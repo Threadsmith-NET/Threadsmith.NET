@@ -503,7 +503,7 @@ public static class TuiMarkdownRenderingTests
         Assert.Equal("**partial", cancellationOutput.SafeSource);
     }
 
-    /// <summary>Every compiled theme inherits semantic Markdown decoration and style suppression removes only style.</summary>
+    /// <summary>Compiled themes declare Markdown styles explicitly; custom themes never inherit those styles.</summary>
     [Fact]
     public static void MarkdownRoles_CompiledThemesAndNoColor_HaveSafeFallbacks()
     {
@@ -520,9 +520,12 @@ public static class TuiMarkdownRenderingTests
                 PresentationTextRole.Default,
                 new TuiTextStyle(Decorations: TuiTextDecoration.None))]);
         var customResolver = new TuiThemeResolver(customTheme);
-        Assert.True(customResolver
-            .Resolve(PresentationTextRole.MarkdownHeading)
-            .Decorations?.HasFlag(TuiTextDecoration.Bold));
+        var emptyResolver = new TuiThemeResolver(new TuiTheme("empty", []));
+        Assert.All(Enum.GetValues<PresentationTextRole>(), role =>
+        {
+            Assert.Equal(new TuiTextStyle(Decorations: TuiTextDecoration.None), customResolver.Resolve(role));
+            Assert.Equal(new TuiTextStyle(Decorations: TuiTextDecoration.None), emptyResolver.Resolve(role));
+        });
 
         var suppressed = new TuiThemeResolver(BuiltInThemes.Create()[1].Theme, suppressStyles: true);
         Assert.Equal(new TuiTextStyle(), suppressed.Resolve(PresentationTextRole.MarkdownHeading));

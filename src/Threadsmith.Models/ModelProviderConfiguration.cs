@@ -131,6 +131,18 @@ public sealed record ModelProviderCatalogLimits
 
     /// <summary>Maximum properties accepted in one JSON object.</summary>
     public int MaximumPropertiesPerObject { get; init; } = 128;
+
+    /// <summary>Rejects invalid limits before parsing or activating catalogs.</summary>
+    public void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFileBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDepth);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumProviders);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumModelsPerProvider);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumModels);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumStringLength);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumPropertiesPerObject);
+    }
 }
 
 /// <summary>Ephemeral host-owned inputs supplied to a compiled provider factory.</summary>
@@ -441,30 +453,15 @@ public sealed record ModelHttpTransportOptions
     public static ModelHttpTransportOptions Load(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var pooledLifetimeSeconds = ReadBounded(
-            configuration,
-            "model:http:pooledConnectionLifetimeSeconds",
-            900,
-            60,
-            86400);
-        var pooledIdleSeconds = ReadBounded(
-            configuration,
-            "model:http:pooledConnectionIdleTimeoutSeconds",
-            120,
-            10,
-            3600);
+        var pooledLifetimeSeconds = ReadPositive(configuration, "model:http:pooledConnectionLifetimeSeconds", 900);
+        var pooledIdleSeconds = ReadPositive(configuration, "model:http:pooledConnectionIdleTimeoutSeconds", 120);
         var connectTimeoutSeconds = configuration.GetValue("model:http:connectTimeoutSeconds", 30);
         if (connectTimeoutSeconds < 0)
         {
             throw new InvalidOperationException("Configuration 'model:http:connectTimeoutSeconds' must be nonnegative; zero disables the timeout.");
         }
 
-        var maxConnectionsPerServer = ReadBounded(
-            configuration,
-            "model:http:maxConnectionsPerServer",
-            16,
-            1,
-            1024);
+        var maxConnectionsPerServer = ReadPositive(configuration, "model:http:maxConnectionsPerServer", 16);
         return new ModelHttpTransportOptions
         {
             PooledConnectionLifetime = TimeSpan.FromSeconds(pooledLifetimeSeconds),
@@ -474,18 +471,16 @@ public sealed record ModelHttpTransportOptions
         };
     }
 
-    private static int ReadBounded(
+    private static int ReadPositive(
         IConfiguration configuration,
         string key,
-        int defaultValue,
-        int minimum,
-        int maximum)
+        int defaultValue)
     {
         var value = configuration.GetValue(key, defaultValue);
-        if (value < minimum || value > maximum)
+        if (value <= 0)
         {
             throw new InvalidOperationException(
-                $"Configuration '{key}' must be between {minimum} and {maximum}.");
+                $"Configuration '{key}' must be positive.");
         }
 
         return value;
@@ -533,7 +528,7 @@ public static class ModelProviderConfigurationLoader
             limits,
             includeRepository,
             observeDiagnostic);
-        return Materialize(configuration, registry, enforceHttps, observeDiagnostic);
+        return Materialize(configuration, registry, enforceHttps, observeDiagnostic, limits);
     }
 
     /// <summary>
@@ -558,6 +553,7 @@ public static class ModelProviderConfigurationLoader
         }
 
         limits ??= new ModelProviderCatalogLimits();
+        limits.Validate();
         var user = File.Exists(userCatalogPath) ? ParseLayer(userCatalogPath, limits, "user") : null;
         var repository = includeRepository && File.Exists(repositoryCatalogPath)
             ? ParseLayer(repositoryCatalogPath, limits, "repository")
@@ -605,6 +601,7 @@ public static class ModelProviderConfigurationLoader
         }
 
         limits ??= new ModelProviderCatalogLimits();
+        limits.Validate();
         if (!File.Exists(repositoryCatalogPath))
         {
             return trusted;
@@ -633,13 +630,16 @@ public static class ModelProviderConfigurationLoader
         ModelProviderCatalogConfiguration configuration,
         ModelProviderRegistry registry,
         bool enforceHttps = true,
-        Action<ModelProviderCatalogDiagnostic>? observeDiagnostic = null)
+        Action<ModelProviderCatalogDiagnostic>? observeDiagnostic = null,
+        ModelProviderCatalogLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(registry);
-        if (configuration.Providers.Count > 32
-            || configuration.Providers.Any(provider => provider.Models.Count > 128)
-            || configuration.Providers.Sum(provider => provider.Models.Count) > 512)
+        limits ??= new();
+        limits.Validate();
+        if (configuration.Providers.Count > limits.MaximumProviders
+            || configuration.Providers.Any(provider => provider.Models.Count > limits.MaximumModelsPerProvider)
+            || configuration.Providers.Sum(provider => (long)provider.Models.Count) > limits.MaximumModels)
         {
             throw new InvalidOperationException("The hydrated provider catalog exceeds model resource limits.");
         }

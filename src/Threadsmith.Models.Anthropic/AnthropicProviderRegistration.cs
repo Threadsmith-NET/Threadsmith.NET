@@ -143,7 +143,7 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
             throw new ArgumentException("The activation context does not match the Anthropic registration.", nameof(context));
         }
 
-        return new AnthropicModelProvider(context.HttpClient, context.Profile, context.ResolvedSecret, model.Compatibility, configured.Id);
+        return new AnthropicModelProvider(context.HttpClient, context.Profile, context.ResolvedSecret, model.Compatibility, configured.Id, configured.ResourceLimits);
     }
 
     /// <inheritdoc />

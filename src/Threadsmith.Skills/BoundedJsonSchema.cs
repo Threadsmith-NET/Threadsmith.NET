@@ -19,6 +19,15 @@ public sealed record SkillSchemaOptions
 
     /// <summary>Maximum array items.</summary>
     public int MaximumArrayItems { get; init; } = 1024;
+
+    /// <summary>Maximum schema property-name characters.</summary>
+    public int MaximumPropertyNameCharacters { get; init; } = 128;
+
+    /// <summary>Maximum enum members.</summary>
+    public int MaximumEnumValues { get; init; } = 256;
+
+    /// <summary>Maximum schema title/description characters.</summary>
+    public int MaximumMetadataCharacters { get; init; } = 4096;
 }
 
 /// <summary>Validates a closed safe JSON Schema subset without dynamic type activation.</summary>
@@ -49,11 +58,14 @@ public sealed class BoundedJsonSchemaValidator
     public BoundedJsonSchemaValidator(SkillSchemaOptions? options = null)
     {
         _options = options ?? new SkillSchemaOptions();
-        if (_options.MaximumSchemaBytes is < 128 or > 4 * 1024 * 1024
-            || _options.MaximumValueBytes is < 2 or > 16 * 1024 * 1024
-            || _options.MaximumDepth is < 1 or > 64
-            || _options.MaximumProperties is < 1 or > 4096
-            || _options.MaximumArrayItems is < 1 or > 100_000)
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumPropertyNameCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumEnumValues);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumMetadataCharacters);
+        if (_options.MaximumSchemaBytes < 1
+            || _options.MaximumValueBytes < 1
+            || _options.MaximumDepth < 1
+            || _options.MaximumProperties < 1
+            || _options.MaximumArrayItems < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Skill schema limits are invalid.");
         }
@@ -89,7 +101,7 @@ public sealed class BoundedJsonSchemaValidator
             throw new InvalidDataException("Skill JSON value exceeds its byte limit.");
         }
 
-        using var schemaDocument = JsonDocument.Parse(schema.SchemaJson);
+        using var schemaDocument = JsonDocument.Parse(schema.SchemaJson, new JsonDocumentOptions { MaxDepth = _options.MaximumDepth });
         using var valueDocument = JsonDocument.Parse(valueJson, new JsonDocumentOptions
         {
             AllowTrailingCommas = false,
@@ -136,7 +148,7 @@ public sealed class BoundedJsonSchemaValidator
                 propertyCount++;
                 if (propertyCount > _options.MaximumProperties
                     || string.IsNullOrWhiteSpace(property.Name)
-                    || property.Name.Length > 128)
+                    || property.Name.Length > _options.MaximumPropertyNameCharacters)
                 {
                     throw new InvalidDataException("Skill schema property count or name exceeds bounds.");
                 }
@@ -195,7 +207,7 @@ public sealed class BoundedJsonSchemaValidator
         ValidateOrderedBounds(schema, "minLength", "maxLength");
         ValidateNumericBounds(schema);
         if (schema.TryGetProperty("enum", out var enumValues)
-            && (enumValues.ValueKind != JsonValueKind.Array || enumValues.GetArrayLength() is < 1 or > 256))
+            && (enumValues.ValueKind != JsonValueKind.Array || (enumValues.GetArrayLength() < 1 || enumValues.GetArrayLength() > _options.MaximumEnumValues)))
         {
             throw new InvalidDataException("Skill schema enum is invalid or exceeds its bound.");
         }
@@ -344,7 +356,7 @@ public sealed class BoundedJsonSchemaValidator
         };
     }
 
-    private static void ValidateBoundedMetadata(JsonElement schema, string property)
+    private void ValidateBoundedMetadata(JsonElement schema, string property)
     {
         if (!schema.TryGetProperty(property, out var value))
         {
@@ -352,7 +364,7 @@ public sealed class BoundedJsonSchemaValidator
         }
 
         if (value.ValueKind != JsonValueKind.String
-            || (value.GetString() ?? string.Empty).Length > 4096)
+            || (value.GetString() ?? string.Empty).Length > _options.MaximumMetadataCharacters)
         {
             throw new InvalidDataException($"Skill schema {property} must be bounded text.");
         }

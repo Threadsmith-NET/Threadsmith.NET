@@ -9,7 +9,6 @@ using Threadsmith.Core;
 /// <summary>Stores explicit memories in SQLite with atomic bounded writes and portable little-endian float32 vectors.</summary>
 public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedRepositoryMemoryStore
 {
-    private const int MaximumTextCharacters = 2_000;
     private readonly string _connectionString;
     private readonly TimeProvider _timeProvider;
 
@@ -309,9 +308,9 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
         ArgumentException.ThrowIfNullOrWhiteSpace(write.Text);
-        if (write.Text.Length > MaximumTextCharacters || write.Text != write.Text.ReplaceLineEndings("\n").Trim())
+        if (write.Text.Length > options.MaximumTextCharacters || write.Text != write.Text.ReplaceLineEndings("\n").Trim())
         {
-            throw new ArgumentException("Memory text must be normalized and contain at most 2,000 characters; normalize before embedding.", nameof(write));
+            throw new ArgumentException($"Memory text must be normalized and contain at most {options.MaximumTextCharacters} characters; normalize before embedding.", nameof(write));
         }
 
         if (!Enum.IsDefined(write.Origin) || !Enum.IsDefined(write.MemoryType) || !Enum.IsDefined(write.Sensitivity))

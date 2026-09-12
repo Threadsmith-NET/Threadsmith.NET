@@ -10,6 +10,8 @@ using Threadsmith.Tools;
 /// <summary>SDK-backed MCP transport for SSE and streamable-HTTP endpoints.</summary>
 internal sealed class SdkHttpTransport : IMcpTransport
 {
+    private readonly McpResourceLimits _limits;
+    private readonly McpTransportMapping _mapping;
     private readonly ISecretResolver _secretResolver;
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
@@ -27,18 +29,22 @@ internal sealed class SdkHttpTransport : IMcpTransport
         ISecretResolver secretResolver,
         ILoggerFactory loggerFactory,
         McpOAuthFlow? oauthFlow = null,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        McpResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        _limits = limits ?? new();
+        _limits.Validate();
+        _mapping = new(_limits);
         _secretResolver = secretResolver;
         _oauthFlow = oauthFlow;
         _capabilityLogger = loggerFactory.CreateLogger<McpCapabilityChangeSubscription>();
         _logger = loggerFactory.CreateLogger<SdkHttpTransport>();
         if (httpClient is null)
         {
-            _metadataHandler = CreateMetadataCompatibilityHandler();
-            _httpClient = CreateHttpClient(new McpBoundedHttpResponseHandler(_metadataHandler));
+            _metadataHandler = CreateMetadataCompatibilityHandler(_limits);
+            _httpClient = CreateHttpClient(new McpBoundedHttpResponseHandler(_metadataHandler, _limits.MaximumResponseBytes));
             _ownsHttpClient = true;
         }
         else
@@ -53,8 +59,9 @@ internal sealed class SdkHttpTransport : IMcpTransport
         ISecretStore secretStore,
         ILoggerFactory loggerFactory,
         McpOAuthFlow? oauthFlow = null,
-        HttpClient? httpClient = null)
-        : this(new LegacySecretStoreResolver(secretStore), loggerFactory, oauthFlow, httpClient)
+        HttpClient? httpClient = null,
+        McpResourceLimits? limits = null)
+        : this(new LegacySecretStoreResolver(secretStore), loggerFactory, oauthFlow, httpClient, limits)
     {
     }
 
@@ -103,7 +110,8 @@ internal sealed class SdkHttpTransport : IMcpTransport
                 var capabilityChanges = new McpCapabilityChangeSubscription(
                     client,
                     profile,
-                    _capabilityLogger);
+                    _capabilityLogger,
+                    token => DiscoverCapabilitiesAsync(client, profile, token));
                 var capabilities = await DiscoverCapabilitiesAsync(
                     client,
                     profile,
@@ -162,7 +170,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
             capabilityId,
             arguments,
             cancellationToken: cancellationToken);
-        return McpTransportMapping.MapInvocation(result);
+        return _mapping.MapInvocation(result);
     }
 
     /// <inheritdoc />
@@ -186,11 +194,11 @@ internal sealed class SdkHttpTransport : IMcpTransport
                 => await client.ReadResourceAsync(
                     capability.ResourceIdentity
                         ?? throw new InvalidOperationException("The MCP resource template has no URI template."),
-                    McpTransportMapping.MapArguments(arguments),
+                    _mapping.MapArguments(arguments),
                     cancellationToken: cancellationToken),
             _ => throw new InvalidOperationException("The selected MCP capability is not a readable resource."),
         };
-        return McpTransportMapping.MapResourceContent(result);
+        return _mapping.MapResourceContent(result);
     }
 
     /// <inheritdoc />
@@ -210,9 +218,9 @@ internal sealed class SdkHttpTransport : IMcpTransport
             ?? throw new InvalidOperationException("The MCP HTTP transport is not connected.");
         var result = await client.GetPromptAsync(
             capability.ServerName,
-            McpTransportMapping.MapArguments(arguments),
+            _mapping.MapArguments(arguments),
             cancellationToken: cancellationToken);
-        return McpTransportMapping.MapPromptContent(result);
+        return _mapping.MapPromptContent(result);
     }
 
     /// <inheritdoc />
@@ -312,7 +320,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
     }
 
     /// <summary>Discovers only server-supported and profile-allowed bounded capabilities.</summary>
-    internal static async Task<IReadOnlyList<McpImportedCapability>> DiscoverCapabilitiesAsync(
+    internal async Task<IReadOnlyList<McpImportedCapability>> DiscoverCapabilitiesAsync(
         McpClient client,
         McpConnectionProfile profile,
         CancellationToken cancellationToken)
@@ -322,7 +330,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
             && client.ServerCapabilities.Tools is not null)
         {
             var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
-            capabilities.AddRange(McpTransportMapping.MapTools(profile, tools));
+            capabilities.AddRange(_mapping.MapTools(profile, tools));
         }
 
         if (client.ServerCapabilities.Resources is not null)
@@ -330,14 +338,14 @@ internal sealed class SdkHttpTransport : IMcpTransport
             if (profile.AllowedCapabilities.Contains(McpCapabilityKind.Resource))
             {
                 var resources = await client.ListResourcesAsync(cancellationToken: cancellationToken);
-                capabilities.AddRange(McpTransportMapping.MapResources(profile, resources));
+                capabilities.AddRange(_mapping.MapResources(profile, resources));
             }
 
             if (profile.AllowedCapabilities.Contains(McpCapabilityKind.ResourceTemplate))
             {
                 var templates = await client.ListResourceTemplatesAsync(
                     cancellationToken: cancellationToken);
-                capabilities.AddRange(McpTransportMapping.MapResourceTemplates(profile, templates));
+                capabilities.AddRange(_mapping.MapResourceTemplates(profile, templates));
             }
         }
 
@@ -345,7 +353,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
             && client.ServerCapabilities.Prompts is not null)
         {
             var prompts = await client.ListPromptsAsync(cancellationToken: cancellationToken);
-            capabilities.AddRange(McpTransportMapping.MapPrompts(profile, prompts));
+            capabilities.AddRange(_mapping.MapPrompts(profile, prompts));
         }
 
         if (capabilities.Select(capability => capability.Id).Distinct(StringComparer.Ordinal).Count()
@@ -424,7 +432,7 @@ internal sealed class SdkHttpTransport : IMcpTransport
                 value = resolution.RequireValue(secretRequest);
             }
 
-            if (value.Length > 8192 || value.Any(char.IsControl))
+            if (value.Length > _limits.MaximumHeaderValueCharacters || value.Any(char.IsControl))
             {
                 throw new InvalidOperationException(
                     $"MCP profile '{profile.Id}' contains an invalid HTTP header value.");
@@ -437,18 +445,19 @@ internal sealed class SdkHttpTransport : IMcpTransport
     }
 
     /// <summary>Creates the owned metadata compatibility handler with bounded redirect-free transport behavior.</summary>
-    internal static McpOAuthMetadataCompatibilityHandler CreateMetadataCompatibilityHandler()
+    internal static McpOAuthMetadataCompatibilityHandler CreateMetadataCompatibilityHandler(McpResourceLimits? limits = null)
     {
-        return new McpOAuthMetadataCompatibilityHandler(new SocketsHttpHandler
-        {
-            // Metadata compatibility validates one explicit document hop; automatic HTTP
-            // redirects would add unbounded, unvalidated network locations underneath it.
-            AllowAutoRedirect = false,
+        return new McpOAuthMetadataCompatibilityHandler(
+            new SocketsHttpHandler
+            {
+                // Metadata compatibility validates one explicit document hop; automatic HTTP
+                // redirects would add unbounded, unvalidated network locations underneath it.
+                AllowAutoRedirect = false,
 
-            // Bounded pool lifetime refreshes DNS/endpoint changes while reusing connections;
-            // matches the model-transport host default. See Plan 67 (AR-04).
-            PooledConnectionLifetime = TimeSpan.FromMinutes(15),
-        });
+                // Pool lifetime refreshes DNS while retaining reusable connections.
+                PooledConnectionLifetime = TimeSpan.FromMinutes(15),
+            },
+            limits);
     }
 
     /// <summary>Creates the owned MCP HTTP client with stable product identification.</summary>

@@ -204,9 +204,9 @@ internal sealed class ToolConflictPlanner
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(options);
-        if (options.MaximumConcurrency is < 1 or > 16)
+        if (options.MaximumConcurrency < 1)
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "Tool concurrency must be between 1 and 16.");
+            throw new ArgumentOutOfRangeException(nameof(options), "Tool concurrency must be positive.");
         }
 
         _registry = registry;

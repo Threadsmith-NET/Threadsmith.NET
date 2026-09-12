@@ -111,10 +111,6 @@ public interface ICSharpScriptEngine
 /// <summary>Tracked-process adapter for the Roslyn scripting worker.</summary>
 public sealed class CSharpScriptEngine : ICSharpScriptEngine
 {
-    private const int _maximumConfiguredOutputBytes = 1024 * 1024;
-    private const int _maximumConfiguredTimeoutMilliseconds = 30000;
-    private const int _minimumConfiguredOutputBytes = 256;
-    private const int _minimumConfiguredTimeoutMilliseconds = 100;
     private readonly IProcessManager _processManager;
     private readonly IToolConfig _toolConfig;
     private readonly string _workerPath;
@@ -148,21 +144,19 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
             "csharp_script",
             "allowed_assemblies",
             "System.Linq,System.Collections,System.Collections.Generic");
-        if (allowedAssemblies.Length > 4096)
+        var maximumCodeCharacters = _toolConfig.Get("csharp_script", "max_code_characters", 65536);
+        var maximumAssemblies = _toolConfig.Get("csharp_script", "max_assemblies", 32);
+        var maximumAssemblyNameCharacters = _toolConfig.Get("csharp_script", "max_assembly_name_characters", 128);
+        var maximumAssemblySettingCharacters = _toolConfig.Get("csharp_script", "max_assembly_setting_characters", 4096);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCodeCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAssemblies);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAssemblyNameCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAssemblySettingCharacters);
+        if (allowedAssemblies.Length > maximumAssemblySettingCharacters || code.Length > maximumCodeCharacters)
         {
-            throw new InvalidOperationException("csharp_script allowed_assemblies is limited to 4096 characters.");
-        }
-
-        if (timeoutMilliseconds is < _minimumConfiguredTimeoutMilliseconds or > _maximumConfiguredTimeoutMilliseconds)
-        {
-            throw new InvalidOperationException(
-                $"csharp_script timeout_ms must be between {_minimumConfiguredTimeoutMilliseconds} and {_maximumConfiguredTimeoutMilliseconds}.");
-        }
-
-        if (maximumOutputBytes is < _minimumConfiguredOutputBytes or > _maximumConfiguredOutputBytes)
-        {
-            throw new InvalidOperationException(
-                $"csharp_script max_output_bytes must be between {_minimumConfiguredOutputBytes} and {_maximumConfiguredOutputBytes}.");
+            throw new InvalidOperationException("csharp_script input exceeds its configured limits.");
         }
 
         if (!File.Exists(_workerPath))
@@ -175,6 +169,9 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
             Code = code,
             Kind = kind.ToString(),
             MaximumOutputBytes = maximumOutputBytes,
+            MaximumCodeCharacters = maximumCodeCharacters,
+            MaximumAssemblies = maximumAssemblies,
+            MaximumAssemblyNameCharacters = maximumAssemblyNameCharacters,
             AllowedAssemblies = allowedAssemblies
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
         };
@@ -255,6 +252,12 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
 
         public int MaximumOutputBytes { get; init; }
 
+        public int MaximumCodeCharacters { get; init; } = 65536;
+
+        public int MaximumAssemblies { get; init; } = 32;
+
+        public int MaximumAssemblyNameCharacters { get; init; } = 128;
+
         public required IReadOnlyList<string> AllowedAssemblies { get; init; }
     }
 }
@@ -262,14 +265,17 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
 /// <summary>Runs a bounded C# expression or statement sequence in an isolated worker.</summary>
 public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutput>
 {
+    private readonly int _maximumCodeCharacters;
     private readonly ToolDefinition _definition;
     private readonly ICSharpScriptEngine _engine;
 
     /// <summary>Initializes a new instance of the <see cref="CSharpScriptTool"/> class.</summary>
-    public CSharpScriptTool(ICSharpScriptEngine engine, IPromptLoader promptLoader)
+    public CSharpScriptTool(ICSharpScriptEngine engine, IPromptLoader promptLoader, int maximumCodeCharacters = 65536)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(promptLoader);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCodeCharacters);
+        _maximumCodeCharacters = maximumCodeCharacters;
         _definition = ToolDefinitionFactory
             .Create<CSharpScriptInput, CSharpScriptOutput>(
                 "csharp_script",
@@ -312,9 +318,9 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Code);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Kind);
-        if (input.Code.Length > 64 * 1024)
+        if (input.Code.Length > _maximumCodeCharacters)
         {
-            throw new ToolArgumentValidationException("code is limited to 65536 characters.");
+            throw new ToolArgumentValidationException($"code is limited to {_maximumCodeCharacters} characters.");
         }
 
         if (!Enum.TryParse(input.Kind, ignoreCase: true, out ScriptKind kind)

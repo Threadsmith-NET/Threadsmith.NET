@@ -33,6 +33,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         DomainEventStream events,
         InMemoryProjectionStore projections,
         ExecutionLimits executionLimits,
+        OperationalLimits operationalLimits,
         SecretOutputSanitizer sanitizer,
         SqliteRepositoryFactsStore repositoryFacts,
         SqliteConversationStore conversationStore,
@@ -78,6 +79,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         Events = events;
         Projections = projections;
         ExecutionLimits = executionLimits;
+        OperationalLimits = operationalLimits;
         Sanitizer = sanitizer;
         RepositoryFacts = repositoryFacts;
         ConversationStore = conversationStore;
@@ -151,6 +153,9 @@ internal sealed class HostFoundation : IAsyncDisposable
 
     /// <summary>Gets bounded execution-loop limits.</summary>
     internal ExecutionLimits ExecutionLimits { get; }
+
+    /// <summary>Validated application resource policy for this host.</summary>
+    internal OperationalLimits OperationalLimits { get; }
 
     /// <summary>Gets the shared secret-output sanitizer.</summary>
     internal SecretOutputSanitizer Sanitizer { get; }
@@ -245,6 +250,16 @@ internal sealed class HostFoundation : IAsyncDisposable
     /// <summary>Gets the governed tool invocation pipeline.</summary>
     internal ToolInvocationPipeline ToolPipeline { get; }
 
+    /// <summary>Binds and validates resource settings, rejecting misspelled or unsupported keys.</summary>
+    internal static OperationalLimits LoadOperationalLimits(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var limits = configuration.GetSection("limits").Get<OperationalLimits>(options => options.ErrorOnUnknownConfiguration = true)
+            ?? new OperationalLimits();
+        limits.Validate();
+        return limits;
+    }
+
     /// <summary>Initializes persistence before subscribers, then semantic and tool services in dependency order.</summary>
     internal static async Task<HostFoundation> CreateAsync(
         IConfiguration configuration,
@@ -259,6 +274,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(promptLoader);
 
+        var operationalLimits = LoadOperationalLimits(configuration);
         var maximumCorrectiveTurns = configuration.GetValue("execution:maxCorrectiveTurns", 3);
         var executionLimits = new ExecutionLimits
         {
@@ -269,6 +285,15 @@ internal sealed class HostFoundation : IAsyncDisposable
                 "execution:maxPlanningToolRounds",
                 ExecutionLimits.DefaultMaxPlanningToolRounds),
             MaxCorrectiveTurns = maximumCorrectiveTurns,
+            Plan = operationalLimits.Plan,
+            MaxSourceFrontierEntries = configuration.GetValue("execution:maxSourceFrontierEntries", 256),
+            MaxPlanSanityIssues = configuration.GetValue("execution:maxPlanSanityIssues", 32),
+            MaxSteeringCharacters = configuration.GetValue("execution:maxSteeringCharacters", 100000),
+            MaxAgentDisplayFragments = configuration.GetValue("execution:maxAgentDisplayFragments", 256),
+            MaxAgentDisplayFragmentCharacters = configuration.GetValue("execution:maxAgentDisplayFragmentCharacters", 4096),
+            MaxAgentDisplayLineCharacters = configuration.GetValue("execution:maxAgentDisplayLineCharacters", 16384),
+
+            MaxRetainedToolCalls = configuration.GetValue("execution:maxRetainedToolCalls", 256),
             MaxStructuredOutputCharacters = configuration.GetValue(
                 "execution:maxStructuredOutputCharacters",
                 8 * 1024 * 1024),
@@ -277,9 +302,10 @@ internal sealed class HostFoundation : IAsyncDisposable
                 4096),
         };
         var toolLimits = CreateToolLimits(configuration);
+        executionLimits.Validate();
         var codeExploreOutputOptions = CodeExploreOutputOptions.FromConfiguration(configuration);
         var codeExploreOptions = CodeExploreConfiguration.FromConfiguration(configuration);
-        var events = new DomainEventStream();
+        var events = new DomainEventStream(TimeSpan.FromMilliseconds(configuration.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000)));
         var projections = new InMemoryProjectionStore(executionLimits);
         var subscriberCapacity = configuration.GetValue("events:subscriberCapacity", 256);
         var projectionSubscription = events.Subscribe(
@@ -331,7 +357,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                     : telemetry.ObserveAsync(domainEvent, cancellationToken),
                 subscriberCapacity);
             var evidenceStore = new EvidenceStore(events, sanitizer);
-            var promptAppendLoader = new PromptAppendLoader(sanitizer);
+            var promptAppendLoader = new PromptAppendLoader(sanitizer, configuration.GetSection("context:promptAppends:limits").Get<PromptAppendLimits>(options => options.ErrorOnUnknownConfiguration = true));
             contextLifecycle = new ContextLifecycleObserver(
                 evidenceStore,
                 promptAppendLoader);
@@ -350,20 +376,24 @@ internal sealed class HostFoundation : IAsyncDisposable
                     ?? throw new InvalidOperationException("The user configuration path has no parent directory."),
                 "secrets",
                 "config.json");
-            var repositorySecretProvider = new RepositorySecretProvider(paths.RepositoryRoot);
+            var secretLimits = trustedConfiguration.GetSection("secretResolution:limits").Get<SecretResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+            secretLimits.Validate();
+            var repositorySecretProvider = new RepositorySecretProvider(paths.RepositoryRoot, secretLimits);
             var secretResolver = new SecretResolver(
                 [
-                    new EnvironmentSecretProvider(),
+                    new EnvironmentSecretProvider(secretLimits),
                     repositorySecretProvider,
-                    new UserFileSecretProvider(userSecretsPath),
-                ]);
-            semanticEngines = new SemanticEngineRegistry(events, loggerFactory);
+                    new UserFileSecretProvider(userSecretsPath, secretLimits),
+                ],
+                secretLimits);
+            semanticEngines = new SemanticEngineRegistry(events, loggerFactory, resourceLimits: operationalLimits.Semantic);
             semanticRefreshPublicationGate = new SemanticRefreshPublicationGateRouter();
             semanticRefreshCoordinator = new SemanticRefreshCoordinator(
                 semanticEngines,
                 events,
                 loggerFactory.CreateLogger<SemanticRefreshCoordinator>(),
-                semanticRefreshPublicationGate);
+                semanticRefreshPublicationGate,
+                resourceLimits: configuration.GetSection("semanticRefresh:limits").Get<SemanticRefreshResourceLimits>(options => options.ErrorOnUnknownConfiguration = true));
             var semanticMutations = new SemanticMutationEngine(
                 semanticEngines,
                 loggerFactory.CreateLogger<SemanticMutationEngine>());
@@ -375,7 +405,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             semanticSubscription = events.Subscribe(semanticObserver.ObserveAsync, subscriberCapacity);
             var processManager = new ProcessManager(
                 sanitizer,
-                loggerFactory.CreateLogger<ProcessManager>());
+                loggerFactory.CreateLogger<ProcessManager>(),
+                limits: operationalLimits.Process);
             var hookHttpClient = new HttpClient(new SocketsHttpHandler
             {
                 // Bounded pool lifetime refreshes DNS/endpoint changes while reusing connections;
@@ -399,7 +430,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 persistence.HookStore,
                 sanitizer,
                 loggerFactory.CreateLogger<HookCoordinator>(),
-                events);
+                events,
+                limits: trustedConfiguration.GetSection("hooks:limits").Get<HookResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new());
             var hookObserver = new HookEventObserver(hookCoordinator);
             hookSubscription = events.Subscribe(
                 (domainEvent, cancellationToken) => domainEvent is ModelReasoningObserved
@@ -408,14 +440,15 @@ internal sealed class HostFoundation : IAsyncDisposable
                 subscriberCapacity);
 
             // Tool registration precedes extension capability composition so extensions share one governed catalog.
-            var gitQueries = new GitQueryService();
-            var dotNetInventory = new DotNetInventoryService(semanticEngines, gitQueries);
-            var advancedSemanticQueries = new AdvancedSemanticQueryService(semanticEngines, promptLoader, codeExploreOptions);
-            var advisorySources = LoadNuGetAdvisorySources(trustedConfiguration);
+            var gitQueries = new GitQueryService(operationalLimits.Git);
+            var dotNetInventory = new DotNetInventoryService(semanticEngines, gitQueries, operationalLimits.Semantic);
+            var advancedSemanticQueries = new AdvancedSemanticQueryService(semanticEngines, promptLoader, codeExploreOptions, operationalLimits.Semantic);
+            var advisorySources = LoadNuGetAdvisorySources(trustedConfiguration, operationalLimits.Validation);
             var nativeValidation = new NativeValidationToolService(
                 processManager,
                 secretResolver,
-                advisorySources);
+                advisorySources,
+                operationalLimits.Validation);
             (var toolStateManager, var toolRegistry, var webFetchAuthorization, var approvalPrompt) = CreateTools(
                 configuration,
                 trustedConfiguration,
@@ -432,7 +465,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 codeExploreOutputOptions,
                 promptLoader,
                 codeExploreOptions,
-                persistence.ConversationStore);
+                persistence.ConversationStore,
+                operationalLimits);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -463,11 +497,13 @@ internal sealed class HostFoundation : IAsyncDisposable
                 loggerFactory.CreateLogger<ToolInvocationPipeline>(),
                 budget,
                 hooks: hookCoordinator,
-                parallelOptions: parallelOptions);
+                parallelOptions: parallelOptions,
+                presentationLimits: configuration.GetSection("tools:runtime:presentation").Get<ToolPresentationLimits>(options => options.ErrorOnUnknownConfiguration = true));
             return new HostFoundation(
                 events,
                 projections,
                 executionLimits,
+                operationalLimits,
                 sanitizer,
                 repositoryFacts,
                 persistence.ConversationStore,
@@ -552,15 +588,11 @@ internal sealed class HostFoundation : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
         var hostEnabled = trustedConfiguration.GetValue("tools:parallel:enabled", true);
-        var hostMaximum = Math.Clamp(
-            trustedConfiguration.GetValue("tools:parallel:maximumConcurrency", 4),
-            1,
-            16);
+        var hostMaximum = trustedConfiguration.GetValue("tools:parallel:maximumConcurrency", 4);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(hostMaximum);
         var effectiveEnabled = configuration.GetValue("tools:parallel:enabled", hostEnabled);
-        var effectiveMaximum = Math.Clamp(
-            configuration.GetValue("tools:parallel:maximumConcurrency", hostMaximum),
-            1,
-            16);
+        var effectiveMaximum = configuration.GetValue("tools:parallel:maximumConcurrency", hostMaximum);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(effectiveMaximum);
         return new ToolParallelOptions
         {
             Enabled = hostEnabled && effectiveEnabled,
@@ -611,13 +643,11 @@ internal sealed class HostFoundation : IAsyncDisposable
     {
         var readFileMaxLines = configuration.GetValue(
             "tools:readFile:maxLines",
-            ToolLimits.ReadFileLineLimitCeiling);
-        var readFileDefaultLines = Math.Min(
-            configuration.GetValue(
-                "tools:readFile:defaultLines",
-                ToolLimits.ReadFileLineLimitCeiling),
-            readFileMaxLines);
-        return new ToolLimits
+            ToolLimits.DefaultReadFileLineLimit);
+        var readFileDefaultLines = configuration.GetValue(
+            "tools:readFile:defaultLines",
+            Math.Min(ToolLimits.DefaultReadFileLineLimit, readFileMaxLines));
+        var limits = new ToolLimits
         {
             ListFilesDefaultEntries = configuration.GetValue("tools:listFiles:defaultEntries", 200),
             ListFilesMaxEntries = configuration.GetValue("tools:listFiles:maxEntries", 2000),
@@ -626,16 +656,24 @@ internal sealed class HostFoundation : IAsyncDisposable
             ReadFileMaxLines = readFileMaxLines,
             ReadFileMaximumContentBytes = configuration.GetValue(
                 "tools:readFile:maxContentBytes",
-                ToolLimits.ReadFileContentByteLimitCeiling),
+                ToolLimits.DefaultReadFileContentByteLimit),
+            SearchMaximumQueryCharacters = configuration.GetValue("tools:search:maxQueryCharacters", 500),
             SearchMaximumBytes = configuration.GetValue("tools:search:maxBytes", 1024L * 1024L),
             SearchDefaultMatches = configuration.GetValue("tools:search:defaultMatches", 100),
             SearchMaxMatches = configuration.GetValue("tools:search:maxMatches", 500),
             FindSymbolMaxResults = configuration.GetValue("tools:findSymbol:maxResults", 1000),
             FindReferencesMaxResults = configuration.GetValue("tools:findReferences:maxResults", 1000),
             FindImplementationsMaxResults = configuration.GetValue("tools:findImplementations:maxResults", 1000),
+            WriteFileMaximumContentBytes = configuration.GetValue("tools:writeFile:maxContentBytes", 1024 * 1024),
+            WriteFileMaximumPathCharacters = configuration.GetValue("tools:writeFile:maxPathCharacters", 4096),
+            SemanticMaximumModelResults = configuration.GetValue("tools:semantic:maxModelResults", 100),
+            SearchRegexTimeoutMilliseconds = configuration.GetValue("tools:search:regexTimeoutMilliseconds", 250),
+            SearchProcessTimeoutMilliseconds = configuration.GetValue("tools:search:processTimeoutMilliseconds", 25_000),
             RunProcessDefaultTimeoutSeconds = configuration.GetValue("tools:runProcess:defaultTimeoutSeconds", 30),
             RunProcessMaxTimeoutSeconds = configuration.GetValue("tools:runProcess:maxTimeoutSeconds", 60),
         };
+        limits.Validate();
+        return limits;
     }
 
     /// <summary>Initializes transactional schema, artifact storage, and startup redaction auditing.</summary>
@@ -659,8 +697,12 @@ internal sealed class HostFoundation : IAsyncDisposable
         await migrations.RunAsync();
         if (migrations.LastBackupPath is { } backupPath)
         {
-            loggerFactory.CreateLogger<MigrationRunner>().LogInformation(
-                "Repository memory migration completed. Verified pre-migration SQLite backup: {BackupPath}.", backupPath);
+            var migrationLogger = loggerFactory.CreateLogger<MigrationRunner>();
+            if (migrationLogger.IsEnabled(LogLevel.Information))
+            {
+                migrationLogger.LogInformation(
+                    "Repository memory migration completed. Verified pre-migration SQLite backup: {BackupPath}.", backupPath);
+            }
         }
 
         var artifactDirectory = Path.GetFullPath(
@@ -745,7 +787,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         var repository = LoadHookHandlerSection(
             configuration.GetSection("hooks:repositoryHandlers"),
             HookHandlerScope.Repository);
-        return HookDescriptorValidator.Normalize(trusted.Concat(repository));
+        return HookDescriptorValidator.Normalize(trusted.Concat(repository), trustedConfiguration.GetSection("hooks:limits").Get<HookResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new());
     }
 
     private static IEnumerable<HookHandlerDescriptor> LoadHookHandlerSection(
@@ -821,14 +863,15 @@ internal sealed class HostFoundation : IAsyncDisposable
 
     /// <summary>Loads bounded trusted HTTPS package advisory sources or fails startup closed.</summary>
     private static IReadOnlyList<NuGetAdvisorySourceOptions> LoadNuGetAdvisorySources(
-        IConfiguration trustedConfiguration)
+        IConfiguration trustedConfiguration,
+        ValidationResourceLimits limits)
     {
         IConfigurationSection[] configured = [.. trustedConfiguration
             .GetSection("nuget:advisorySources")
             .GetChildren()];
-        if (configured.Length > 16)
+        if (configured.Length > limits.MaximumAdvisorySources)
         {
-            throw new InvalidDataException("At most 16 trusted NuGet advisory sources may be configured.");
+            throw new InvalidDataException($"At most {limits.MaximumAdvisorySources} trusted NuGet advisory sources may be configured.");
         }
 
         var sources = new List<NuGetAdvisorySourceOptions>(configured.Length);
@@ -869,7 +912,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         CodeExploreOutputOptions codeExploreOutputOptions,
         IPromptLoader promptLoader,
         CodeExploreOptions codeExploreOptions,
-        IConversationStore conversationStore)
+        IConversationStore conversationStore,
+        OperationalLimits operationalLimits)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -892,7 +936,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         var webFetchAuthorization = new WebFetchAuthorizationAuthority(
             webFetchOptions,
             TimeProvider.System,
-            new UserAllowedNetworkHostStore(paths.UserConfiguration));
+            new UserAllowedNetworkHostStore(paths.UserConfiguration, trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024)));
         var directFetchApprovalPrompt = new DirectFetchApprovalPromptRouter();
         var webContentFetcher = new WebContentFetcher(
             new PublicHttpsWebContentTransport(),
@@ -924,7 +968,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         [
             new ListFilesTool(promptLoader, limits),
             new ReadFileTool(promptLoader, limits),
-            new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader),
+            new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader, limits),
             new SearchTextTool(promptLoader, limits, processManager, ripgrepExecutable),
             new GitStatusTool(processManager, promptLoader),
             new GitDiffTool(gitQueries, promptLoader),
@@ -932,23 +976,23 @@ internal sealed class HostFoundation : IAsyncDisposable
             new GitShowTool(gitQueries, promptLoader),
             new GitBlameTool(gitQueries, promptLoader),
             new GitBranchComparisonTool(gitQueries, promptLoader),
-            new DotNetInventoryTool(dotNetInventory, promptLoader),
-            new NuGetHealthTool(nativeValidation, promptLoader),
-            new DotNetBuildTool(nativeValidation, promptLoader),
-            new DotNetAnalyzerTool(nativeValidation, promptLoader),
-            new DotNetFormatCheckTool(nativeValidation, promptLoader),
-            new DiagnosticQueryTool(nativeValidation, promptLoader),
-            new TestDiscoveryTool(nativeValidation, promptLoader),
-            new TargetedTestTool(nativeValidation, promptLoader),
+            new DotNetInventoryTool(dotNetInventory, promptLoader, operationalLimits.Semantic),
+            new NuGetHealthTool(nativeValidation, promptLoader, operationalLimits.Validation),
+            new DotNetBuildTool(nativeValidation, promptLoader, operationalLimits.Validation),
+            new DotNetAnalyzerTool(nativeValidation, promptLoader, operationalLimits.Validation),
+            new DotNetFormatCheckTool(nativeValidation, promptLoader, operationalLimits.Validation),
+            new DiagnosticQueryTool(nativeValidation, promptLoader, operationalLimits.Validation),
+            new TestDiscoveryTool(nativeValidation, promptLoader, operationalLimits.Validation),
+            new TargetedTestTool(nativeValidation, promptLoader, operationalLimits.Validation),
             new CodeExploreOutputFormattingTool(
                 new CodeExploreTool(codeExplore, promptLoader, processManager, codeExploreOptions),
                 codeExploreOutputOptions,
                 promptLoader,
                 codeExploreOptions),
-            new CallHierarchyTool(advancedSemanticQueries, promptLoader),
-            new SymbolImpactTool(advancedSemanticQueries, promptLoader),
-            new CSharpPatternSearchTool(advancedSemanticQueries, promptLoader),
-            new GeneratedCodeTool(advancedSemanticQueries, promptLoader),
+            new CallHierarchyTool(advancedSemanticQueries, promptLoader, operationalLimits.Semantic),
+            new SymbolImpactTool(advancedSemanticQueries, promptLoader, operationalLimits.Semantic),
+            new CSharpPatternSearchTool(advancedSemanticQueries, promptLoader, operationalLimits.Semantic),
+            new GeneratedCodeTool(advancedSemanticQueries, promptLoader, operationalLimits.Semantic),
             new FindSymbolTool(semanticEngines, promptLoader, limits),
             new FindReferencesTool(semanticEngines, promptLoader, limits),
             new FindImplementationsTool(semanticEngines, promptLoader, limits),
@@ -960,7 +1004,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 requireRunProcessApproval,
                 shellExecutable),
             new DateTimeTool(promptLoader),
-            new CSharpScriptTool(scriptEngine, promptLoader),
+            new CSharpScriptTool(scriptEngine, promptLoader, configuration.GetValue("tools:config:csharp_script:max_code_characters", 65536)),
             new WebSearchTool(
                 webSearchClient,
                 webSearchOptions,
@@ -984,10 +1028,15 @@ internal sealed class HostFoundation : IAsyncDisposable
             paths.RepositoryConfiguration,
             mcpApprovalPath: mcpApprovalPath,
             fetchAuthorization: webFetchAuthorization,
-            writeFileConfiguration: writeFileConfiguration);
+            writeFileConfiguration: writeFileConfiguration,
+            policyStoreLimits: operationalLimits.PolicyStores);
         return (
             stateManager,
-            new ToolRegistry(tools, stateManager, webFetchAuthorization),
+            new ToolRegistry(
+                tools,
+                stateManager,
+                webFetchAuthorization,
+                configuration.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true)),
             webFetchAuthorization,
             directFetchApprovalPrompt);
     }

@@ -100,6 +100,14 @@ dotnet format src/Threadsmith.sln --verify-no-changes --no-restore
 
 If formatting must be applied, limit it to the files or projects involved in your change and review the resulting diff carefully.
 
+Visual Studio also displays suggestion-level analyzer diagnostics. A build summary with zero warnings and errors does not include those suggestions. Check them explicitly when verifying changed code:
+
+```powershell
+dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info
+```
+
+Use `--include` with the changed file paths to focus this check. Correct relevant findings in the code; do not disable their rules to obtain a clean result.
+
 ## Testing changes
 
 Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the focused test project covering your change. Before submitting a pull request, run the same product build and test commands used by CI:

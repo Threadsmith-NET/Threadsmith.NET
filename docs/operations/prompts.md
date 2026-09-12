@@ -72,7 +72,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-read_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-read_file-Description.md` | Advertised description for `read_file`. | None |
 | `Tool-write_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-write_file-Description.md` | Advertised description for `write_file`. | None |
 | `Tool-memories-Description.md` | `Threadsmith.Tools` | `prompts/Tool-memories-Description.md` | Advertised description for `memories`. | None |
-| `Tool-search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-search-Description.md` | Advertised description for `search`. | None |
+| `Tool-search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-search-Description.md` | Advertised description for `search`. | `MaximumQueryCharacters` |
 | `Tool-git_status-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_status-Description.md` | Advertised description for `git_status`. | None |
 | `Tool-find_symbol-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_symbol-Description.md` | Advertised description for `find_symbol`. | None |
 | `Tool-find_references-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_references-Description.md` | Advertised description for `find_references`. | None |
@@ -174,7 +174,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Correction-git_diff-MissingRevision.md` | `Threadsmith.Tools` | `prompts/Correction-git_diff-MissingRevision.md` | Corrective guidance for a missing `git_diff` revision. | `FieldName`, `ModeDescription` |
 | `Correction-git_log-InvalidRevision.md` | `Threadsmith.Tools` | `prompts/Correction-git_log-InvalidRevision.md` | Corrective guidance for an invalid `git_log` revision. | `FieldName` |
 | `Correction-git_blame-InvalidRevision.md` | `Threadsmith.Tools` | `prompts/Correction-git_blame-InvalidRevision.md` | Corrective guidance for an invalid `git_blame` revision. | `FieldName` |
-| `Correction-search-Bounds.md` | `Threadsmith.Tools` | `prompts/Correction-search-Bounds.md` | Corrective guidance for invalid `search` bounds. | `MaximumMatches` |
+| `Correction-search-Bounds.md` | `Threadsmith.Tools` | `prompts/Correction-search-Bounds.md` | Corrective guidance for invalid `search` bounds. | `MaximumMatches`, `MaximumQueryCharacters` |
 | `Correction-run_process-UnsupportedShell.md` | `Threadsmith.Tools` | `prompts/Correction-run_process-UnsupportedShell.md` | Corrective guidance for an unsupported `run_process` shell. | `ShellExecutable` |
 | `Correction-Mutation-ImplementationRequiresTool.md` | `Threadsmith.Execution` | `prompts/Correction-Mutation-ImplementationRequiresTool.md` | Corrective guidance when a requested mutation requires the proposal tool. | None |
 | `Correction-Mutation-RenameSymbolSemanticUnavailable.md` | `Threadsmith.Execution` | `prompts/Correction-Mutation-RenameSymbolSemanticUnavailable.md` | Corrective guidance when semantic rename support is unavailable. | None |

@@ -303,11 +303,9 @@ internal static class ShellRunner
     private static bool TryGetStandingPreferenceWarning(string resultJson, out string warning)
     {
         warning = string.Empty;
-        if (resultJson.Length > 64 * 1024)
-        {
-            return false;
-        }
 
+        // Completed tool results already obey the configured tool-output limit. A second fixed
+        // ceiling here would silently drop warnings from otherwise valid memory results.
         try
         {
             using var document = JsonDocument.Parse(resultJson);

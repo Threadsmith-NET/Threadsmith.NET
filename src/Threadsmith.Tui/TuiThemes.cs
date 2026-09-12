@@ -5,19 +5,22 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 
 /// <summary>Atomically persists the default theme in the ordinary user configuration file.</summary>
 internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceStore
 {
-    private const int MaximumConfigurationBytes = 1024 * 1024;
+    private readonly int _maximumConfigurationBytes;
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(PathComparer);
     private readonly string _configurationPath;
 
     /// <summary>Initializes a new instance of the <see cref="UserConfigurationThemePreferenceStore"/> class.</summary>
-    internal UserConfigurationThemePreferenceStore(string configurationPath)
+    internal UserConfigurationThemePreferenceStore(string configurationPath, int maximumConfigurationBytes = 1024 * 1024)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationPath);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
+        _maximumConfigurationBytes = maximumConfigurationBytes;
         _configurationPath = Path.GetFullPath(configurationPath);
     }
 
@@ -39,7 +42,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
             var tui = GetOrCreateObject(root, "tui");
             SetProperty(tui, "defaultTheme", themeId);
             var updated = UpdateThemeDefault(original, themeId);
-            if (updated.Length > MaximumConfigurationBytes)
+            if (updated.Length > _maximumConfigurationBytes)
             {
                 throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
             }
@@ -347,7 +350,7 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         }
 
         var info = new FileInfo(_configurationPath);
-        if (info.Length > MaximumConfigurationBytes)
+        if (info.Length > _maximumConfigurationBytes)
         {
             throw new InvalidOperationException("The user configuration exceeds the supported size.");
         }
@@ -420,6 +423,7 @@ internal static class TuiThemeConfigurationLoader
 
     private static (ConfiguredThemeCatalog Catalog, string DefaultThemeId) LoadValidated(IConfiguration? configuration)
     {
+        var limits = TuiDisplayOptions.Load(configuration).Limits;
         var themes = BuiltInThemes.Create().ToList();
         var positions = themes
             .Select((theme, index) => new KeyValuePair<string, int>(theme.Theme.Id, index))
@@ -453,12 +457,12 @@ internal static class TuiThemeConfigurationLoader
                     .AddInMemoryCollection(layerValues)
                     .Build();
                 IConfigurationSection[] layerSections = [.. layer.GetSection("tui:themes").GetChildren()];
-                if (layerSections.Length > MaximumThemes)
+                if (layerSections.Length > limits.MaximumThemes)
                 {
-                    throw new InvalidOperationException($"At most {MaximumThemes} configured themes are supported.");
+                    throw new InvalidOperationException($"At most {limits.MaximumThemes} configured themes are supported.");
                 }
 
-                AddValidThemes(layerSections, configuredThemes, warnings);
+                AddValidThemes(layerSections, configuredThemes, warnings, limits);
             }
         }
         else
@@ -466,17 +470,17 @@ internal static class TuiThemeConfigurationLoader
             IConfigurationSection[] effectiveSections = configuration is null
                 ? []
                 : [.. configuration.GetSection("tui:themes").GetChildren()];
-            if (effectiveSections.Length > MaximumThemes)
+            if (effectiveSections.Length > limits.MaximumThemes)
             {
-                throw new InvalidOperationException($"At most {MaximumThemes} configured themes are supported.");
+                throw new InvalidOperationException($"At most {limits.MaximumThemes} configured themes are supported.");
             }
 
-            AddValidThemes(effectiveSections, configuredThemes, warnings);
+            AddValidThemes(effectiveSections, configuredThemes, warnings, limits);
         }
 
-        if (configuredThemes.Select(theme => theme.Theme.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() > MaximumThemes)
+        if (configuredThemes.Select(theme => theme.Theme.Id).Distinct(StringComparer.OrdinalIgnoreCase).Count() > limits.MaximumThemes)
         {
-            throw new InvalidOperationException($"At most {MaximumThemes} configured themes are supported.");
+            throw new InvalidOperationException($"At most {limits.MaximumThemes} configured themes are supported.");
         }
 
         foreach (var theme in configuredThemes)
@@ -508,13 +512,14 @@ internal static class TuiThemeConfigurationLoader
     private static void AddValidThemes(
         IEnumerable<IConfigurationSection> sections,
         ICollection<ConfiguredTheme> themes,
-        ICollection<string> warnings)
+        ICollection<string> warnings,
+        TuiResourceLimits limits)
     {
         foreach (var section in sections)
         {
             try
             {
-                themes.Add(ParseTheme(section));
+                themes.Add(ParseTheme(section, limits));
             }
             catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
             {
@@ -525,11 +530,11 @@ internal static class TuiThemeConfigurationLoader
         }
     }
 
-    private static ConfiguredTheme ParseTheme(IConfigurationSection section)
+    private static ConfiguredTheme ParseTheme(IConfigurationSection section, TuiResourceLimits limits)
     {
         var id = section["id"] ?? throw new InvalidOperationException("Configured themes require an id.");
         var name = section["name"] ?? id;
-        ValidateText(name, MaximumNameLength, "Theme names");
+        ValidateText(name, limits.MaximumThemeNameCharacters, "Theme names");
         var styles = new List<KeyValuePair<PresentationTextRole, TuiTextStyle>>();
         foreach (var styleSection in section.GetSection("styles").GetChildren())
         {
@@ -580,9 +585,9 @@ internal static class TuiThemeConfigurationLoader
         var spinner = uiSection["spinner"] ?? TuiThemeUi.Default.Spinner;
         var marker = uiSection["selectionMarker"] ?? TuiThemeUi.Default.SelectionMarker;
         var separator = uiSection["footerSeparator"] ?? TuiThemeUi.Default.FooterSeparator;
-        ValidateText(spinner, MaximumUiValueLength, "Theme spinner names");
-        ValidateText(marker, MaximumUiValueLength, "Theme selection markers");
-        ValidateText(separator, MaximumUiValueLength, "Theme footer separators");
+        ValidateText(spinner, limits.MaximumThemeUiCharacters, "Theme spinner names");
+        ValidateText(marker, limits.MaximumThemeUiCharacters, "Theme selection markers");
+        ValidateText(separator, limits.MaximumThemeUiCharacters, "Theme footer separators");
         if (!string.Equals(spinner, "dots", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException("The supported theme spinner is 'dots'.");

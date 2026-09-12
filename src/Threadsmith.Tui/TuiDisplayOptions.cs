@@ -12,6 +12,9 @@ public sealed record TuiDisplayOptions
     /// <summary>Gets whether ordinary model answers use bounded semantic markdown rendering.</summary>
     public bool RenderMarkdown { get; init; } = true;
 
+    /// <summary>Gets configured interactive retention and rendering limits.</summary>
+    public TuiResourceLimits Limits { get; init; } = new();
+
     /// <summary>Gets bounded diagnostics produced while reading display configuration.</summary>
     public IReadOnlyList<string> Diagnostics { get; init; } = [];
 
@@ -25,9 +28,12 @@ public sealed record TuiDisplayOptions
         var diagnostics = new List<string>(2);
         var showDurations = ParseBoolean(configuration?[durationKey], durationKey, diagnostics);
         var renderMarkdown = ParseBoolean(configuration?[markdownKey], markdownKey, diagnostics);
+        var limits = configuration?.GetSection("tui:limits").Get<TuiResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        limits.Validate();
         return new TuiDisplayOptions
         {
             ShowOperationDurations = showDurations,
+            Limits = limits,
             RenderMarkdown = renderMarkdown,
             Diagnostics = diagnostics.ToArray(),
         };
@@ -37,7 +43,7 @@ public sealed record TuiDisplayOptions
     /// <returns>Immutable frontend-neutral behavior.</returns>
     internal InteractionDisplayOptions ToInteractionOptions()
     {
-        return new InteractionDisplayOptions(RenderMarkdown, ShowOperationDurations);
+        return new InteractionDisplayOptions(RenderMarkdown, ShowOperationDurations) { Limits = Limits };
     }
 
     private static bool ParseBoolean(string? configured, string key, List<string> diagnostics)

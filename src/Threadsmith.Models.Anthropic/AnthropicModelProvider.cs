@@ -8,6 +8,7 @@ using Threadsmith.Models;
 /// <summary>Owns one native request per host round, with a single deadline and classified retry loop.</summary>
 internal sealed class AnthropicModelProvider : IModelProvider
 {
+    private readonly AnthropicResourceLimits _limits;
     private readonly string _apiKey;
     private readonly AnthropicModelCompatibility _compatibility;
     private readonly HttpClient _httpClient;
@@ -15,12 +16,14 @@ internal sealed class AnthropicModelProvider : IModelProvider
     private readonly string _providerId;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicModelProvider"/> class.</summary>
-    internal AnthropicModelProvider(HttpClient httpClient, ModelProfile profile, string apiKey, AnthropicModelCompatibility compatibility, string? providerId = null)
+    internal AnthropicModelProvider(HttpClient httpClient, ModelProfile profile, string apiKey, AnthropicModelCompatibility compatibility, string? providerId = null, AnthropicResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
         ArgumentNullException.ThrowIfNull(compatibility);
+        _limits = limits ?? new();
+        _limits.Validate();
         _httpClient = httpClient;
         _profile = profile;
         _apiKey = apiKey;
@@ -29,9 +32,19 @@ internal sealed class AnthropicModelProvider : IModelProvider
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<ModelChunk> StreamAsync(
+        ModelStreamRequest request,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        return StreamCoreAsync(request, cancellationToken);
+    }
+
+    private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(
+        ModelStreamRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var offeredEnvelopes = new List<ModelResponseReplayEnvelope>();
         try
         {
@@ -50,8 +63,8 @@ internal sealed class AnthropicModelProvider : IModelProvider
             var parameters = AnthropicRequestMapper.Create(request, _profile, _compatibility);
             for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
             {
-                using var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, _profile.Timeout, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver);
-                var adapter = new AnthropicStreamAdapter(request, _profile, _compatibility, _providerId, _apiKey);
+                using var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, _profile.Timeout, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes);
+                var adapter = new AnthropicStreamAdapter(request, _profile, _compatibility, _providerId, _apiKey, _limits);
                 await using var events = client.Messages.CreateStreaming(parameters, deadline.Token).GetAsyncEnumerator(deadline.Token);
                 var observed = false;
                 Failure? failure = null;

@@ -3,6 +3,8 @@ namespace Threadsmith.App;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Agents;
+using Threadsmith.Interaction.Contracts;
+using Threadsmith.Tui;
 
 /// <summary>Resolves whole name lists independently across ordinary configuration providers.</summary>
 internal static class AgentNameConfiguration
@@ -10,14 +12,15 @@ internal static class AgentNameConfiguration
     /// <summary>Loads immutable names and bounded warnings without echoing untrusted values.</summary>
     internal static (AgentNameCatalog Catalog, IReadOnlyList<string> Warnings) Load(IConfiguration configuration)
     {
+        var limits = TuiDisplayOptions.Load(configuration).Limits;
         var warnings = new List<string>();
         var roles = new Dictionary<AgentRole, IReadOnlyList<string>>();
-        var shared = LoadList(configuration, "tui:agentNames:defaultNames", warnings);
-        foreach (var section in configuration.GetSection("tui:agentNames:byRole").GetChildren().Take(64))
+        var shared = LoadList(configuration, "tui:agentNames:defaultNames", warnings, limits);
+        foreach (var section in configuration.GetSection("tui:agentNames:byRole").GetChildren())
         {
             if (AgentRoleNames.TryParse(section.Key, out var role))
             {
-                roles[role] = LoadList(configuration, section.Path, warnings);
+                roles[role] = LoadList(configuration, section.Path, warnings, limits);
             }
             else if (!warnings.Contains("Unknown agent-name role ignored.", StringComparer.Ordinal))
             {
@@ -25,12 +28,13 @@ internal static class AgentNameConfiguration
             }
         }
 
-        return (new AgentNameCatalog(shared, roles), warnings.AsReadOnly());
+        return (new AgentNameCatalog(shared, roles, limits), warnings.AsReadOnly());
     }
 
-    private static IReadOnlyList<string> LoadList(IConfiguration configuration, string path, List<string> warnings)
+    private static IReadOnlyList<string> LoadList(IConfiguration configuration, string path, List<string> warnings, TuiResourceLimits limits)
     {
         string[] raw;
+        var probeCount = (int)Math.Min((long)limits.MaximumAgentNames + 1, int.MaxValue);
         if (configuration is IConfigurationRoot root)
         {
             var provider = root.Providers.Reverse().FirstOrDefault(item =>
@@ -40,7 +44,7 @@ internal static class AgentNameConfiguration
                 return [];
             }
 
-            var keys = provider.GetChildKeys([], path).Distinct(StringComparer.OrdinalIgnoreCase).Take(AgentNameCatalog.MaximumNames + 1).ToArray();
+            var keys = provider.GetChildKeys([], path).Distinct(StringComparer.OrdinalIgnoreCase).Take(probeCount).ToArray();
             if (keys.Any(key => !int.TryParse(key, out var index) || index < 0))
             {
                 warnings.Add("Invalid agent-name list ignored.");
@@ -52,11 +56,11 @@ internal static class AgentNameConfiguration
         }
         else
         {
-            raw = [.. configuration.GetSection(path).GetChildren().Take(AgentNameCatalog.MaximumNames + 1)
+            raw = [.. configuration.GetSection(path).GetChildren().Take(probeCount)
                 .Select(item => item.Value ?? string.Empty)];
         }
 
-        var valid = AgentNameCatalog.Validate(raw);
+        var valid = AgentNameCatalog.Validate(raw, limits);
         if (valid.Count != raw.Length || valid.Count == 0)
         {
             warnings.Add("Agent-name list contained empty, invalid, duplicate, or excessive entries; usable names or fallback names will be used.");

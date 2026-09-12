@@ -57,6 +57,8 @@ public sealed class RepositoryLifecycle :
         ".csproj", ".fsproj", ".vbproj",
     };
 
+    private readonly WorkspaceResourceLimits _resourceLimits;
+    private readonly int _maximumConfigurationBytes;
     private readonly IDomainEventStream _events;
 
     private readonly IRepositoryFactsStore _factsStore;
@@ -85,11 +87,17 @@ public sealed class RepositoryLifecycle :
         TransactionalWorkspaceCoordinator? mutationCoordinator = null,
         ILogger<RepositoryLifecycle>? logger = null,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
-        Func<string, CancellationToken, Task>? repositoryOpened = null)
+        Func<string, CancellationToken, Task>? repositoryOpened = null,
+        WorkspaceResourceLimits? resourceLimits = null,
+        int maximumConfigurationBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(factsStore);
         ArgumentNullException.ThrowIfNull(environmentResolver);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
+        _maximumConfigurationBytes = maximumConfigurationBytes;
+        _resourceLimits = resourceLimits ?? new();
+        _resourceLimits.Validate();
         _events = events;
         _factsStore = factsStore;
         _environmentResolver = environmentResolver;
@@ -162,9 +170,9 @@ public sealed class RepositoryLifecycle :
         var configPath = NormalizeUnderRoot(
             repositoryPath,
             Path.Combine(".threadsmith", "config.json"));
-        if (File.Exists(configPath) && new FileInfo(configPath).Length > 1024 * 1024)
+        if (File.Exists(configPath) && new FileInfo(configPath).Length > _maximumConfigurationBytes)
         {
-            throw new InvalidDataException("Repository configuration exceeds the 1 MiB safety limit.");
+            throw new InvalidDataException("Repository configuration exceeds the configured byte limit.");
         }
 
         var configuration = new ConfigurationBuilder()
@@ -251,6 +259,7 @@ public sealed class RepositoryLifecycle :
                 configuration["build:configuration"] ?? "Debug",
                 configuration["build:platform"] ?? "Any CPU",
                 effectiveTrust >= RepositoryTrustLevel.TrustedBuild,
+                _resourceLimits,
                 cancellationToken)
             : null;
         if (_mutationApprovalPolicy is not null)
@@ -427,6 +436,7 @@ public sealed class RepositoryLifecycle :
                 environment,
                 session.RepositoryPath,
                 solutionPath,
+                _resourceLimits,
                 cancellationToken);
         }
 
@@ -534,7 +544,7 @@ public sealed class RepositoryLifecycle :
             new ParallelOptions
             {
                 CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount, 8)),
+                MaxDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount, _resourceLimits.MaximumConcurrentBaselineHashes)),
             },
             async (path, token) =>
             {
@@ -569,7 +579,7 @@ public sealed class RepositoryLifecycle :
             cancellationToken);
         var gitStatusLines = gitStatus?.ReplaceLineEndings("\n")
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Take(1000)
+            .Take(_resourceLimits.MaximumBaselineStatusLines)
             .ToArray() ?? [];
         var baseline = new WorkspaceBaseline(
             command.WorkspaceId,
@@ -688,7 +698,7 @@ public sealed class RepositoryLifecycle :
                 return null;
             }
 
-            const int maximumOutputCharacters = 64 * 1024;
+            var maximumOutputCharacters = _resourceLimits.MaximumProcessOutputCharacters;
             var outputTask = ReadBoundedOutputAsync(
                 process.StandardOutput,
                 maximumOutputCharacters,
@@ -796,7 +806,7 @@ public sealed class RepositoryLifecycle :
         ? StringComparison.OrdinalIgnoreCase
         : StringComparison.Ordinal;
 
-    private static async Task PersistSolutionPreferenceAsync(
+    private async Task PersistSolutionPreferenceAsync(
         string repositoryPath,
         string? solutionRelativePath,
         CancellationToken cancellationToken)
@@ -820,10 +830,10 @@ public sealed class RepositoryLifecycle :
                 JsonObject root;
                 if (File.Exists(configurationPath))
                 {
-                    if (new FileInfo(configurationPath).Length > 1024 * 1024)
+                    if (new FileInfo(configurationPath).Length > _maximumConfigurationBytes)
                     {
                         throw new InvalidDataException(
-                            "Repository configuration exceeds the 1 MiB safety limit.");
+                            "Repository configuration exceeds the configured byte limit.");
                     }
 
                     var content = await File.ReadAllTextAsync(configurationPath, token);

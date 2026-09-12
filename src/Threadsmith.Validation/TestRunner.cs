@@ -87,6 +87,8 @@ public sealed partial class TestResultNormalizer
 /// <summary>Runs selected test projects through the tracked process manager.</summary>
 public sealed class TestRunner
 {
+    private readonly ValidationResourceLimits _limits;
+
     private static readonly Histogram<double> _testLatency = ValidationMetrics.Meter.CreateHistogram<double>(
         "threadsmith.validation.tests.duration",
         "ms");
@@ -104,10 +106,12 @@ public sealed class TestRunner
     private readonly IProcessManager _processManager;
 
     /// <summary>Initializes a new instance of the <see cref="TestRunner"/> class.</summary>
-    public TestRunner(IProcessManager processManager, IDomainEventStream events)
+    public TestRunner(IProcessManager processManager, IDomainEventStream events, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
         ArgumentNullException.ThrowIfNull(events);
+        _limits = limits ?? new();
+        _limits.Validate();
         _processManager = processManager;
         _events = events;
     }
@@ -209,7 +213,7 @@ public sealed class TestRunner
                         ],
                     WorkingDirectory = root,
                     Timeout = timeout,
-                    MaximumOutputCharacters = 1024 * 1024,
+                    MaximumOutputCharacters = _limits.MaximumBuildOutputCharacters,
                     Origin = ProcessRequestOrigin.Host,
                 },
                 cancellationToken);

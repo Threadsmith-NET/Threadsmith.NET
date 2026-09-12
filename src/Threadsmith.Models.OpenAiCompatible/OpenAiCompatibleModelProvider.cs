@@ -56,9 +56,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<ModelChunk> StreamAsync(
+    public IAsyncEnumerable<ModelChunk> StreamAsync(
         ModelStreamRequest request,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.ResolvedProfileId is { } resolvedProfileId
@@ -92,10 +92,18 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         if (maximumOutputTokens <= 0 || maximumOutputTokens > _profile.MaximumOutputTokens)
         {
             throw new ModelProviderException(
-                $"The requested output ceiling must be between 1 and the resolved profile maximum of "
+                "The requested output ceiling must be between 1 and the resolved profile maximum of "
                 + $"{_profile.MaximumOutputTokens} tokens.");
         }
 
+        return StreamCoreAsync(request, maximumOutputTokens, cancellationToken);
+    }
+
+    private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(
+        ModelStreamRequest request,
+        int maximumOutputTokens,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -295,6 +303,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             long toolCallCount = 0;
             var outputTracker = new StreamedOutputTracker(_profile.MaximumStreamedBytes, _maximumStreamedCharacters);
             var usageReported = false;
+            var textGuard = canonicalTools.Count > 0 ? new NativeToolTextGuard() : null;
+            var orphanedToolArguments = false;
             while (true)
             {
                 string? line;
@@ -400,7 +410,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                     {
                         outputTracker.Add(content);
                         completionCharacters += content.Length;
-                        yield return new ModelChunk { Text = content };
+                        var visibleContent = textGuard?.Append(content) ?? content;
+                        if (!orphanedToolArguments && visibleContent.Length > 0)
+                        {
+                            yield return new ModelChunk { Text = visibleContent };
+                        }
                     }
 
                     foreach (var toolCall in choice.Delta.ToolCalls)
@@ -430,6 +444,21 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
                     if (choice.FinishReason is { } finishReason)
                     {
+                        if (textGuard is not null)
+                        {
+                            orphanedToolArguments |= textGuard.Complete(toolCallCount > 0, out var remainingText);
+                            if (remainingText.Length > 0)
+                            {
+                                yield return new ModelChunk { Text = remainingText };
+                            }
+                        }
+
+                        if (orphanedToolArguments)
+                        {
+                            // Keep reading the usage trailer, but release no calls from this response.
+                            continue;
+                        }
+
                         foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
                         {
                             yield return toolChunk;
@@ -449,9 +478,21 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 }
             }
 
-            foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
+            if (textGuard is not null)
             {
-                yield return toolChunk;
+                orphanedToolArguments |= textGuard.Complete(toolCallCount > 0, out var remainingText);
+                if (remainingText.Length > 0)
+                {
+                    yield return new ModelChunk { Text = remainingText };
+                }
+            }
+
+            if (!orphanedToolArguments)
+            {
+                foreach (var toolChunk in DrainToolCalls(toolCalls, toolNameMap))
+                {
+                    yield return toolChunk;
+                }
             }
 
             if (!usageReported)
@@ -467,6 +508,18 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         _profile.Cost.Calculate(inputTokens, outputTokens),
                         IsEstimate: true),
                 };
+            }
+
+            if (orphanedToolArguments)
+            {
+                throw new MalformedInvocationException(new MalformedInvocationDiagnostic
+                {
+                    Kind = MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                    ProviderFamily = "openai-compatible",
+                    ToolCallCount = toolCalls.Count,
+                    SafeMessage = "The provider emitted tool parameters as assistant text. "
+                        + "The tool batch was not executed because its arguments may be incomplete.",
+                });
             }
         }
     }

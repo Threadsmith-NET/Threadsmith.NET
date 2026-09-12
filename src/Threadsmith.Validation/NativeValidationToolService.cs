@@ -20,13 +20,7 @@ public sealed record NuGetAdvisorySourceOptions(
 /// <summary>Runs bounded exploratory .NET health and validation operations through the tracked process owner.</summary>
 public sealed partial class NativeValidationToolService : INativeValidationToolService
 {
-    private const int DiagnosticPageSize = 100;
-    private const int MaximumAdvisories = 200;
-    private const int MaximumOutputCharacters = 512 * 1024;
-    private const int MaximumDependencies = 1000;
-    private const int MaximumDiscoveredTests = 500;
-    private const int OperationTimeoutSeconds = 120;
-    private const long MaximumAssetsBytes = 16 * 1024 * 1024;
+    private readonly ValidationResourceLimits _limits;
     private readonly ConcurrentDictionary<string, DiagnosticContinuation> _diagnosticContinuations = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, DiagnosticRun> _diagnosticRuns = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, StoredDiscoveredTest> _discoveredTests = new(StringComparer.Ordinal);
@@ -49,15 +43,18 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
     public NativeValidationToolService(
         IProcessManager processManager,
         ISecretResolver? secretResolver,
-        IEnumerable<NuGetAdvisorySourceOptions> sources)
+        IEnumerable<NuGetAdvisorySourceOptions> sources,
+        ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
         ArgumentNullException.ThrowIfNull(sources);
+        _limits = limits ?? new ValidationResourceLimits();
+        _limits.Validate();
         _processManager = processManager;
         _secretResolver = secretResolver;
         _testDiscoverer = new TestDiscoverer(processManager);
         NuGetAdvisorySourceOptions[] configuredSources = [.. sources];
-        if (configuredSources.Length > 16
+        if (configuredSources.Length > _limits.MaximumAdvisorySources
             || configuredSources.Any(source => !IsValidSource(source)
                 || (source.SecretReference is not null && secretResolver is null)))
         {
@@ -125,7 +122,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                 relativeAssets,
                 "NuGet assets");
             var info = new FileInfo(assetsPath);
-            if (info.Length > MaximumAssetsBytes)
+            if (info.Length > _limits.MaximumAssetsBytes)
             {
                 throw new InvalidDataException("NuGet restore assets exceed the inspection size limit.");
             }
@@ -170,7 +167,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                         {
                             collected.AddRange(ParseAdvisories(
                                 process.StandardOutput,
-                                MaximumAdvisories - collected.Count));
+                                _limits.MaximumAdvisories - collected.Count));
                         }
                         catch (JsonException)
                         {
@@ -186,7 +183,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                 sourceNames.AddRange(_sources.Select(source => source.Source.GetLeftPart(UriPartial.Authority)));
                 advisories = collected
                     .Distinct()
-                    .Take(MaximumAdvisories)
+                    .Take(_limits.MaximumAdvisories)
                     .ToArray();
 
                 if (advisoryOutputTruncated)
@@ -199,9 +196,9 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         NuGetDependencyNode[] boundedDependencies = [.. dependencies
             .OrderBy(item => item.TargetFramework, StringComparer.Ordinal)
             .ThenBy(item => item.Id, StringComparer.OrdinalIgnoreCase)
-            .Take(MaximumDependencies)];
+            .Take(_limits.MaximumDependencies)];
         var truncated = boundedDependencies.Length != dependencies.Count
-            || advisories.Count >= MaximumAdvisories
+            || advisories.Count >= _limits.MaximumAdvisories
             || omissions.Any(omission => omission.Contains("truncated", StringComparison.OrdinalIgnoreCase));
         var complete = File.Exists(assetsPath)
             && (request.SourceMode == PackageHealthSourceMode.Offline
@@ -274,7 +271,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromSeconds(OperationTimeoutSeconds),
+            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         var output = string.Concat(process.StandardOutput, Environment.NewLine, process.StandardError).Trim();
         var invocationId = CreateIdentity(string.Join('|', runId.Value, ValidationInvocationKind.FormatCheck, DateTimeOffset.UtcNow.Ticks, target));
@@ -383,7 +380,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
 
         DiagnosticQueryItem[] all = [.. items];
         offset = Math.Min(offset, all.Length);
-        DiagnosticQueryItem[] page = [.. all.Skip(offset).Take(DiagnosticPageSize)];
+        DiagnosticQueryItem[] page = [.. all.Skip(offset).Take(_limits.DiagnosticPageSize)];
         string? nextToken = null;
         if (offset + page.Length < all.Length)
         {
@@ -423,7 +420,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             [project],
             traitFilter,
-            TimeSpan.FromSeconds(OperationTimeoutSeconds),
+            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         DiscoveredTest[] discovered = [.. cases
             .Where(testCase => testCase.FullyQualifiedName.Length <= 1024)
@@ -441,7 +438,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         }
 
         DiscoveredTest[] all = [.. ApplyTestFilters(discovered, request)];
-        DiscoveredTest[] bounded = [.. all.Take(MaximumDiscoveredTests)];
+        DiscoveredTest[] bounded = [.. all.Take(_limits.MaximumDiscoveredTests)];
         foreach (var test in bounded)
         {
             _discoveredTests[test.Id.Value] = new StoredDiscoveredTest(root, test);
@@ -524,7 +521,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromSeconds(OperationTimeoutSeconds),
+            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         var selection = new TestSelection { Projects = [project] };
         var normalized = TestResultNormalizer.Normalize(project, process, selection.RelatedMutationIds);
@@ -567,7 +564,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             root,
             runId,
             arguments,
-            TimeSpan.FromSeconds(OperationTimeoutSeconds),
+            TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
         var output = string.Concat(process.StandardOutput, Environment.NewLine, process.StandardError).Trim();
         Diagnostic[] diagnostics = [.. DiagnosticNormalizer.Normalize(
@@ -695,7 +692,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
                 EnvironmentVariables = environmentVariables,
                 WorkingDirectory = root,
                 Timeout = timeout,
-                MaximumOutputCharacters = MaximumOutputCharacters,
+                MaximumOutputCharacters = _limits.MaximumOutputCharacters,
                 Origin = ProcessRequestOrigin.Host,
             },
             cancellationToken);
@@ -980,9 +977,9 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         }
     }
 
-    private static TestProject ReadTestProject(string root, string projectPath)
+    private TestProject ReadTestProject(string root, string projectPath)
     {
-        if (new FileInfo(projectPath).Length > 1024 * 1024)
+        if (new FileInfo(projectPath).Length > _limits.MaximumProjectXmlBytes)
         {
             throw new InvalidDataException("Test project metadata exceeds the inspection size limit.");
         }

@@ -35,10 +35,11 @@ public sealed class AnthropicModelCatalogCache
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow,
     };
 
+    private readonly AnthropicResourceLimits _limits;
     private readonly string _path;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicModelCatalogCache"/> class with an absolute user-owned path.</summary>
-    public AnthropicModelCatalogCache(string path)
+    public AnthropicModelCatalogCache(string path, AnthropicResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!Path.IsPathFullyQualified(path))
@@ -46,12 +47,14 @@ public sealed class AnthropicModelCatalogCache
             throw new ArgumentException("Anthropic metadata cache paths must be absolute.", nameof(path));
         }
 
+        _limits = limits ?? new();
+        _limits.Validate();
         _path = Path.GetFullPath(path);
         ValidatePath();
     }
 
     /// <summary>Creates a confined filename independent of provider-ID path syntax.</summary>
-    public static AnthropicModelCatalogCache ForProvider(string directory, string providerId)
+    public static AnthropicModelCatalogCache ForProvider(string directory, string providerId, AnthropicResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
@@ -69,7 +72,7 @@ public sealed class AnthropicModelCatalogCache
             throw new InvalidOperationException("Anthropic cache path escapes its user-owned directory.");
         }
 
-        return new AnthropicModelCatalogCache(path);
+        return new AnthropicModelCatalogCache(path, limits);
     }
 
     /// <summary>Loads one validated provider/reference snapshot, returning null for corrupt or unavailable data.</summary>
@@ -86,10 +89,10 @@ public sealed class AnthropicModelCatalogCache
             using var memory = new MemoryStream();
             var buffer = new byte[4096];
             int read;
-            while ((read = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, MaximumBytes + 1L - memory.Length)), cancellationToken).ConfigureAwait(false)) > 0)
+            while ((read = await stream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, _limits.MaximumMetadataBytes + 1L - memory.Length)), cancellationToken).ConfigureAwait(false)) > 0)
             {
                 await memory.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-                if (memory.Length > MaximumBytes)
+                if (memory.Length > _limits.MaximumMetadataBytes)
                 {
                     return null;
                 }
@@ -122,7 +125,7 @@ public sealed class AnthropicModelCatalogCache
 
         cancellationToken.ThrowIfCancellationRequested();
         var bytes = JsonSerializer.SerializeToUtf8Bytes(entry, SerializerOptions);
-        if (bytes.Length > MaximumBytes)
+        if (bytes.Length > _limits.MaximumMetadataBytes)
         {
             throw new ModelProviderException("Anthropic cache metadata exceeds its byte limit.");
         }
@@ -169,9 +172,9 @@ public sealed class AnthropicModelCatalogCache
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(secretReference.Trim().ToLowerInvariant())));
     }
 
-    private static bool IsValid(AnthropicModelCatalogCacheEntry? entry, string providerId, string identity)
+    private bool IsValid(AnthropicModelCatalogCacheEntry? entry, string providerId, string identity)
     {
-        return entry is { SchemaVersion: 2, Models.Count: <= 128 }
+        return entry is { SchemaVersion: 2 } && entry.Models.Count <= _limits.MaximumDiscoveredModels
             && entry.FetchedAt >= DateTimeOffset.UnixEpoch && entry.FetchedAt <= DateTimeOffset.UtcNow
             && string.Equals(entry.ProviderId, providerId, StringComparison.OrdinalIgnoreCase)
             && AnthropicCatalogHydrator.IsSafeIdentity(entry.ProviderId)

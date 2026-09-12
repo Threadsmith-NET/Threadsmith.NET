@@ -144,6 +144,8 @@ Selection considers only configured profiles. It rejects profiles that lack requ
 
 Interactive general turns require tool-call capability so the model can use authorized read-only functions or call the host-owned `propose_plan` function without a separate classifier request. Profiles intended for interactive use must set `capabilities:toolCalls` to `true` and the endpoint must implement OpenAI-compatible function tools. The host sends only read-only runtime tools plus `propose_plan`; mutation tools remain unavailable before approval.
 
+OpenAI-compatible responses that combine native tool calls with a standalone orphaned XML parameter tail are treated as malformed invocations. Threadsmith holds that ambiguous leading fragment until the response can be classified, prevents the entire affected tool batch from executing, and requests correction through the existing conversation or subagent correction flow. Reported token usage is retained. Ordinary prose streams immediately; valid XML, fenced examples, and unconfirmed fragments remain unchanged. This handling is shared by MAIN and subagents and does not reconstruct missing arguments from displayed text.
+
 ## Models for delegated roles
 
 Set `agents:roleModels` in trusted user configuration at `~/.threadsmith/config.json` or machine configuration at `%ProgramData%/Threadsmith/config.json`. Each entry selects an existing enabled profile from the provider catalog built without repository configuration. The exact role keys are `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, and `architectureReviewer`.
@@ -281,3 +283,5 @@ Keep the response mode appropriate to your endpoint. Both effort-bearing templat
 ### Interactive `/reasoning` command
 
 In the interactive terminal, `/reasoning` reports the resolved model and whether control is selectable, always on, or unsupported. `/reasoning <level>` is accepted only for selectable models and only for a level advertised by that model's configuration. Always-on and unsupported models return an actionable non-selectable message. Switching profiles revalidates the shared preference and resets it to `none`; switching back does not restore the former value.
+
+Provider-catalog validation bounds are configurable with trusted `model:catalogLimits` settings. Anthropic provider entries also accept `resourceLimits` for stream, replay, discovery, and metadata limits. See [Resource limits](resource-limits.md) for the complete defaults and example; external protocol and model capabilities remain authoritative.

@@ -8,10 +8,14 @@ internal sealed class McpBoundedHttpResponseHandler : DelegatingHandler
     /// <summary>Maximum encoded bytes accepted from one HTTP response.</summary>
     internal const int MaximumResponseBytes = 1024 * 1024;
 
+    private readonly int _maximumResponseBytes;
+
     /// <summary>Initializes a new instance of the <see cref="McpBoundedHttpResponseHandler"/> class.</summary>
-    internal McpBoundedHttpResponseHandler(HttpMessageHandler innerHandler)
+    internal McpBoundedHttpResponseHandler(HttpMessageHandler innerHandler, int maximumResponseBytes = MaximumResponseBytes)
         : base(innerHandler)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumResponseBytes);
+        _maximumResponseBytes = maximumResponseBytes;
     }
 
     /// <inheritdoc />
@@ -24,7 +28,7 @@ internal sealed class McpBoundedHttpResponseHandler : DelegatingHandler
             response.Content.Headers.ContentType?.MediaType,
             "text/event-stream",
             StringComparison.OrdinalIgnoreCase);
-        if (!isEventStream && response.Content.Headers.ContentLength is > MaximumResponseBytes)
+        if (!isEventStream && response.Content.Headers.ContentLength > _maximumResponseBytes)
         {
             response.Dispose();
             throw new InvalidDataException("The MCP HTTP response exceeds the host wire bound.");
@@ -32,7 +36,7 @@ internal sealed class McpBoundedHttpResponseHandler : DelegatingHandler
 
         response.Content = new BoundedHttpContent(
             response.Content,
-            MaximumResponseBytes,
+            _maximumResponseBytes,
             isEventStream);
         return response;
     }

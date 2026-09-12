@@ -6,7 +6,7 @@ using System.Text.RegularExpressions;
 internal static class WebSearchRequestContract
 {
     /// <summary>Maximum number of characters disclosed in one query.</summary>
-    internal const int MaximumQueryCharacters = 500;
+    internal const int MaximumQueryCharacters = 600;
 
     /// <summary>Maximum number of whitespace-delimited words accepted by the provider.</summary>
     internal const int MaximumQueryWords = 75;
@@ -33,14 +33,14 @@ internal static class WebSearchRequestContract
         StringComparer.Ordinal);
 
     /// <summary>Rejects invalid input before credentials or network access at either entry point.</summary>
-    internal static void Validate(WebSearchRequest input)
+    internal static void Validate(WebSearchRequest input, int maximumFreshnessDays = MaximumFreshnessDays, int maximumQueryCharacters = 500)
     {
         ArgumentNullException.ThrowIfNull(input);
         if (string.IsNullOrWhiteSpace(input.Query)
-            || input.Query.Length > MaximumQueryCharacters
+            || input.Query.Length > Math.Min(maximumQueryCharacters, MaximumQueryCharacters)
             || input.Query.Any(char.IsControl))
         {
-            throw new ToolArgumentValidationException("query must contain 1 through 500 plain-text characters, with no control characters.");
+            throw new ToolArgumentValidationException($"query must contain 1 through {maximumQueryCharacters} plain-text characters, with no control characters.");
         }
 
         if (input.Query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length > MaximumQueryWords)
@@ -53,9 +53,9 @@ internal static class WebSearchRequestContract
             throw new ToolArgumentValidationException("maximumResults must be an integer from 1 through 20; omit it to use 5.");
         }
 
-        if (input.FreshnessDays is < 1 or > MaximumFreshnessDays)
+        if (input.FreshnessDays < 1 || input.FreshnessDays > maximumFreshnessDays)
         {
-            throw new ToolArgumentValidationException("freshnessDays must be an integer from 1 through 365; omit it for no freshness filter.");
+            throw new ToolArgumentValidationException("freshnessDays must be an integer within the configured range; omit it for no freshness filter.");
         }
 
         if (input.Locale is not null)

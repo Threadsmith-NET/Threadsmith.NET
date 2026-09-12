@@ -12,16 +12,17 @@ using Threadsmith.Core;
 internal sealed class McpToolApprovalStore
 {
     private const int CurrentSchemaVersion = 1;
-    private const int MaximumApprovals = 4096;
-    private const int MaximumFileBytes = 1024 * 1024;
+    private readonly PolicyStoreResourceLimits _limits;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly string? _path;
     private HashSet<string> _approvals;
 
     /// <summary>Initializes a new instance of the <see cref="McpToolApprovalStore"/> class.</summary>
-    internal McpToolApprovalStore(string? path)
+    internal McpToolApprovalStore(string? path, PolicyStoreResourceLimits? limits = null)
     {
+        _limits = limits ?? new();
+        _limits.Validate();
         _path = string.IsNullOrWhiteSpace(path) ? null : Path.GetFullPath(path);
         try
         {
@@ -120,7 +121,7 @@ internal sealed class McpToolApprovalStore
             or System.Text.Json.JsonException;
     }
 
-    private static HashSet<string> Load(string? path)
+    private HashSet<string> Load(string? path)
     {
         if (path is null || !File.Exists(path))
         {
@@ -149,7 +150,7 @@ internal sealed class McpToolApprovalStore
             throw new InvalidOperationException("The MCP tool approval store permissions are unsafe.");
         }
 
-        if (file.Length > MaximumFileBytes)
+        if (file.Length > _limits.MaximumPolicyFileBytes)
         {
             throw new InvalidOperationException("The MCP tool approval store exceeds its host-owned size bound.");
         }
@@ -158,7 +159,7 @@ internal sealed class McpToolApprovalStore
             ?? throw new InvalidOperationException("The MCP tool approval store must contain a JSON object.");
         if (root["schemaVersion"]?.GetValue<int>() != CurrentSchemaVersion
             || root["approvals"] is not JsonArray approvalNodes
-            || approvalNodes.Count > MaximumApprovals)
+            || approvalNodes.Count > _limits.MaximumApprovalEntries)
         {
             throw new InvalidOperationException("The MCP tool approval store has an unsupported or oversized schema.");
         }
@@ -221,12 +222,12 @@ internal sealed class McpToolApprovalStore
                 || string.Equals(principal.Value, "S-1-3-4", StringComparison.Ordinal);
     }
 
-    private static async Task PersistAsync(
+    private async Task PersistAsync(
         string path,
         IReadOnlyCollection<string> approvals,
         CancellationToken cancellationToken)
     {
-        if (approvals.Count > MaximumApprovals)
+        if (approvals.Count > _limits.MaximumApprovalEntries)
         {
             throw new InvalidOperationException("The MCP tool approval store exceeds its host-owned entry bound.");
         }

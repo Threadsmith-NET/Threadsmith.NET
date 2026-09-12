@@ -25,13 +25,7 @@ public sealed class McpManager :
     IMcpManager,
     ICommandHandler<ExecuteMcpManagementCommand, McpManagementResult>
 {
-    private const int MaximumArguments = 32;
-    private const int MaximumArgumentCharacters = 16 * 1024;
-    private const int MaximumCapabilities = 256;
-    private const int MaximumFailureCharacters = 1024;
-    private const int MaximumProfiles = 64;
-    private const int MaximumRecentLatencySamples = 32;
-
+    private readonly McpResourceLimits _limits;
     private readonly IMcpAdapter _adapter;
     private readonly Func<McpConnectionResult, CancellationToken, Task>? _connectedCallback;
     private readonly SemaphoreSlim _connectionLimiter;
@@ -56,7 +50,8 @@ public sealed class McpManager :
         TimeProvider? timeProvider = null,
         int maximumConcurrentConnections = 4,
         Func<McpConnectionResult, CancellationToken, Task>? connectedCallback = null,
-        Func<McpConnectionProfile, McpImportedCapability, CancellationToken, Task<bool>>? explicitReadAuthorizer = null)
+        Func<McpConnectionProfile, McpImportedCapability, CancellationToken, Task<bool>>? explicitReadAuthorizer = null,
+        McpResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(profiles);
         ArgumentNullException.ThrowIfNull(adapter);
@@ -64,11 +59,13 @@ public sealed class McpManager :
         ArgumentNullException.ThrowIfNull(identityManager);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
-        if (maximumConcurrentConnections is < 1 or > 16)
+        _limits = limits ?? new();
+        _limits.Validate();
+        if (maximumConcurrentConnections < 1)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(maximumConcurrentConnections),
-                "MCP concurrent connection limit must be between 1 and 16.");
+                "MCP concurrent connection limit must be positive.");
         }
 
         McpConnectionProfile[] profileArray = [.. profiles];
@@ -77,9 +74,9 @@ public sealed class McpManager :
             ValidateProfile(profile);
         }
 
-        if (profileArray.Length > MaximumProfiles)
+        if (profileArray.Length > _limits.MaximumProfiles)
         {
-            throw new InvalidOperationException($"At most {MaximumProfiles} MCP profiles may be configured.");
+            throw new InvalidOperationException($"At most {_limits.MaximumProfiles} MCP profiles may be configured.");
         }
 
         if (profileArray.Select(profile => profile.Id).Distinct(StringComparer.Ordinal).Count()
@@ -101,7 +98,7 @@ public sealed class McpManager :
         _states = new ConcurrentDictionary<string, ProfileRuntime>(
             profileArray.Select(profile => new KeyValuePair<string, ProfileRuntime>(
                 profile.Id,
-                new ProfileRuntime(profile))),
+                new ProfileRuntime(profile, _limits))),
             StringComparer.Ordinal);
     }
 
@@ -385,7 +382,7 @@ public sealed class McpManager :
             var connection = await _adapter.ConnectAsync(connectionProfile, cancellationToken);
             state.Generation++;
             state.LastTransitionAt = _timeProvider.GetUtcNow();
-            if (connection.Capabilities.Count > MaximumCapabilities)
+            if (connection.Capabilities.Count > _limits.MaximumCapabilities)
             {
                 await _adapter.DisconnectAsync(state.Profile.Id, CancellationToken.None);
                 state.ProjectedState = McpConnectionState.Failed;
@@ -394,7 +391,7 @@ public sealed class McpManager :
                     state,
                     request.Action,
                     McpManagementFailureKind.InvalidCapability,
-                    $"The MCP server advertises more than {MaximumCapabilities} total capabilities.");
+                    $"The MCP server advertises more than {_limits.MaximumCapabilities} total capabilities.");
             }
 
             state.Capabilities = connection.Capabilities
@@ -814,7 +811,7 @@ public sealed class McpManager :
             new()
             {
                 Name = "capability-translation",
-                Succeeded = state.Capabilities.Count <= MaximumCapabilities,
+                Succeeded = state.Capabilities.Count <= _limits.MaximumCapabilities,
                 Detail = $"{state.Capabilities.Count} active bounded descriptor(s).",
             },
         };
@@ -1075,7 +1072,7 @@ public sealed class McpManager :
 
     private string NormalizeFailureMessage(string message)
     {
-        return Bound(_sanitizer.Sanitize(message), MaximumFailureCharacters);
+        return Bound(_sanitizer.Sanitize(message), _limits.MaximumFailureCharacters);
     }
 
     private static McpManagementResult Success(McpManagementAction action, string message)
@@ -1192,7 +1189,7 @@ public sealed class McpManager :
 
     private McpExternalContent MapContent(McpTransportContentItem content)
     {
-        const int maximumTextCharacters = 256 * 1024;
+        var maximumTextCharacters = _limits.MaximumContentCharacters;
         var sanitizedText = _sanitizer.Sanitize(content.Text);
         return new McpExternalContent
         {
@@ -1205,69 +1202,66 @@ public sealed class McpManager :
         };
     }
 
-    private static void ValidateProfile(McpConnectionProfile profile)
+    private void ValidateProfile(McpConnectionProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
         if (string.IsNullOrWhiteSpace(profile.Id)
-            || profile.Id.Length > 128
+            || profile.Id.Length > _limits.MaximumProfileIdCharacters
             || profile.Id.Any(character => !char.IsAsciiLetterOrDigit(character)
                 && character is not '-' and not '_' and not '.'))
         {
-            throw new InvalidOperationException("MCP profile ids must use at most 128 ASCII letters, digits, dots, underscores, or hyphens.");
+            throw new InvalidOperationException($"MCP profile ids must use at most {_limits.MaximumProfileIdCharacters} ASCII letters, digits, dots, underscores, or hyphens.");
         }
 
-        if (string.IsNullOrWhiteSpace(profile.DisplayName) || profile.DisplayName.Length > 256)
+        if (string.IsNullOrWhiteSpace(profile.DisplayName) || profile.DisplayName.Length > _limits.MaximumNameCharacters)
         {
             throw new InvalidOperationException($"MCP profile '{profile.Id}' has an invalid display name.");
         }
 
-        if (string.IsNullOrWhiteSpace(profile.Command) || profile.Command.Length > 4096)
+        if (string.IsNullOrWhiteSpace(profile.Command) || profile.Command.Length > _limits.MaximumCommandCharacters)
         {
             throw new InvalidOperationException($"MCP profile '{profile.Id}' has an invalid command or endpoint.");
         }
 
         if (profile.StartupTimeout <= TimeSpan.Zero
             || profile.RequestTimeout <= TimeSpan.Zero
-            || profile.DrainKillTimeout <= TimeSpan.Zero
-            || profile.StartupTimeout > TimeSpan.FromMinutes(30)
-            || profile.RequestTimeout > TimeSpan.FromMinutes(30)
-            || profile.DrainKillTimeout > TimeSpan.FromMinutes(5))
+            || profile.DrainKillTimeout <= TimeSpan.Zero)
         {
             throw new InvalidOperationException($"MCP profile '{profile.Id}' has a timeout outside host bounds.");
         }
 
-        if (profile.Arguments.Count > 64
-            || profile.Arguments.Any(argument => argument.Length > 8192)
-            || profile.Environment.Count > 64
-            || profile.Environment.Any(pair => pair.Key.Length is 0 or > 128
+        if (profile.Arguments.Count > _limits.MaximumProfileArguments
+            || profile.Arguments.Any(argument => argument.Length > _limits.MaximumProfileArgumentCharacters)
+            || profile.Environment.Count > _limits.MaximumEnvironmentVariables
+            || profile.Environment.Any(pair => (pair.Key.Length == 0 || pair.Key.Length > _limits.MaximumArgumentNameCharacters)
                 || pair.Key.Any(char.IsControl)
-                || pair.Value.Length > 32 * 1024)
-            || profile.Headers.Count > 64
-            || profile.SecretScope.Count > 64
-            || profile.SecretScope.Any(reference => reference.Length > 512)
-            || profile.WorkingDirectory?.Length > 4096
+                || pair.Value.Length > _limits.MaximumEnvironmentValueCharacters)
+            || profile.Headers.Count > _limits.MaximumHeaders
+            || profile.SecretScope.Count > _limits.MaximumSecretReferences
+            || profile.SecretScope.Any(reference => reference.Length > _limits.MaximumSecretReferenceCharacters)
+            || profile.WorkingDirectory?.Length > _limits.MaximumCommandCharacters
             || profile.AllowedCapabilities.Count > Enum.GetValues<McpCapabilityKind>().Length
             || profile.AllowedCapabilities.Any(kind => !Enum.IsDefined(kind))
-            || profile.OAuth?.Scopes.Count > 64
-            || profile.OAuth?.Scopes.Any(scope => scope.Length is 0 or > 256) is true
-            || profile.OAuth?.ClientId?.Length > 1024)
+            || profile.OAuth?.Scopes.Count > _limits.MaximumScopes
+            || profile.OAuth?.Scopes.Any(scope => (scope.Length == 0 || scope.Length > _limits.MaximumScopeCharacters)) is true
+            || profile.OAuth?.ClientId?.Length > _limits.MaximumClientIdCharacters)
         {
             throw new InvalidOperationException($"MCP profile '{profile.Id}' exceeds host configuration bounds.");
         }
     }
 
-    private static void ValidateRequest(McpManagementRequest request)
+    private void ValidateRequest(McpManagementRequest request)
     {
-        if (request.MaximumCount is < 1 or > MaximumCapabilities)
+        if (request.MaximumCount < 1 || request.MaximumCount > _limits.MaximumCapabilities)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                $"MCP maximumCount must be between 1 and {MaximumCapabilities}.");
+                $"MCP maximumCount must be between 1 and {_limits.MaximumCapabilities}.");
         }
 
-        if (request.Arguments.Count > MaximumArguments
-            || request.Arguments.Any(pair => pair.Key.Length is 0 or > 128
-                || pair.Value.Length > MaximumArgumentCharacters))
+        if (request.Arguments.Count > _limits.MaximumArguments
+            || request.Arguments.Any(pair => (pair.Key.Length == 0 || pair.Key.Length > _limits.MaximumArgumentNameCharacters)
+                || pair.Value.Length > _limits.MaximumArgumentCharacters))
         {
             throw new ArgumentException("MCP arguments exceed host bounds.", nameof(request));
         }
@@ -1387,11 +1381,13 @@ public sealed class McpManager :
 
     private sealed class ProfileRuntime
     {
+        private readonly McpResourceLimits _limits;
         private readonly Lock _latencyGate = new();
         private readonly Dictionary<string, Queue<long>> _latencies = new(StringComparer.Ordinal);
 
-        internal ProfileRuntime(McpConnectionProfile profile)
+        internal ProfileRuntime(McpConnectionProfile profile, McpResourceLimits limits)
         {
+            _limits = limits;
             Profile = profile;
         }
 
@@ -1431,7 +1427,7 @@ public sealed class McpManager :
                 }
 
                 samples.Enqueue(milliseconds.Value);
-                while (samples.Count > MaximumRecentLatencySamples)
+                while (samples.Count > _limits.MaximumRecentLatencySamples)
                 {
                     _ = samples.Dequeue();
                 }

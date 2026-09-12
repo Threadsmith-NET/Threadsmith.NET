@@ -14,6 +14,7 @@ public sealed class LocalTextEmbeddingGenerator : ITextEmbeddingGenerator, IAsyn
     /// <summary>Gets the complete MiniLM sequence limit.</summary>
     internal const int MaximumTokens = MiniLmEmbedderEngine.MaximumTokens;
     private const string SpaceId = "minilm-l12-v2:9bc18616990647530c139b95df1d1aa30cd115b7:mlnet-bert-default-wrapped:mean-mask-f32:l2-f32:256:v2";
+    private readonly TimeSpan _disposalTimeout;
     private readonly SemaphoreSlim _inferenceGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _assetDirectory;
@@ -22,15 +23,17 @@ public sealed class LocalTextEmbeddingGenerator : ITextEmbeddingGenerator, IAsyn
     private int _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="LocalTextEmbeddingGenerator"/> class.</summary>
-    public LocalTextEmbeddingGenerator()
-        : this(Path.Combine(AppContext.BaseDirectory, "embeddings", "all-MiniLM-L12-v2"))
+    public LocalTextEmbeddingGenerator(int disposalTimeoutMilliseconds = 10000)
+        : this(Path.Combine(AppContext.BaseDirectory, "embeddings", "all-MiniLM-L12-v2"), disposalTimeoutMilliseconds: disposalTimeoutMilliseconds)
     {
     }
 
     /// <summary>Initializes a new instance of the <see cref="LocalTextEmbeddingGenerator"/> class using a test-owned asset root.</summary>
-    internal LocalTextEmbeddingGenerator(string assetDirectory, Action? inferenceStarted = null)
+    internal LocalTextEmbeddingGenerator(string assetDirectory, Action? inferenceStarted = null, int disposalTimeoutMilliseconds = 10000)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(assetDirectory);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(disposalTimeoutMilliseconds);
+        _disposalTimeout = TimeSpan.FromMilliseconds(disposalTimeoutMilliseconds);
         _assetDirectory = assetDirectory;
         _inferenceStarted = inferenceStarted;
     }
@@ -72,7 +75,7 @@ public sealed class LocalTextEmbeddingGenerator : ITextEmbeddingGenerator, IAsyn
         }
 
         await _shutdown.CancelAsync().ConfigureAwait(false);
-        if (await _inferenceGate.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false))
+        if (await _inferenceGate.WaitAsync(_disposalTimeout).ConfigureAwait(false))
         {
             try
             {

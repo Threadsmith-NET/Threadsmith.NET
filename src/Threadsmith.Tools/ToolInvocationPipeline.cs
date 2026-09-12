@@ -47,9 +47,6 @@ public interface IToolInvocationPipeline
 /// <summary>Default centralized tool invocation pipeline.</summary>
 public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 {
-    private const int MaximumActivityDetailCharacters = 240;
-    private const int MaximumTransientActivityDetailCharacters = 8192;
-    private const int MaximumPreflightReasonCharacters = 512;
     private static readonly ActivitySource _activitySource = new("Threadsmith.Tools");
     private static readonly Meter _meter = new("Threadsmith.Tools");
     private static readonly Histogram<double> _latency = _meter.CreateHistogram<double>(
@@ -59,6 +56,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     private static readonly Counter<long> _rejections = _meter.CreateCounter<long>(
         "threadsmith.tool.rejections");
 
+    private readonly ToolPresentationLimits _presentationLimits;
     private readonly IApprovalPolicy _approvalPolicy;
     private readonly IBudget? _budget;
     private readonly IDomainEventStream _events;
@@ -85,7 +83,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         IBudget? budget = null,
         TimeProvider? timeProvider = null,
         IHookCoordinator? hooks = null,
-        ToolParallelOptions? parallelOptions = null)
+        ToolParallelOptions? parallelOptions = null,
+        ToolPresentationLimits? presentationLimits = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(policy);
@@ -93,6 +92,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
+        _presentationLimits = presentationLimits ?? new();
+        _presentationLimits.Validate();
         _registry = registry;
         _policy = policy;
         _approvalPolicy = approvalPolicy;
@@ -573,7 +574,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             var resultJson = JsonOutputSanitizer.Sanitize(
                 Encoding.UTF8.GetString(resultStream.GetBuffer(), 0, (int)resultStream.Length),
                 _sanitizer);
-            if (tool is not IPostSanitizationToolOutputBoundary
+            if (ConfiguredTool.Unwrap(tool) is not IPostSanitizationToolOutputBoundary
                 && Encoding.UTF8.GetByteCount(resultJson) > tool.Definition.MaximumOutputBytes)
             {
                 return await CompleteFailureAsync(
@@ -591,7 +592,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             if (!string.IsNullOrEmpty(execution.ModelResultContent))
             {
                 modelResultContent = JsonOutputSanitizer.SanitizeJsonOrText(execution.ModelResultContent, _sanitizer);
-                if (tool is not IPostSanitizationToolOutputBoundary
+                if (ConfiguredTool.Unwrap(tool) is not IPostSanitizationToolOutputBoundary
                     && Encoding.UTF8.GetByteCount(modelResultContent) > tool.Definition.MaximumOutputBytes)
                 {
                     return await CompleteFailureAsync(
@@ -607,7 +608,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             }
 
             var isTruncated = execution.IsTruncated;
-            if (tool is IPostSanitizationToolOutputBoundary outputBoundary)
+            if (ConfiguredTool.Unwrap(tool) is IPostSanitizationToolOutputBoundary outputBoundary)
             {
                 var boundedOutput = outputBoundary.BoundSanitizedOutput(
                     resultJson,
@@ -654,7 +655,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     ModelResultContent: modelResultContent,
                     TransientActivityDetail: NormalizeActivityDetail(
                         execution.TransientActivityDetail,
-                        MaximumTransientActivityDetailCharacters)) { RunId = request.RunId },
+                        _presentationLimits.MaximumTransientActivityDetailCharacters)) { RunId = request.RunId },
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded: true, null, suppressLifecycleHooks);
             return new ToolInvocationResult
@@ -763,7 +764,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var sanitized = _sanitizer.Sanitize(preparationError);
         return string.IsNullOrWhiteSpace(sanitized)
             ? "Tool arguments do not match the declared input schema or host invariants."
-            : BoundSingleLine(sanitized, MaximumPreflightReasonCharacters);
+            : BoundSingleLine(sanitized, _presentationLimits.MaximumPreflightReasonCharacters);
     }
 
     private static string BoundSingleLine(string value, int maximumCharacters)
@@ -800,12 +801,12 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             return null;
         }
 
-        return NormalizeActivityDetail(detail, MaximumActivityDetailCharacters);
+        return NormalizeActivityDetail(detail, _presentationLimits.MaximumActivityDetailCharacters);
     }
 
     private string? CreateTransientActivityDetail(ITool tool, object input, ToolExecutionContext context)
     {
-        if (tool is not ITransientToolActivityDetail transientTool)
+        if (ConfiguredTool.Unwrap(tool) is not ITransientToolActivityDetail transientTool)
         {
             return null;
         }
@@ -814,7 +815,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         {
             return NormalizeActivityDetail(
                 transientTool.GetTransientActivityDetail(input, context),
-                MaximumTransientActivityDetailCharacters);
+                _presentationLimits.MaximumTransientActivityDetailCharacters);
         }
         catch (Exception)
         {

@@ -3,16 +3,19 @@ namespace Threadsmith.Models.Anthropic;
 /// <summary>Complete-snapshot discovery bounded across pages by one deadline.</summary>
 public sealed class AnthropicModelDiscoveryService
 {
+    private readonly AnthropicResourceLimits _limits;
     private readonly IAnthropicModelDiscoveryClient _client;
     private readonly TimeSpan _deadline;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicModelDiscoveryService"/> class with a bounded total deadline.</summary>
-    public AnthropicModelDiscoveryService(IAnthropicModelDiscoveryClient client, TimeSpan? deadline = null)
+    public AnthropicModelDiscoveryService(IAnthropicModelDiscoveryClient client, TimeSpan? deadline = null, AnthropicResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(client);
+        _limits = limits ?? new();
+        _limits.Validate();
         _client = client;
-        _deadline = deadline ?? TimeSpan.FromSeconds(15);
-        if (_deadline <= TimeSpan.Zero || _deadline > TimeSpan.FromSeconds(15))
+        _deadline = deadline ?? TimeSpan.FromMilliseconds(_limits.DiscoveryTimeoutMilliseconds);
+        if (_deadline <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(deadline));
         }
@@ -30,17 +33,17 @@ public sealed class AnthropicModelDiscoveryService
             var cursors = new HashSet<string>(StringComparer.Ordinal);
             string? after = null;
             long bytes = 0;
-            for (var pageNumber = 0; pageNumber < 10; pageNumber++)
+            for (var pageNumber = 0; pageNumber < _limits.MaximumDiscoveryPages; pageNumber++)
             {
                 timeout.Token.ThrowIfCancellationRequested();
                 var page = await _client.ListAsync(after, 100, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
-                if (page.Models.Count > 100 || page.ResponseBytes < 0 || page.ResponseBytes > AnthropicModelCatalogCache.MaximumBytes)
+                if (page.Models.Count > 100 || page.ResponseBytes < 0 || page.ResponseBytes > _limits.MaximumMetadataBytes)
                 {
                     throw new AnthropicDiscoveryException("Anthropic discovery exceeded a page resource limit.");
                 }
 
                 bytes = checked(bytes + page.ResponseBytes);
-                if (bytes > AnthropicModelCatalogCache.MaximumBytes || models.Count + page.Models.Count > 128)
+                if (bytes > _limits.MaximumMetadataBytes || (long)models.Count + page.Models.Count > _limits.MaximumDiscoveredModels)
                 {
                     throw new AnthropicDiscoveryException("Anthropic discovery exceeded its aggregate resource limit.");
                 }

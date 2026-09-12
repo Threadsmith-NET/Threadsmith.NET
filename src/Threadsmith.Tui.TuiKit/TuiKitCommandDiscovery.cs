@@ -5,6 +5,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using Threadsmith.Interaction.Commands;
+using Threadsmith.Interaction.Contracts;
 using TUIKit.Input;
 using TUIKit.Widgets;
 
@@ -19,10 +20,12 @@ internal sealed class TuiKitCommandDiscovery : ISuggestionProvider
     private readonly CommandRegistry _registry = new();
 
     /// <summary>Initializes a new instance of the <see cref="TuiKitCommandDiscovery"/> class.</summary>
-    internal TuiKitCommandDiscovery(IEnumerable<InteractiveCommandDescriptor> entries, Action<string> complete)
+    internal TuiKitCommandDiscovery(IEnumerable<InteractiveCommandDescriptor> entries, Action<string> complete, TuiResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
         ArgumentNullException.ThrowIfNull(complete);
+        Limits = limits ?? new();
+        Limits.Validate();
         _entries = [.. entries];
         _byName = _entries.ToFrozenDictionary(entry => entry.Name, StringComparer.OrdinalIgnoreCase);
         foreach (var entry in _entries)
@@ -34,6 +37,9 @@ internal sealed class TuiKitCommandDiscovery : ISuggestionProvider
                 category: "Threadsmith"));
         }
     }
+
+    /// <summary>Immutable discovery rendering limits.</summary>
+    internal TuiResourceLimits Limits { get; }
 
     /// <inheritdoc />
     public IReadOnlyList<string> Suggest(string input)
@@ -69,7 +75,7 @@ internal sealed class TuiKitCommandDiscovery : ISuggestionProvider
         return _byName.TryGetValue(name, out descriptor);
     }
 
-    private static string PaletteTitle(InteractiveCommandDescriptor entry)
+    private string PaletteTitle(InteractiveCommandDescriptor entry)
     {
         var text = TranscriptView.Safe(entry.Name + " - " + entry.Description).ReplaceLineEndings(" ");
         var title = new StringBuilder();
@@ -77,7 +83,7 @@ internal sealed class TuiKitCommandDiscovery : ISuggestionProvider
         while (elements.MoveNext())
         {
             var element = elements.GetTextElement();
-            if (title.Length + element.Length > MaximumTitleLength)
+            if (title.Length + element.Length > Limits.MaximumCommandTitleCharacters)
             {
                 break;
             }

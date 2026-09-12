@@ -42,13 +42,16 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
     };
 
     private readonly ToolDefinition _definition;
+    private readonly SkillRuntimeLimits _limits;
     private readonly ISkillWorkflowOrchestrator _workflows;
 
     /// <summary>Initializes a new instance of the <see cref="InvokeSkillTool"/> class.</summary>
-    public InvokeSkillTool(ISkillWorkflowOrchestrator workflows, IPromptLoader prompts)
+    public InvokeSkillTool(ISkillWorkflowOrchestrator workflows, IPromptLoader prompts, SkillRuntimeLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(workflows);
         ArgumentNullException.ThrowIfNull(prompts);
+        _limits = limits ?? new();
+        _limits.Validate();
         _workflows = workflows;
         _definition = CreateDefinition(prompts);
     }
@@ -120,7 +123,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         }
 
         var inputJson = input.Input.GetRawText();
-        if (input.Selector.Length > 1024 || inputJson.Length > 1024 * 1024)
+        if (input.Selector.Length > _limits.MaximumSelectorCharacters || inputJson.Length > _limits.MaximumInputCharacters)
         {
             throw new ToolArgumentValidationException("Skill selector or input exceeds its bound.");
         }

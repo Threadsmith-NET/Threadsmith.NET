@@ -12,6 +12,31 @@ using Xunit;
 /// <summary>Milestone 22.2 extensible secret-discovery acceptance coverage.</summary>
 public sealed class SecretResolutionTests
 {
+    /// <summary>Configured store and value limits agree without weakening secret validation.</summary>
+    [Theory]
+    [InlineData(100000)]
+    [InlineData(int.MaxValue)]
+    public async Task UserProviderUsesConfiguredStoreAndValueLimitsAsync(int maximumStoreBytes)
+    {
+        using var fixture = new SecretFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(fixture.UserStorePath)!);
+        var value = new string('v', 70000);
+        await File.WriteAllTextAsync(
+            fixture.UserStorePath,
+            $"{{\"secrets\":{{\"tests\":{{\"{fixture.Id}\":\"{value}\"}}}}}}",
+            new UTF8Encoding(false));
+        var defaults = await new UserFileSecretProvider(fixture.UserStorePath).TryResolveAsync(fixture.CreateRequest());
+        Assert.NotEqual(SecretResolutionFailure.None, defaults.Failure);
+        var configured = await new UserFileSecretProvider(fixture.UserStorePath, new()
+        {
+            MaximumStoreBytes = maximumStoreBytes,
+            MaximumValueCharacters = 80000,
+        }).TryResolveAsync(fixture.CreateRequest());
+        Assert.Equal(value, configured.Value?.Reveal());
+        Assert.Throws<ArgumentException>(() => new SecretValue(value));
+        Assert.Equal(value, new SecretValue(value, 80000).Reveal());
+    }
+
     /// <summary>References are canonical, bounded, and reject traversal or ambiguous separators.</summary>
     [Theory]
     [InlineData("")]

@@ -2,17 +2,19 @@ namespace Threadsmith.Interaction.Coordination;
 
 using System.Text;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 
 /// <summary>Owns the ordered conversation text produced from live domain events.</summary>
 internal sealed class ConversationTranscript
 {
-    private const int MaximumTrackedSemanticRefreshStarts = 128;
+    private readonly TuiResourceLimits _limits;
 
     private readonly StringBuilder _reasoning = new();
     private readonly bool _showOperationDurations;
     private readonly Func<bool> _inspectCodeExploreOutput;
     private readonly StringBuilder _text;
+    private readonly PresentationBlockSpacing _blockSpacing = new();
     private readonly Dictionary<(RunId RunId, int Revision), PlanSanityCheckCompleted> _planSanityChecks = [];
     private readonly Dictionary<(RunId RunId, int Revision), string> _planRiskBases = [];
     private readonly Dictionary<RunId, Dictionary<string, string>> _planStepDetailsByRun = [];
@@ -33,13 +35,18 @@ internal sealed class ConversationTranscript
     /// <param name="initialText">Previously projected conversation text.</param>
     /// <param name="showOperationDurations">Whether valid authoritative durations are appended.</param>
     /// <param name="inspectCodeExploreOutput">Returns whether code_explore output should be included in future tool blocks.</param>
+    /// <param name="limits">Configured transcript and presentation limits.</param>
     internal ConversationTranscript(
         string initialText,
         bool showOperationDurations = true,
-        Func<bool>? inspectCodeExploreOutput = null)
+        Func<bool>? inspectCodeExploreOutput = null,
+        TuiResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(initialText);
+        _limits = limits ?? new();
+        _limits.Validate();
         _text = new StringBuilder(initialText);
+        _blockSpacing.Observe(initialText);
         _showOperationDurations = showOperationDurations;
         _inspectCodeExploreOutput = inspectCodeExploreOutput ?? (() => false);
     }
@@ -89,7 +96,7 @@ internal sealed class ConversationTranscript
                     _awaitingFirstResponseBoundary = false;
                 }
 
-                _text.Append(output.Text);
+                AppendText(output.Text);
                 _lastVisibleWasLifecycleBlock = false;
                 return true;
             case ToolInvocationStarted started:
@@ -130,12 +137,12 @@ internal sealed class ConversationTranscript
                     return false;
                 }
 
-                _text.AppendLine();
-                _text.AppendLine();
+                AppendText(Environment.NewLine);
+                AppendText(Environment.NewLine);
                 return true;
             case ModelFallbackSelected fallback:
                 AppendSystemResponse(
-                    $"The selected model could not satisfy this request. Switched to fallback model "
+                    "The selected model could not satisfy this request. Switched to fallback model "
                     + $"'{fallback.SelectedModelName}' ({fallback.SelectedProviderId}); it is now the active model"
                     + (fallback.Persisted
                         ? "."
@@ -156,7 +163,7 @@ internal sealed class ConversationTranscript
                 return true;
             case SemanticLoadCompleted completion when string.Equals(
                 completion.Confidence,
-                SemanticConfidenceLevel.None.ToString(),
+                nameof(SemanticConfidenceLevel.None),
                 StringComparison.Ordinal):
                 AppendSystemResponse("Semantic confidence: Unavailable");
                 return true;
@@ -378,7 +385,7 @@ internal sealed class ConversationTranscript
     private void AppendLifecycleBlock(string text)
     {
         EnsureEventPresentationBoundary();
-        _text.Append(text);
+        AppendText(text);
         _lastVisibleWasLifecycleBlock = true;
     }
 
@@ -392,7 +399,8 @@ internal sealed class ConversationTranscript
             completed,
             _showOperationDurations,
             _inspectCodeExploreOutput(),
-            progress));
+            progress,
+            _limits.MaximumToolInspectionCharacters));
     }
 
     private void AppendSemanticCheckCompletion(
@@ -487,7 +495,7 @@ internal sealed class ConversationTranscript
 
         var node = _renderedSemanticRefreshStartOrder.AddLast(refreshId);
         _renderedSemanticRefreshStarts.Add(refreshId, node);
-        if (_renderedSemanticRefreshStarts.Count <= MaximumTrackedSemanticRefreshStarts)
+        if (_renderedSemanticRefreshStarts.Count <= _limits.MaximumTrackedRefreshStarts)
         {
             return;
         }
@@ -547,59 +555,13 @@ internal sealed class ConversationTranscript
 
     private void EnsureEventPresentationBoundary()
     {
-        if (_awaitingFirstResponseBoundary)
-        {
-            _awaitingFirstResponseBoundary = false;
-            _text.AppendLine();
-            return;
-        }
-
-        if (_text.Length == 0)
-        {
-            return;
-        }
-
-        var trailingNewLineCount = CountTrailingNewLines();
-        if (trailingNewLineCount == 0)
-        {
-            _text.AppendLine();
-            _text.AppendLine();
-            return;
-        }
-
-        if (trailingNewLineCount == 1)
-        {
-            _text.AppendLine();
-        }
+        AppendText(_blockSpacing.BeforeBlock(_awaitingFirstResponseBoundary));
+        _awaitingFirstResponseBoundary = false;
     }
 
-    private int CountTrailingNewLines()
+    private void AppendText(string text)
     {
-        var count = 0;
-        for (var index = _text.Length - 1; index >= 0;)
-        {
-            if (_text[index] == '\n')
-            {
-                count++;
-                index--;
-                if (index >= 0 && _text[index] == '\r')
-                {
-                    index--;
-                }
-
-                continue;
-            }
-
-            if (_text[index] == '\r')
-            {
-                count++;
-                index--;
-                continue;
-            }
-
-            break;
-        }
-
-        return count;
+        _text.Append(text);
+        _blockSpacing.Observe(text);
     }
 }

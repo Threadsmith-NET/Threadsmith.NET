@@ -477,12 +477,26 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
     }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<ModelChunk> StreamAsync(
+    public IAsyncEnumerable<ModelChunk> StreamAsync(
         ModelStreamRequest request,
-        [System.Runtime.CompilerServices.EnumeratorCancellation]
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        return StreamCoreAsync(request, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public ModelStreamRequest Prepare(ModelStreamRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return request.ResolvedProfileId is null ? request : _effectiveCatalog.Prepare(request);
+    }
+
+    private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(
+        ModelStreamRequest request,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var requiredCapabilities = request.RequiredCapabilities with { Streaming = true };
         var selectionConstraints = request.SelectionConstraints with
         {
@@ -545,13 +559,6 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         {
             yield return chunk;
         }
-    }
-
-    /// <inheritdoc />
-    public ModelStreamRequest Prepare(ModelStreamRequest request)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return request.ResolvedProfileId is null ? request : _effectiveCatalog.Prepare(request);
     }
 }
 

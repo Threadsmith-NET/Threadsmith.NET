@@ -34,24 +34,27 @@ public sealed record AnthropicModelDiscoveryPage
 public static class AnthropicModelDiscoveryClient
 {
     /// <summary>Creates one discovery-scoped SDK reader; aggregate bytes include every page.</summary>
-    public static IAnthropicModelDiscoveryClient Create(HttpClient httpClient, string apiKey, TimeSpan timeout)
+    public static IAnthropicModelDiscoveryClient Create(HttpClient httpClient, string apiKey, TimeSpan timeout, AnthropicResourceLimits? limits = null)
     {
-        return new Client(httpClient, apiKey, timeout);
+        return new Client(httpClient, apiKey, timeout, limits);
     }
 
     private sealed class Client : IAnthropicModelDiscoveryClient
     {
+        private readonly AnthropicResourceLimits _limits;
         private readonly string _apiKey;
         private readonly HttpClient _httpClient;
         private readonly TimeSpan _timeout;
         private long _aggregateBytes;
 
         /// <summary>Initializes a new instance of the <see cref="Client"/> class.</summary>
-        internal Client(HttpClient httpClient, string apiKey, TimeSpan timeout)
+        internal Client(HttpClient httpClient, string apiKey, TimeSpan timeout, AnthropicResourceLimits? limits = null)
         {
             ArgumentNullException.ThrowIfNull(httpClient);
             ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
             ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(timeout, TimeSpan.Zero);
+            _limits = limits ?? new();
+            _limits.Validate();
             _httpClient = httpClient;
             _apiKey = apiKey;
             _timeout = timeout;
@@ -72,12 +75,12 @@ public static class AnthropicModelDiscoveryClient
                 _httpClient,
                 _apiKey,
                 _timeout,
-                maximumResponseBytes: AnthropicModelCatalogCache.MaximumBytes,
+                maximumResponseBytes: _limits.MaximumMetadataBytes,
                 responseBytesObserved: count =>
                 {
                     pageBytes = checked(pageBytes + count);
                     _aggregateBytes = checked(_aggregateBytes + count);
-                    if (_aggregateBytes > AnthropicModelCatalogCache.MaximumBytes)
+                    if (_aggregateBytes > _limits.MaximumMetadataBytes)
                     {
                         throw new AnthropicDiscoveryException("Anthropic discovery exceeded its aggregate response byte limit.");
                     }

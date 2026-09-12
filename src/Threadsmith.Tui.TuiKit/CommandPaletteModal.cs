@@ -14,8 +14,8 @@ internal sealed class CommandPaletteModal : Modal
     private const int MaximumVisibleRows = 12;
     private readonly TuiKitCommandDiscovery _discovery;
     private readonly FuzzyList<Command> _palette;
-    private readonly ComposerBuffer _query = new();
-    private readonly CellBuffer _listBuffer = new(TuiKitCommandDiscovery.MaximumTitleLength, 1);
+    private readonly ComposerBuffer _query;
+    private readonly CellBuffer _listBuffer = new(1, 1);
     private readonly CachedTextRun[] _rows = [.. Enumerable.Range(0, MaximumVisibleRows).Select(_ => new CachedTextRun())];
     private readonly CachedTextRun _title = new();
     private readonly CachedTextRun _queryRun = new();
@@ -40,6 +40,7 @@ internal sealed class CommandPaletteModal : Modal
         Action disarmEscape)
     {
         _discovery = discovery;
+        _query = new ComposerBuffer(discovery.Limits);
         _palette = discovery.BuildPalette();
         _size = size;
         _resolveStyle = resolveStyle;
@@ -193,14 +194,14 @@ internal sealed class CommandPaletteModal : Modal
 
     private void InsertQuery(string text)
     {
-        if (text.Length > MaximumQueryLength - (FilterText.Length - _query.Selection.Length))
+        if (text.Length > _discovery.Limits.MaximumFilterCharacters - (FilterText.Length - _query.Selection.Length))
         {
-            _notice = "Query limit: 256 characters";
+            _notice = $"Query limit: {_discovery.Limits.MaximumFilterCharacters} characters";
             return;
         }
 
         var safe = TranscriptView.Safe(text).ReplaceLineEndings(" ");
-        if (safe.Length <= MaximumQueryLength - (FilterText.Length - _query.Selection.Length))
+        if (safe.Length <= _discovery.Limits.MaximumFilterCharacters - (FilterText.Length - _query.Selection.Length))
         {
             try
             {
@@ -215,7 +216,7 @@ internal sealed class CommandPaletteModal : Modal
         }
         else
         {
-            _notice = "Query limit: 256 characters";
+            _notice = $"Query limit: {_discovery.Limits.MaximumFilterCharacters} characters";
         }
     }
 
@@ -224,12 +225,12 @@ internal sealed class CommandPaletteModal : Modal
         // TUIKit 0.10.1 renders labels one UTF-16 code unit per cell and hardcodes default
         // colors. Render the bounded full labels offscreen, then reflow whole graphemes using
         // our existing safe text renderer. Matching, ordering and scrolling remain TUIKit-owned.
-        _listBuffer.Resize(TuiKitCommandDiscovery.MaximumTitleLength, view.Size.Height + 1);
+        _listBuffer.Resize(_discovery.Limits.MaximumCommandTitleCharacters, view.Size.Height + 1);
         _listBuffer.Clear(CellStyle.Default);
         _palette.HighlightStyle = highlight;
         _palette.MatchStyle = CellStyle.Default;
         _palette.Render(new BufferSurface(_listBuffer));
-        var text = new StringBuilder(TuiKitCommandDiscovery.MaximumTitleLength);
+        var text = new StringBuilder(_discovery.Limits.MaximumCommandTitleCharacters);
         for (var row = 0; row < view.Size.Height; row++)
         {
             text.Clear();

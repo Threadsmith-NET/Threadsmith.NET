@@ -271,7 +271,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-search-Bounds.md` | Corrective guidance for invalid `search` bounds. | [`MaximumMatches`](#placeholder-maximummatches) |
+| `Correction-search-Bounds.md` | Corrective guidance for invalid `search` bounds. | [`MaximumMatches`](#placeholder-maximummatches), [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
 
 #### `SemanticFirstSearch` family
 
@@ -652,7 +652,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-search-Description.md` | Advertised description for `search`. | `None` |
+| `Tool-search-Description.md` | Advertised description for `search`. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
 
 #### `symbol_impact` family
 
@@ -825,6 +825,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-maximumattempts"></a>`MaximumAttempts` | Host-enforced maximum correction or retry attempts. |
 | <a id="placeholder-maximumiterations"></a>`MaximumIterations` | Host-enforced maximum workflow/model-loop iterations. |
 | <a id="placeholder-maximummatches"></a>`MaximumMatches` | Host-enforced maximum number of returned matches. |
+| <a id="placeholder-maximumquerycharacters"></a>`MaximumQueryCharacters` | Configured maximum characters in a file-search query. |
 | <a id="placeholder-message"></a>`Message` | Bounded message content for the surrounding item. |
 | <a id="placeholder-modedescription"></a>`ModeDescription` | User-facing explanation of the selected execution or tool mode. |
 | <a id="placeholder-modeltokens"></a>`ModelTokens` | Measured model-token usage for a child or operation. |

@@ -2002,7 +2002,9 @@ public static class ToolRuntimeTests
         Assert.All(
             tools,
             tool => Assert.Equal(
-                TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
+                tool.Definition.Id == "search"
+                    ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string> { ["MaximumQueryCharacters"] = "500" })
+                    : TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
                 tool.Definition.Description));
 
         var runProcess = new RunProcessTool(

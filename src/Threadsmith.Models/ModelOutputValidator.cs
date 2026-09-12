@@ -23,7 +23,7 @@ public static class ModelOutputValidator
     };
 
     /// <summary>Validates the supported schema version and type-specific invariants.</summary>
-    public static void Validate(ModelOutput output, int supportedSchemaVersion = 1)
+    public static void Validate(ModelOutput output, int supportedSchemaVersion = 1, WorkspaceResourceLimits? mutationLimits = null, PlanResourceLimits? planLimits = null)
     {
         ArgumentNullException.ThrowIfNull(output);
         if (output.SchemaVersion != supportedSchemaVersion)
@@ -41,10 +41,10 @@ public static class ModelOutputValidator
                 ValidateInvocation(tool);
                 break;
             case PlanModelOutput plan:
-                ValidatePlan(plan.Plan);
+                ValidatePlan(plan.Plan, planLimits ?? new());
                 break;
             case MutationSetModelOutput mutationSet:
-                ValidateMutationSet(mutationSet.MutationSet);
+                ValidateMutationSet(mutationSet.MutationSet, mutationLimits ?? new());
                 break;
             case TextModelOutput:
                 break;
@@ -55,7 +55,7 @@ public static class ModelOutputValidator
     }
 
     /// <summary>Parses strict JSON into a validated structured plan output.</summary>
-    public static PlanModelOutput ParsePlan(string json)
+    public static PlanModelOutput ParsePlan(string json, PlanResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
         PlanModelOutput output;
@@ -81,7 +81,7 @@ public static class ModelOutputValidator
 
         try
         {
-            Validate(output);
+            Validate(output, planLimits: limits);
         }
         catch (MalformedInvocationException)
         {
@@ -105,7 +105,7 @@ public static class ModelOutputValidator
     }
 
     /// <summary>Parses strict JSON into a validated bounded mutation-set output.</summary>
-    public static MutationSetModelOutput ParseMutationSet(string json)
+    public static MutationSetModelOutput ParseMutationSet(string json, WorkspaceResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
         MutationSetModelOutput output;
@@ -130,7 +130,7 @@ public static class ModelOutputValidator
 
         try
         {
-            Validate(output);
+            Validate(output, mutationLimits: limits);
         }
         catch (MalformedInvocationException)
         {
@@ -312,7 +312,7 @@ public static class ModelOutputValidator
         return builder.ToString().Trim();
     }
 
-    private static void ValidatePlan(ImplementationPlan plan)
+    private static void ValidatePlan(ImplementationPlan plan, PlanResourceLimits limits)
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (plan.SchemaVersion != 2)
@@ -321,24 +321,25 @@ public static class ModelOutputValidator
                 $"Unsupported plan schema version {plan.SchemaVersion}; expected 2.");
         }
 
+        limits.Validate();
         var steps = plan.Steps;
         var risks = plan.Risks;
         var outstandingQuestions = plan.OutstandingQuestions;
         if (plan.Revision <= 0
             || string.IsNullOrWhiteSpace(plan.Summary)
-            || plan.Summary.Length > 4096
+            || plan.Summary.Length > limits.MaximumSummaryCharacters
             || steps is null
-            || steps.Count is < 1 or > 100
+            || (steps.Count < 1 || steps.Count > limits.MaximumSteps)
             || risks is null
-            || risks.Count > 100
-            || risks.Any(risk => string.IsNullOrWhiteSpace(risk) || risk.Length > 4096)
+            || risks.Count > limits.MaximumMetadataItems
+            || risks.Any(risk => string.IsNullOrWhiteSpace(risk) || risk.Length > limits.MaximumSummaryCharacters)
             || outstandingQuestions is null
-            || outstandingQuestions.Count > 100
+            || outstandingQuestions.Count > limits.MaximumMetadataItems
             || outstandingQuestions.Any(question =>
-                string.IsNullOrWhiteSpace(question) || question.Length > 4096))
+                string.IsNullOrWhiteSpace(question) || question.Length > limits.MaximumSummaryCharacters))
         {
             throw new MalformedModelOutputException(
-                "A plan requires a positive revision, summary, and 1..100 steps.");
+                "A plan requires a positive revision, summary, and steps within the configured limit.");
         }
 
         var stepIds = new HashSet<StepId>();
@@ -355,19 +356,19 @@ public static class ModelOutputValidator
             if (step.StepId == default
                 || !stepIds.Add(step.StepId)
                 || string.IsNullOrWhiteSpace(step.Title)
-                || step.Title.Length > 256
+                || step.Title.Length > limits.MaximumTitleCharacters
                 || string.IsNullOrWhiteSpace(step.Description)
-                || step.Description.Length > 8192
+                || step.Description.Length > limits.MaximumDescriptionCharacters
                 || string.IsNullOrWhiteSpace(step.ExpectedOutcome)
-                || step.ExpectedOutcome.Length > 4096
+                || step.ExpectedOutcome.Length > limits.MaximumSummaryCharacters
                 || fileIntents is null
-                || fileIntents.Count > 100
+                || fileIntents.Count > limits.MaximumMetadataItems
                 || validation is null
-                || validation.Count > 100
+                || validation.Count > limits.MaximumMetadataItems
                 || validation.Any(expectation =>
                     string.IsNullOrWhiteSpace(expectation)
-                    || expectation.Length > 4096)
-                || fileIntents.Any(IsInvalidPlanFileIntent))
+                    || expectation.Length > limits.MaximumSummaryCharacters)
+                || fileIntents.Any(intent => IsInvalidPlanFileIntent(intent, limits)))
             {
                 throw new MalformedModelOutputException(
                     "Plan steps require unique ids, bounded text, and repository-relative file intents.");
@@ -375,7 +376,7 @@ public static class ModelOutputValidator
         }
     }
 
-    private static bool IsInvalidPlanFileIntent(PlanFileIntent? intent)
+    private static bool IsInvalidPlanFileIntent(PlanFileIntent? intent, PlanResourceLimits limits)
     {
         if (intent is null)
         {
@@ -385,12 +386,12 @@ public static class ModelOutputValidator
         var hasDestination = !string.IsNullOrWhiteSpace(intent.DestinationPath);
         var destinationAllowed = intent.Kind is PlanFileChangeKind.Move or PlanFileChangeKind.Rename;
         return !Enum.IsDefined(intent.Kind)
-            || IsInvalidPlanPath(intent.Path)
+            || IsInvalidPlanPath(intent.Path, limits)
             || (destinationAllowed != hasDestination)
-            || (hasDestination && IsInvalidPlanPath(intent.DestinationPath ?? string.Empty));
+            || (hasDestination && IsInvalidPlanPath(intent.DestinationPath ?? string.Empty, limits));
     }
 
-    private static bool IsInvalidPlanPath(string? path)
+    private static bool IsInvalidPlanPath(string? path, PlanResourceLimits limits)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -399,35 +400,36 @@ public static class ModelOutputValidator
 
         var segments = path.Replace('\\', '/')
             .Split('/', StringSplitOptions.RemoveEmptyEntries);
-        return path.Length > 1024
+        return path.Length > limits.MaximumPathCharacters
             || Path.IsPathRooted(path)
             || segments.Contains("..", StringComparer.Ordinal);
     }
 
-    private static void ValidateMutationSet(MutationSet mutationSet)
+    private static void ValidateMutationSet(MutationSet mutationSet, WorkspaceResourceLimits limits)
     {
         ArgumentNullException.ThrowIfNull(mutationSet);
+        limits.Validate();
         if (mutationSet.MutationSetId == default
             || mutationSet.SessionId == default
             || mutationSet.WorkspaceId == default
             || mutationSet.BaselineCapturedAt == default
             || string.IsNullOrWhiteSpace(mutationSet.Rationale)
-            || mutationSet.Rationale.Length > 8192
+            || mutationSet.Rationale.Length > limits.MaximumRationaleCharacters
             || mutationSet.Mutations is null
-            || mutationSet.Mutations.Count is < 1 or > 100
+            || (mutationSet.Mutations.Count < 1 || mutationSet.Mutations.Count > limits.MaximumMutations)
             || mutationSet.AffectedProjects is null
-            || mutationSet.AffectedProjects.Count > 100
+            || mutationSet.AffectedProjects.Count > limits.MaximumMutationMetadataItems
             || mutationSet.ExpectedDiagnosticsResolved is null
-            || mutationSet.ExpectedDiagnosticsResolved.Count > 100
+            || mutationSet.ExpectedDiagnosticsResolved.Count > limits.MaximumMutationMetadataItems
             || mutationSet.ExpectedTests is null
-            || mutationSet.ExpectedTests.Count > 100
+            || mutationSet.ExpectedTests.Count > limits.MaximumMutationMetadataItems
             || string.IsNullOrWhiteSpace(mutationSet.ValidationPolicy)
-            || mutationSet.ValidationPolicy.Length > 256
+            || mutationSet.ValidationPolicy.Length > limits.MaximumValidationPolicyCharacters
             || !Enum.IsDefined(mutationSet.Risk)
             || !Enum.IsDefined(mutationSet.RequiredApproval))
         {
             throw new MalformedModelOutputException(
-                "A mutation set requires stable ownership, an exact baseline, rationale, and 1..100 mutations.");
+                $"A mutation set requires stable ownership, an exact baseline, rationale, and 1..{limits.MaximumMutations} mutations within the configured metadata limits.");
         }
 
         var ids = new HashSet<MutationId>();
@@ -446,7 +448,7 @@ public static class ModelOutputValidator
             if (mutation.MutationId == default
                 || !ids.Add(mutation.MutationId)
                 || string.IsNullOrWhiteSpace(mutation.RelativePath)
-                || mutation.RelativePath.Length > 1024
+                || mutation.RelativePath.Length > limits.MaximumMutationPathCharacters
                 || Path.IsPathRooted(mutation.RelativePath)
                 || segments.Contains("..", StringComparer.Ordinal)
                 || mutation.SchemaVersion != 1
@@ -457,12 +459,12 @@ public static class ModelOutputValidator
                     and not MutationType.RenameSymbol
                 || mutation.StartOffset < 0
                 || mutation.Length < 0
-                || mutation.ExpectedText?.Length > 4 * 1024 * 1024
-                || mutation.RelatedSymbolId?.Length > 4096
+                || mutation.ExpectedText?.Length > limits.MaximumMutationCharacters
+                || mutation.RelatedSymbolId?.Length > limits.MaximumMutationSymbolIdCharacters
                 || !Enum.IsDefined(mutation.DestinationExpectation)
                 || (mutation.LifecycleRisk is not null && !Enum.IsDefined(mutation.LifecycleRisk.Value))
                 || (mutation.ProjectFilePath is not null
-                    && (mutation.ProjectFilePath.Length > 1024
+                    && (mutation.ProjectFilePath.Length > limits.MaximumMutationPathCharacters
                         || Path.IsPathRooted(mutation.ProjectFilePath)
                         || mutation.ProjectFilePath.Replace('\\', '/').Split('/').Contains("..", StringComparer.Ordinal))))
             {
@@ -507,7 +509,7 @@ public static class ModelOutputValidator
                     || mutation.ReplacementText.Length != 0
                     || mutation.ExpectedIdentity is null
                     || string.IsNullOrWhiteSpace(destination)
-                    || destination.Length > 1024
+                    || destination.Length > limits.MaximumMutationPathCharacters
                     || Path.IsPathRooted(destination)
                     || destinationSegments.Contains("..", StringComparer.Ordinal)
                     || string.Equals(
@@ -527,7 +529,7 @@ public static class ModelOutputValidator
             }
 
             if (mutation.Content is { } content
-                && (content.Text.Length > 4 * 1024 * 1024
+                && (content.Text.Length > limits.MaximumMutationCharacters
                     || (content.Sha256 is not null && !IsSha256(content.Sha256))
                     || !Enum.IsDefined(content.Encoding)
                     || !Enum.IsDefined(content.Newline)))
@@ -536,10 +538,10 @@ public static class ModelOutputValidator
             }
         }
 
-        if (replacementCharacters > 4 * 1024 * 1024)
+        if (replacementCharacters > limits.MaximumMutationCharacters)
         {
             throw new MalformedModelOutputException(
-                "Mutation replacement content exceeds the 4 MiB proposal limit.");
+                $"Mutation replacement content exceeds the configured {limits.MaximumMutationCharacters} character proposal limit.");
         }
     }
 

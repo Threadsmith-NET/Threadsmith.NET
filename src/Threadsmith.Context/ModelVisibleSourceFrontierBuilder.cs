@@ -14,15 +14,17 @@ public static class ModelVisibleSourceFrontierBuilder
         IReadOnlyList<ModelMessage> messages,
         string repositoryPath,
         WorkspaceId? workspaceId,
-        long frontierGeneration)
+        long frontierGeneration,
+        int maximumEntries = 256)
     {
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumEntries);
         var normalizedRepositoryPath = NormalizeRepositoryPath(repositoryPath);
         var entries = new List<ModelVisibleSourceEntry>();
         foreach (var message in messages)
         {
-            if (entries.Count >= MaximumEntries)
+            if (entries.Count >= maximumEntries)
             {
                 break;
             }
@@ -41,7 +43,8 @@ public static class ModelVisibleSourceFrontierBuilder
                     message,
                     normalizedRepositoryPath,
                     workspaceId,
-                    entries);
+                    entries,
+                    maximumEntries);
             }
         }
 
@@ -60,9 +63,10 @@ public static class ModelVisibleSourceFrontierBuilder
         ModelMessage message,
         string normalizedRepositoryPath,
         WorkspaceId? workspaceId,
-        List<ModelVisibleSourceEntry> entries)
+        List<ModelVisibleSourceEntry> entries,
+        int maximumEntries)
     {
-        if (entries.Count >= MaximumEntries || !TryDeserializeCodeExploreResult(content, out var result))
+        if (entries.Count >= maximumEntries || !TryDeserializeCodeExploreResult(content, out var result))
         {
             return;
         }
@@ -75,7 +79,7 @@ public static class ModelVisibleSourceFrontierBuilder
 
         foreach (var section in fileSections)
         {
-            if (entries.Count >= MaximumEntries)
+            if (entries.Count >= maximumEntries)
             {
                 break;
             }

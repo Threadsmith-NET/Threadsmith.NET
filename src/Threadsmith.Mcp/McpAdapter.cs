@@ -14,9 +14,7 @@ using Threadsmith.Tools;
 /// </remarks>
 public sealed class McpAdapter : IMcpAdapter
 {
-    private const int MaximumCapabilities = 256;
-    private const int MaximumFailureCharacters = 1024;
-
+    private readonly McpResourceLimits _limits;
     private readonly Func<McpConnectionProfile, IMcpTransport> _transportFactory;
     private readonly ISecretResolver _secretResolver;
     private readonly IOutputSanitizer _sanitizer;
@@ -35,13 +33,16 @@ public sealed class McpAdapter : IMcpAdapter
         ILogger<McpAdapter> logger,
         IPromptLoader prompts,
         ToolRegistry? toolRegistry = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        McpResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(transportFactory);
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(prompts);
+        _limits = limits ?? new();
+        _limits.Validate();
         _transportFactory = transportFactory;
         _secretResolver = secretResolver;
         _sanitizer = sanitizer;
@@ -59,7 +60,8 @@ public sealed class McpAdapter : IMcpAdapter
         ILogger<McpAdapter> logger,
         IPromptLoader prompts,
         ToolRegistry? toolRegistry = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        McpResourceLimits? limits = null)
         : this(
             transportFactory,
             new LegacySecretStoreResolver(secretStore),
@@ -67,7 +69,8 @@ public sealed class McpAdapter : IMcpAdapter
             logger,
             prompts,
             toolRegistry,
-            timeProvider)
+            timeProvider,
+            limits)
     {
     }
 
@@ -135,13 +138,13 @@ public sealed class McpAdapter : IMcpAdapter
             return CreateFailedConnectionResult(profile, exception);
         }
 
-        if (capabilities.Count > MaximumCapabilities)
+        if (capabilities.Count > _limits.MaximumCapabilities)
         {
             await SafeStopAsync(transport, profile);
             return CreateFailedConnectionResult(
                 profile,
                 new InvalidOperationException(
-                    $"The MCP server advertises more than {MaximumCapabilities} total capabilities."));
+                    $"The MCP server advertises more than {_limits.MaximumCapabilities} total capabilities."));
         }
 
         var connection = new Connection(transport, profile, capabilities);
@@ -454,7 +457,7 @@ public sealed class McpAdapter : IMcpAdapter
 
     private string NormalizeFailureMessage(string message)
     {
-        return Bound(_sanitizer.Sanitize(message), MaximumFailureCharacters);
+        return Bound(_sanitizer.Sanitize(message), _limits.MaximumFailureCharacters);
     }
 
     private async Task RefreshCapabilitiesAsync(
@@ -464,10 +467,10 @@ public sealed class McpAdapter : IMcpAdapter
     {
         ArgumentNullException.ThrowIfNull(connection);
         ArgumentNullException.ThrowIfNull(capabilities);
-        if (capabilities.Count > MaximumCapabilities)
+        if (capabilities.Count > _limits.MaximumCapabilities)
         {
             throw new InvalidOperationException(
-                $"The MCP server advertises more than {MaximumCapabilities} total capabilities.");
+                $"The MCP server advertises more than {_limits.MaximumCapabilities} total capabilities.");
         }
 
         await connection.CapabilityGate.WaitAsync(cancellationToken);

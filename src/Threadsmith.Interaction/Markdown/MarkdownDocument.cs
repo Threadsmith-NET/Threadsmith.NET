@@ -4,7 +4,11 @@ using System.Collections.Immutable;
 
 /// <summary>Closed terminal-neutral semantic document produced from one model answer.</summary>
 /// <param name="Blocks">Validated top-level blocks in source order.</param>
-public sealed record MarkdownDocument(ImmutableArray<MarkdownBlock> Blocks);
+public sealed record MarkdownDocument(ImmutableArray<MarkdownBlock> Blocks)
+{
+    /// <summary>Host parser limits retained for consistent downstream validation.</summary>
+    internal MarkdownRenderingLimits Limits { get; init; } = new();
+}
 
 /// <summary>Base type for the bounded markdown block vocabulary owned by the TUI.</summary>
 public abstract record MarkdownBlock;

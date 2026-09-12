@@ -56,7 +56,7 @@ public sealed class McpManagerTests
     [Fact]
     public static void ResourceMapping_OversizedFirstItem_ReportsTruncation()
     {
-        var result = McpTransportMapping.MapResourceContent(new ReadResourceResult
+        var result = new McpTransportMapping().MapResourceContent(new ReadResourceResult
         {
             Contents =
             [
@@ -78,7 +78,7 @@ public sealed class McpManagerTests
     [Fact]
     public static void ToolMapping_MultipleLargeBlocks_UsesAggregateBound()
     {
-        var result = McpTransportMapping.MapInvocation(new CallToolResult
+        var result = new McpTransportMapping().MapInvocation(new CallToolResult
         {
             Content =
             [
@@ -96,7 +96,7 @@ public sealed class McpManagerTests
     [Fact]
     public static void ToolMapping_NonTextContent_IsVisibleAndIncomplete()
     {
-        var result = McpTransportMapping.MapInvocation(new CallToolResult
+        var result = new McpTransportMapping().MapInvocation(new CallToolResult
         {
             Content =
             [

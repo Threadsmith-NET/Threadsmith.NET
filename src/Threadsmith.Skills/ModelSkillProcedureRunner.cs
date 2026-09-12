@@ -10,6 +10,7 @@ using Threadsmith.Tools;
 public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 {
     private readonly ConfiguredModelCatalog? _catalog;
+    private readonly SkillRuntimeLimits _limits;
     private readonly IModelProvider _models;
     private readonly IModelProviderInstructionResolver? _providerInstructionResolver;
     private readonly IPromptLoader _prompts;
@@ -27,7 +28,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         Func<SkillInvocationRequest, CancellationToken, Task<ToolInvocationContext>> toolContext,
         IPromptLoader prompts,
         ConfiguredModelCatalog? catalog = null,
-        IModelProviderInstructionResolver? providerInstructionResolver = null)
+        IModelProviderInstructionResolver? providerInstructionResolver = null,
+        SkillRuntimeLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -35,6 +37,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(toolContext);
         ArgumentNullException.ThrowIfNull(prompts);
+        _limits = limits ?? new();
+        _limits.Validate();
         _models = models;
         _tools = tools;
         _toolPipeline = toolPipeline;
@@ -150,7 +154,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 if (chunk.Text is { } delta)
                 {
                     text.Append(delta);
-                    if (text.Length > 1024 * 1024)
+                    if (text.Length > _limits.MaximumModelOutputCharacters)
                     {
                         throw new InvalidDataException("Skill procedure output exceeds its byte-oriented bound.");
                     }

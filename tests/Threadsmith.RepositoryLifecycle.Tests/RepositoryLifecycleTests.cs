@@ -889,7 +889,7 @@ public static class RepositoryLifecycleTests
             "Loading remembered solution: Sample.sln",
             surface.Output,
             StringComparison.Ordinal);
-        Assert.Contains("(Use --solution to change)", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>Remembered-solution startup details belong to the splash instead of the model transcript.</summary>
@@ -907,7 +907,7 @@ public static class RepositoryLifecycleTests
         await coordinator.RunAsync(repository.RootPath, RepositoryTrustLevel.TrustedRead)
             .WaitAsync(TimeSpan.FromSeconds(15));
 
-        Assert.Equal(["Loading remembered solution: Sample.sln", "  (Use --solution to change)"], surface.StartupDetails);
+        Assert.Equal(["Loading remembered solution: Sample.sln"], surface.StartupDetails);
         Assert.True(surface.DetailsShownDuringSemanticLoading);
         Assert.DoesNotContain("Loading remembered solution", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
@@ -1056,7 +1056,7 @@ public static class RepositoryLifecycleTests
         {
             if (label == "Semantic loading")
             {
-                DetailsShownDuringSemanticLoading = StartupDetails.Count == 2;
+                DetailsShownDuringSemanticLoading = StartupDetails.Count > 0;
             }
 
             return operation.WaitAsync(cancellationToken);

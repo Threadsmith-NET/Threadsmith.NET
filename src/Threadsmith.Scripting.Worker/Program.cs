@@ -47,9 +47,12 @@ public static class Program
                 new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
                 ?? throw new InvalidOperationException("The scripting request was empty.");
             if (string.IsNullOrWhiteSpace(request.Code)
-                || request.Code.Length > 64 * 1024
-                || request.MaximumOutputBytes is < 256 or > 1024 * 1024
-                || request.AllowedAssemblies.Count > 32
+                || request.MaximumCodeCharacters <= 0
+                || request.MaximumAssemblies <= 0
+                || request.MaximumAssemblyNameCharacters <= 0
+                || request.Code.Length > request.MaximumCodeCharacters
+                || request.MaximumOutputBytes <= 0
+                || request.AllowedAssemblies.Count > request.MaximumAssemblies
                 || request.Kind is not ("Expression" or "Statement"))
             {
                 throw new InvalidOperationException("The scripting request exceeded a worker boundary.");
@@ -70,7 +73,7 @@ public static class Program
             foreach (var assemblyName in request.AllowedAssemblies.Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (string.IsNullOrWhiteSpace(assemblyName)
-                    || assemblyName.Length > 128
+                    || assemblyName.Length > request.MaximumAssemblyNameCharacters
                     || !assemblyName.StartsWith("System.", StringComparison.Ordinal))
                 {
                     throw new InvalidOperationException($"Assembly '{assemblyName}' is not allowed or unavailable.");
@@ -210,6 +213,12 @@ public static class Program
         public required string Kind { get; init; }
 
         public int MaximumOutputBytes { get; init; }
+
+        public int MaximumCodeCharacters { get; init; } = 65536;
+
+        public int MaximumAssemblies { get; init; } = 32;
+
+        public int MaximumAssemblyNameCharacters { get; init; } = 128;
 
         public required IReadOnlyList<string> AllowedAssemblies { get; init; }
     }

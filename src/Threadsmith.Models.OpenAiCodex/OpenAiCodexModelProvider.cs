@@ -35,9 +35,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
     private string AccessToken { get; }
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<ModelChunk> StreamAsync(
+    public IAsyncEnumerable<ModelChunk> StreamAsync(
         ModelStreamRequest request,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         if (request.ContainsSensitiveData
@@ -52,10 +52,18 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             && (maximumOutputTokens <= 0 || maximumOutputTokens > profileOutputLimit))
         {
             throw new ModelProviderException(
-                $"The requested output ceiling must be between 1 and the resolved profile maximum of "
+                "The requested output ceiling must be between 1 and the resolved profile maximum of "
                 + $"{profileOutputLimit} tokens.");
         }
 
+        return StreamCoreAsync(request, profileOutputLimit, cancellationToken);
+    }
+
+    private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(
+        ModelStreamRequest request,
+        int profileOutputLimit,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
 
         // Codex cannot enforce a per-request token limit. Reserve input capacity here;

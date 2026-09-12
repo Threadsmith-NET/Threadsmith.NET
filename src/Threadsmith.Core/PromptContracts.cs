@@ -1733,7 +1733,8 @@ public static class PromptAssetCatalog
                     [PromptFileNames.CorrectionGitDiffMissingRevision] = Set("FieldName", "ModeDescription"),
                     [PromptFileNames.CorrectionGitLogInvalidRevision] = Set("FieldName"),
                     [PromptFileNames.CorrectionGitBlameInvalidRevision] = Set("FieldName"),
-                    [PromptFileNames.CorrectionSearchBounds] = Set("MaximumMatches"),
+                    [PromptFileNames.CorrectionSearchBounds] = Set("MaximumMatches", "MaximumQueryCharacters"),
+                    [PromptFileNames.ToolSearchDescription] = Set("MaximumQueryCharacters"),
                     [PromptFileNames.CorrectionRunProcessUnsupportedShell] = Set("ShellExecutable"),
                     [PromptFileNames.ToolWebFetchDirectAuthorizationUnavailable] = Set(
                         "Origin",

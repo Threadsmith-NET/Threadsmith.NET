@@ -92,10 +92,12 @@ public static class AnthropicCatalogHydrator
         IReadOnlyDictionary<string, AnthropicModelCompatibility> reviewedCompatibility)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(provider.ResourceLimits);
+        provider.ResourceLimits.Validate();
         ArgumentNullException.ThrowIfNull(discoveredModels);
         ArgumentNullException.ThrowIfNull(reviewedCompatibility);
         ValidateDescriptor(provider);
-        if (discoveredModels.Count > 128)
+        if (discoveredModels.Count > provider.ResourceLimits.MaximumDiscoveredModels)
         {
             throw new ModelProviderException("Anthropic discovery exceeds the model count limit.");
         }
@@ -143,13 +145,15 @@ public static class AnthropicCatalogHydrator
     public static void ValidateDescriptor(AnthropicProviderConfiguration provider)
     {
         ArgumentNullException.ThrowIfNull(provider);
+        ArgumentNullException.ThrowIfNull(provider.ResourceLimits);
+        provider.ResourceLimits.Validate();
         if (!IsSafeIdentity(provider.Id) || string.IsNullOrWhiteSpace(provider.Name)
             || provider.SecretKeyReference is not { Length: > 8 } reference
             || !reference.StartsWith("secrets:", StringComparison.OrdinalIgnoreCase)
             || reference.Length > 256 || reference.Any(char.IsControl)
             || reference.Split(':').Any(segment => !IsSafeIdentity(segment) || segment is "." or "..")
             || provider.Defaults is null || provider.ModelOverrides is null
-            || provider.ModelOverrides.Count > 128)
+            || provider.ModelOverrides.Count > provider.ResourceLimits.MaximumDiscoveredModels)
         {
             throw new InvalidOperationException("Anthropic requires a valid provider identity and user-owned secrets: reference.");
         }

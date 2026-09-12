@@ -240,7 +240,7 @@ public sealed partial class InteractionCoordinator
         });
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         await using var agents = _surface.Surface is IAgentWorkspaceSurface
-            ? new AgentWorkspaceProjection(_surface.Surface, _agentDisplay, _sessionUsage, _modelCatalog, _agentNames, _displayOptions.RenderMarkdown, _displayOptions.ShowOperationDurations, lifetime.Token)
+            ? new AgentWorkspaceProjection(_surface.Surface, _agentDisplay, _sessionUsage, _modelCatalog, _agentNames, _displayOptions.RenderMarkdown, _displayOptions.ShowOperationDurations, _displayOptions.Limits, lifetime.Token)
             : null;
         if (agents is not null)
         {
@@ -254,8 +254,9 @@ public sealed partial class InteractionCoordinator
         var transcript = new ConversationTranscript(
             string.Empty,
             _displayOptions.ShowOperationDurations,
-            () => _codeExploreOutputOptions.GetInspectCodeExploreOutput(sessionId));
-        var delegations = new DelegationActivityRegistry();
+            () => _codeExploreOutputOptions.GetInspectCodeExploreOutput(sessionId),
+            _displayOptions.Limits);
+        var delegations = new DelegationActivityRegistry(_displayOptions.Limits);
         var runCompletionQueued = false;
         await using var subscription = _events.Subscribe(async (domainEvent, token) =>
         {
@@ -433,7 +434,7 @@ public sealed partial class InteractionCoordinator
         var streamThinking = _sessionPreferences?.IncludeReasoningText ?? false;
         var retainActivityDuringOutput = _surface.Surface.Capabilities.SupportsRetainedActivity;
         ContextInspectionProjection? latestContextInspection = null;
-        var modelAnswerCollector = new ModelAnswerCollector(_displayOptions.RenderMarkdown);
+        var modelAnswerCollector = new ModelAnswerCollector(_displayOptions.RenderMarkdown, limits: _displayOptions.Limits.Markdown);
         var streamingThinkingActive = false;
         var streamingThinkingEndedWithLineBreak = true;
 
@@ -2243,10 +2244,9 @@ public sealed partial class InteractionCoordinator
         string rawMessage,
         CancellationToken cancellationToken)
     {
-        if (_toolStateManager is null
-            || !CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage)
-            || !_toolStateManager.IsEnabled("web_fetch")
-            || !_toolStateManager.RequiresCurrentMessageUrlConsent())
+        if (_toolStateManager?.IsEnabled("web_fetch") != true
+            || !_toolStateManager.RequiresCurrentMessageUrlConsent()
+            || !_toolStateManager.HasCurrentMessageUrlCandidate(rawMessage))
         {
             return;
         }
@@ -2708,7 +2708,7 @@ public sealed partial class InteractionCoordinator
         }
 
         var confirmed = false;
-        var allowLocalCleanup = false;
+        const bool allowLocalCleanup = false;
         var revokeBeforeSwitch = false;
         if (action is McpManagementAction.Logout
             or McpManagementAction.Revoke
@@ -3439,17 +3439,11 @@ public sealed partial class InteractionCoordinator
                 + (inspection.RepositoryMemoryDispatch is { } dispatch
                     ? $"  memory submission: {dispatch.Outcome}; {dispatch.Inclusions.Count} revision receipts; {dispatch.ElapsedMilliseconds:F1} ms\n"
                     : string.Empty)
-                + string.Join(
-                    string.Empty,
-                    inspection.ConversationItems.Select(item =>
+                + string.Concat(inspection.ConversationItems.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} {item.Kind} {item.Id}: {item.Rationale}\n"))
-                + string.Join(
-                    string.Empty,
-                    inspection.RepositoryMemoryItems.Select(item =>
+                + string.Concat(inspection.RepositoryMemoryItems.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} repository-memory {item.Origin} {item.Id.Value:D}: {item.Rationale}\n"))
-                + string.Join(
-                    string.Empty,
-                    inspection.Reductions.Select(reduction => $"  reduced: {reduction}\n"));
+                + string.Concat(inspection.Reductions.Select(reduction => $"  reduced: {reduction}\n"));
             await _surface.WriteAsync(output, PresentationTextRole.Status, cancellationToken);
             return;
         }
@@ -3504,7 +3498,7 @@ public sealed partial class InteractionCoordinator
                         cancellationToken);
                     var listing = candidates.Count == 0
                         ? "No skills matched.\n"
-                        : string.Join(string.Empty, candidates.Select(candidate =>
+                        : string.Concat(candidates.Select(candidate =>
                         {
                             var claude = candidate.Provenance.Source.StartsWith(
                                 "claude:",
@@ -3929,9 +3923,7 @@ public sealed partial class InteractionCoordinator
 
         var output = $"Delegation {checkpoint.DelegationId.Value:D}: {checkpoint.Phase}; "
             + $"generation {checkpoint.Provenance.Generation}; next: {checkpoint.NextAction}\n"
-            + string.Join(
-                string.Empty,
-                checkpoint.ChildOutcomes.Select(outcome =>
+            + string.Concat(checkpoint.ChildOutcomes.Select(outcome =>
                     $"  {outcome.AssignmentId.Value:D} {outcome.Role} {outcome.Status}; "
                     + $"tools {outcome.Usage.ToolCalls}; tokens {outcome.Usage.ModelTokens}; {outcome.Reason}\n"
                     + FormatAgentModelSelection(outcome.ModelSelection)));
@@ -3952,10 +3944,10 @@ public sealed partial class InteractionCoordinator
 
     private static string FormatRepositoryMemorySnapshot(RepositoryMemoryReadSnapshot snapshot)
     {
-        var warnings = string.Join(string.Empty, snapshot.Warnings.Select(warning => $"  warning: {warning}\n"));
+        var warnings = string.Concat(snapshot.Warnings.Select(warning => $"  warning: {warning}\n"));
         var items = snapshot.Entries.Count == 0
             ? "  no repository memory entries\n"
-            : string.Join(string.Empty, snapshot.Entries.Select(FormatRepositoryMemorySummary));
+            : string.Concat(snapshot.Entries.Select(FormatRepositoryMemorySummary));
         return $"Repository memory ({snapshot.Entries.Count} entries; best-effort recall):\n" + warnings + items;
     }
 
@@ -3968,13 +3960,18 @@ public sealed partial class InteractionCoordinator
     }
 
     private static string FormatRepositoryMemorySummary(RepositoryMemoryEntry item)
-        => $"  {item.Id.Value:D} [{item.Origin.ToString().ToLowerInvariant()}, {FormatRepositoryMemoryType(item.MemoryType)}]: {item.Text}\n";
-
-    private static string FormatRepositoryMemoryType(RepositoryMemoryType memoryType) => memoryType switch
     {
-        RepositoryMemoryType.StandingPreference => "standing preference",
-        _ => "situational",
-    };
+        return $"  {item.Id.Value:D} [{item.Origin.ToString().ToLowerInvariant()}, {FormatRepositoryMemoryType(item.MemoryType)}]: {item.Text}\n";
+    }
+
+    private static string FormatRepositoryMemoryType(RepositoryMemoryType memoryType)
+    {
+        return memoryType switch
+        {
+            RepositoryMemoryType.StandingPreference => "standing preference",
+            _ => "situational",
+        };
+    }
 
     private async Task WriteStandingPreferenceWarningAsync(
         SessionId sessionId,
@@ -4539,7 +4536,7 @@ public sealed partial class InteractionCoordinator
                         result.Repository.RepositoryPath,
                         result.Solution.SolutionPath)
                     .Replace('\\', '/');
-                string[] details = [$"Loading remembered solution: {relativeSolution}", "  (Use --solution to change)"];
+                string[] details = [$"Loading remembered solution: {relativeSolution}"];
                 if (isStartup && _surface.Surface is IStartupProgressSurface startup)
                 {
                     await startup.SetStartupDetailsAsync(details, cancellationToken);
@@ -4555,7 +4552,7 @@ public sealed partial class InteractionCoordinator
 
             return result;
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (!isStartup && exception is not OperationCanceledException)
         {
             await _surface.WriteAsync(
                 FormatStatusError(exception) + Environment.NewLine,
@@ -4872,13 +4869,7 @@ public sealed partial class InteractionCoordinator
         timeout.CancelAfter(TimeSpan.FromSeconds(2));
         try
         {
-            var status = await _gitQueries.GetWorkingTreeStatusAsync(path, timeout.Token);
-            if (status is null)
-            {
-                return null;
-            }
-
-            return status;
+            return await _gitQueries.GetWorkingTreeStatusAsync(path, timeout.Token);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {

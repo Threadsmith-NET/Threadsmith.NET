@@ -235,6 +235,15 @@ public sealed record WebFetchOptions
     /// <summary>Maximum individual decoded string length.</summary>
     public int MaximumStringCharacters { get; init; } = 128 * 1024;
 
+    /// <summary>Maximum fresh user-message characters scanned for candidate URLs.</summary>
+    public int MaximumScannedUserCharacters { get; init; } = 32768;
+
+    /// <summary>Maximum candidate URLs recognized per fresh user message.</summary>
+    public int MaximumUserUrlCandidates { get; init; } = 8;
+
+    /// <summary>Maximum retained transient URL references and grants.</summary>
+    public int MaximumReferences { get; init; } = 100;
+
     /// <summary>Search reference lifetime.</summary>
     public TimeSpan ReferenceLifetime { get; init; } = TimeSpan.FromMinutes(10);
 
@@ -254,6 +263,15 @@ public sealed record WebFetchOptions
             MaximumCompressedBytes = NarrowInt("webFetch:maximumCompressedBytes", defaults.MaximumCompressedBytes),
             MaximumDecodedBytes = NarrowInt("webFetch:maximumDecodedBytes", defaults.MaximumDecodedBytes),
             MaximumExtractedCharacters = NarrowInt("webFetch:maximumExtractedCharacters", defaults.MaximumExtractedCharacters),
+            MaximumHtmlTokens = NarrowInt("webFetch:maximumHtmlTokens", defaults.MaximumHtmlTokens),
+            MaximumHtmlDepth = NarrowInt("webFetch:maximumHtmlDepth", defaults.MaximumHtmlDepth),
+            MaximumJsonTokens = NarrowInt("webFetch:maximumJsonTokens", defaults.MaximumJsonTokens),
+            MaximumJsonDepth = NarrowInt("webFetch:maximumJsonDepth", defaults.MaximumJsonDepth),
+            MaximumStringCharacters = NarrowInt("webFetch:maximumStringCharacters", defaults.MaximumStringCharacters),
+            MaximumScannedUserCharacters = NarrowInt("webFetch:maximumScannedUserCharacters", defaults.MaximumScannedUserCharacters),
+            MaximumUserUrlCandidates = NarrowInt("webFetch:maximumUserUrlCandidates", defaults.MaximumUserUrlCandidates),
+            MaximumReferences = NarrowInt("webFetch:maximumReferences", defaults.MaximumReferences),
+            ReferenceLifetime = TimeSpan.FromSeconds(NarrowInt("webFetch:referenceLifetimeSeconds", (int)defaults.ReferenceLifetime.TotalSeconds)),
         };
         options.Validate();
         return options;
@@ -269,20 +287,21 @@ public sealed record WebFetchOptions
     /// <summary>Validates compiled/narrowed limits.</summary>
     public void Validate()
     {
-        if (MaximumUrlCharacters is < 1 or > 8192
-            || MaximumRedirects is < 0 or > 5
-            || Timeout <= TimeSpan.Zero || Timeout > TimeSpan.FromSeconds(60)
-            || MaximumCompressedBytes is < 1024 or > 4 * 1024 * 1024
-            || MaximumDecodedBytes is < 1024 or > 8 * 1024 * 1024
-            || MaximumExtractedCharacters is < 1024 or > 512 * 1024
-            || MaximumHtmlTokens is < 100 or > 500_000
-            || MaximumHtmlDepth is < 8 or > 256
-            || MaximumJsonTokens is < 100 or > 500_000
-            || MaximumJsonDepth is < 8 or > 128
-            || MaximumStringCharacters is < 1024 or > 512 * 1024
-            || ReferenceLifetime <= TimeSpan.Zero || ReferenceLifetime > TimeSpan.FromHours(1))
+        if (MaximumScannedUserCharacters <= 0 || MaximumUserUrlCandidates <= 0 || MaximumReferences <= 0
+            || MaximumUrlCharacters <= 0
+            || MaximumRedirects < 0
+            || Timeout <= TimeSpan.Zero
+            || MaximumCompressedBytes <= 0
+            || MaximumDecodedBytes <= 0
+            || MaximumExtractedCharacters <= 0
+            || MaximumHtmlTokens <= 0
+            || MaximumHtmlDepth <= 0
+            || MaximumJsonTokens <= 0
+            || MaximumJsonDepth <= 0
+            || MaximumStringCharacters <= 0
+            || ReferenceLifetime <= TimeSpan.Zero)
         {
-            throw new InvalidOperationException("Web-fetch limits are outside compiled security bounds.");
+            throw new InvalidOperationException("Web-fetch limits are invalid.");
         }
     }
 }

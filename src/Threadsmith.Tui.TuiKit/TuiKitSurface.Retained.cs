@@ -120,12 +120,13 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(change);
-        if (request.Options.Count is 0 or > 2048 || request.Options.Select(option => option.Id).Distinct(StringComparer.Ordinal).Count() != request.Options.Count)
+        if (request.Options.Count == 0 || request.Options.Count > _limits.MaximumToggleOptions
+            || request.Options.Select(option => option.Id).Distinct(StringComparer.Ordinal).Count() != request.Options.Count)
         {
-            throw new ArgumentException("Toggle catalogs require 1–2048 distinct stable IDs.", nameof(request));
+            throw new ArgumentException($"Toggle catalogs require 1–{_limits.MaximumToggleOptions:N0} distinct stable IDs.", nameof(request));
         }
 
-        var modal = new ToggleModal(request, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()) { CopyRequested = Copy, SupportsActions = action is not null };
+        var modal = new ToggleModal(request, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture(), _limits) { CopyRequested = Copy, SupportsActions = action is not null };
         Task<string?>? closed = null;
         await EnqueueAsync(() => closed = _app.ShowAsync<string>(modal), cancellationToken);
         var completion = closed ?? throw new InvalidOperationException("Toggle popup did not open.");

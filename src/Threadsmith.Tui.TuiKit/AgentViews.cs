@@ -2,6 +2,7 @@ namespace Threadsmith.Tui.TuiKit;
 
 using Threadsmith.Core;
 using Threadsmith.Interaction.Agents;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 
 /// <summary>Owns retained view state independently of tab widget reconstruction.</summary>
@@ -13,13 +14,16 @@ internal sealed class AgentViews
     private readonly List<AgentView> _ordered = [];
     private readonly Dictionary<AgentPresentationTarget, AgentView> _children = [];
     private readonly Func<PresentationTextRole, TUIKit.CellStyle> _resolveStyle;
+    private readonly TuiResourceLimits _limits;
     private SessionId _session;
 
     /// <summary>Initializes a new instance of the <see cref="AgentViews"/> class.</summary>
-    internal AgentViews(Func<PresentationTextRole, TUIKit.CellStyle> resolveStyle)
+    internal AgentViews(Func<PresentationTextRole, TUIKit.CellStyle> resolveStyle, TuiResourceLimits? limits = null)
     {
+        _limits = limits ?? new();
+        _limits.Validate();
         _resolveStyle = resolveStyle;
-        Main = new AgentView(null, new TranscriptView { ResolveStyle = resolveStyle });
+        Main = new AgentView(null, new TranscriptView(_limits) { ResolveStyle = resolveStyle });
         Selected = Main;
         _ordered.Add(Main);
     }
@@ -78,7 +82,7 @@ internal sealed class AgentViews
         }
         else
         {
-            view = new AgentView(snapshot, new TranscriptView { ResolveStyle = _resolveStyle });
+            view = new AgentView(snapshot, new TranscriptView(_limits) { ResolveStyle = _resolveStyle });
             _children.Add(snapshot.Target, view);
             _ordered.Add(view);
             Revision++;
@@ -125,8 +129,8 @@ internal sealed class AgentViews
         foreach (var view in _children.Values)
         {
             view.Transcript.SetRetentionBudget(
-                Math.Min(TranscriptView.ByteLimit, ChildTextBudget / 2 / _children.Count),
-                Math.Min(TranscriptView.LineLimit, 8192 / _children.Count));
+                Math.Min(_limits.MaximumTranscriptBytes, _limits.MaximumChildTranscriptBytes / 2 / _children.Count),
+                Math.Min(_limits.MaximumTranscriptLines, _limits.MaximumChildTranscriptLines / _children.Count));
         }
     }
 }

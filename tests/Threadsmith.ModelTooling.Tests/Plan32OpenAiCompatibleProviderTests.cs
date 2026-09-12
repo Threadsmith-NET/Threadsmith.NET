@@ -423,10 +423,10 @@ public static class Plan32OpenAiCompatibleProviderTests
 
     /// <summary>Unsafe HTTP transport resource values fail startup validation.</summary>
     [Theory]
-    [InlineData("model:http:pooledConnectionLifetimeSeconds", "59")]
-    [InlineData("model:http:pooledConnectionIdleTimeoutSeconds", "3601")]
+    [InlineData("model:http:pooledConnectionLifetimeSeconds", "0")]
+    [InlineData("model:http:pooledConnectionIdleTimeoutSeconds", "0")]
     [InlineData("model:http:connectTimeoutSeconds", "-1")]
-    [InlineData("model:http:maxConnectionsPerServer", "1025")]
+    [InlineData("model:http:maxConnectionsPerServer", "0")]
     public static void HttpTransportOptions_OutOfBoundsValue_IsRejected(string key, string value)
     {
         IConfiguration configuration = new ConfigurationBuilder()

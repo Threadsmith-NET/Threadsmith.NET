@@ -10,6 +10,7 @@ public sealed class LocalTextCrossEncoder : ITextCrossEncoder, IAsyncDisposable
     private const int MaximumTokens = LocalTextCrossEncoderEngine.MaximumTokens;
     private const int MaximumBatchSize = LocalTextCrossEncoderEngine.MaximumBatchSize;
     private const string ModelId = "cross-encoder-ms-marco-minilm-l6-v2:233902d25c440f23af6f7d6e94d2946bac0bee0a:bert-lower-pair:raw-logit:256:64:v1";
+    private readonly TimeSpan _disposalTimeout;
     private readonly SemaphoreSlim _inferenceGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
     private readonly string _assetDirectory;
@@ -19,20 +20,22 @@ public sealed class LocalTextCrossEncoder : ITextCrossEncoder, IAsyncDisposable
     private int _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="LocalTextCrossEncoder"/> class with a bounded CPU worker count.</summary>
-    /// <param name="cpuThreads">Requested CPU worker threads, from one through thirty-two.</param>
-    public LocalTextCrossEncoder(int cpuThreads = 8)
-        : this(Path.Combine(AppContext.BaseDirectory, "crossencoders", "ms-marco-MiniLM-L6-v2"), cpuThreads)
+    /// <param name="cpuThreads">Requested positive CPU worker thread count.</param>
+    /// <param name="disposalTimeoutMilliseconds">Maximum shutdown wait for active inference.</param>
+    public LocalTextCrossEncoder(int cpuThreads = 8, int disposalTimeoutMilliseconds = 10000)
+        : this(Path.Combine(AppContext.BaseDirectory, "crossencoders", "ms-marco-MiniLM-L6-v2"), cpuThreads, disposalTimeoutMilliseconds: disposalTimeoutMilliseconds)
     {
     }
 
     /// <summary>Initializes a new instance of the <see cref="LocalTextCrossEncoder"/> class from a test-owned asset root.</summary>
-    internal LocalTextCrossEncoder(string assetDirectory, int cpuThreads = 8, Action? inferenceStarted = null)
+    internal LocalTextCrossEncoder(string assetDirectory, int cpuThreads = 8, Action? inferenceStarted = null, int disposalTimeoutMilliseconds = 10000)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(assetDirectory);
         ArgumentOutOfRangeException.ThrowIfLessThan(cpuThreads, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(cpuThreads, 32);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(disposalTimeoutMilliseconds);
+        _disposalTimeout = TimeSpan.FromMilliseconds(disposalTimeoutMilliseconds);
         _assetDirectory = assetDirectory;
-        _cpuThreads = Math.Min(cpuThreads, Environment.ProcessorCount);
+        _cpuThreads = cpuThreads;
         _inferenceStarted = inferenceStarted;
     }
 
@@ -89,7 +92,7 @@ public sealed class LocalTextCrossEncoder : ITextCrossEncoder, IAsyncDisposable
         }
 
         await _shutdown.CancelAsync().ConfigureAwait(false);
-        if (await _inferenceGate.WaitAsync(TimeSpan.FromSeconds(10)).ConfigureAwait(false))
+        if (await _inferenceGate.WaitAsync(_disposalTimeout).ConfigureAwait(false))
         {
             try
             {

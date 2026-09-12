@@ -10,6 +10,9 @@ using Threadsmith.Models;
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AnthropicProviderConfiguration : ModelProviderConfiguration
 {
+    /// <summary>Configurable streaming, discovery, and cache resource limits.</summary>
+    public AnthropicResourceLimits ResourceLimits { get; init; } = new();
+
     /// <summary>Exact-model trusted policy overrides applied during discovery hydration.</summary>
     public IReadOnlyList<AnthropicModelOverrideConfiguration> ModelOverrides { get; init; } = [];
 

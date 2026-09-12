@@ -14,7 +14,8 @@ internal sealed class ToggleModal : Modal
     private readonly InteractionToggleRequest _request;
     private readonly Dictionary<string, InteractionToggleOption> _options;
     private readonly Dictionary<string, string[]> _groups;
-    private readonly ComposerBuffer _filter = new();
+    private readonly ComposerBuffer _filter;
+    private readonly TuiResourceLimits _limits;
     private readonly Dictionary<string, bool> _expansion = new(StringComparer.Ordinal);
     private readonly Func<PresentationTextRole, CellStyle> _style;
     private readonly Action _cancel;
@@ -29,8 +30,11 @@ internal sealed class ToggleModal : Modal
     private bool _fits = true;
 
     /// <summary>Initializes a new instance of the <see cref="ToggleModal"/> class.</summary>
-    internal ToggleModal(InteractionToggleRequest request, Func<PresentationTextRole, CellStyle> style, Action cancel, Action toggleMouse)
+    internal ToggleModal(InteractionToggleRequest request, Func<PresentationTextRole, CellStyle> style, Action cancel, Action toggleMouse, TuiResourceLimits? limits = null)
     {
+        _limits = limits ?? new();
+        _limits.Validate();
+        _filter = new ComposerBuffer(_limits);
         _request = request;
         _style = style;
         _cancel = cancel;
@@ -101,7 +105,7 @@ internal sealed class ToggleModal : Modal
         {
             if (_details is null)
             {
-                _details = new TranscriptView { ResolveStyle = _style };
+                _details = new TranscriptView(_limits) { ResolveStyle = _style };
                 var selected = _options.GetValueOrDefault(_tree.SelectedNode);
                 var label = selected is null ? _tree.SelectedNode[6..] : selected.Label + "\n" + selected.Reason;
                 _details.Present(new PresentationBatch([new PresentationTextItem([new(label, PresentationTextRole.Default)])]));
@@ -147,7 +151,7 @@ internal sealed class ToggleModal : Modal
                 _filter.Delete(true);
                 Filter();
             }
-            else if (key.Code == KeyCode.Character && key.Modifiers == KeyModifiers.None && _filter.Text.Length < 256)
+            else if (key.Code == KeyCode.Character && key.Modifiers == KeyModifiers.None && _filter.Text.Length < _limits.MaximumFilterCharacters)
             {
                 _filter.Insert(char.ConvertFromUtf32(key.Rune));
                 Filter();
@@ -165,7 +169,7 @@ internal sealed class ToggleModal : Modal
     /// <inheritdoc />
     public override bool HandlePaste(string text)
     {
-        if (_fits && !_busy && _details is null && text.Length <= 256 - _filter.Text.Length)
+        if (_fits && !_busy && _details is null && text.Length <= _limits.MaximumFilterCharacters - _filter.Text.Length)
         {
             _filter.Insert(text.ReplaceLineEndings(" "));
             Filter();

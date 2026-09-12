@@ -2418,11 +2418,8 @@ public static class Milestone1Tests
             var style = resolver.Resolve(role);
             Assert.Null(style.Foreground);
             Assert.Null(style.Background);
+            Assert.False(style.Decorations.GetValueOrDefault().HasFlag(TuiTextDecoration.Invert));
         }
-
-        Assert.Equal(
-            TuiTextDecoration.Invert,
-            resolver.Resolve(PresentationTextRole.SessionStatus).Decorations);
     }
 
     /// <summary>Partial role styles independently inherit unspecified values from the default role.</summary>
@@ -2434,8 +2431,10 @@ public static class Milestone1Tests
             [
                 new(PresentationTextRole.Default, new TuiTextStyle(
                     TuiColor.Parse("white"),
-                    TuiColor.Parse("#102030"))),
+                    TuiColor.Parse("#102030"),
+                    TuiTextDecoration.Italic)),
                 new(PresentationTextRole.Error, new TuiTextStyle(TuiColor.Parse("red"))),
+                new(PresentationTextRole.MarkdownStrong, new TuiTextStyle(TuiColor.Parse("cyan"))),
             ]);
         var resolver = new TuiThemeResolver(theme);
 
@@ -2443,6 +2442,15 @@ public static class Milestone1Tests
 
         Assert.Equal("red", result.Foreground?.Value);
         Assert.Equal("#102030", result.Background?.Value);
+        Assert.Equal(TuiTextDecoration.Italic, result.Decorations);
+        var heading = resolver.Resolve(PresentationTextRole.MarkdownHeading);
+        Assert.Equal("white", heading.Foreground?.Value);
+        Assert.Equal("#102030", heading.Background?.Value);
+        Assert.Equal(TuiTextDecoration.Italic, heading.Decorations);
+        var strong = resolver.Resolve(PresentationTextRole.MarkdownStrong);
+        Assert.Equal("cyan", strong.Foreground?.Value);
+        Assert.Equal("#102030", strong.Background?.Value);
+        Assert.Equal(TuiTextDecoration.Italic, strong.Decorations);
     }
 
     /// <summary>An explicit empty decoration set overrides inherited decorations.</summary>
@@ -2553,10 +2561,10 @@ public static class Milestone1Tests
             Assert.NotNull(resolver.Resolve(PresentationTextRole.SelectionHighlight).Background);
         }
 
-        Assert.All(themes, theme => Assert.True(
+        Assert.All(themes, theme => Assert.All(Enum.GetValues<PresentationTextRole>(), role => Assert.False(
             new TuiThemeResolver(theme.Theme)
-                .Resolve(PresentationTextRole.SessionStatus)
-                .Decorations?.HasFlag(TuiTextDecoration.Invert)));
+                .Resolve(role)
+                .Decorations.GetValueOrDefault().HasFlag(TuiTextDecoration.Invert))));
         Assert.True(new TuiThemeResolver(themes[3].Theme).Resolve(PresentationTextRole.Error).Decorations?.HasFlag(TuiTextDecoration.Underline));
     }
 
@@ -2574,6 +2582,8 @@ public static class Milestone1Tests
             ["tui:themes:1:name"] = "Project Blue",
             ["tui:themes:1:styles:Hyperlink:foreground"] = "#5FAFFF",
             ["tui:themes:1:styles:Hyperlink:underline"] = "true",
+            ["tui:themes:1:styles:SessionStatus:background"] = "black",
+            ["tui:themes:1:styles:TitleBarRole:invert"] = "true",
         }).Build();
 
         (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
@@ -2583,6 +2593,11 @@ public static class Milestone1Tests
         Assert.Equal("Replaced Forge", catalog.Themes[1].Name);
         Assert.Equal("project-blue", preferences.ActiveTheme.Theme.Id);
         Assert.Single(catalog.Warnings);
+        var resolver = new TuiThemeResolver(preferences.ActiveTheme.Theme);
+        Assert.Equal(TuiColor.Parse("black"), resolver.Resolve(PresentationTextRole.SessionStatus).Background);
+        Assert.Equal(TuiTextDecoration.None, resolver.Resolve(PresentationTextRole.SessionStatus).Decorations);
+        Assert.Equal(TuiTextDecoration.None, resolver.Resolve(PresentationTextRole.AgentSelectedTabRole).Decorations);
+        Assert.Equal(TuiTextDecoration.Invert, resolver.Resolve(PresentationTextRole.TitleBarRole).Decorations);
     }
 
     /// <summary>Theme arrays from separate providers remain whole before merging by stable id.</summary>

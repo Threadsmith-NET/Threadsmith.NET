@@ -282,7 +282,7 @@ public sealed partial class SessionApplication :
         _repositoryMemories = repositoryMemories;
         _repositoryMemoryOptions = repositoryMemoryOptions;
         _conversationToolSnapshots = conversationToolSnapshots;
-        _steering = steering ?? new RunSteeringCoordinator();
+        _steering = steering ?? new RunSteeringCoordinator(_limits);
         _correctiveMessages = correctiveMessages;
         _prompts = prompts;
         _semanticRefreshCoordinator = semanticRefreshCoordinator;

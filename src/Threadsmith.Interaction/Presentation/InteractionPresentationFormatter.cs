@@ -65,13 +65,15 @@ internal static class InteractionPresentationFormatter
     /// <param name="showOperationDurations">Whether valid host-measured durations should be shown.</param>
     /// <param name="inspectCodeExploreOutput">Whether successful code_explore blocks include final model-visible output.</param>
     /// <param name="progress">Final host-owned progress entries collected for this invocation.</param>
+    /// <param name="maximumInspectionCharacters">Configured expanded-output character limit.</param>
     /// <returns>A terminal-neutral TUI presentation block.</returns>
     internal static string FormatToolCompletion(
         ToolInvocationStarted started,
         ToolInvocationCompleted completed,
         bool showOperationDurations,
         bool inspectCodeExploreOutput = false,
-        IReadOnlyList<PresentationTextSegment>? progress = null)
+        IReadOnlyList<PresentationTextSegment>? progress = null,
+        int maximumInspectionCharacters = MaximumToolInspectionCharacters)
     {
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(completed);
@@ -87,7 +89,7 @@ internal static class InteractionPresentationFormatter
         }
 
         if (IsBuiltInMemoryTool(started, source)
-            && GetMemoryOutput(started, completed) is { } memoryOutput)
+            && GetMemoryOutput(started, completed, maximumInspectionCharacters) is { } memoryOutput)
         {
             lines.Add(new TuiBlockLine(
                 TuiBlockLineKind.Body,
@@ -103,7 +105,8 @@ internal static class InteractionPresentationFormatter
                 TuiBlockLineKind.Body,
                 PrepareInspectionOutput(
                     completed.ModelResultContent ?? completed.ResultJson ?? string.Empty,
-                    completed.ModelResultContent is null),
+                    completed.ModelResultContent is null,
+                    maximumInspectionCharacters),
                 PresentationTextRole.Muted,
                 PreserveText: true));
         }
@@ -513,17 +516,17 @@ internal static class InteractionPresentationFormatter
             && source is not { Kind: not ToolActivitySourceKind.BuiltIn };
     }
 
-    private static string? GetMemoryOutput(ToolInvocationStarted started, ToolInvocationCompleted completed)
+    private static string? GetMemoryOutput(ToolInvocationStarted started, ToolInvocationCompleted completed, int maximumInspectionCharacters)
     {
         if (!completed.Succeeded)
         {
             return string.IsNullOrWhiteSpace(started.TransientActivityDetail)
                 ? null
-                : PrepareMemoryOutput("Requested memory:\n" + started.TransientActivityDetail);
+                : PrepareMemoryOutput("Requested memory:\n" + started.TransientActivityDetail, maximumInspectionCharacters);
         }
 
         if (string.IsNullOrWhiteSpace(completed.ResultJson)
-            || completed.ResultJson.Length > MaximumToolInspectionCharacters)
+            || completed.ResultJson.Length > maximumInspectionCharacters)
         {
             return null;
         }
@@ -590,7 +593,7 @@ internal static class InteractionPresentationFormatter
                 output.AppendLine(warning.GetString());
             }
 
-            return PrepareMemoryOutput(output.ToString().TrimEnd());
+            return PrepareMemoryOutput(output.ToString().TrimEnd(), maximumInspectionCharacters);
         }
         catch (JsonException)
         {
@@ -598,16 +601,16 @@ internal static class InteractionPresentationFormatter
         }
     }
 
-    private static string PrepareMemoryOutput(string output)
+    private static string PrepareMemoryOutput(string output, int maximumInspectionCharacters)
     {
         var encoded = TerminalControlEncoder.Encode(NormalizeInspectionLineEndings(output));
-        if (encoded.Length <= MaximumToolInspectionCharacters)
+        if (encoded.Length <= maximumInspectionCharacters)
         {
             return encoded;
         }
 
         const string truncationMarker = "\n[memory output truncated by console display bound]";
-        var length = MaximumToolInspectionCharacters - truncationMarker.Length;
+        var length = Math.Max(0, maximumInspectionCharacters - truncationMarker.Length);
         if (char.IsHighSurrogate(encoded[length - 1]))
         {
             length--;
@@ -628,12 +631,12 @@ internal static class InteractionPresentationFormatter
                 || !string.IsNullOrWhiteSpace(completed.ResultJson));
     }
 
-    private static string PrepareInspectionOutput(string output, bool isJson)
+    private static string PrepareInspectionOutput(string output, bool isJson, int maximumInspectionCharacters)
     {
         var displayOutput = NormalizeInspectionLineEndings(isJson ? FormatJsonForInspection(output) : output);
-        var bounded = displayOutput.Length <= MaximumToolInspectionCharacters
+        var bounded = displayOutput.Length <= maximumInspectionCharacters
             ? displayOutput
-            : displayOutput[..MaximumToolInspectionCharacters]
+            : displayOutput[..maximumInspectionCharacters]
                 + "\n"
                 + "[code_explore inspection truncated by TUI display bound]";
         return TerminalControlEncoder.Encode(bounded);

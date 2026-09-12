@@ -168,7 +168,7 @@ public sealed class ActiveModelSelectionService :
     ICommandHandler<SelectActiveModelCommand, ActiveModelSelectionResult>,
     ICommandHandler<SetActiveReasoningCommand, ActiveModelSelectionResult>
 {
-    private const int MaximumConfigurationBytes = 1024 * 1024;
+    private readonly int _maximumConfigurationBytes;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     private readonly EffectiveModelProviderCatalog _catalog;
@@ -183,7 +183,8 @@ public sealed class ActiveModelSelectionService :
     public ActiveModelSelectionService(
         EffectiveModelProviderCatalog catalog,
         SessionModelPreferences preferences,
-        string repositoryConfigurationPath)
+        string repositoryConfigurationPath,
+        int maximumConfigurationBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(preferences);
@@ -194,6 +195,8 @@ public sealed class ActiveModelSelectionService :
         _defaultProfileId = defaults.ProfileId
             ?? throw new InvalidOperationException("An active model default is required.");
         _defaultReasoningLevel = defaults.Reasoning;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
+        _maximumConfigurationBytes = maximumConfigurationBytes;
         _configurationPath = Path.GetFullPath(repositoryConfigurationPath);
         _source = ActiveModelSelectionSource.UserDefault;
         _ = ApplyRepositorySelectionIfPresent(_configurationPath);
@@ -417,7 +420,7 @@ public sealed class ActiveModelSelectionService :
         }
 
         FileInfo info = new(configurationPath);
-        if (info.Length > MaximumConfigurationBytes)
+        if (info.Length > _maximumConfigurationBytes)
         {
             throw new InvalidDataException("Repository configuration exceeds the model-selection size limit.");
         }
@@ -546,7 +549,7 @@ public sealed class ActiveModelSelectionService :
         }
     }
 
-    private static async Task<JsonObject> LoadRootAsync(
+    private async Task<JsonObject> LoadRootAsync(
         string configurationPath,
         CancellationToken cancellationToken)
     {
@@ -557,7 +560,7 @@ public sealed class ActiveModelSelectionService :
         }
 
         FileInfo info = new(configurationPath);
-        if (info.Length > MaximumConfigurationBytes)
+        if (info.Length > _maximumConfigurationBytes)
         {
             throw new InvalidDataException("Repository configuration exceeds the model-selection size limit.");
         }

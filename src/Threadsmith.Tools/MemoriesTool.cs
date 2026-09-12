@@ -24,7 +24,6 @@ public sealed record MemoriesOutput(string Action, string Outcome, string? Id, b
 /// <summary>Admits explicit memory changes through the shared repository memory service.</summary>
 public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransientToolActivityDetail
 {
-    private const int MaximumListBytes = 48 * 1024;
     private readonly IManagedRepositoryMemoryService _memories;
     private readonly IRepositoryMemoryOptionsProvider _options;
     private readonly ToolDefinition _definition;
@@ -95,7 +94,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         {
             var info = new MemoryInfo(item.Id.Value.ToString("D"), item.Text, item.Origin.ToString().ToLowerInvariant(), FormatMemoryType(item.MemoryType), item.CreatedAt, item.UpdatedAt, item.InclusionCount, item.LastIncludedAt, item.EmbeddingSpaceId);
             bytes += JsonSerializer.SerializeToUtf8Bytes(info).Length;
-            if (bytes > MaximumListBytes)
+            if (bytes > options.MaximumListBytes)
             {
                 break;
             }

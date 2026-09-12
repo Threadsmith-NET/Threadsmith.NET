@@ -10,6 +10,8 @@ using Threadsmith.Core;
 /// <summary>SDK-backed MCP transport for a child process communicating over standard input and output.</summary>
 internal sealed class SdkStdioTransport : IMcpTransport
 {
+    private readonly McpResourceLimits _limits;
+    private readonly McpTransportMapping _mapping;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ILogger<SdkStdioTransport> _logger;
     private readonly ILogger<McpCapabilityChangeSubscription> _capabilityLogger;
@@ -21,10 +23,13 @@ internal sealed class SdkStdioTransport : IMcpTransport
     private long _shutdownTimeoutTicks = TimeSpan.FromSeconds(10).Ticks;
 
     /// <summary>Initializes a new instance of the <see cref="SdkStdioTransport"/> class.</summary>
-    internal SdkStdioTransport(IOutputSanitizer sanitizer, ILoggerFactory loggerFactory)
+    internal SdkStdioTransport(IOutputSanitizer sanitizer, ILoggerFactory loggerFactory, McpResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(loggerFactory);
+        _limits = limits ?? new();
+        _limits.Validate();
+        _mapping = new(_limits);
         _sanitizer = sanitizer;
         _logger = loggerFactory.CreateLogger<SdkStdioTransport>();
         _capabilityLogger = loggerFactory.CreateLogger<McpCapabilityChangeSubscription>();
@@ -68,7 +73,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
         var stderrPump = PumpStandardErrorAsync(process, profile.Id, stderrLifetime.Token);
         var transport = new StreamClientTransport(
             process.StandardInput.BaseStream,
-            new McpBoundedLineReadStream(process.StandardOutput.BaseStream),
+            new McpBoundedLineReadStream(process.StandardOutput.BaseStream, _limits.MaximumLineBytes),
             NullLoggerFactory.Instance);
         var clientOptions = McpProtocolCompatibility.CreateClientOptions(profile.StartupTimeout);
         McpClient? client = null;
@@ -83,7 +88,8 @@ internal sealed class SdkStdioTransport : IMcpTransport
             var capabilityChanges = new McpCapabilityChangeSubscription(
                 client,
                 profile,
-                _capabilityLogger);
+                _capabilityLogger,
+                token => DiscoverCapabilitiesAsync(client, profile, token));
             var capabilities = await DiscoverCapabilitiesAsync(
                 client,
                 profile,
@@ -147,7 +153,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
             capabilityId,
             arguments,
             cancellationToken: cancellationToken);
-        return McpTransportMapping.MapInvocation(result);
+        return _mapping.MapInvocation(result);
     }
 
     /// <inheritdoc />
@@ -171,11 +177,11 @@ internal sealed class SdkStdioTransport : IMcpTransport
                 => await client.ReadResourceAsync(
                     capability.ResourceIdentity
                         ?? throw new InvalidOperationException("The MCP resource template has no URI template."),
-                    McpTransportMapping.MapArguments(arguments),
+                    _mapping.MapArguments(arguments),
                     cancellationToken: cancellationToken),
             _ => throw new InvalidOperationException("The selected MCP capability is not a readable resource."),
         };
-        return McpTransportMapping.MapResourceContent(result);
+        return _mapping.MapResourceContent(result);
     }
 
     /// <inheritdoc />
@@ -195,9 +201,9 @@ internal sealed class SdkStdioTransport : IMcpTransport
             ?? throw new InvalidOperationException("The MCP stdio transport is not connected.");
         var result = await client.GetPromptAsync(
             capability.ServerName,
-            McpTransportMapping.MapArguments(arguments),
+            _mapping.MapArguments(arguments),
             cancellationToken: cancellationToken);
-        return McpTransportMapping.MapPromptContent(result);
+        return _mapping.MapPromptContent(result);
     }
 
     /// <inheritdoc />
@@ -303,7 +309,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
     }
 
     /// <summary>Discovers only server-supported and profile-allowed bounded capabilities.</summary>
-    internal static async Task<IReadOnlyList<McpImportedCapability>> DiscoverCapabilitiesAsync(
+    internal async Task<IReadOnlyList<McpImportedCapability>> DiscoverCapabilitiesAsync(
         McpClient client,
         McpConnectionProfile profile,
         CancellationToken cancellationToken)
@@ -313,7 +319,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
             && client.ServerCapabilities.Tools is not null)
         {
             var tools = await client.ListToolsAsync(cancellationToken: cancellationToken);
-            capabilities.AddRange(McpTransportMapping.MapTools(profile, tools));
+            capabilities.AddRange(_mapping.MapTools(profile, tools));
         }
 
         if (client.ServerCapabilities.Resources is not null)
@@ -321,14 +327,14 @@ internal sealed class SdkStdioTransport : IMcpTransport
             if (profile.AllowedCapabilities.Contains(McpCapabilityKind.Resource))
             {
                 var resources = await client.ListResourcesAsync(cancellationToken: cancellationToken);
-                capabilities.AddRange(McpTransportMapping.MapResources(profile, resources));
+                capabilities.AddRange(_mapping.MapResources(profile, resources));
             }
 
             if (profile.AllowedCapabilities.Contains(McpCapabilityKind.ResourceTemplate))
             {
                 var templates = await client.ListResourceTemplatesAsync(
                     cancellationToken: cancellationToken);
-                capabilities.AddRange(McpTransportMapping.MapResourceTemplates(profile, templates));
+                capabilities.AddRange(_mapping.MapResourceTemplates(profile, templates));
             }
         }
 
@@ -336,7 +342,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
             && client.ServerCapabilities.Prompts is not null)
         {
             var prompts = await client.ListPromptsAsync(cancellationToken: cancellationToken);
-            capabilities.AddRange(McpTransportMapping.MapPrompts(profile, prompts));
+            capabilities.AddRange(_mapping.MapPrompts(profile, prompts));
         }
 
         if (capabilities.Select(capability => capability.Id).Distinct(StringComparer.Ordinal).Count()
@@ -426,7 +432,7 @@ internal sealed class SdkStdioTransport : IMcpTransport
         string profileId,
         CancellationToken cancellationToken)
     {
-        const int maximumRetainedLineCharacters = 8192;
+        var maximumRetainedLineCharacters = _limits.MaximumStandardErrorLineCharacters;
         using var reader = process.StandardError;
         var buffer = new char[2048];
         var line = new System.Text.StringBuilder(maximumRetainedLineCharacters);

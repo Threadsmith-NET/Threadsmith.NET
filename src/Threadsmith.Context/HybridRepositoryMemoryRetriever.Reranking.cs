@@ -53,8 +53,19 @@ public sealed partial class HybridRepositoryMemoryRetriever
                 throw new InvalidOperationException("The cross-encoder descriptor is invalid.");
             }
 
-            var candidates = ranked.Take(Math.Min(options.RerankerCandidateLimit, model.MaxBatchSize)).ToArray();
-            var scores = await crossEncoder.ScoreAsync(query, candidates.Select(candidate => candidate.Entry.Text).ToArray(), cancellationToken);
+            var candidates = ranked.Take(options.RerankerCandidateLimit).ToArray();
+            var scores = new List<TextCrossEncoderScore>(candidates.Length);
+            foreach (var batch in candidates.Chunk(model.MaxBatchSize))
+            {
+                var batchScores = await crossEncoder.ScoreAsync(query, batch.Select(candidate => candidate.Entry.Text).ToArray(), cancellationToken);
+                if (batchScores.Count != batch.Length)
+                {
+                    throw new InvalidOperationException("The cross-encoder returned an incomplete batch.");
+                }
+
+                scores.AddRange(batchScores);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             if (scores.Count != candidates.Length || scores.Any(score => score is null || !double.IsFinite(score.Score) || score.InputTokenCount < 0))
             {

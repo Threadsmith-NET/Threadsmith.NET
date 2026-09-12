@@ -13,11 +13,14 @@ namespace Threadsmith.Tools;
 /// </remarks>
 public sealed record ToolLimits
 {
-    /// <summary>Hard ceiling for one <c>read_file</c> line window.</summary>
-    public const int ReadFileLineLimitCeiling = 2000;
+    /// <summary>Maximum characters in a file-search query.</summary>
+    public int SearchMaximumQueryCharacters { get; init; } = 500;
 
-    /// <summary>Hard ceiling for textual content returned by one <c>read_file</c> invocation.</summary>
-    public const int ReadFileContentByteLimitCeiling = 50 * 1024;
+    /// <summary>Default size for one <c>read_file</c> line window.</summary>
+    public const int DefaultReadFileLineLimit = 2000;
+
+    /// <summary>Default bound for textual content returned by one <c>read_file</c> invocation.</summary>
+    public const int DefaultReadFileContentByteLimit = 50 * 1024;
 
     // ── list_files ───────────────────────────────────────────────────────
 
@@ -33,16 +36,15 @@ public sealed record ToolLimits
     public long ReadFileMaximumBytes { get; init; } = 1024 * 1024;
 
     /// <summary>Default <c>maximumLines</c> when the model omits it.</summary>
-    public int ReadFileDefaultLines { get; init; } = ReadFileLineLimitCeiling;
+    public int ReadFileDefaultLines { get; init; } = DefaultReadFileLineLimit;
 
-    /// <summary>Configured upper bound for <c>maximumLines</c>, capped by <see cref="ReadFileLineLimitCeiling"/>.</summary>
-    public int ReadFileMaxLines { get; init; } = ReadFileLineLimitCeiling;
+    /// <summary>Configured upper bound for <c>maximumLines</c>.</summary>
+    public int ReadFileMaxLines { get; init; } = DefaultReadFileLineLimit;
 
     /// <summary>
-    /// Configured textual-content bound for one result, capped by
-    /// <see cref="ReadFileContentByteLimitCeiling"/>.
+    /// Configured textual-content bound for one result.
     /// </summary>
-    public int ReadFileMaximumContentBytes { get; init; } = ReadFileContentByteLimitCeiling;
+    public int ReadFileMaximumContentBytes { get; init; } = DefaultReadFileContentByteLimit;
 
     // ── search ───────────────────────────────────────────────────────────
 
@@ -73,6 +75,50 @@ public sealed record ToolLimits
 
     /// <summary>Upper bound for <c>timeoutSeconds</c>. Historical default: 60.</summary>
     public int RunProcessMaxTimeoutSeconds { get; init; } = 60;
+
+    /// <summary>Maximum UTF-8 content bytes accepted by write_file.</summary>
+    public int WriteFileMaximumContentBytes { get; init; } = 1024 * 1024;
+
+    /// <summary>Maximum destination path characters accepted by write_file.</summary>
+    public int WriteFileMaximumPathCharacters { get; init; } = 4096;
+
+    /// <summary>Maximum legacy semantic results projected into model context.</summary>
+    public int SemanticMaximumModelResults { get; init; } = 100;
+
+    /// <summary>Timeout in milliseconds for each search regex match.</summary>
+    public int SearchRegexTimeoutMilliseconds { get; init; } = 250;
+
+    /// <summary>Timeout in milliseconds for the ripgrep search process.</summary>
+    public int SearchProcessTimeoutMilliseconds { get; init; } = 25_000;
+
+    /// <summary>Rejects nonpositive limits and defaults larger than their request ceilings.</summary>
+    public void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchMaximumQueryCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ListFilesDefaultEntries);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ListFilesMaxEntries);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileMaximumBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileDefaultLines);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileMaxLines);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileMaximumContentBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchMaximumBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchDefaultMatches);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchMaxMatches);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(FindSymbolMaxResults);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(FindReferencesMaxResults);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(FindImplementationsMaxResults);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RunProcessDefaultTimeoutSeconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(RunProcessMaxTimeoutSeconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(WriteFileMaximumContentBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(WriteFileMaximumPathCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SemanticMaximumModelResults);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchRegexTimeoutMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SearchProcessTimeoutMilliseconds);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(ListFilesDefaultEntries, ListFilesMaxEntries);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(ReadFileDefaultLines, ReadFileMaxLines);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(SearchDefaultMatches, SearchMaxMatches);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(RunProcessDefaultTimeoutSeconds, RunProcessMaxTimeoutSeconds);
+    }
 
     /// <summary>The compiled-in defaults used when no configuration is supplied.</summary>
     public static ToolLimits Default { get; } = new();

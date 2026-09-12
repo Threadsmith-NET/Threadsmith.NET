@@ -16,8 +16,6 @@ using Threadsmith.Core;
 /// <summary>Runs bounded advanced C# queries against snapshots from the existing semantic workspace.</summary>
 public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService, ICodeExploreService
 {
-    private const int MaximumGeneratedDocuments = 100;
-    private const int MaximumGeneratedContentCharacters = 16_384;
     private const int NaturalLanguageNameSegmentBaseScore = 160;
     private const int NaturalLanguageNameSegmentConceptScore = 40;
     private const int NaturalLanguagePrimaryNameSegmentConceptScore = 20;
@@ -244,16 +242,19 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private readonly Dictionary<Guid, long> _latestCodeExploreCatalogGenerations = [];
     private readonly Dictionary<string, IReadOnlyList<string>> _naturalLanguageGraphNeighbors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, SharedCodeExploreBuild<IReadOnlyList<string>>> _naturalLanguageGraphBuilds = new(StringComparer.Ordinal);
+    private readonly SemanticResourceLimits _resourceLimits;
     private readonly CodeExploreOptions _options;
     private readonly IPromptLoader _prompts;
     private readonly SemanticEngineRegistry _registry;
 
     /// <summary>Initializes a new instance of the <see cref="AdvancedSemanticQueryService"/> class.</summary>
-    public AdvancedSemanticQueryService(SemanticEngineRegistry registry, IPromptLoader prompts, CodeExploreOptions? options = null)
+    public AdvancedSemanticQueryService(SemanticEngineRegistry registry, IPromptLoader prompts, CodeExploreOptions? options = null, SemanticResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(prompts);
         _options = (options ?? new CodeExploreOptions()).Resolve();
+        _resourceLimits = resourceLimits ?? new();
+        _resourceLimits.Validate();
         _registry = registry;
         _prompts = prompts;
     }
@@ -730,7 +731,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     continue;
                 }
 
-                if (documents.Count >= MaximumGeneratedDocuments)
+                if (documents.Count >= _resourceLimits.MaximumGeneratedDocuments)
                 {
                     truncated = true;
                     break;
@@ -738,10 +739,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
                 var text = await document.GetTextAsync(cancellationToken);
                 var content = request.IncludeContent ? text.ToString() : null;
-                var contentTruncated = content is { Length: var length } && length > MaximumGeneratedContentCharacters;
+                var contentTruncated = content is { Length: var length } && length > _resourceLimits.MaximumGeneratedContentCharacters;
                 if (contentTruncated)
                 {
-                    content = content?[..MaximumGeneratedContentCharacters];
+                    content = content?[.._resourceLimits.MaximumGeneratedContentCharacters];
                 }
 
                 var filePath = document.FilePath ?? document.Name;
@@ -13780,26 +13781,28 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             TaskScheduler.Default);
     }
 
-    private static void ValidateSymbolId(string symbolId)
+    private void ValidateSymbolId(string symbolId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
-        if (symbolId.Length > 2048)
+        if (symbolId.Length > _resourceLimits.MaximumSymbolIdCharacters)
         {
-            throw new ArgumentOutOfRangeException(nameof(symbolId), "Symbol ids are limited to 2,048 characters.");
+            throw new ArgumentOutOfRangeException(nameof(symbolId), $"Symbol ids are limited to {_resourceLimits.MaximumSymbolIdCharacters} characters.");
         }
     }
 
-    private static void ValidateLimits(SemanticTraversalLimits limits)
+    private void ValidateLimits(SemanticTraversalLimits limits)
     {
         ArgumentNullException.ThrowIfNull(limits);
-        if (limits.MaximumDepth is < 0 or > 8 || limits.MaximumNodes is < 1 or > 1000
-            || limits.MaximumEdges is < 1 or > 5000 || limits.TimeoutMilliseconds is < 1 or > 60_000)
+        if (limits.MaximumDepth < 0 || limits.MaximumDepth > _resourceLimits.MaximumTraversalDepth
+            || limits.MaximumNodes < 1 || limits.MaximumNodes > _resourceLimits.MaximumTraversalNodes
+            || limits.MaximumEdges < 1 || limits.MaximumEdges > _resourceLimits.MaximumTraversalEdges
+            || limits.TimeoutMilliseconds < 1 || limits.TimeoutMilliseconds > _resourceLimits.MaximumTraversalTimeoutMilliseconds)
         {
             throw new ArgumentOutOfRangeException(nameof(limits), "Semantic traversal bounds are outside host limits.");
         }
     }
 
-    private static void ValidatePattern(CSharpPatternSearchRequest request)
+    private void ValidatePattern(CSharpPatternSearchRequest request)
     {
         var patternVersion = request.Pattern.Version ?? 1;
         if (patternVersion != 1)
@@ -13807,7 +13810,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             throw new NotSupportedException($"C# pattern version {patternVersion} is not supported.");
         }
 
-        if (request.MaximumMatches is < 1 or > 1000 || request.TimeoutMilliseconds is < 1 or > 60_000)
+        if (request.MaximumMatches < 1 || request.MaximumMatches > _resourceLimits.MaximumPatternMatches
+            || request.TimeoutMilliseconds < 1 || request.TimeoutMilliseconds > _resourceLimits.MaximumTraversalTimeoutMilliseconds)
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Pattern-search bounds are outside host limits.");
         }
@@ -13825,15 +13829,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         foreach (var value in new[] { request.Pattern.Name, request.Pattern.ContainingType, request.Pattern.Capture }
             .Concat(requiredAttributes))
         {
-            if (value is { Length: > CSharpPatternConstraints.MaximumNameCharacters }
+            if (value?.Length > _resourceLimits.MaximumPatternNameCharacters
                 || (value is not null && !CSharpPatternConstraints.IsValidDottedIdentifierName(value)))
             {
                 throw new ArgumentException("Pattern names must be bounded C# identifiers.", nameof(request));
             }
         }
 
-        if (requiredModifiers.Count > CSharpPatternConstraints.MaximumPredicateValues
-            || requiredAttributes.Count > CSharpPatternConstraints.MaximumPredicateValues)
+        if (requiredModifiers.Count > _resourceLimits.MaximumPatternPredicateValues
+            || requiredAttributes.Count > _resourceLimits.MaximumPatternPredicateValues)
         {
             throw new ArgumentOutOfRangeException(nameof(request), "Pattern predicate counts exceed host limits.");
         }

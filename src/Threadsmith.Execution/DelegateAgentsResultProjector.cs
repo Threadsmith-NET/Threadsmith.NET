@@ -130,7 +130,7 @@ internal sealed class DelegateAgentsResultProjector
                 _implementationOmission);
         })];
         var outcomes = projections.Select(item => item.Outcome).ToArray();
-        var disagreementCandidates = DelegateAgentDisagreementDetector.Detect(outcomes);
+        var disagreementCandidates = DelegateAgentDisagreementDetector.Detect(outcomes, _options);
         var retainedDisagreements = new List<string>();
         var omissions = outcomes
             .Where(outcome => outcome.Status != AgentRunStatus.Completed)

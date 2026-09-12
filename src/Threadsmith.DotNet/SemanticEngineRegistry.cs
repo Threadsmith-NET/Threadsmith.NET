@@ -8,6 +8,7 @@ using Threadsmith.Core;
 public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutationAnalyzer, IAsyncDisposable
 {
     private readonly TimeSpan? _cancellationBackstop;
+    private readonly SemanticResourceLimits _resourceLimits;
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
     private readonly IDomainEventStream _events;
     private readonly ILoggerFactory _loggerFactory;
@@ -17,7 +18,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
     public SemanticEngineRegistry(
         IDomainEventStream events,
         ILoggerFactory loggerFactory,
-        TimeSpan? cancellationBackstop = null)
+        TimeSpan? cancellationBackstop = null,
+        SemanticResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(loggerFactory);
@@ -26,6 +28,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
             throw new ArgumentOutOfRangeException(nameof(cancellationBackstop));
         }
 
+        _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
+        _resourceLimits.Validate();
         _events = events;
         _loggerFactory = loggerFactory;
         _cancellationBackstop = cancellationBackstop;
@@ -151,6 +155,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
         return _engines.GetOrAdd(workspaceId, _ => new SemanticEngine(
             _events,
             _loggerFactory.CreateLogger<SemanticEngine>(),
-            _cancellationBackstop));
+            _cancellationBackstop,
+            _resourceLimits));
     }
 }

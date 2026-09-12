@@ -9,16 +9,17 @@ using Threadsmith.Core;
 /// <summary>Executes closed, bounded, local-only Git inspection queries.</summary>
 public sealed class GitQueryService : IGitQueryService
 {
-    private const int MaximumBlameLines = 500;
-    private const int MaximumCapturedCharacters = 512 * 1024;
-    private const int MaximumChangedPaths = 500;
-    private const int MaximumDiffEntries = 200;
-    private const int MaximumPatchCharacters = 131072;
-    private const int MaximumShowCharacters = 131072;
-    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+    private readonly GitResourceLimits _limits;
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
         throwOnInvalidBytes: true);
+
+    /// <summary>Initializes a new instance of the <see cref="GitQueryService"/> class.</summary>
+    public GitQueryService(GitResourceLimits? limits = null)
+    {
+        _limits = limits ?? new GitResourceLimits();
+        _limits.Validate();
+    }
 
     /// <inheritdoc />
     public async Task<RepositoryGitStatus?> GetWorkingTreeStatusAsync(string repositoryPath, CancellationToken cancellationToken = default)
@@ -123,13 +124,13 @@ public sealed class GitQueryService : IGitQueryService
         IReadOnlyList<GitDiffEntry> allEntries = ParseNameStatus(names.Text)
             .Select(entry => entry with { IsBinary = binaryPaths.Contains(entry.Path) })
             .ToArray();
-        GitDiffEntry[] entries = [.. allEntries.Take(MaximumDiffEntries)];
+        GitDiffEntry[] entries = [.. allEntries.Take(_limits.MaximumDiffEntries)];
         var truncated = names.IsTruncated
             || numstat.IsTruncated
             || patch.IsTruncated
             || entries.Length < allEntries.Count
-            || patch.Text.Length > MaximumPatchCharacters;
-        var boundedPatch = patch.Text[..Math.Min(patch.Text.Length, MaximumPatchCharacters)];
+            || patch.Text.Length > _limits.MaximumPatchCharacters;
+        var boundedPatch = patch.Text[..Math.Min(patch.Text.Length, _limits.MaximumPatchCharacters)];
         return new GitDiffResult(
             mode,
             request.BaseRevision,
@@ -148,7 +149,7 @@ public sealed class GitQueryService : IGitQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         var revision = NormalizeRevisionOrDefault(request.Revision);
-        var maximumCommits = Math.Clamp(request.MaximumCommits ?? 50, 1, 500);
+        var maximumCommits = Math.Clamp(request.MaximumCommits ?? 50, 1, _limits.MaximumCommits);
         ValidateRevision(revision, nameof(request.Revision));
 
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
@@ -197,11 +198,11 @@ public sealed class GitQueryService : IGitQueryService
             var blob = await RunBytesAsync(root, ["cat-file", "-p", objectExpression], cancellationToken);
             var binary = blob.IsBinary;
             var content = binary ? string.Empty : StrictUtf8.GetString(blob.Bytes);
-            var truncated = blob.IsTruncated || content.Length > MaximumShowCharacters;
+            var truncated = blob.IsTruncated || content.Length > _limits.MaximumShowCharacters;
             return new GitShowResult(
                 request.Revision,
                 kind,
-                content[..Math.Min(content.Length, MaximumShowCharacters)],
+                content[..Math.Min(content.Length, _limits.MaximumShowCharacters)],
                 binary,
                 truncated);
         }
@@ -210,11 +211,11 @@ public sealed class GitQueryService : IGitQueryService
             ? ["show", "--no-ext-diff", "--no-textconv", "--format=fuller", "--binary", request.Revision, .. Pathspec(path)]
             : ["ls-tree", objectExpression];
         var objectOutput = await RunAsync(root, objectArguments, cancellationToken);
-        var objectTruncated = objectOutput.IsTruncated || objectOutput.Text.Length > MaximumShowCharacters;
+        var objectTruncated = objectOutput.IsTruncated || objectOutput.Text.Length > _limits.MaximumShowCharacters;
         return new GitShowResult(
             request.Revision,
             kind,
-            objectOutput.Text[..Math.Min(objectOutput.Text.Length, MaximumShowCharacters)],
+            objectOutput.Text[..Math.Min(objectOutput.Text.Length, _limits.MaximumShowCharacters)],
             false,
             objectTruncated);
     }
@@ -244,7 +245,7 @@ public sealed class GitQueryService : IGitQueryService
             arguments.Add("-L");
             var implicitEndLine = (int)Math.Min(
                 int.MaxValue,
-                (long)request.StartLine.Value + MaximumBlameLines - 1);
+                (long)request.StartLine.Value + _limits.MaximumBlameLines - 1);
             arguments.Add($"{request.StartLine},{request.EndLine ?? implicitEndLine}");
         }
 
@@ -253,7 +254,7 @@ public sealed class GitQueryService : IGitQueryService
         arguments.Add(path);
         var output = await RunAsync(root, arguments, cancellationToken);
         var allLines = ParseBlame(output.Text);
-        GitBlameRange[] lines = [.. allLines.Take(MaximumBlameLines)];
+        GitBlameRange[] lines = [.. allLines.Take(_limits.MaximumBlameLines)];
         return new GitBlameResult(path, lines, output.IsTruncated || allLines.Count > lines.Length);
     }
 
@@ -296,7 +297,7 @@ public sealed class GitQueryService : IGitQueryService
             ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "-M", mergeBase, request.TargetRevision],
             cancellationToken);
         var allPaths = ParseNameStatus(changedPathsOutput.Text);
-        GitDiffEntry[] paths = [.. allPaths.Take(MaximumChangedPaths)];
+        GitDiffEntry[] paths = [.. allPaths.Take(_limits.MaximumChangedPaths)];
         return new GitBranchComparisonResult(
             request.BaseRevision,
             request.TargetRevision,
@@ -357,7 +358,7 @@ public sealed class GitQueryService : IGitQueryService
         }
     }
 
-    private static async Task<string> ValidateRepositoryAsync(
+    private async Task<string> ValidateRepositoryAsync(
         string repositoryPath,
         CancellationToken cancellationToken)
     {
@@ -549,13 +550,13 @@ public sealed class GitQueryService : IGitQueryService
         return lines;
     }
 
-    private static async Task<BoundedText> RunAsync(
+    private async Task<BoundedText> RunAsync(
         string repositoryPath,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(Timeout);
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
         using var process = CreateProcess(repositoryPath, arguments);
 
         try
@@ -588,13 +589,13 @@ public sealed class GitQueryService : IGitQueryService
         }
     }
 
-    private static async Task<BoundedBytes> RunBytesAsync(
+    private async Task<BoundedBytes> RunBytesAsync(
         string repositoryPath,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(Timeout);
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
         using var process = CreateProcess(repositoryPath, arguments);
         try
         {
@@ -688,7 +689,7 @@ public sealed class GitQueryService : IGitQueryService
         });
     }
 
-    private static async Task<BoundedText> ReadBoundedAsync(
+    private async Task<BoundedText> ReadBoundedAsync(
         StreamReader reader,
         CancellationToken cancellationToken)
     {
@@ -703,7 +704,7 @@ public sealed class GitQueryService : IGitQueryService
                 break;
             }
 
-            var remaining = MaximumCapturedCharacters - builder.Length;
+            var remaining = _limits.MaximumCapturedCharacters - builder.Length;
             if (remaining > 0)
             {
                 builder.Append(buffer, 0, Math.Min(read, remaining));
@@ -715,11 +716,11 @@ public sealed class GitQueryService : IGitQueryService
         return new BoundedText(builder.ToString(), truncated);
     }
 
-    private static async Task<BoundedBytes> ReadBoundedAsync(
+    private async Task<BoundedBytes> ReadBoundedAsync(
         Stream stream,
         CancellationToken cancellationToken)
     {
-        using var output = new MemoryStream(capacity: MaximumCapturedCharacters);
+        using var output = new MemoryStream(capacity: _limits.MaximumCapturedCharacters);
         var buffer = new byte[4096];
         var decoder = StrictUtf8.GetDecoder();
         var binary = false;
@@ -745,7 +746,7 @@ public sealed class GitQueryService : IGitQueryService
                 }
             }
 
-            var remaining = MaximumCapturedCharacters - (int)output.Length;
+            var remaining = _limits.MaximumCapturedCharacters - (int)output.Length;
             if (remaining > 0)
             {
                 await output.WriteAsync(buffer.AsMemory(0, Math.Min(remaining, read)), cancellationToken);

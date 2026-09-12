@@ -77,8 +77,7 @@ internal sealed partial class TuiKitSurface
 
     private CellStyle ResolvePaneStyle(PresentationTextRole role, PresentationTextRole pane)
     {
-        var style = ResolveStyle(role);
-        return style.Background.Kind == ColorKind.Default ? style.WithBackground(ResolveStyle(pane).Background) : style;
+        return _styles.ResolveInPane(role, pane);
     }
 
     private void RouteMouse(MouseEvent mouse)

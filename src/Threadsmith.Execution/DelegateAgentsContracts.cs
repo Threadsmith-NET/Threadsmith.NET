@@ -232,6 +232,12 @@ public sealed record DelegateAgentsOptions
     private readonly int _maximumSummaryCharacters = 1_024;
     private readonly AgentResultLimits _resultLimits = new();
 
+    /// <summary>Maximum disagreement subject characters; zero disables this bound.</summary>
+    public int MaximumDisagreementSubjectCharacters { get; init; } = 256;
+
+    /// <summary>Maximum disagreement summaries returned; zero disables this bound.</summary>
+    public int MaximumDisagreements { get; init; } = 8;
+
     /// <summary>Independent, optional history optimization for ordinary children.</summary>
     public ChildAgentCompactionOptions Compaction { get; init; } = new();
 
@@ -344,6 +350,7 @@ public sealed record DelegateAgentsOptions
         Compaction.Validate();
         int[] limits =
         [
+            MaximumDisagreements, MaximumDisagreementSubjectCharacters,
             MaximumAgents, MaximumTaskCharacters, MaximumContextCharacters, _maximumSummaryCharacters,
             MaximumTasksPerAssignment, MaximumScopeCharacters, MaximumChildOutputCharacters,
             MaximumToolNameCharacters, MaximumToolArgumentBytes, MaximumToolArgumentsAggregateBytes,

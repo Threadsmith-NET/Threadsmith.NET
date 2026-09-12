@@ -11,11 +11,7 @@ using Threadsmith.Core;
 /// <summary>Repository-aware copy-on-write staging, conflict detection, commit, and rollback.</summary>
 public sealed class TransactionalWorkspace : ITransactionalWorkspace
 {
-    private const int _maximumMutations = 100;
-    private const int _maximumMutationCharacters = 4 * 1024 * 1024;
     private const long _defaultMaximumBaselineContentBytes = 256L * 1024 * 1024;
-    private const int _maximumDiffLinesForLcs = 512;
-    private const int _maximumConcurrentConflictHashes = 4;
     private static readonly Histogram<long> _mutationSize = WorkspaceMutationMetrics.Meter.CreateHistogram<long>(
         "threadsmith.workspace.mutation.characters");
 
@@ -30,6 +26,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ILogger<TransactionalWorkspace> _logger;
     private readonly long _maximumBaselineContentBytes;
+    private readonly WorkspaceResourceLimits _resourceLimits;
     private readonly StringComparison _pathComparison;
     private readonly StringComparer _pathComparer;
     private readonly IMutationApprovalPolicy _mutationApprovalPolicy;
@@ -46,7 +43,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         long maximumBaselineContentBytes = _defaultMaximumBaselineContentBytes,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
         IMutationTransactionObserver? transactionObserver = null,
-        ISemanticHostMutationAttribution? semanticMutationAttribution = null)
+        ISemanticHostMutationAttribution? semanticMutationAttribution = null,
+        WorkspaceResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(events);
@@ -63,7 +61,9 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         Baseline = baseline;
         _events = events;
         _logger = logger ?? NullLogger<TransactionalWorkspace>.Instance;
-        _maximumBaselineContentBytes = maximumBaselineContentBytes;
+        _resourceLimits = resourceLimits ?? new WorkspaceResourceLimits { MaximumBaselineContentBytes = maximumBaselineContentBytes };
+        _resourceLimits.Validate();
+        _maximumBaselineContentBytes = _resourceLimits.MaximumBaselineContentBytes;
         var caseSensitiveFileSystem = IsCaseSensitiveFileSystem(baseline.RepositoryPath);
         _pathComparison = caseSensitiveFileSystem
             ? StringComparison.Ordinal
@@ -90,6 +90,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         long maximumBaselineContentBytes = _defaultMaximumBaselineContentBytes,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
         ISemanticHostMutationAttribution? semanticMutationAttribution = null,
+        WorkspaceResourceLimits? resourceLimits = null,
         CancellationToken cancellationToken = default)
     {
         var workspace = new TransactionalWorkspace(
@@ -99,7 +100,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             logger,
             maximumBaselineContentBytes,
             mutationApprovalPolicy,
-            semanticMutationAttribution: semanticMutationAttribution);
+            semanticMutationAttribution: semanticMutationAttribution,
+            resourceLimits: resourceLimits);
         await workspace.CaptureBaselineAsync(cancellationToken);
         return workspace;
     }
@@ -826,7 +828,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 _maximumBaselineContentBytes,
                 _mutationApprovalPolicy,
                 _transactionObserver,
-                _semanticMutationAttribution);
+                _semanticMutationAttribution,
+                _resourceLimits);
             foreach (var (path, snapshot) in snapshots)
             {
                 // FileSnapshot byte arrays are private immutable captured content.
@@ -933,15 +936,15 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 || mutationSet.SessionId == default
                 || mutationSet.WorkspaceId != Baseline.WorkspaceId
                 || mutationSet.BaselineCapturedAt != Baseline.CapturedAt
-                || mutationSet.Mutations.Count is < 1 or > _maximumMutations
+                || (mutationSet.Mutations.Count < 1 || mutationSet.Mutations.Count > _resourceLimits.MaximumMutations)
                 || string.IsNullOrWhiteSpace(mutationSet.Rationale)
-                || mutationSet.Rationale.Length > 8192
+                || mutationSet.Rationale.Length > _resourceLimits.MaximumRationaleCharacters
                 || mutationSet.Mutations.Sum(item =>
                     (long)(item.Content?.Text.Length ?? item.ReplacementText.Length))
-                    > _maximumMutationCharacters)
+                    > _resourceLimits.MaximumMutationCharacters)
             {
                 throw new ArgumentException(
-                    "A mutation set must target this exact baseline and contain 1..100 bounded mutations.",
+                    $"A mutation set must target this exact baseline and contain 1..{_resourceLimits.MaximumMutations} mutations within the configured content and rationale limits.",
                     nameof(mutationSet));
             }
 
@@ -1164,7 +1167,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             new ParallelOptions
             {
                 CancellationToken = cancellationToken,
-                MaxDegreeOfParallelism = _maximumConcurrentConflictHashes,
+                MaxDegreeOfParallelism = _resourceLimits.MaximumConcurrentConflictHashes,
             },
             async (target, token) =>
             {
@@ -1466,7 +1469,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             };
     }
 
-    private static string CreateUnifiedDiff(
+    private string CreateUnifiedDiff(
         string relativePath,
         string? before,
         string? after,
@@ -1487,7 +1490,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         builder.Append("+++ ").Append(after is null ? "/dev/null" : $"b/{relativePath}").AppendLine();
         builder.Append("@@ -1,").Append(oldLines.Length)
             .Append(" +1,").Append(newLines.Length).AppendLine(" @@");
-        if ((long)oldLines.Length * newLines.Length > (long)_maximumDiffLinesForLcs * _maximumDiffLinesForLcs)
+        if ((long)oldLines.Length * newLines.Length > (long)_resourceLimits.MaximumDiffLinesForLcs * _resourceLimits.MaximumDiffLinesForLcs)
         {
             foreach (var line in oldLines)
             {
@@ -2028,6 +2031,7 @@ public sealed class TransactionalWorkspaceCoordinator :
     private readonly IDomainEventStream _events;
     private readonly IHookCoordinator? _hooks;
     private readonly long _maximumBaselineContentBytes;
+    private readonly WorkspaceResourceLimits _resourceLimits;
     private readonly IMutationApprovalPolicy _mutationApprovalPolicy;
     private readonly ISemanticHostMutationAttribution? _semanticMutationAttribution;
     private readonly Lock _registrationGate = new();
@@ -2040,7 +2044,8 @@ public sealed class TransactionalWorkspaceCoordinator :
         long maximumBaselineContentBytes = 256L * 1024 * 1024,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
         IHookCoordinator? hooks = null,
-        ISemanticHostMutationAttribution? semanticMutationAttribution = null)
+        ISemanticHostMutationAttribution? semanticMutationAttribution = null,
+        WorkspaceResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         if (maximumBaselineContentBytes <= 0)
@@ -2050,7 +2055,9 @@ public sealed class TransactionalWorkspaceCoordinator :
 
         _events = events;
         _hooks = hooks;
-        _maximumBaselineContentBytes = maximumBaselineContentBytes;
+        _resourceLimits = resourceLimits ?? new WorkspaceResourceLimits { MaximumBaselineContentBytes = maximumBaselineContentBytes };
+        _resourceLimits.Validate();
+        _maximumBaselineContentBytes = _resourceLimits.MaximumBaselineContentBytes;
         _mutationApprovalPolicy = mutationApprovalPolicy ?? new MutationApprovalPolicyService();
         _semanticMutationAttribution = semanticMutationAttribution;
     }
@@ -2070,6 +2077,7 @@ public sealed class TransactionalWorkspaceCoordinator :
             maximumBaselineContentBytes: _maximumBaselineContentBytes,
             mutationApprovalPolicy: _mutationApprovalPolicy,
             semanticMutationAttribution: _semanticMutationAttribution,
+            resourceLimits: _resourceLimits,
             cancellationToken: cancellationToken);
         TransactionalWorkspace? previous;
         lock (_registrationGate)

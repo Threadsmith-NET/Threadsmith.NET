@@ -50,6 +50,7 @@ public sealed record McpIdentityMutationResult
 public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly McpResourceLimits _limits;
     private readonly bool _ownsHttpClient;
     private readonly ISecretResolver _secretResolver;
     private readonly IMcpOAuthTokenStore _tokenStore;
@@ -58,14 +59,17 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
     public McpIdentityManager(
         IMcpOAuthTokenStore tokenStore,
         ISecretResolver secretResolver,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        McpResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(tokenStore);
         ArgumentNullException.ThrowIfNull(secretResolver);
+        _limits = limits ?? new();
+        _limits.Validate();
         _tokenStore = tokenStore;
         _secretResolver = secretResolver;
         _httpClient = httpClient ?? new HttpClient(new McpBoundedHttpResponseHandler(
-            SdkHttpTransport.CreateMetadataCompatibilityHandler()))
+            SdkHttpTransport.CreateMetadataCompatibilityHandler(_limits), _limits.MaximumResponseBytes))
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
@@ -406,12 +410,12 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             : null;
     }
 
-    private static async Task<JsonDocument> ReadBoundedMetadataAsync(
+    private async Task<JsonDocument> ReadBoundedMetadataAsync(
         HttpContent content,
         CancellationToken cancellationToken)
     {
-        const int maximumBytes = 64 * 1024;
-        if (content.Headers.ContentLength is > maximumBytes)
+        var maximumBytes = _limits.MaximumOAuthMetadataBytes;
+        if (content.Headers.ContentLength > maximumBytes)
         {
             throw new InvalidDataException("Authorization-server metadata exceeds the host bound.");
         }
@@ -437,7 +441,7 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
 
         return JsonDocument.Parse(
             buffer.AsMemory(0, offset),
-            new JsonDocumentOptions { MaxDepth = 16 });
+            new JsonDocumentOptions { MaxDepth = _limits.MaximumIdentityJsonDepth });
     }
 
     private static Uri BuildMetadataUri(Uri issuer)

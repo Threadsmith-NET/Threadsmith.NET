@@ -144,7 +144,8 @@ internal static class ModelComposition
                 var activeModels = new ActiveModelSelectionService(
                     configuredProviders,
                     preferences,
-                    paths.RepositoryConfiguration);
+                    paths.RepositoryConfiguration,
+                    trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024));
 
                 var anthropicSecretReferences = configuredProviders.Configuration.Providers.OfType<AnthropicProviderConfiguration>()
                     .Select(item => item.SecretKeyReference).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -445,6 +446,8 @@ internal static class ModelComposition
         HttpClient httpClient,
         CancellationToken cancellationToken)
     {
+        var catalogLimits = trustedConfiguration.GetSection("model:catalogLimits").Get<ModelProviderCatalogLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        catalogLimits.Validate();
         var hasCatalog = File.Exists(paths.UserProviderCatalog) || File.Exists(paths.RepositoryProviderCatalog);
         if (!hasCatalog)
         {
@@ -458,6 +461,7 @@ internal static class ModelComposition
             Path.GetFullPath(paths.UserProviderCatalog),
             Path.GetFullPath(paths.RepositoryProviderCatalog),
             registry,
+            limits: catalogLimits,
             includeRepository: false);
         var directory = Path.GetDirectoryName(paths.UserConfiguration)
             ?? throw new InvalidOperationException("User configuration directory is missing.");
@@ -491,7 +495,7 @@ internal static class ModelComposition
 
         var trustedDescriptor = descriptor with { Providers = providers.AsReadOnly() };
         var ordinaryDescriptor = ModelProviderConfigurationLoader.ApplyRepositoryOverrides(
-            trustedDescriptor, Path.GetFullPath(paths.RepositoryProviderCatalog), registry);
+            trustedDescriptor, Path.GetFullPath(paths.RepositoryProviderCatalog), registry, catalogLimits);
         var trustedAnthropic = providers.OfType<AnthropicProviderConfiguration>()
             .ToDictionary(provider => provider.Id, StringComparer.OrdinalIgnoreCase);
         var ordinaryProviders = new List<ModelProviderConfiguration>(ordinaryDescriptor.Providers.Count);
@@ -515,11 +519,13 @@ internal static class ModelComposition
         var trusted = ModelProviderConfigurationLoader.Materialize(
             trustedDescriptor,
             registry,
-            trustedConfiguration.GetValue("model:enforceModelEndpointHttps", true));
+            trustedConfiguration.GetValue("model:enforceModelEndpointHttps", true),
+            limits: catalogLimits);
         var ordinary = ModelProviderConfigurationLoader.Materialize(
             ordinaryDescriptor with { Providers = ordinaryProviders.AsReadOnly() },
             registry,
-            configuration.GetValue("model:enforceModelEndpointHttps", true));
+            configuration.GetValue("model:enforceModelEndpointHttps", true),
+            limits: catalogLimits);
         return (ordinary, trusted);
     }
 
@@ -682,7 +688,7 @@ internal static class ModelComposition
                 Path.GetFullPath(paths.UserProviderCatalog),
                 Path.GetFullPath(paths.RepositoryProviderCatalog),
                 registry,
-                limits: null,
+                limits: trustedConfiguration.GetSection("model:catalogLimits").Get<ModelProviderCatalogLimits>(options => options.ErrorOnUnknownConfiguration = true),
                 enforceHttps: enforceHttps,
                 includeRepository: false,
                 observeDiagnostic: null);
@@ -722,7 +728,7 @@ internal static class ModelComposition
                 Path.GetFullPath(paths.UserProviderCatalog),
                 Path.GetFullPath(paths.RepositoryProviderCatalog),
                 registry,
-                limits: null,
+                limits: configuration.GetSection("model:catalogLimits").Get<ModelProviderCatalogLimits>(options => options.ErrorOnUnknownConfiguration = true),
                 enforceHttps: enforceHttps,
                 observeDiagnostic: diagnostic =>
                 {

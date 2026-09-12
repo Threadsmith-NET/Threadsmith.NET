@@ -217,7 +217,7 @@ public static class MemoriesToolTests
         Assert.Equal(-2.5, source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
         Assert.Equal(5, source.Capture(RepositoryIdentity.Create(next)).StandingPreferenceWarningThreshold);
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:SemanticMinimum"] = "1.1" }).Build()));
-        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerCandidateLimit"] = "65" }).Build()));
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerCandidateLimit"] = "0" }).Build()));
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerMinimumScore"] = "NaN" }).Build()));
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:standingPreferenceWarningThreshold"] = "-1" }).Build()));
         Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);

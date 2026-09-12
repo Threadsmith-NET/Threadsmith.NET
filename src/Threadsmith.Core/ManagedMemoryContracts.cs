@@ -30,12 +30,36 @@ public sealed record RepositoryMemoryOptions
     /// <summary>Optional strict raw reranker-logit admission floor; null retains the ranked top candidates.</summary>
     public double? RerankerMinimumScore { get; init; }
 
+    /// <summary>Maximum complete sanitized memory characters.</summary>
+    public int MaximumTextCharacters { get; init; } = 2000;
+
+    /// <summary>Maximum retrieval query characters.</summary>
+    public int MaximumQueryCharacters { get; init; } = 8000;
+
+    /// <summary>Maximum distinct lexical query terms.</summary>
+    public int MaximumQueryTerms { get; init; } = 32;
+
+    /// <summary>Maximum entries in each retrieval cache.</summary>
+    public int MaximumCacheEntries { get; init; } = 64;
+
+    /// <summary>Maximum retrieval diagnostics retained.</summary>
+    public int MaximumDiagnostics { get; init; } = 64;
+
+    /// <summary>Maximum serialized entry bytes in a memories tool list.</summary>
+    public int MaximumListBytes { get; init; } = 48 * 1024;
+
     /// <summary>Context maximum constrained by the storage capacity.</summary>
     public int EffectiveContextMaximum => Math.Min(MaxNumberOfRepoMemories, MaxRepoMemoriesInContext);
 
     /// <summary>Rejects invalid configuration before it affects storage or retrieval.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTextCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumQueryCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumQueryTerms);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCacheEntries);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnostics);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumListBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxNumberOfRepoMemories);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRepoMemoriesInContext);
         ArgumentOutOfRangeException.ThrowIfNegative(StandingPreferenceWarningThreshold);
@@ -47,7 +71,6 @@ public sealed record RepositoryMemoryOptions
         ArgumentOutOfRangeException.ThrowIfLessThan(SemanticMinimum, -1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(SemanticMinimum, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(RerankerCandidateLimit, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(RerankerCandidateLimit, 64);
         if (RerankerMinimumScore is { } rerankerMinimumScore && !double.IsFinite(rerankerMinimumScore))
         {
             throw new ArgumentOutOfRangeException(nameof(RerankerMinimumScore), "The reranker minimum score must be finite when supplied.");

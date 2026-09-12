@@ -11,17 +11,20 @@ public static class HookDescriptorValidator
 
     /// <summary>Validates, fingerprints, and deterministically orders declarations.</summary>
     public static IReadOnlyList<HookHandlerDescriptor> Normalize(
-        IEnumerable<HookHandlerDescriptor> descriptors)
+        IEnumerable<HookHandlerDescriptor> descriptors,
+        HookResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(descriptors);
+        var options = resourceLimits ?? new();
+        options.Validate();
         HookHandlerDescriptor[] source = [.. descriptors];
-        if (source.Length > MaximumHandlers)
+        if (source.Length > options.MaximumHandlers)
         {
-            throw new ArgumentOutOfRangeException(nameof(descriptors), "At most 64 hook handlers may be configured.");
+            throw new ArgumentOutOfRangeException(nameof(descriptors), "The configured hook handler limit was exceeded.");
         }
 
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        HookHandlerDescriptor[] normalized = [.. source.Select(NormalizeOne)
+        HookHandlerDescriptor[] normalized = [.. source.Select(descriptor => NormalizeOne(descriptor, options))
             .OrderBy(descriptor => descriptor.Priority)
             .ThenBy(descriptor => descriptor.Scope)
             .ThenBy(descriptor => descriptor.Identity.Id.Value, StringComparer.Ordinal)
@@ -31,9 +34,9 @@ public static class HookDescriptorValidator
                 : throw new ArgumentException($"Duplicate hook handler id '{descriptor.Identity.Id}'.", nameof(descriptors)))];
         var aggregateSeconds = normalized.Where(descriptor => descriptor.Enabled)
             .Sum(descriptor => descriptor.Limits.Timeout.TotalSeconds * (descriptor.Limits.MaximumRetries + 1));
-        if (aggregateSeconds > TimeSpan.FromMinutes(2).TotalSeconds)
+        if (aggregateSeconds > TimeSpan.FromMilliseconds(options.MaximumAggregateTimeoutMilliseconds).TotalSeconds)
         {
-            throw new ArgumentException("The aggregate configured hook run budget exceeds two minutes.", nameof(descriptors));
+            throw new ArgumentException("The aggregate configured hook run budget exceeds the configured limit.", nameof(descriptors));
         }
 
         return normalized;
@@ -75,35 +78,34 @@ public static class HookDescriptorValidator
         or HookPoint.BeforeValidation;
     }
 
-    private static HookHandlerDescriptor NormalizeOne(HookHandlerDescriptor descriptor)
+    private static HookHandlerDescriptor NormalizeOne(HookHandlerDescriptor descriptor, HookResourceLimits options)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Identity.Id.Value);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Identity.Version);
         ArgumentException.ThrowIfNullOrWhiteSpace(descriptor.Target);
-        if (descriptor.SchemaVersion != 1 || descriptor.HookPoints.Count is < 1 or > 16)
+        if (descriptor.SchemaVersion != 1 || (descriptor.HookPoints.Count < 1 || descriptor.HookPoints.Count > options.MaximumHookPoints))
         {
-            throw new ArgumentException("A hook declaration must use schema 1 and contain 1-16 hook points.", nameof(descriptor));
+            throw new ArgumentException("A hook declaration must use schema 1 and contain points within the configured limit.", nameof(descriptor));
         }
 
-        if (descriptor.Target.Length > 2048
-            || descriptor.Identity.Id.Value.Length > 128
-            || descriptor.Identity.Version.Length > 64
-            || descriptor.SecretReferences.Count > 16
-            || descriptor.SecretReferences.Any(secret => secret.Length > 128 || !secret.StartsWith("secrets:", StringComparison.Ordinal)))
+        if (descriptor.Target.Length > options.MaximumTargetCharacters
+            || descriptor.Identity.Id.Value.Length > options.MaximumIdCharacters
+            || descriptor.Identity.Version.Length > options.MaximumVersionCharacters
+            || descriptor.SecretReferences.Count > options.MaximumSecretReferences
+            || descriptor.SecretReferences.Any(secret => secret.Length > options.MaximumSecretReferenceCharacters || !secret.StartsWith("secrets:", StringComparison.Ordinal)))
         {
             throw new ArgumentException("Hook identity, target, or secret-reference bounds are invalid.", nameof(descriptor));
         }
 
         var limits = descriptor.Limits;
-        if (limits.Timeout < TimeSpan.FromMilliseconds(100)
-            || limits.Timeout > TimeSpan.FromMinutes(2)
-            || limits.MaximumInputBytes is < 1024 or > 1024 * 1024
-            || limits.MaximumOutputBytes is < 1024 or > 1024 * 1024
-            || limits.MaximumConcurrency is < 1 or > 8
-            || limits.MaximumRetries is < 0 or > 2)
+        if (limits.Timeout <= TimeSpan.Zero
+            || limits.MaximumInputBytes <= 0
+            || limits.MaximumOutputBytes <= 0
+            || limits.MaximumConcurrency <= 0
+            || limits.MaximumRetries < 0)
         {
-            throw new ArgumentException("Hook resource limits are outside compiled safety bounds.", nameof(descriptor));
+            throw new ArgumentException("Hook resource limits are invalid.", nameof(descriptor));
         }
 
         HookPoint[] points = [.. descriptor.HookPoints.Distinct().OrderBy(point => point)];

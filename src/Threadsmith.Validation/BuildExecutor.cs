@@ -115,7 +115,7 @@ public sealed partial class DiagnosticNormalizer
 /// <summary>Executes trusted affected-project builds without invoking a shell.</summary>
 public sealed class BuildExecutor
 {
-    private const int _maximumCapturedCharacters = 1024 * 1024;
+    private readonly int _maximumCapturedCharacters;
 
     private static readonly Histogram<double> _buildLatency = ValidationMetrics.Meter.CreateHistogram<double>(
         "threadsmith.validation.build.duration",
@@ -134,7 +134,8 @@ public sealed class BuildExecutor
         IDomainEventStream events,
         DiagnosticNormalizer normalizer,
         ILogger<BuildExecutor> logger,
-        TimeSpan? cancellationBackstop = null)
+        TimeSpan? cancellationBackstop = null,
+        ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(normalizer);
@@ -144,6 +145,9 @@ public sealed class BuildExecutor
             throw new ArgumentOutOfRangeException(nameof(cancellationBackstop));
         }
 
+        var resourceLimits = limits ?? new();
+        resourceLimits.Validate();
+        _maximumCapturedCharacters = resourceLimits.MaximumBuildOutputCharacters;
         _events = events;
         _normalizer = normalizer;
         _logger = logger;
@@ -339,7 +343,7 @@ public sealed class BuildExecutor
             stopwatch.Elapsed);
     }
 
-    private static async Task<string> DrainAsync(StreamReader reader)
+    private async Task<string> DrainAsync(StreamReader reader)
     {
         var buffer = new char[4096];
         var captured = new StringBuilder();

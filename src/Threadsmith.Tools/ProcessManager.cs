@@ -111,18 +111,22 @@ public sealed class ProcessManager : IProcessManager
     private readonly ILogger<ProcessManager> _logger;
     private readonly IOutputSanitizer _sanitizer;
     private readonly TimeProvider _timeProvider;
+    private readonly ProcessResourceLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="ProcessManager"/> class.</summary>
     public ProcessManager(
         IOutputSanitizer sanitizer,
         ILogger<ProcessManager> logger,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ProcessResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
         _sanitizer = sanitizer;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _limits = limits ?? new();
+        _limits.Validate();
     }
 
     /// <inheritdoc />
@@ -144,9 +148,9 @@ public sealed class ProcessManager : IProcessManager
             throw new ArgumentOutOfRangeException(nameof(request), "Process bounds must be positive, or the timeout must be infinite.");
         }
 
-        if (request.EnvironmentVariables.Count > 16
-            || request.EnvironmentVariables.Any(item => item.Key.Length is < 1 or > 128
-                || item.Value.Length > 16 * 1024
+        if (request.EnvironmentVariables.Count > _limits.MaximumEnvironmentVariables
+            || request.EnvironmentVariables.Any(item => (item.Key.Length < 1 || item.Key.Length > _limits.MaximumEnvironmentNameCharacters)
+                || item.Value.Length > _limits.MaximumEnvironmentValueCharacters
                 || item.Key.Contains('=')
                 || item.Key.Contains('\0')
                 || item.Value.Contains('\0')))
@@ -295,7 +299,7 @@ public sealed class ProcessManager : IProcessManager
                 {
                     process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync(CancellationToken.None)
-                        .WaitAsync(TimeSpan.FromSeconds(5));
+                        .WaitAsync(TimeSpan.FromMilliseconds(_limits.DrainTimeoutMilliseconds));
                 }
             }
             catch (OperationCanceledException)
@@ -304,7 +308,7 @@ public sealed class ProcessManager : IProcessManager
                 {
                     process.Kill(entireProcessTree: true);
                     await process.WaitForExitAsync(CancellationToken.None)
-                        .WaitAsync(TimeSpan.FromSeconds(5));
+                        .WaitAsync(TimeSpan.FromMilliseconds(_limits.DrainTimeoutMilliseconds));
                 }
 
                 throw;

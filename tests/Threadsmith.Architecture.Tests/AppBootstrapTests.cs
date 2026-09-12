@@ -23,11 +23,11 @@ public static class AppBootstrapTests
 
         var configured = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["reranking:cpuThreads"] = "12",
+            ["reranking:cpuThreads"] = "33",
         }).Build();
-        Assert.Equal(12, ApplicationComposition.GetRerankerCpuThreads(configured));
+        Assert.Equal(33, ApplicationComposition.GetRerankerCpuThreads(configured));
 
-        foreach (var value in new[] { "0", "33" })
+        foreach (var value in new[] { "0", "-1" })
         {
             var invalid = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {

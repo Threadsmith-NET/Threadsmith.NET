@@ -35,7 +35,7 @@ internal static class InteractiveFrontendRunner
     [MethodImpl(MethodImplOptions.NoInlining)]
     private static async Task RunTuiKitAsync(ShellRunContext context, SessionThemePreferences themes, TuiDisplayOptions display, CancellationTokenSource processCancellation)
     {
-        await using var surface = new TuiKitSurface(themes.ActiveTheme, processCancellation.Cancel);
+        await using var surface = new TuiKitSurface(themes.ActiveTheme, processCancellation.Cancel, limits: display.Limits);
         var coordinator = CreateCoordinator(context, themes, display, surface, surface.SetThemeAsync);
         await surface.RunAsync(token => RunCoordinatorAsync(coordinator, context, token), processCancellation.Token);
     }
@@ -49,7 +49,8 @@ internal static class InteractiveFrontendRunner
     {
         var extensionHost = context.ExtensionHost ?? throw new InvalidOperationException("Interactive startup requires the extension host.");
         var names = AgentNameConfiguration.Load(context.Configuration);
-        var themeCommands = new ThemeCommandContribution(themes, applyTheme, new UserConfigurationThemePreferenceStore(context.Paths.UserConfiguration));
+        var terminalWarnings = surface is TuiKitSurface tuiKit ? tuiKit.ThemeDiagnostics : [];
+        var themeCommands = new ThemeCommandContribution(themes, applyTheme, new UserConfigurationThemePreferenceStore(context.Paths.UserConfiguration, context.Configuration.GetValue("repository:configurationBytes", 1024 * 1024)));
         return new InteractionCoordinator(
             new InteractionPresenter(context.Dispatcher, context.Projections),
             context.Events,
@@ -67,8 +68,8 @@ internal static class InteractiveFrontendRunner
             context.Applications.ClaudeSkillCatalog,
             sessionLifecycleAvailable: true,
             displayOptions: display.ToInteractionOptions(),
-            displayWarnings: themes.Catalog.Warnings.Concat(display.Diagnostics).Concat(context.Applications.StartupDisplayWarnings).Concat(names.Warnings).ToArray(),
-            gitQueries: new GitQueryService(),
+            displayWarnings: themes.Catalog.Warnings.Concat(display.Diagnostics).Concat(context.Applications.StartupDisplayWarnings).Concat(names.Warnings).Concat(terminalWarnings).ToArray(),
+            gitQueries: new GitQueryService(HostFoundation.LoadOperationalLimits(context.Configuration).Git),
             webFetchAuthorization: context.WebFetchAuthorization,
             directFetchApprovalPrompt: context.DirectFetchApprovalPrompt,
             frontendCommands: themeCommands,

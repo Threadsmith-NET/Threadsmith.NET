@@ -2,6 +2,7 @@ namespace Threadsmith.Tui;
 
 using System.Text;
 using PrettyPrompt.Consoles;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Runs;
 
 /// <summary>Describes how one PrettyPrompt read ended and when its requested idle output drained.</summary>
@@ -16,7 +17,7 @@ internal sealed record PromptReadCompletion(
 /// </summary>
 internal sealed class BufferedPromptConsole : IConsole
 {
-    private const int MaximumBufferedKeys = 100_000;
+    private readonly TuiResourceLimits _limits;
     private static readonly TimeSpan IdlePromptPollInterval = TimeSpan.FromMilliseconds(10);
     private static readonly ConsoleKeyInfo IdleOutputYieldKey = new(
         '\0',
@@ -34,9 +35,11 @@ internal sealed class BufferedPromptConsole : IConsole
     private PromptReadState? _promptRead;
 
     /// <summary>Initializes a new instance of the <see cref="BufferedPromptConsole"/> class.</summary>
-    public BufferedPromptConsole(IConsole inner)
+    public BufferedPromptConsole(IConsole inner, TuiResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(inner);
+        _limits = limits ?? new();
+        _limits.Validate();
         _inner = inner;
     }
 
@@ -371,14 +374,14 @@ internal sealed class BufferedPromptConsole : IConsole
         lock (_gate)
         {
             if (!ReferenceEquals(_activeLease, lease)
-                || _replay.Count >= MaximumBufferedKeys
+                || _replay.Count >= _limits.MaximumBufferedKeys
                 || !TryGetKeyAvailable())
             {
                 keys = [];
                 return false;
             }
 
-            var availableCapacity = MaximumBufferedKeys - _replay.Count;
+            var availableCapacity = _limits.MaximumBufferedKeys - _replay.Count;
             var batch = new List<ConsoleKeyInfo>();
             do
             {
@@ -413,7 +416,7 @@ internal sealed class BufferedPromptConsole : IConsole
 
             foreach (var key in keys)
             {
-                if (_replay.Count >= MaximumBufferedKeys)
+                if (_replay.Count >= _limits.MaximumBufferedKeys)
                 {
                     break;
                 }

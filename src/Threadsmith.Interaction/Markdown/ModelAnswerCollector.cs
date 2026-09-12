@@ -7,6 +7,7 @@ using Threadsmith.Interaction.Presentation;
 internal sealed class ModelAnswerCollector
 {
     private readonly bool _renderMarkdown;
+    private readonly MarkdownRenderingLimits _limits;
     private readonly IMarkdownParser _parser;
     private readonly StringBuilder _source = new();
     private long _sourceBytes;
@@ -14,10 +15,12 @@ internal sealed class ModelAnswerCollector
     private bool _sourceStreaming;
 
     /// <summary>Initializes a new instance of the <see cref="ModelAnswerCollector"/> class.</summary>
-    internal ModelAnswerCollector(bool renderMarkdown, IMarkdownParser? parser = null)
+    internal ModelAnswerCollector(bool renderMarkdown, IMarkdownParser? parser = null, MarkdownRenderingLimits? limits = null)
     {
         _renderMarkdown = renderMarkdown;
-        _parser = parser ?? new MarkdownParser();
+        _limits = limits ?? new();
+        _limits.Validate();
+        _parser = parser ?? new MarkdownParser(_limits);
     }
 
     /// <summary>Appends a model delta and returns immediate safe-source output only in source mode.</summary>
@@ -38,7 +41,7 @@ internal sealed class ModelAnswerCollector
 
         _source.Append(delta);
         _sourceBytes += Encoding.UTF8.GetByteCount(delta);
-        if (_sourceBytes <= MarkdownParser.MaximumSourceBytes)
+        if (_sourceBytes <= _limits.MaximumSourceBytes)
         {
             return null;
         }

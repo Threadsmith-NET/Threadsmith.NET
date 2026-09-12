@@ -17,8 +17,7 @@ public sealed class DomainEventStream : IDomainEventStream
     public DomainEventStream(TimeSpan? committedDeliveryTimeout = null)
     {
         var effectiveTimeout = committedDeliveryTimeout ?? DefaultCommittedDeliveryTimeout;
-        if (effectiveTimeout < TimeSpan.FromMilliseconds(10)
-            || effectiveTimeout > TimeSpan.FromMinutes(1))
+        if (effectiveTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(committedDeliveryTimeout));
         }

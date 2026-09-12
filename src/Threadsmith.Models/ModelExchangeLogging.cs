@@ -290,11 +290,19 @@ public sealed class LoggingModelProvider : IModelProvider, IModelRequestPreparat
     public ModelStreamRequest Prepare(ModelStreamRequest request) => ModelRequestPreparation.Prepare(_inner, request);
 
     /// <inheritdoc />
-    public async IAsyncEnumerable<ModelChunk> StreamAsync(
+    public IAsyncEnumerable<ModelChunk> StreamAsync(
         ModelStreamRequest request,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        return StreamCoreAsync(request, cancellationToken);
+    }
+
+    private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(
+        ModelStreamRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         await _log.AppendRequestSummaryAsync(request, cancellationToken).ConfigureAwait(false);
         await _log.AppendRequestAsync(request, cancellationToken).ConfigureAwait(false);
         var sequence = 0;

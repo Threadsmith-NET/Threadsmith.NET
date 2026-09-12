@@ -21,11 +21,20 @@
 // Git-ignored before Threadsmith reads it. Secret JSON is separately strict/bounded.
 //
 // This file is loaded by Microsoft.Extensions.Configuration (plan-01 establishes the
-// binding; plan-09 consumes it). Unknown keys are ignored; invalid values fail loudly.
+// binding; plan-09 consumes it). Typed resource-limit groups reject unknown keys and invalid values.
+// See resource-limits.example and docs/operations/resource-limits.md for all resource settings.
 // The file is JSON-with-comments (// and /* */), which the .NET JSON configuration
 // provider supports.
 
 {
+  // Application-owned limits; omitted values retain defaults. See resource-limits.example.
+  "limits": {
+    "workspace": { "maximumBaselineContentBytes": 268435456, "maximumMutations": 100 },
+    "semantic": { "maximumFallbackFiles": 10000 },
+    "git": { "timeoutMilliseconds": 30000 },
+    "validation": { "timeoutMilliseconds": 120000 }
+  },
+
   // ── Solution selection (§21.2) ──────────────────────────────────────────
   // The solution Threadsmith.NET opens for a repository. Successful startup
   // selection remembers a slash-normalized repository-relative path here;
@@ -44,7 +53,7 @@
     // Presentation names: explicit role list > shared defaultNames > compiled role defaults.
     // Each list replaces the complete lower-priority list, including indexed CLI/env overrides.
     // Optional shared list: "defaultNames": ["Avery", "Jordan", "Morgan"].
-    // At most 128 names/list, 32 normalized UTF-16 units/name; invalid entries warn and fall back.
+    // Defaults: 128 names/list and 32 UTF-16 units/name; configurable under tui:limits.
     "agentNames": {
       "byRole": {
         "explorer": ["Amundsen", "Cousteau", "Humboldt", "Magellan", "Shackleton", "Zheng He"],
@@ -330,6 +339,9 @@
   // Per-tool operational limits below override the compiled defaults; see the
   // ── Execution limits section for the execution subsystem limits.
   "tools": {
+    // Optional outer tool overrides. byTool entries carry toolId, including colon-qualified MCP IDs.
+    // timeoutMilliseconds: positive, or -1 for no outer deadline.
+    "runtime": { "defaults": {}, "byTool": [] },
     // Plan-27 availability state. When enabled is present, non-essential tools must
     // be listed explicitly; disabled wins over enabled. Essential tools remain on.
     "enabled": [ "list_files", "read_file", "write_file", "memories", "search", "git_status", "git_diff", "git_log", "git_show", "git_blame", "git_compare_branches", "dotnet_inventory", "nuget_health", "dotnet_build", "dotnet_analyzers", "dotnet_format_check", "diagnostic_query", "test_discover", "test_run_targeted", "find_symbol", "find_references", "find_implementations", "run_process", "datetime", "invoke_skill" ],
@@ -525,7 +537,7 @@
         // Semantic matches must score strictly above this finite cosine minimum (-1 to 1).
         // Lexical matches qualify independently; 1 excludes all semantic matches.
         "SemanticMinimum": 0.47,
-        // Local CPU cross-encoder reranking is opt-in. Candidate limit is 1 through 64.
+        // Local CPU cross-encoder reranking is opt-in. Candidate limit accepts any positive count.
         "RerankerEnabled": false,
         "RerankerCandidateLimit": 8,
         // Optional strict raw-logit floor; null preserves the top ranked candidates.
@@ -615,7 +627,7 @@
   // Maximum byte size of the ordinary repo/session config files. This guard is
   // sourced from the trusted machine/user/env layers ONLY (never the repo config
   // it guards), so an untrusted repository cannot widen it. Static secret stores
-  // are outside IConfiguration and use their own compiled strict 64-KiB bound.
+  // are outside IConfiguration; secretResolution:limits controls their parsing and value bounds.
   "repository": {
     "configurationBytes": 1048576
   },

@@ -20,15 +20,18 @@ internal sealed class AnthropicBorrowedHttpHandler : HttpMessageHandler
 {
     private readonly HttpClient _sharedHttpClient;
     private readonly long _maximumResponseBytes;
+    private readonly long _maximumSseFrameBytes;
     private readonly Action<long>? _responseBytesObserved;
     private readonly Action? _submissionObserver;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicBorrowedHttpHandler"/> class.</summary>
-    internal AnthropicBorrowedHttpHandler(HttpClient sharedHttpClient, long maximumResponseBytes = 1048576, Action<long>? responseBytesObserved = null, Action? submissionObserver = null)
+    internal AnthropicBorrowedHttpHandler(HttpClient sharedHttpClient, long maximumResponseBytes = 1048576, Action<long>? responseBytesObserved = null, Action? submissionObserver = null, long maximumSseFrameBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(sharedHttpClient);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumResponseBytes);
         _sharedHttpClient = sharedHttpClient;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSseFrameBytes);
+        _maximumSseFrameBytes = maximumSseFrameBytes;
         _maximumResponseBytes = maximumResponseBytes;
         _responseBytesObserved = responseBytesObserved;
         _submissionObserver = submissionObserver;
@@ -97,7 +100,7 @@ internal sealed class AnthropicBorrowedHttpHandler : HttpMessageHandler
             // The host invokes streaming Messages on this surface. Untrusted response media headers
             // cannot disable the frame ceiling that must run before the SDK's SSE parser.
             var expectsSse = request.Method == HttpMethod.Post && uri.AbsolutePath == "/v1/messages";
-            var bounded = new StreamContent(new AnthropicBoundedReadStream(stream, original, _maximumResponseBytes, _responseBytesObserved, expectsSse));
+            var bounded = new StreamContent(new AnthropicBoundedReadStream(stream, original, _maximumResponseBytes, _responseBytesObserved, expectsSse, _maximumSseFrameBytes));
             foreach (var header in original.Headers)
             {
                 bounded.Headers.TryAddWithoutValidation(header.Key, header.Value);

@@ -81,6 +81,12 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         ArgumentNullException.ThrowIfNull(roots);
         _roots = roots.ToArray();
         _options = options ?? new ClaudeSkillCompatibilityOptions();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumRoots);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumCandidates);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumFrontmatterBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumInstructionBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumFiles);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumAggregateBytes);
         if (_roots.Count == 0 || _roots.Count > _options.MaximumRoots)
         {
             throw new ArgumentException("Claude skill root count is outside configured bounds.", nameof(roots));

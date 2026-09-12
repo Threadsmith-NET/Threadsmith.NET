@@ -15,6 +15,16 @@ public sealed class RunSteeringCoordinator
     /// <summary>Maximum steering text admitted from one composer submission.</summary>
     public const int MaximumSteeringCharacters = 100_000;
 
+    private readonly int _maximumSteeringCharacters;
+
+    /// <summary>Initializes a new instance of the <see cref="RunSteeringCoordinator"/> class.</summary>
+    public RunSteeringCoordinator(ExecutionLimits? limits = null)
+    {
+        var options = limits ?? new();
+        options.Validate();
+        _maximumSteeringCharacters = options.MaxSteeringCharacters;
+    }
+
     private readonly ConcurrentDictionary<RunId, RunState> _runs = new();
 
     /// <summary>Registers one newly active conversation run.</summary>
@@ -263,11 +273,11 @@ public sealed class RunSteeringCoordinator
             {
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    if (text.Length > MaximumSteeringCharacters)
+                    if (text.Length > _maximumSteeringCharacters)
                     {
                         throw new ArgumentOutOfRangeException(
                             nameof(sanitizedText),
-                            $"Steering text cannot exceed {MaximumSteeringCharacters} characters.");
+                            $"Steering text cannot exceed {_maximumSteeringCharacters} characters.");
                     }
 
                     sequence = checked(++state.LastSequence);

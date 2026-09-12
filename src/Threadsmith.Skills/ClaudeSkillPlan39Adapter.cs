@@ -67,7 +67,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
     public IReadOnlyList<SkillCatalogCandidate> Search(SkillCatalogQuery query)
     {
         ArgumentNullException.ThrowIfNull(query);
-        if (query.MaximumResults is < 1 or > 500)
+        if (query.MaximumResults < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(query), "Skill search result limit must be 1-500.");
         }

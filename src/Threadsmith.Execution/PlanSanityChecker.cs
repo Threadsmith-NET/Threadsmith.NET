@@ -5,14 +5,17 @@ using Threadsmith.Core;
 /// <summary>Runs cheap bounded sanity checks over structured implementation plans.</summary>
 public sealed class PlanSanityChecker : IPlanSanityChecker
 {
-    private const int MaximumIssues = 32;
+    private readonly int _maximumIssues;
     private readonly IPromptLoader _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="PlanSanityChecker"/> class.</summary>
-    public PlanSanityChecker(IPromptLoader prompts)
+    public PlanSanityChecker(IPromptLoader prompts, ExecutionLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         _prompts = prompts;
+        var options = limits ?? new();
+        options.Validate();
+        _maximumIssues = options.MaxPlanSanityIssues;
     }
 
     /// <inheritdoc />
@@ -443,7 +446,7 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
         return new NormalizedPath(relativePath, pathExistence);
     }
 
-    private static void ValidateIntentExistence(
+    private void ValidateIntentExistence(
         NormalizedPlanFileIntent intent,
         string repositoryRoot,
         HashSet<string> baselineFiles,
@@ -547,7 +550,7 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
         }
     }
 
-    private static PlanRiskClassification ClassifyPathRisk(
+    private PlanRiskClassification ClassifyPathRisk(
         string relativePath,
         PlanFileChangeKind changeKind,
         List<PlanSanityIssue> issues)
@@ -794,9 +797,9 @@ public sealed class PlanSanityChecker : IPlanSanityChecker
         return (PlanRiskClassification)Math.Max((int)left, (int)right);
     }
 
-    private static void AddIssue(List<PlanSanityIssue> issues, PlanSanityIssue issue)
+    private void AddIssue(List<PlanSanityIssue> issues, PlanSanityIssue issue)
     {
-        if (issues.Count < MaximumIssues)
+        if (issues.Count < _maximumIssues)
         {
             issues.Add(issue);
             return;

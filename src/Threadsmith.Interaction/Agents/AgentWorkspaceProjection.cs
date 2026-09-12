@@ -4,7 +4,6 @@ using System.Diagnostics.CodeAnalysis;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Contracts;
-using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Models;
@@ -30,6 +29,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
     private readonly Dictionary<DelegationId, ToolInvocationId> _delegationTools = [];
     private readonly Dictionary<AgentPresentationTarget, PresentationTextSegment> _progress = [];
     private readonly bool _markdown;
+    private readonly TuiResourceLimits _limits;
     private readonly bool _showOperationDurations;
     private readonly List<AgentDisplayText> _pendingDisplay = [];
     private SessionId _session;
@@ -43,7 +43,15 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
     /// <summary>Initializes a new instance of the <see cref="AgentWorkspaceProjection"/> class with the host duration preference.</summary>
     internal AgentWorkspaceProjection(IInteractionSurface surface, AgentDisplayStream? display, SessionUsageProjection? usage, ConfiguredModelCatalog? models, AgentNameCatalog names, bool markdown, bool showOperationDurations, CancellationToken cancellationToken)
+        : this(surface, display, usage, models, names, markdown, showOperationDurations, new TuiResourceLimits(), cancellationToken)
     {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="AgentWorkspaceProjection"/> class.</summary>
+    internal AgentWorkspaceProjection(IInteractionSurface surface, AgentDisplayStream? display, SessionUsageProjection? usage, ConfiguredModelCatalog? models, AgentNameCatalog names, bool markdown, bool showOperationDurations, TuiResourceLimits limits, CancellationToken cancellationToken)
+    {
+        _limits = limits;
+        _limits.Validate();
         _surface = surface;
         _workspace = (IAgentWorkspaceSurface)surface;
         _display = display;
@@ -184,11 +192,12 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 var matched = _tools.Remove(completed.ToolInvocationId, out var start);
                 if (start is not null && _children.TryGetValue(start.RunId, out var child))
                 {
-                    var transcript = new ConversationTranscript(string.Empty, _showOperationDurations);
-                    transcript.Apply(start);
-                    transcript.Apply(completed);
+                    await FlushAsync(child, cancellationToken);
+                    var text = child.BlockSpacing.BeforeBlock()
+                        + InteractionPresentationFormatter.FormatToolCompletion(start, completed, _showOperationDurations, maximumInspectionCharacters: _limits.MaximumToolInspectionCharacters);
+                    child.BlockSpacing.Observe(text);
                     var segments = new List<PresentationTextSegment>();
-                    InteractionEventSegments.Append(segments, completed, transcript.Text);
+                    InteractionEventSegments.Append(segments, completed, text, _showOperationDurations);
                     await _surface.PresentAsync(new PresentationBatch([new PresentationTextItem(segments)]) { Target = child.Snapshot.Target }, cancellationToken);
                     child.ToolActivities.Remove(completed.ToolInvocationId);
                     child.Snapshot = child.Snapshot with { ToolActivities = child.ToolActivities.Values.ToArray() };
@@ -307,7 +316,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             }
 
             var snapshot = new AgentPresentationSnapshot(target, _names.Allocate(target, lifecycle.Role), lifecycle.Role, lifecycle.Status, lifecycle.Revision);
-            state = new ChildState(snapshot, _markdown);
+            state = new ChildState(snapshot, _markdown, _limits.Markdown);
             _children.Add(lifecycle.ChildRunId, state);
             _usage?.RegisterChild(_session, lifecycle.ChildRunId);
         }
@@ -345,7 +354,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
     {
         var safe = TerminalControlEncoder.Encode(reason);
         safe = safe.Replace('\r', ' ').Replace('\n', ' ');
-        safe = safe.Length > 240 ? safe[..240] + "…" : safe;
+        safe = safe.Length > _limits.MaximumAgentProgressCharacters ? safe[.._limits.MaximumAgentProgressCharacters] + "…" : safe;
         var entry = new PresentationTextSegment(
             $"{snapshot.Label}: {snapshot.State}{(safe.Length > 0 ? " — " + safe : string.Empty)}",
             snapshot.State is AgentRunStatus.Failed or AgentRunStatus.Discarded ? PresentationTextRole.Error : PresentationTextRole.Status);
@@ -373,7 +382,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
     private void TrimClosed()
     {
         var attempts = _closed.Count;
-        while (_closed.Count > 64 && attempts-- > 0)
+        while (_closed.Count > _limits.MaximumRetainedDelegations && attempts-- > 0)
         {
             var entry = _closed.Dequeue();
             var delegation = entry.Id;
@@ -415,7 +424,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             {
                 if (!_revisions.Keys.Any(target => target.RunId == item.RunId))
                 {
-                    if (_pendingDisplay.Count < 256)
+                    if (_pendingDisplay.Count < _limits.MaximumPendingAgentUpdates)
                     {
                         _pendingDisplay.Add(item);
                     }
@@ -432,6 +441,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             {
                 if (_display.IncludeReasoningText)
                 {
+                    child.BlockSpacing.Observe(TerminalControlEncoder.Encode(item.Text));
                     await _surface.PresentAsync(
                         new PresentationBatch([new PresentationTextItem([
                         new(TerminalControlEncoder.Encode(item.Text), PresentationTextRole.Reasoning),
@@ -450,6 +460,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             }
 
             var immediate = child.Answer.Append(item.Text);
+            child.BlockSpacing.Observe(item.Text);
             child.Characters += item.Text.Length;
             if (immediate is not null)
             {
@@ -493,15 +504,17 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
     private sealed class ChildState
     {
-        internal ChildState(AgentPresentationSnapshot snapshot, bool markdown)
+        internal ChildState(AgentPresentationSnapshot snapshot, bool markdown, MarkdownRenderingLimits limits)
         {
             Snapshot = snapshot;
-            Answer = new ModelAnswerCollector(markdown);
+            Answer = new ModelAnswerCollector(markdown, limits: limits);
         }
 
         internal AgentPresentationSnapshot Snapshot { get; set; }
 
         internal ModelAnswerCollector Answer { get; }
+
+        internal PresentationBlockSpacing BlockSpacing { get; } = new();
 
         internal int Characters { get; set; }
 

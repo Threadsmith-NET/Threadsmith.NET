@@ -8,13 +8,12 @@ using Threadsmith.Core;
 /// <summary>Resolves the installed dotnet host and SDK selected for a repository.</summary>
 public sealed class DotNetEnvironmentResolver
 {
-    private const int _maximumCapturedCharacters = 64 * 1024;
-
     /// <summary>Resolves safe environment facts without evaluating repository projects.</summary>
     /// <param name="repositoryPath">Normalized repository root.</param>
     /// <param name="configuration">Build configuration.</param>
     /// <param name="platform">Build platform.</param>
     /// <param name="allowRepositorySdkResolution">Whether dotnet may resolve the SDK from the repository directory.</param>
+    /// <param name="limits">Resource limits for process capture.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Resolved environment facts, or <see langword="null"/> when dotnet is unavailable.</returns>
     public static async Task<MsBuildEnvironmentSnapshot?> ResolveAsync(
@@ -22,6 +21,7 @@ public sealed class DotNetEnvironmentResolver
         string configuration,
         string platform,
         bool allowRepositorySdkResolution,
+        WorkspaceResourceLimits? limits = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
@@ -76,7 +76,7 @@ public sealed class DotNetEnvironmentResolver
         }
 
         string? configuredSdkVersion = null;
-        if (globalJsonPath is not null && new FileInfo(globalJsonPath).Length <= 1024 * 1024)
+        if (globalJsonPath is not null && new FileInfo(globalJsonPath).Length <= (limits ?? new()).MaximumSdkConfigurationBytes)
         {
             await using var globalJsonStream = new FileStream(
                 globalJsonPath,
@@ -108,6 +108,7 @@ public sealed class DotNetEnvironmentResolver
             dotNetPath,
             versionWorkingDirectory,
             ["--version"],
+            limits?.MaximumProcessOutputCharacters ?? new WorkspaceResourceLimits().MaximumProcessOutputCharacters,
             cancellationToken);
         var sdkVersion = versionResult.StandardOutput.Trim();
         if (!allowRepositorySdkResolution
@@ -163,6 +164,7 @@ public sealed class DotNetEnvironmentResolver
         MsBuildEnvironmentSnapshot environment,
         string repositoryPath,
         string solutionPath,
+        WorkspaceResourceLimits? limits = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(environment);
@@ -172,6 +174,7 @@ public sealed class DotNetEnvironmentResolver
             environment.DotNetPath,
             repositoryPath,
             ["restore", solutionPath, "--nologo"],
+            limits?.MaximumProcessOutputCharacters ?? new WorkspaceResourceLimits().MaximumProcessOutputCharacters,
             cancellationToken);
         return environment with
         {
@@ -185,6 +188,7 @@ public sealed class DotNetEnvironmentResolver
         string dotNetPath,
         string workingDirectory,
         IReadOnlyList<string> arguments,
+        int maximumCapturedCharacters,
         CancellationToken cancellationToken)
     {
         using var process = new Process
@@ -209,8 +213,8 @@ public sealed class DotNetEnvironmentResolver
             return new DotNetProcessResult(-1, string.Empty, "The dotnet process did not start.");
         }
 
-        var standardOutput = ReadBoundedAsync(process.StandardOutput);
-        var standardError = ReadBoundedAsync(process.StandardError);
+        var standardOutput = ReadBoundedAsync(process.StandardOutput, maximumCapturedCharacters);
+        var standardError = ReadBoundedAsync(process.StandardError, maximumCapturedCharacters);
         try
         {
             await process.WaitForExitAsync(cancellationToken);
@@ -233,9 +237,9 @@ public sealed class DotNetEnvironmentResolver
             captured[1]);
     }
 
-    private static async Task<string> ReadBoundedAsync(StreamReader reader)
+    private static async Task<string> ReadBoundedAsync(StreamReader reader, int maximumCapturedCharacters)
     {
-        var retained = new StringBuilder(_maximumCapturedCharacters);
+        var retained = new StringBuilder(maximumCapturedCharacters);
         var buffer = new char[4096];
         while (true)
         {
@@ -245,7 +249,7 @@ public sealed class DotNetEnvironmentResolver
                 break;
             }
 
-            var remaining = _maximumCapturedCharacters - retained.Length;
+            var remaining = maximumCapturedCharacters - retained.Length;
             if (remaining > 0)
             {
                 retained.Append(buffer, 0, Math.Min(count, remaining));

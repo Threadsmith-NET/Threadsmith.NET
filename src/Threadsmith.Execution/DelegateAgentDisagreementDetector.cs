@@ -6,8 +6,6 @@ using Threadsmith.Core;
 /// <summary>Detects conservative same-subject conclusion polarity conflicts.</summary>
 internal static class DelegateAgentDisagreementDetector
 {
-    private const int MaximumDisagreements = 8;
-    private const int MaximumSubjectCharacters = 256;
     private static readonly string[] ConcernPhrases =
     [
         " bug ", " fail ", " fails ", " failed ", " failure ", " incorrect ", " issue ",
@@ -26,13 +24,15 @@ internal static class DelegateAgentDisagreementDetector
     ];
 
     /// <summary>Returns bounded disagreement summaries without interpreting unknown conclusions.</summary>
-    public static IReadOnlyList<string> Detect(IReadOnlyList<AgentRunOutcome> outcomes)
+    public static IReadOnlyList<string> Detect(IReadOnlyList<AgentRunOutcome> outcomes, DelegateAgentsOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(outcomes);
+        options ??= new();
+        options.Validate();
         var findings = outcomes.SelectMany(outcome =>
             outcome.Findings?.Findings.Select(finding => new FindingProjection(
                 outcome.AssignmentId,
-                ResolveSubject(finding),
+                ResolveSubject(finding, options.EffectiveLimit(options.MaximumDisagreementSubjectCharacters)),
                 ResolvePolarity(finding))) ?? []);
         var disagreements = new List<string>();
         foreach (var group in findings
@@ -52,7 +52,7 @@ internal static class DelegateAgentDisagreementDetector
             disagreements.Add(
                 $"At {group.Key}, child {concern.AssignmentId.Value:D} reports a concern while "
                     + $"child {noConcern.AssignmentId.Value:D} reports no concern.");
-            if (disagreements.Count == MaximumDisagreements)
+            if (options.EffectiveLimit(options.MaximumDisagreements) is > 0 and var maximum && disagreements.Count == maximum)
             {
                 break;
             }
@@ -108,12 +108,12 @@ internal static class DelegateAgentDisagreementDetector
         return builder.ToString();
     }
 
-    private static string? ResolveSubject(AgentFinding finding)
+    private static string? ResolveSubject(AgentFinding finding, int maximumCharacters)
     {
         var subject = finding.Symbols.FirstOrDefault() ?? finding.Locations.FirstOrDefault();
         return string.IsNullOrWhiteSpace(subject)
             ? null
-            : BoundedText.Truncate(subject.Trim(), MaximumSubjectCharacters, out _);
+            : maximumCharacters > 0 ? BoundedText.Truncate(subject.Trim(), maximumCharacters, out _) : subject.Trim();
     }
 
     private enum FindingPolarity

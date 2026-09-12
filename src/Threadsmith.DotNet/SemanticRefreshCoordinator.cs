@@ -5,57 +5,28 @@ using System.Text;
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
 
-/// <summary>Immutable host-owned resource bounds for semantic refresh coordination.</summary>
-internal sealed record SemanticRefreshResourceLimits
+/// <summary>Bounds for transient notification queues and diagnostic text during semantic refresh.</summary>
+public sealed record SemanticRefreshResourceLimits
 {
     /// <summary>Initializes a new instance of the <see cref="SemanticRefreshResourceLimits"/> class.</summary>
     public SemanticRefreshResourceLimits(
-        int maximumAuthoritativeInputPaths = 4096,
-        int maximumGraphScanDepth = 64,
-        int maximumGraphScanEntries = 20000,
         int maximumPendingPaths = 1024,
         int maximumRecentHostEchoIdentities = 1024,
         int maximumSafeReasonLength = 256,
-        int maximumWatcherDirectories = 512,
-        long maximumAuthoritativeSnapshotBytes = 64 * 1024 * 1024,
-        long maximumStableReadBytes = 4 * 1024 * 1024)
+        int maximumStableFileReadAttempts = 2)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAuthoritativeInputPaths);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumGraphScanDepth);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumGraphScanEntries);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumPendingPaths);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRecentHostEchoIdentities);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSafeReasonLength);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumWatcherDirectories);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAuthoritativeSnapshotBytes);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumStableReadBytes);
-        if (maximumAuthoritativeSnapshotBytes < maximumStableReadBytes)
-        {
-            throw new ArgumentOutOfRangeException(nameof(maximumAuthoritativeSnapshotBytes));
-        }
-
-        MaximumAuthoritativeInputPaths = maximumAuthoritativeInputPaths;
-        MaximumGraphScanDepth = maximumGraphScanDepth;
-        MaximumGraphScanEntries = maximumGraphScanEntries;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumStableFileReadAttempts);
+        MaximumStableFileReadAttempts = maximumStableFileReadAttempts;
         MaximumPendingPaths = maximumPendingPaths;
         MaximumRecentHostEchoIdentities = maximumRecentHostEchoIdentities;
         MaximumSafeReasonLength = maximumSafeReasonLength;
-        MaximumWatcherDirectories = maximumWatcherDirectories;
-        MaximumAuthoritativeSnapshotBytes = maximumAuthoritativeSnapshotBytes;
-        MaximumStableReadBytes = maximumStableReadBytes;
     }
 
-    /// <summary>Gets the maximum authoritative input path count.</summary>
-    public int MaximumAuthoritativeInputPaths { get; }
-
-    /// <summary>Gets the aggregate authoritative snapshot byte bound.</summary>
-    public long MaximumAuthoritativeSnapshotBytes { get; }
-
-    /// <summary>Gets the maximum repository graph scan depth.</summary>
-    public int MaximumGraphScanDepth { get; }
-
-    /// <summary>Gets the maximum repository graph scan entry count.</summary>
-    public int MaximumGraphScanEntries { get; }
+    /// <summary>Gets the maximum attempts to capture a stable file.</summary>
+    public int MaximumStableFileReadAttempts { get; }
 
     /// <summary>Gets the maximum pending path count.</summary>
     public int MaximumPendingPaths { get; }
@@ -65,12 +36,6 @@ internal sealed record SemanticRefreshResourceLimits
 
     /// <summary>Gets the maximum safe failure-reason character count.</summary>
     public int MaximumSafeReasonLength { get; }
-
-    /// <summary>Gets the per-file stable-read byte bound.</summary>
-    public long MaximumStableReadBytes { get; }
-
-    /// <summary>Gets the maximum watched directory count.</summary>
-    public int MaximumWatcherDirectories { get; }
 
     /// <summary>Gets the production semantic refresh resource limits.</summary>
     public static SemanticRefreshResourceLimits Production { get; } = new();
@@ -102,7 +67,6 @@ public sealed class SemanticRefreshCoordinator :
     private readonly TimeSpan _settleInterval;
     private readonly TimeProvider _timeProvider;
     private readonly Func<string, FileSystemWatcher> _watcherFactory;
-    private readonly int _watcherScanEntryLimit;
     private readonly bool _watchFileSystem;
     private long _nextBindingGeneration;
     private int _disposed;
@@ -115,7 +79,8 @@ public sealed class SemanticRefreshCoordinator :
         ISemanticRefreshPublicationGate? publicationGate = null,
         TimeProvider? timeProvider = null,
         TimeSpan? settleInterval = null,
-        TimeSpan? maximumBurstWindow = null)
+        TimeSpan? maximumBurstWindow = null,
+        SemanticRefreshResourceLimits? resourceLimits = null)
         : this(
             new RegistrySemanticRefreshBackend(semanticEngines),
             events,
@@ -126,7 +91,8 @@ public sealed class SemanticRefreshCoordinator :
             maximumBurstWindow,
             watchFileSystem: true,
             fileSnapshotReader: null,
-            pathSafetyValidator: null)
+            pathSafetyValidator: null,
+            resourceLimits: resourceLimits)
     {
     }
 
@@ -208,7 +174,6 @@ public sealed class SemanticRefreshCoordinator :
         ISemanticPathSafetyValidator? pathSafetyValidator = null,
         TimeSpan? recentHostEchoLifetime = null,
         Func<string, FileSystemWatcher>? watcherFactory = null,
-        int? watcherScanEntryLimit = null,
         SemanticRefreshResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
@@ -229,11 +194,6 @@ public sealed class SemanticRefreshCoordinator :
             throw new ArgumentOutOfRangeException(nameof(recentHostEchoLifetime));
         }
 
-        if (watcherScanEntryLimit <= 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(watcherScanEntryLimit));
-        }
-
         _backend = backend;
         _events = events;
         _fileSnapshotReader = fileSnapshotReader;
@@ -246,7 +206,6 @@ public sealed class SemanticRefreshCoordinator :
         _settleInterval = settleInterval ?? _defaultSettleInterval;
         _maximumBurstWindow = maximumBurstWindow ?? _defaultMaximumBurstWindow;
         _watcherFactory = watcherFactory ?? (static path => new FileSystemWatcher(path));
-        _watcherScanEntryLimit = watcherScanEntryLimit ?? _resourceLimits.MaximumGraphScanEntries;
         if (_maximumBurstWindow < _settleInterval)
         {
             throw new ArgumentException(
@@ -330,9 +289,7 @@ public sealed class SemanticRefreshCoordinator :
                     normalizedRequest,
                     Interlocked.Increment(ref _nextBindingGeneration),
                     _watchFileSystem,
-                    _watcherFactory,
-                    _watcherScanEntryLimit,
-                    _resourceLimits.MaximumWatcherDirectories);
+                    _watcherFactory);
                 if (_workspaceBindings.Remove(request.WorkspaceId, out var replacedWorkspace))
                 {
                     MarkBindingObsolete(replacedWorkspace);
@@ -391,7 +348,7 @@ public sealed class SemanticRefreshCoordinator :
                 binding.InitialLoadCompletion.TrySetResult();
                 if (binding.HasWork)
                 {
-                    _ = EnsureWorkerLocked(binding);
+                    _ = EnsureWorkerLockedAsync(binding);
                 }
             }
         }
@@ -589,7 +546,7 @@ public sealed class SemanticRefreshCoordinator :
                         SemanticRefreshMetrics.JoinedWaiters.Add(1);
                     }
 
-                    worker = EnsureWorkerLocked(binding);
+                    worker = EnsureWorkerLockedAsync(binding);
                 }
             }
 
@@ -644,7 +601,7 @@ public sealed class SemanticRefreshCoordinator :
             requestedForce = binding.ForceRequestedVersion;
             if (!binding.IsLoading)
             {
-                _ = EnsureWorkerLocked(binding);
+                _ = EnsureWorkerLockedAsync(binding);
             }
         }
 
@@ -661,7 +618,7 @@ public sealed class SemanticRefreshCoordinator :
                             "The forced semantic refresh completed without a result.");
                 }
 
-                worker = EnsureWorkerLocked(binding);
+                worker = EnsureWorkerLockedAsync(binding);
             }
 
             await worker.WaitAsync(cancellationToken);
@@ -954,9 +911,7 @@ public sealed class SemanticRefreshCoordinator :
                     normalizedRequest,
                     Interlocked.Increment(ref _nextBindingGeneration),
                     _watchFileSystem,
-                    _watcherFactory,
-                    _watcherScanEntryLimit,
-                    _resourceLimits.MaximumWatcherDirectories)
+                    _watcherFactory)
                 {
                     IsLoading = true,
                 };
@@ -1000,7 +955,7 @@ public sealed class SemanticRefreshCoordinator :
                     cancellationToken);
                 EnsureCompleteAuthoritativeSnapshot(
                     initialSnapshot,
-                    "Initial semantic inputs could not be captured within safe resource bounds.");
+                    "Initial semantic inputs could not be captured as stable, accessible files.");
                 lock (binding.Gate)
                 {
                     ThrowIfObsolete(binding);
@@ -1209,7 +1164,7 @@ public sealed class SemanticRefreshCoordinator :
 
             if (!binding.IsLoading)
             {
-                _ = EnsureWorkerLocked(binding);
+                _ = EnsureWorkerLockedAsync(binding);
             }
         }
     }
@@ -1232,7 +1187,7 @@ public sealed class SemanticRefreshCoordinator :
             binding.LastObservedAt = observedAt;
             if (!binding.IsLoading)
             {
-                _ = EnsureWorkerLocked(binding);
+                _ = EnsureWorkerLockedAsync(binding);
             }
         }
     }
@@ -1302,7 +1257,7 @@ public sealed class SemanticRefreshCoordinator :
         return isLifecycleChange;
     }
 
-    private Task EnsureWorkerLocked(WorkspaceBinding binding)
+    private Task EnsureWorkerLockedAsync(WorkspaceBinding binding)
     {
         binding.Worker ??= Task.Run(
             () => ProcessBindingAsync(binding),
@@ -1385,7 +1340,7 @@ public sealed class SemanticRefreshCoordinator :
                     && binding.HasWork
                     && binding.DirtyVersion > lastFailedTarget)
                 {
-                    _ = EnsureWorkerLocked(binding);
+                    _ = EnsureWorkerLockedAsync(binding);
                 }
             }
         }
@@ -1610,7 +1565,7 @@ public sealed class SemanticRefreshCoordinator :
                     || preRefreshInputs.Contents.Values.Any(content => !content.IsStable)))
             {
                 throw new InvalidDataException(
-                    "Semantic refresh inputs could not be captured within safe resource bounds.");
+                    "Semantic refresh inputs could not be captured as stable, accessible files.");
             }
 
             async Task<SemanticLoadResult> PublishAsync(CancellationToken publicationToken)
@@ -2099,7 +2054,7 @@ public sealed class SemanticRefreshCoordinator :
             cancellationToken);
         EnsureCompleteAuthoritativeSnapshot(
             currentSnapshot,
-            "Semantic binding inputs could not be captured within safe resource bounds.");
+            "Semantic binding inputs could not be captured as stable, accessible files.");
         if (initialSnapshot is null)
         {
             return;
@@ -2137,12 +2092,13 @@ public sealed class SemanticRefreshCoordinator :
             paths,
             currentPaths,
             binaryPaths);
-        isComplete &= AddCurrentGraphControlInputs(
+        AddCurrentGraphControlInputs(
             binding,
             paths,
             currentPaths,
             binaryPaths,
-            includePotentialBinaryInputs);
+            includePotentialBinaryInputs,
+            cancellationToken);
 
         foreach (var path in additionalPaths)
         {
@@ -2151,12 +2107,6 @@ public sealed class SemanticRefreshCoordinator :
             {
                 isComplete = false;
                 continue;
-            }
-
-            if (!paths.Contains(normalized) && paths.Count >= _resourceLimits.MaximumAuthoritativeInputPaths)
-            {
-                isComplete = false;
-                break;
             }
 
             paths.Add(normalized);
@@ -2175,19 +2125,9 @@ public sealed class SemanticRefreshCoordinator :
         }
 
         var contents = new Dictionary<string, StableFileContent>(PathComparer);
-        var snapshotBytes = 0L;
         foreach (var path in paths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var pathLength = TryGetSafeFileLength(binding, path);
-            if (!pathLength.HasValue
-                || pathLength.Value > _resourceLimits.MaximumAuthoritativeSnapshotBytes - snapshotBytes)
-            {
-                isComplete = false;
-                break;
-            }
-
-            snapshotBytes += pathLength.Value;
             var content = await ReadStableFileAsync(
                 binding,
                 path,
@@ -2203,25 +2143,7 @@ public sealed class SemanticRefreshCoordinator :
             isComplete);
     }
 
-    private long? TryGetSafeFileLength(WorkspaceBinding binding, string path)
-    {
-        if (!IsSafeForRead(binding, path))
-        {
-            return null;
-        }
-
-        try
-        {
-            return File.Exists(path) ? new FileInfo(path).Length : 0;
-        }
-        catch (Exception exception) when (exception is IOException
-            or UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
-
-    private bool AddCurrentFullReloadInputs(
+    private static bool AddCurrentFullReloadInputs(
         WorkspaceBinding binding,
         IEnumerable<string> inputs,
         HashSet<string> paths,
@@ -2246,29 +2168,25 @@ public sealed class SemanticRefreshCoordinator :
             paths.Add(normalized);
             currentPaths.Add(normalized);
             binaryPaths.Add(normalized);
-            if (paths.Count > _resourceLimits.MaximumAuthoritativeInputPaths)
-            {
-                return false;
-            }
         }
 
         return isComplete;
     }
 
-    private bool AddCurrentGraphControlInputs(
+    private static void AddCurrentGraphControlInputs(
         WorkspaceBinding binding,
         HashSet<string> paths,
         HashSet<string> currentPaths,
         HashSet<string> binaryPaths,
-        bool includePotentialBinaryInputs)
+        bool includePotentialBinaryInputs,
+        CancellationToken cancellationToken)
     {
-        var isComplete = true;
-        var directories = new Stack<(string Path, int Depth)>();
-        directories.Push((binding.Request.RepositoryPath, 0));
-        var scannedEntries = 0;
+        var directories = new Stack<string>();
+        directories.Push(binding.Request.RepositoryPath);
         while (directories.Count > 0)
         {
-            var (directory, depth) = directories.Pop();
+            cancellationToken.ThrowIfCancellationRequested();
+            var directory = directories.Pop();
             try
             {
                 foreach (var entry in Directory.EnumerateFileSystemEntries(
@@ -2276,11 +2194,7 @@ public sealed class SemanticRefreshCoordinator :
                     "*",
                     SearchOption.TopDirectoryOnly))
                 {
-                    scannedEntries++;
-                    if (scannedEntries > _resourceLimits.MaximumGraphScanEntries)
-                    {
-                        return false;
-                    }
+                    cancellationToken.ThrowIfCancellationRequested();
 
                     var attributes = File.GetAttributes(entry);
                     if ((attributes & FileAttributes.ReparsePoint) != 0)
@@ -2296,13 +2210,7 @@ public sealed class SemanticRefreshCoordinator :
                             continue;
                         }
 
-                        if (depth >= _resourceLimits.MaximumGraphScanDepth)
-                        {
-                            isComplete = false;
-                            continue;
-                        }
-
-                        directories.Push((entry, depth + 1));
+                        directories.Push(entry);
                         continue;
                     }
 
@@ -2325,12 +2233,6 @@ public sealed class SemanticRefreshCoordinator :
                         continue;
                     }
 
-                    if (!paths.Contains(normalized)
-                        && paths.Count >= _resourceLimits.MaximumAuthoritativeInputPaths)
-                    {
-                        return false;
-                    }
-
                     paths.Add(normalized);
                     if (isGraphControl)
                     {
@@ -2346,33 +2248,32 @@ public sealed class SemanticRefreshCoordinator :
             catch (Exception exception) when (exception is IOException
                 or UnauthorizedAccessException)
             {
-                isComplete = false;
+                throw new InvalidDataException($"Semantic input scan could not enumerate '{directory}': {exception.Message}", exception);
             }
         }
 
-        var solutionPath = NormalizePath(binding, binding.Request.SolutionPath);
-        if (solutionPath is null)
-        {
-            return false;
-        }
-
-        if (!paths.Contains(solutionPath) && paths.Count >= _resourceLimits.MaximumAuthoritativeInputPaths)
-        {
-            return false;
-        }
+        var solutionPath = NormalizePath(binding, binding.Request.SolutionPath)
+            ?? throw new InvalidDataException($"Selected solution '{binding.Request.SolutionPath}' is outside the supported semantic input paths.");
 
         paths.Add(solutionPath);
         currentPaths.Add(solutionPath);
-        return isComplete;
     }
 
     private static void EnsureCompleteAuthoritativeSnapshot(
         AuthoritativeInputSnapshot snapshot,
         string message)
     {
-        if (!snapshot.IsComplete || snapshot.Contents.Values.Any(content => !content.IsStable))
+        if (!snapshot.IsComplete)
         {
             throw new InvalidDataException(message);
+        }
+
+        foreach (var (path, content) in snapshot.Contents)
+        {
+            if (!content.IsStable)
+            {
+                throw new InvalidDataException($"Semantic input '{path}' could not be verified as stable and accessible.");
+            }
         }
     }
 
@@ -2481,8 +2382,8 @@ public sealed class SemanticRefreshCoordinator :
 
         var name = Path.GetFileName(path);
         var extension = Path.GetExtension(path);
-        return name.StartsWith("~", StringComparison.Ordinal)
-            || name.EndsWith("~", StringComparison.Ordinal)
+        return name.StartsWith('~')
+            || name.EndsWith('~')
             || extension.Equals(".tmp", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".swp", StringComparison.OrdinalIgnoreCase)
             || extension.Equals(".swo", StringComparison.OrdinalIgnoreCase);
@@ -2506,11 +2407,9 @@ public sealed class SemanticRefreshCoordinator :
 
     private static IReadOnlySet<string> CaptureRelevantWatcherEntries(
         SemanticLoadRequest request,
-        IReadOnlyList<string> roots,
-        int scanEntryLimit)
+        IReadOnlyList<string> roots)
     {
         var entriesByPath = new HashSet<string>(PathComparer);
-        var inspectedEntryCount = 0;
         foreach (var root in roots)
         {
             IEnumerable<string> entries;
@@ -2528,12 +2427,6 @@ public sealed class SemanticRefreshCoordinator :
             {
                 foreach (var entry in entries)
                 {
-                    if (++inspectedEntryCount > scanEntryLimit)
-                    {
-                        throw new InvalidDataException(
-                            "Semantic repository monitoring exceeds the safe entry bound.");
-                    }
-
                     var normalized = NormalizePath(request, entry);
                     if (normalized is null || IsIgnoredPath(request.RepositoryPath, normalized))
                     {
@@ -2620,7 +2513,7 @@ public sealed class SemanticRefreshCoordinator :
                 snapshot.Identity);
         }
 
-        for (var attempt = 0; attempt < 2; attempt++)
+        for (var attempt = 0; attempt < _resourceLimits.MaximumStableFileReadAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsSafeForRead(binding, path))
@@ -2634,22 +2527,9 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             var before = new FileInfo(path);
-            if (before.Length > _resourceLimits.MaximumStableReadBytes)
-            {
-                if (!IsSafeForRead(binding, path))
-                {
-                    return CreateUnsafeSnapshot(path);
-                }
-
-                return new StableFileContent(
-                    true,
-                    true,
-                    null,
-                    $"oversize:{before.Length}:{before.LastWriteTimeUtc.Ticks}");
-            }
-
+            before.Refresh();
             string? text = null;
-            byte[]? bytes = null;
+            byte[]? contentHash = null;
             try
             {
                 if (!IsSafeForRead(binding, path))
@@ -2659,7 +2539,14 @@ public sealed class SemanticRefreshCoordinator :
 
                 if (readAsBinary)
                 {
-                    bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+                    await using var stream = new FileStream(
+                        path,
+                        FileMode.Open,
+                        FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete,
+                        bufferSize: 81920,
+                        FileOptions.Asynchronous | FileOptions.SequentialScan);
+                    contentHash = await SHA256.HashDataAsync(stream, cancellationToken);
                 }
                 else
                 {
@@ -2685,8 +2572,8 @@ public sealed class SemanticRefreshCoordinator :
                 && before.Length == after.Length
                 && before.LastWriteTimeUtc == after.LastWriteTimeUtc)
             {
-                var identityBytes = bytes ?? Encoding.UTF8.GetBytes(text ?? string.Empty);
-                var identity = Convert.ToHexString(SHA256.HashData(identityBytes));
+                var hash = contentHash ?? SHA256.HashData(Encoding.UTF8.GetBytes(text ?? string.Empty));
+                var identity = Convert.ToHexString(hash);
                 return new StableFileContent(true, true, text, identity);
             }
 
@@ -2730,7 +2617,7 @@ public sealed class SemanticRefreshCoordinator :
             if (current.Exists && current.Text is null)
             {
                 throw new InvalidDataException(
-                    "A loaded semantic text document exceeded the bounded verification limit.");
+                    "A loaded semantic text document did not provide readable text.");
             }
 
             if (!string.Equals(
@@ -2853,10 +2740,13 @@ public sealed class SemanticRefreshCoordinator :
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                _logger.LogDebug(
-                    exception,
-                    "Observed a failed semantic refresh while disposing workspace {WorkspaceId}",
-                    binding.Request.WorkspaceId.Value);
+                if (_logger.IsEnabled(LogLevel.Debug))
+                {
+                    _logger.LogDebug(
+                        exception,
+                        "Observed a failed semantic refresh while disposing workspace {WorkspaceId}",
+                        binding.Request.WorkspaceId.Value);
+                }
             }
         }
 
@@ -2874,8 +2764,6 @@ public sealed class SemanticRefreshCoordinator :
     {
         private readonly Lock _watcherGate = new();
         private readonly Func<string, FileSystemWatcher> _watcherFactory;
-        private readonly int _maximumWatcherDirectories;
-        private readonly int _watcherScanEntryLimit;
         private readonly bool _watchFileSystem;
         private readonly List<FileSystemWatcher> _watchers = [];
 
@@ -2883,16 +2771,12 @@ public sealed class SemanticRefreshCoordinator :
             SemanticLoadRequest request,
             long generation,
             bool watchFileSystem,
-            Func<string, FileSystemWatcher> watcherFactory,
-            int watcherScanEntryLimit,
-            int maximumWatcherDirectories)
+            Func<string, FileSystemWatcher> watcherFactory)
         {
             Request = request;
             Generation = generation;
             _watchFileSystem = watchFileSystem;
             _watcherFactory = watcherFactory;
-            _watcherScanEntryLimit = watcherScanEntryLimit;
-            _maximumWatcherDirectories = maximumWatcherDirectories;
             AppliedIdentities = new Dictionary<string, string>(PathComparer);
             HostIdentities = new Dictionary<string, HashSet<string>>(PathComparer);
             HostMismatchPaths = new HashSet<string>(PathComparer);
@@ -3124,7 +3008,6 @@ public sealed class SemanticRefreshCoordinator :
             var roots = new List<string>();
             var scheduled = new HashSet<string>(PathComparer);
             var pending = new Stack<string>();
-            var inspectedDirectoryCount = 0;
             scheduled.Add(Request.RepositoryPath);
             pending.Push(Request.RepositoryPath);
             while (pending.TryPop(out var current))
@@ -3134,12 +3017,6 @@ public sealed class SemanticRefreshCoordinator :
                 {
                     foreach (var directory in Directory.EnumerateDirectories(current))
                     {
-                        if (++inspectedDirectoryCount > _watcherScanEntryLimit)
-                        {
-                            throw new InvalidDataException(
-                                "Semantic repository monitoring exceeds the safe entry bound.");
-                        }
-
                         var relative = Path.GetRelativePath(Request.RepositoryPath, directory)
                             .Replace('\\', '/');
                         if (IsIgnoredDirectorySegment(Path.GetFileName(directory))
@@ -3154,12 +3031,6 @@ public sealed class SemanticRefreshCoordinator :
                         if (scheduled.Contains(directory))
                         {
                             continue;
-                        }
-
-                        if (scheduled.Count >= _maximumWatcherDirectories)
-                        {
-                            throw new InvalidDataException(
-                                "Semantic repository monitoring exceeds the safe directory bound.");
                         }
 
                         scheduled.Add(directory);
@@ -3182,12 +3053,6 @@ public sealed class SemanticRefreshCoordinator :
                     continue;
                 }
 
-                if (scheduled.Count >= _maximumWatcherDirectories)
-                {
-                    throw new InvalidDataException(
-                        "Semantic repository monitoring exceeds the safe directory bound.");
-                }
-
                 scheduled.Add(directory);
                 roots.Add(directory);
             }
@@ -3197,7 +3062,7 @@ public sealed class SemanticRefreshCoordinator :
 
         private IReadOnlySet<string> CaptureWatcherTopology(IReadOnlyList<string> roots)
         {
-            return CaptureRelevantWatcherEntries(Request, roots, _watcherScanEntryLimit);
+            return CaptureRelevantWatcherEntries(Request, roots);
         }
 
         private void QueueTopologyChangeIfNeeded(

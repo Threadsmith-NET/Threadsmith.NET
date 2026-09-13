@@ -111,6 +111,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         var checkpoint = new SkillWorkflowCheckpoint
         {
             WorkflowId = SkillWorkflowId.New(),
+            InvokingToolInvocationId = request.InvokingToolInvocationId,
             InvocationId = request.InvocationId,
             SessionId = request.SessionId,
             RunId = request.RunId,
@@ -163,6 +164,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             Attempt = checked(checkpoint.Attempt + 1),
             Generation = checked(checkpoint.Generation + 1),
+            InvokingToolInvocationId = null,
             Trust = plan.Request.Trust,
             Phase = plan.Request.Phase,
             Status = SkillInvocationStatus.Accepted,
@@ -213,6 +215,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             Steps = steps,
             Generation = checked(checkpoint.Generation + 1),
+            InvokingToolInvocationId = null,
             Trust = plan.Request.Trust,
             Phase = plan.Request.Phase,
             Status = SkillInvocationStatus.Accepted,
@@ -339,7 +342,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 current = current with
                 {
                     Steps = [.. current.Steps, result],
-                    Status = result.HostAction is null
+                    Status = result.HostAction is null || _reviewActions?.Handles(candidate, step) == true
                         ? SkillInvocationStatus.Running
                         : SkillInvocationStatus.AwaitingHost,
                     NextAction = result.HostAction is null
@@ -771,7 +774,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 checkpoint.Package.Digest.Value,
                 checkpoint.Status,
                 checkpoint.Generation,
-                checkpoint.NextAction),
+                checkpoint.NextAction)
+            {
+                RunId = checkpoint.RunId,
+                InvokingToolInvocationId = checkpoint.InvokingToolInvocationId,
+            },
             cancellationToken);
     }
 

@@ -11,6 +11,53 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>Redaction preserves the schema-valid framing of a native skill answer.</summary>
+    [Fact]
+    public async Task SkillProcedure_SanitizesStructuredOutputWithoutChangingJsonFraming()
+    {
+        var tool = new PermissionProbeTool();
+        var model = new PermissionModelProvider { FinalText = "{\"summary\":\"password: fixture-value\"}" };
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
+        var result = await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
+
+        using var parsed = System.Text.Json.JsonDocument.Parse(result.OutputJson);
+        Assert.Contains("[REDACTED]", parsed.RootElement.GetProperty("summary").GetString(), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("fixture-value", result.OutputJson, StringComparison.Ordinal);
+    }
+
+    /// <summary>A replacement registration cannot inherit a model's earlier capability selection.</summary>
+    [Fact]
+    public async Task SkillProcedure_PinsTheAdvertisedRegistration()
+    {
+        var original = new PermissionProbeTool();
+        var replacement = new PermissionProbeTool();
+        var registry = new ToolRegistry([]);
+        var source = new ToolActivitySource(ToolActivitySourceKind.Extension, "fixture");
+        registry.RegisterOrReplace(original, source);
+        var model = new PermissionModelProvider { BeforeToolRequest = () => registry.RegisterOrReplace(replacement, source, original) };
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(PermissionContext, original, model, events, registry: registry);
+        await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
+        Assert.Equal(0, original.Executions);
+        Assert.Equal(0, replacement.Executions);
+    }
+
+    /// <summary>Skill model continuations use the existing bounded model projection.</summary>
+    [Fact]
+    public async Task SkillProcedure_UsesTheModelResultProjection()
+    {
+        var tool = new PermissionProbeTool { ModelResultContent = "projected-result" };
+        var model = new PermissionModelProvider();
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
+        await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
+        Assert.Contains("projected-result", model.Requests[1].Input, StringComparison.Ordinal);
+        var resultMessage = Assert.Single(model.Requests[1].Messages, message => message.GetModelVisibleContent().Contains("projected-result", StringComparison.Ordinal));
+        Assert.Equal(ModelMessageRole.Tool, resultMessage.Role);
+        Assert.DoesNotContain("audit-only-content", model.Requests[1].Input, StringComparison.Ordinal);
+    }
+
     /// <summary>The host rejects a multiple-call response before executing any skill tool.</summary>
     [Fact]
     public async Task SkillProcedure_MultipleCalls_RejectsEntireResponseBeforeEffects()
@@ -195,9 +242,10 @@ public sealed partial class SkillSubsystemTests
         PermissionProbeTool tool,
         PermissionModelProvider model,
         IDomainEventStream events,
-        ConfiguredModelCatalog? catalog = null)
+        ConfiguredModelCatalog? catalog = null,
+        ToolRegistry? registry = null)
     {
-        var registry = new ToolRegistry([tool]);
+        registry ??= new ToolRegistry([tool]);
         var sanitizer = new SecretOutputSanitizer();
         var pipeline = new ToolInvocationPipeline(
             registry,
@@ -267,6 +315,8 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class PermissionModelProvider : IModelProvider
     {
+        public string FinalText { get; init; } = "{\"summary\":\"ok\"}";
+
         public bool DuplicateToolCall { get; init; }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -291,17 +341,19 @@ public sealed partial class SkillSubsystemTests
             }
             else
             {
-                yield return new ModelChunk { Text = "{\"summary\":\"ok\"}" };
+                yield return new ModelChunk { Text = FinalText };
             }
         }
     }
 
     private sealed record PermissionProbeInput;
 
-    private sealed record PermissionProbeOutput;
+    private sealed record PermissionProbeOutput(string Audit = "audit-only-content");
 
     private sealed class PermissionProbeTool : Tool<PermissionProbeInput, PermissionProbeOutput>
     {
+        public string? ModelResultContent { get; init; }
+
         public int Executions { get; private set; }
 
         public override ToolDefinition Definition { get; } = new()
@@ -321,7 +373,7 @@ public sealed partial class SkillSubsystemTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Executions++;
-            return Task.FromResult(new ToolExecution<PermissionProbeOutput>(new PermissionProbeOutput(), []));
+            return Task.FromResult(new ToolExecution<PermissionProbeOutput>(new PermissionProbeOutput(), [], ModelResultContent: ModelResultContent));
         }
 
         protected override void ValidateInput(PermissionProbeInput input)

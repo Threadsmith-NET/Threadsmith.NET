@@ -225,7 +225,7 @@ internal sealed class FocusedReviewCompletionPolicy : IFocusedReviewCompletionPo
             }
         }
 
-        if (requireScope && (!file.InScope || (_target.MergeBase is not null && !file.ChangedRanges.Any(range => range.Start <= end && range.End >= start))))
+        if (requireScope && (!file.InScope || ((_target.ComparisonRevision ?? _target.MergeBase) is not null && !file.ChangedRanges.Any(range => range.Start <= end && range.End >= start))))
         {
             throw new InvalidDataException("Issue location is outside the selected snapshot or changed lines.");
         }

@@ -11,20 +11,26 @@ using Threadsmith.Tools;
 /// <summary>Captures bounded immutable source evidence through typed host Git operations and existing read grants.</summary>
 public sealed partial class FocusedReviewTargetCapture
 {
-    private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly IProcessManager _processes;
     private readonly IOutputSanitizer _sanitizer;
     private readonly string _cacheRoot;
+    private readonly IToolRegistry _tools;
+    private readonly IToolInvocationPipeline _pipeline;
+    private static readonly JsonSerializerOptions ToolJson = new(JsonSerializerDefaults.Web);
 
     /// <summary>Initializes a new instance of the <see cref="FocusedReviewTargetCapture"/> class.</summary>
     public FocusedReviewTargetCapture(
         IProcessManager processes,
         IOutputSanitizer sanitizer,
-        string cacheRoot)
+        string cacheRoot,
+        IToolRegistry tools,
+        IToolInvocationPipeline pipeline)
     {
         _processes = processes ?? throw new ArgumentNullException(nameof(processes));
         _sanitizer = sanitizer ?? throw new ArgumentNullException(nameof(sanitizer));
         _cacheRoot = Path.GetFullPath(cacheRoot);
+        _tools = tools ?? throw new ArgumentNullException(nameof(tools));
+        _pipeline = pipeline ?? throw new ArgumentNullException(nameof(pipeline));
     }
 
     /// <summary>Freezes a review target and optional criterion inventory before any child starts.</summary>
@@ -32,8 +38,11 @@ public sealed partial class FocusedReviewTargetCapture
         FocusedReviewInput input,
         SkillInvocationRequest invocation,
         ToolInvocationContext authority,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<string, CancellationToken, Task>? reportProgress = null)
     {
+        Task ReportAsync(string message) => reportProgress?.Invoke(message, cancellationToken) ?? Task.CompletedTask;
+
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(invocation);
         ArgumentNullException.ThrowIfNull(authority);
@@ -52,55 +61,55 @@ public sealed partial class FocusedReviewTargetCapture
         var baseBranch = input.BaseBranch;
         if (remote)
         {
-            (root, repository) = await AcquireRemoteAsync(input, invocation, authority, cancellationToken);
+            (root, repository) = await AcquireRemoteAsync(input, invocation, authority, cancellationToken, reportProgress);
         }
-        else
+
+        var inventory = await ReadInventoryAsync(root, remote ? "refs/heads/review-target" : "HEAD", !remote, invocation, authority, cancellationToken);
+        if (!remote)
         {
-            var actualRoot = (await GitAsync(root, invocation, ["rev-parse", "--show-toplevel"], cancellationToken)).Trim();
-            if (!Path.GetFullPath(actualRoot).Equals(Path.GetFullPath(root), PathComparison))
+            branch = inventory.Branch;
+            if (input.Mode == "currentBranchChanges" && branch == "HEAD" && baseBranch is null)
             {
-                throw new InvalidDataException("Review invocation must own the active repository root.");
+                throw new InvalidDataException("Detached HEAD requires an explicit baseBranch before review.");
             }
 
-            branch = (await GitAsync(root, invocation, ["rev-parse", "--abbrev-ref", "HEAD"], cancellationToken)).Trim();
             if (input.Mode == "currentBranchChanges" && baseBranch is null)
             {
-                if (branch == "HEAD")
-                {
-                    throw new InvalidDataException("Detached HEAD review requires an explicit baseBranch.");
-                }
-
-                var refs = await GitAsync(root, invocation, ["for-each-ref", "--format=%(symref)", "refs/remotes/*/HEAD"], cancellationToken);
-                var bases = refs.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
-                if (bases.Length != 1)
-                {
-                    throw new InvalidDataException("No unambiguous local default-branch metadata; supply baseBranch before review.");
-                }
-
-                baseBranch = bases[0];
+                baseBranch = inventory.DefaultBranch ?? throw new InvalidDataException("No unambiguous local default-branch metadata; supply baseBranch before review.");
             }
         }
 
-        var revision = await ResolveCommitAsync(root, invocation, remote ? "refs/heads/review-target" : "HEAD", cancellationToken);
+        await ReportAsync("Inspecting source revisions");
+        var revision = inventory.Revision;
         string? mergeBase = null;
+        GitShowInventory? baselineInventory = null;
         if (baseBranch is not null)
         {
             ValidateRef(baseBranch);
-            var baseCommit = await ResolveCommitAsync(root, invocation, remote ? "refs/heads/review-base" : baseBranch, cancellationToken);
-            mergeBase = (await GitAsync(root, invocation, ["merge-base", revision, baseCommit], cancellationToken)).Trim();
-            ValidateObjectId(mergeBase);
+            if (remote)
+            {
+                baselineInventory = await ReadInventoryAsync(root, "refs/heads/review-base", false, invocation, authority, cancellationToken);
+                mergeBase = baselineInventory.Revision;
+            }
+            else
+            {
+                var compared = await InvokeToolAsync<GitBranchComparisonResult>(
+                    "git_compare_branches",
+                    new GitBranchComparisonRequest { BaseRevision = baseBranch, TargetRevision = revision },
+                    invocation,
+                    authority,
+                    cancellationToken);
+                mergeBase = compared.MergeBase;
+                baselineInventory = await ReadInventoryAsync(root, mergeBase, false, invocation, authority, cancellationToken);
+            }
         }
 
-        var before = remote ? string.Empty : await GitAsync(root, invocation, ["status", "--porcelain=v2", "--untracked-files=all"], cancellationToken);
-        var treeRecords = await GitRecordsAsync(root, invocation, ["ls-tree", "-r", "-z", revision], cancellationToken);
-        var tree = treeRecords.Select(ParseTreeRecord).ToDictionary(item => item.Path, StringComparer.Ordinal);
-        var baseTree = mergeBase is null ? new Dictionary<string, TreeEntry>(
-            StringComparer.Ordinal)
-            : (await GitRecordsAsync(root, invocation, ["ls-tree", "-r", "-z", mergeBase], cancellationToken))
-                .Select(ParseTreeRecord).ToDictionary(item => item.Path, StringComparer.Ordinal);
-        var paths = remote ? [.. tree.Keys]
-            : await GitRecordsAsync(root, invocation, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], cancellationToken);
-        paths = [.. paths.Concat(baseTree.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+        var before = inventory.StatusDigest;
+        var tree = inventory.Files.Select(file => new TreeEntry(file.Mode, file.ObjectId, file.Path, file.Size) { Revision = revision }).ToDictionary(item => item.Path, StringComparer.Ordinal);
+        var baseTree = baselineInventory is null ? new Dictionary<string, TreeEntry>(StringComparer.Ordinal)
+            : baselineInventory.Files.Select(file => new TreeEntry(file.Mode, file.ObjectId, file.Path, file.Size) { Revision = baselineInventory.Revision }).ToDictionary(item => item.Path, StringComparer.Ordinal);
+        IEnumerable<string> sourcePaths = remote ? tree.Keys : inventory.WorkingTreePaths;
+        var paths = sourcePaths.Concat(baseTree.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         foreach (var selected in input.Paths)
         {
             if (!paths.Any(path => InScope(path, [selected])))
@@ -109,12 +118,49 @@ public sealed partial class FocusedReviewTargetCapture
             }
         }
 
+        if (remote && baselineInventory is not null)
+        {
+            var changedPaths = paths.Where(path => !tree.TryGetValue(path, out var current)
+                || !baseTree.TryGetValue(path, out var previous) || current.ObjectId != previous.ObjectId || current.Mode != previous.Mode).ToArray();
+            var changedSet = changedPaths.ToHashSet(StringComparer.Ordinal);
+            paths = [.. paths.Where(path => changedSet.Contains(path)
+                || (input.RequirementsSource == "reviewTarget" && path == input.RequirementsDocumentPath)
+                || path == "AGENTS.md" || (path.EndsWith("/AGENTS.md", StringComparison.Ordinal)
+                    && changedPaths.Any(changed => changed.StartsWith(path[..^"AGENTS.md".Length], StringComparison.Ordinal))))];
+        }
+
+        var capturedPaths = paths.ToHashSet(StringComparer.Ordinal);
+        bool Requested(string path) => input.Paths.Count == 0 || InScope(path, input.Paths)
+            || (input.RequirementsSource == "reviewTarget" && path == input.RequirementsDocumentPath)
+            || path == "AGENTS.md" || (path.EndsWith("/AGENTS.md", StringComparison.Ordinal)
+                && input.Paths.Any(scope => scope.StartsWith(path[..^"AGENTS.md".Length], StringComparison.Ordinal)));
+        var blobEntries = (remote ? tree.Values.Concat(baseTree.Values) : baseTree.Values)
+            .Where(entry => capturedPaths.Contains(entry.Path) && Requested(entry.Path) && !RepositoryPathPolicy.IsProhibited(entry.Path, authority.ProhibitedPaths)
+                && !entry.Path.StartsWith(".threadsmith/", StringComparison.OrdinalIgnoreCase)
+                && !entry.Path.StartsWith(".inbox/", StringComparison.OrdinalIgnoreCase)
+                && entry.Mode is not ("120000" or "160000") && entry.Size is >= 0 and <= 512 * 1024)
+            .DistinctBy(entry => entry.ObjectId).ToArray();
+        var blobs = await ReadBlobsAsync(root, invocation, blobEntries, authority, reportProgress, cancellationToken);
+        string BlobContent(TreeEntry entry) => blobs.TryGetValue(entry.ObjectId, out var blob) && blob.Content is not null
+            ? blob.Content : throw new InvalidDataException("Source blob is oversized, binary, invalid UTF-8 or requires secret redaction.");
+
         var files = new List<FocusedReviewFile>();
         var excluded = new List<string>();
+        if (inventory.OmittedPaths + (baselineInventory?.OmittedPaths ?? 0) > 0)
+        {
+            excluded.Add("Some source paths were withheld by current tool read policy.");
+        }
+
         var localDigests = new Dictionary<string, string>(StringComparer.Ordinal);
         long totalBytes = 0;
+        var inspected = 0;
         foreach (var path in paths)
         {
+            if (inspected++ % 25 == 0)
+            {
+                await ReportAsync(string.Create(CultureInfo.InvariantCulture, $"Preparing source snapshot: {inspected - 1}/{paths.Length} paths"));
+            }
+
             if (input.Paths.Count > 0 && !InScope(path, input.Paths)
                 && !(input.RequirementsSource == "reviewTarget" && path == input.RequirementsDocumentPath)
                 && !(path == "AGENTS.md" || (path.EndsWith("/AGENTS.md", StringComparison.Ordinal)
@@ -160,7 +206,7 @@ public sealed partial class FocusedReviewTargetCapture
                 {
                     if (tree.TryGetValue(path, out entry))
                     {
-                        content = await ReadBlobAsync(root, invocation, entry.ObjectId, cancellationToken);
+                        content = BlobContent(entry);
                         digest = entry.ObjectId;
                     }
                 }
@@ -169,9 +215,9 @@ public sealed partial class FocusedReviewTargetCapture
                     var resolved = ReviewPathAccess.Resolve(path, authority);
                     if (File.Exists(resolved))
                     {
-                        var bytes = await ReadBoundedAsync(resolved, cancellationToken);
-                        content = StrictUtf8.GetString(bytes);
-                        digest = Hash(bytes);
+                        var snapshot = await ReadSnapshotAsync(path, invocation, authority, cancellationToken);
+                        content = snapshot.Content!;
+                        digest = snapshot.ContentDigest!;
                         localDigests.Add(path, digest);
                     }
                 }
@@ -179,7 +225,7 @@ public sealed partial class FocusedReviewTargetCapture
                 string? baseline = null;
                 if (baseTree.TryGetValue(path, out var old) && old.Mode is not ("120000" or "160000"))
                 {
-                    baseline = await ReadBlobAsync(root, invocation, old.ObjectId, cancellationToken);
+                    baseline = BlobContent(old);
                 }
 
                 if (content is null && baseline is null)
@@ -212,16 +258,15 @@ public sealed partial class FocusedReviewTargetCapture
                     {
                         changed = [new FocusedReviewRange(1, Math.Max(1, Lines(content).Length))];
                     }
-                    else
+                    else if (!string.Equals(content, baseline, StringComparison.Ordinal))
                     {
-                        var arguments = new List<string> { "diff", "--no-ext-diff", "--no-textconv", "--unified=0", mergeBase };
-                        if (remote)
-                        {
-                            arguments.Add(revision);
-                        }
-
-                        arguments.AddRange(["--", path]);
-                        var patch = await GitAsync(root, invocation, arguments, cancellationToken);
+                        var comparison = await InvokeToolAsync<GitDiffResult>(
+                            "git_diff",
+                            new GitDiffRequest { Mode = remote ? GitComparisonMode.Range : GitComparisonMode.WorkingTree, ContextLines = 0, BaseRevision = mergeBase, TargetRevision = remote ? revision : null, Path = path },
+                            invocation,
+                            SnapshotAuthority(root, authority),
+                            cancellationToken);
+                        var patch = comparison.Patch;
                         changed = HunkRegex().Matches(patch).Select(
                             match =>
                         {
@@ -263,18 +308,14 @@ public sealed partial class FocusedReviewTargetCapture
                 }
             }
 
-            if (before != await GitAsync(
-                root,
-                invocation,
-                ["status", "--porcelain=v2", "--untracked-files=all"],
-                cancellationToken)
-                || revision != await ResolveCommitAsync(root, invocation, "HEAD", cancellationToken))
+            var after = await ReadInventoryAsync(root, "HEAD", true, invocation, authority, cancellationToken);
+            if (before != after.StatusDigest || revision != after.Revision)
             {
                 throw new InvalidDataException("Git state changed during capture; explicitly retry the review.");
             }
         }
 
-        var requirements = await CaptureRequirementsAsync(input, files, authority, cancellationToken);
+        var requirements = await CaptureRequirementsAsync(input, files, invocation, authority, cancellationToken);
         var identity = Hash(
             Encoding.UTF8.GetBytes(
             JsonSerializer.Serialize(
@@ -288,6 +329,7 @@ public sealed partial class FocusedReviewTargetCapture
                 excluded,
                 requirements?.Digest,
             })));
+        await ReportAsync(string.Create(CultureInfo.InvariantCulture, $"Source snapshot ready: {files.Count} files"));
         return new FocusedReviewTarget
         {
             Mode = input.Mode,
@@ -296,7 +338,8 @@ public sealed partial class FocusedReviewTargetCapture
             Branch = branch,
             Revision = revision,
             BaseBranch = baseBranch,
-            MergeBase = mergeBase,
+            MergeBase = remote ? null : mergeBase,
+            ComparisonRevision = mergeBase,
             Identity = identity,
             Instructions = _sanitizer.Sanitize(input.Instructions),
             Files = files,
@@ -384,7 +427,8 @@ public sealed partial class FocusedReviewTargetCapture
         FocusedReviewInput input,
         SkillInvocationRequest invocation,
         ToolInvocationContext authority,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<string, CancellationToken, Task>? reportProgress)
     {
         var repository = input.Repository ?? throw new InvalidDataException("A repository is required.");
         if (!repository.Contains("://", StringComparison.Ordinal))
@@ -432,7 +476,7 @@ public sealed partial class FocusedReviewTargetCapture
         }
 
         Directory.CreateDirectory(root);
-        _ = await GitAsync(root, invocation, ["init", "--bare", "--template=", "."], cancellationToken);
+        _ = await GitAsync(root, invocation, ["init", "--template=", "."], cancellationToken);
         var effectiveUrl = (await GitAsync(root, invocation, ["ls-remote", "--get-url", "--", repository], cancellationToken)).Trim();
         if (!string.Equals(effectiveUrl, repository, StringComparison.Ordinal))
         {
@@ -441,7 +485,7 @@ public sealed partial class FocusedReviewTargetCapture
 
         var refs = new List<string>
         {
-            "fetch", "--no-tags", "--no-recurse-submodules", "--", repository,
+            "fetch", "--depth=1", "--no-tags", "--no-recurse-submodules", "--", repository,
             $"refs/heads/{input.Branch}:refs/heads/review-target",
         };
         if (input.BaseBranch is not null)
@@ -449,7 +493,17 @@ public sealed partial class FocusedReviewTargetCapture
             refs.Add($"refs/heads/{input.BaseBranch}:refs/heads/review-base");
         }
 
+        if (reportProgress is not null)
+        {
+            await reportProgress("Fetching repository (Git)", cancellationToken);
+        }
+
         _ = await GitAsync(root, invocation, refs, cancellationToken);
+        if (reportProgress is not null)
+        {
+            await reportProgress("Repository fetched; preparing source snapshot", cancellationToken);
+        }
+
         var safeUri = new UriBuilder(uri) { UserName = string.Empty, Password = string.Empty };
         return (root, safeUri.Uri.AbsoluteUri);
     }
@@ -457,6 +511,7 @@ public sealed partial class FocusedReviewTargetCapture
     private async Task<FocusedReviewRequirements?> CaptureRequirementsAsync(
         FocusedReviewInput input,
         IReadOnlyList<FocusedReviewFile> files,
+        SkillInvocationRequest invocation,
         ToolInvocationContext authority,
         CancellationToken cancellationToken)
     {
@@ -484,34 +539,167 @@ public sealed partial class FocusedReviewTargetCapture
         else
         {
             var resolved = ReviewPathAccess.Resolve(path, authority);
-            var bytes = await ReadBoundedAsync(resolved, cancellationToken);
-            content = StrictUtf8.GetString(bytes);
+            var snapshot = await ReadSnapshotAsync(path, invocation, authority, cancellationToken);
+            content = snapshot.Content!;
             if (_sanitizer.Sanitize(content) != content)
             {
                 throw new InvalidDataException("Secret redaction would alter the requirements document; provide a sanitized requirements source.");
             }
 
-            digest = Hash(bytes);
+            digest = snapshot.ContentDigest!;
             path = Path.GetRelativePath(authority.RepositoryPath, resolved).Replace('\\', '/');
         }
 
         return new FocusedReviewRequirements(input.RequirementsSource, path, digest, content, ExtractCriteria(content));
     }
 
-    private async Task<string> ReadBlobAsync(
+    private async Task<IReadOnlyDictionary<string, GitShowFile>> ReadBlobsAsync(
         string root,
         SkillInvocationRequest invocation,
-        string objectId,
+        IReadOnlyList<TreeEntry> entries,
+        ToolInvocationContext authority,
+        Func<string, CancellationToken, Task>? reportProgress,
         CancellationToken cancellationToken)
     {
-        ValidateObjectId(objectId);
-        var size = await GitAsync(root, invocation, ["cat-file", "-s", objectId], cancellationToken);
-        if (!long.TryParse(size.Trim(), CultureInfo.InvariantCulture, out var bytes) || bytes > 512 * 1024)
+        var result = new Dictionary<string, GitShowFile>(StringComparer.Ordinal);
+        long totalBytes = 0;
+        foreach (var revision in entries.GroupBy(entry => entry.Revision, StringComparer.Ordinal))
         {
-            throw new InvalidDataException("Source blob exceeds the review read limit.");
+            var pending = revision.ToArray();
+            var index = 0;
+            while (index < pending.Length)
+            {
+                var batch = new List<TreeEntry>();
+                long batchBytes = 0;
+                while (index < pending.Length && batch.Count < 64 && (batch.Count == 0 || batchBytes + pending[index].Size <= 32 * 1024))
+                {
+                    var entry = pending[index++];
+                    batch.Add(entry);
+                    batchBytes += entry.Size;
+                }
+
+                totalBytes += batchBytes;
+                if (totalBytes > 32L * 1024 * 1024)
+                {
+                    throw new InvalidOperationException("Review capture exceeds its source bound; narrow the authorized target.");
+                }
+
+                if (reportProgress is not null)
+                {
+                    await reportProgress(string.Create(CultureInfo.InvariantCulture, $"Reading source snapshots: {result.Count}/{entries.Count} blobs"), cancellationToken);
+                }
+
+                var captured = await InvokeToolAsync<GitShowResult>(
+                    "git_show",
+                    new GitShowRequest { Revision = revision.Key, Paths = batch.Select(entry => entry.Path).ToArray() },
+                    invocation,
+                    SnapshotAuthority(root, authority),
+                    cancellationToken);
+                if (captured.Files.Count != batch.Count || !captured.Files.Select(file => file.Path).SequenceEqual(batch.Select(entry => entry.Path)))
+                {
+                    throw new InvalidDataException("Git source batch identity changed.");
+                }
+
+                for (var item = 0; item < batch.Count; item++)
+                {
+                    var file = captured.Files[item];
+                    if (file.ObjectId != batch[item].ObjectId)
+                    {
+                        throw new InvalidDataException("Git source batch object changed.");
+                    }
+
+                    var unchanged = file.Content is not null && Hash(Encoding.UTF8.GetBytes(file.Content)) == file.ContentDigest;
+                    result.Add(file.ObjectId, unchanged && !file.IsBinary && !file.IsTruncated ? file : file with { Content = null });
+                }
+            }
         }
 
-        return await RunGitAsync(root, invocation, ["cat-file", "blob", objectId], ProcessStandardOutputFormat.ReviewText, cancellationToken);
+        return result;
+    }
+
+    private async Task<ReadFileOutput> ReadSnapshotAsync(
+        string path,
+        SkillInvocationRequest invocation,
+        ToolInvocationContext authority,
+        CancellationToken cancellationToken)
+    {
+        var content = new StringBuilder();
+        ReadFileOutput? first = null;
+        var offset = 0;
+        while (true)
+        {
+            var output = await InvokeToolAsync<ReadFileOutput>("read_file", new ReadFileInput { Path = path, Snapshot = true, SnapshotOffset = offset }, invocation, authority, cancellationToken);
+            first ??= output;
+            if (output.Content is null || first.ContentDigest != output.ContentDigest || first.Path != output.Path)
+            {
+                throw new InvalidDataException("Source snapshot changed during paging.");
+            }
+
+            var end = checked(offset + Encoding.UTF8.GetByteCount(output.Content));
+            if (end > 512 * 1024 || (output.NextSnapshotOffset is { } next && (next != end || next <= offset)))
+            {
+                throw new InvalidDataException("Source snapshot exceeds its bound or returned an invalid continuation.");
+            }
+
+            content.Append(output.Content);
+            if (output.NextSnapshotOffset is null)
+            {
+                break;
+            }
+
+            offset = end;
+        }
+
+        var text = content.ToString();
+        if (Hash(Encoding.UTF8.GetBytes(text)) != first.ContentDigest)
+        {
+            throw new InvalidDataException("Source snapshot was changed by decoding or secret redaction.");
+        }
+
+        return first with { Content = text, NextSnapshotOffset = null };
+    }
+
+    private async Task<T> InvokeToolAsync<T>(
+        string toolId,
+        object input,
+        SkillInvocationRequest invocation,
+        ToolInvocationContext authority,
+        CancellationToken cancellationToken)
+    {
+        var registration = _tools.GetRegistrations(invocation.SessionId, invocation.RunId)
+            .SingleOrDefault(item => item.Tool.Definition.Id.Equals(toolId, StringComparison.OrdinalIgnoreCase))
+            ?? throw new UnauthorizedAccessException($"Review requires the enabled {toolId} tool.");
+        var result = await _pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = invocation.SessionId,
+                RunId = invocation.RunId,
+                Phase = invocation.Phase,
+                ToolId = toolId,
+                ArgumentsJson = JsonSerializer.SerializeToElement(input, ToolJson).GetRawText(),
+                ExpectedRegistration = registration,
+                Context = authority with { RequestedBy = $"skill-host:{invocation.InvocationId.Value:D}", ModelVisibleToolSnapshotId = null },
+            },
+            cancellationToken);
+        if (!result.Succeeded || result.IsTruncated || result.ResultJson is null)
+        {
+            throw new InvalidDataException($"Review {toolId} request failed or exceeded its configured bound: {result.ErrorClassification}.");
+        }
+
+        return JsonSerializer.Deserialize<T>(result.ResultJson, ToolJson)
+            ?? throw new InvalidDataException("Review tool returned no structured result.");
+    }
+
+    private static ToolInvocationContext SnapshotAuthority(string root, ToolInvocationContext authority)
+    {
+        if (Path.GetFullPath(root).Equals(Path.GetFullPath(authority.RepositoryPath), PathComparison))
+        {
+            return authority;
+        }
+
+        var roots = authority.ApprovedRoots.Select(path => Path.GetRelativePath(authority.RepositoryPath, Path.GetFullPath(path, authority.RepositoryPath)))
+            .Where(path => path != ".." && !path.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !Path.IsPathRooted(path)).ToArray();
+        return authority with { RepositoryPath = root, WorkspaceId = null, ApprovedRoots = roots };
     }
 
     private static async Task<byte[]> ReadBoundedAsync(
@@ -532,26 +720,55 @@ public sealed partial class FocusedReviewTargetCapture
         return bytes;
     }
 
-    private async Task<string> ResolveCommitAsync(
+    private async Task<GitShowInventory> ReadInventoryAsync(
         string root,
+        string revision,
+        bool workingTree,
         SkillInvocationRequest invocation,
-        string reference,
+        ToolInvocationContext authority,
         CancellationToken cancellationToken)
     {
-        ValidateRef(reference);
-        var value = (await GitAsync(root, invocation, ["rev-parse", "--verify", "--end-of-options", reference + "^{commit}"], cancellationToken)).Trim();
-        ValidateObjectId(value);
-        return value;
-    }
+        GitShowInventory? combined = null;
+        var offset = 0;
+        do
+        {
+            var output = await InvokeToolAsync<GitShowResult>(
+                "git_show",
+                new GitShowRequest { Revision = combined?.Revision ?? revision, Inventory = true, IncludeWorkingTree = workingTree, InventoryOffset = offset },
+                invocation,
+                SnapshotAuthority(root, authority),
+                cancellationToken);
+            if (Hash(Encoding.UTF8.GetBytes(output.Content)) != output.ContentDigest)
+            {
+                throw new InvalidDataException("Git inventory identity was altered by sanitization.");
+            }
 
-    private async Task<string[]> GitRecordsAsync(
-        string root,
-        SkillInvocationRequest invocation,
-        IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
-    {
-        var result = await RunGitAsync(root, invocation, arguments, ProcessStandardOutputFormat.ReviewRecords, cancellationToken);
-        return JsonSerializer.Deserialize<string[]>(result) ?? throw new InvalidDataException("Git path inventory was unavailable.");
+            var page = JsonSerializer.Deserialize<GitShowInventory>(output.Content)
+                ?? throw new InvalidDataException("Git inventory was unavailable.");
+            if (combined is not null && (combined.Revision != page.Revision || combined.StatusDigest != page.StatusDigest))
+            {
+                throw new InvalidDataException("Git state changed during inventory capture.");
+            }
+
+            combined = combined is null ? page : combined with
+            {
+                Files = [.. combined.Files, .. page.Files],
+                WorkingTreePaths = [.. combined.WorkingTreePaths, .. page.WorkingTreePaths],
+                OmittedPaths = combined.OmittedPaths + page.OmittedPaths,
+            };
+            if (page.NextOffset is not { } next)
+            {
+                return combined;
+            }
+
+            if (next <= offset || next > 10000)
+            {
+                throw new InvalidDataException("Git inventory exceeds the review path bound.");
+            }
+
+            offset = next;
+        }
+        while (true);
     }
 
     private Task<string> GitAsync(
@@ -566,7 +783,8 @@ public sealed partial class FocusedReviewTargetCapture
         SkillInvocationRequest invocation,
         IReadOnlyList<string> arguments,
         ProcessStandardOutputFormat format,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? standardInput = null)
     {
         var result = await _processes.RunAsync(
             new ProcessExecutionRequest
@@ -582,6 +800,7 @@ public sealed partial class FocusedReviewTargetCapture
                 Timeout = TimeSpan.FromMinutes(2),
                 MaximumOutputCharacters = 2 * 1024 * 1024,
                 StandardOutputFormat = format,
+                StandardInput = standardInput,
             },
             cancellationToken);
         if (result.ExitCode != 0 || result.TimedOut || result.StandardOutputTruncated || result.StandardErrorTruncated)
@@ -615,25 +834,6 @@ public sealed partial class FocusedReviewTargetCapture
         }
     }
 
-    private static TreeEntry ParseTreeRecord(
-        string value)
-    {
-        var tab = value.IndexOf('\t');
-        if (tab < 0)
-        {
-            throw new InvalidDataException("Git tree entry is malformed.");
-        }
-
-        var fields = value[..tab].Split(' ');
-        if (fields.Length != 3)
-        {
-            throw new InvalidDataException("Git tree metadata is malformed.");
-        }
-
-        ValidateObjectId(fields[2]);
-        return new TreeEntry(fields[0], fields[2], value[(tab + 1)..]);
-    }
-
     [GeneratedRegex(@"(?m)^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", RegexOptions.CultureInvariant)]
     private static partial Regex HunkRegex();
 
@@ -649,5 +849,8 @@ public sealed partial class FocusedReviewTargetCapture
     [GeneratedRegex(@"\b(runtime|manual|benchmark|live|execute|executed|run tests|tests pass|cross-platform)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ExecutionCriterionRegex();
 
-    private sealed record TreeEntry(string Mode, string ObjectId, string Path);
+    private sealed record TreeEntry(string Mode, string ObjectId, string Path, long Size)
+    {
+        internal string Revision { get; init; } = string.Empty;
+    }
 }

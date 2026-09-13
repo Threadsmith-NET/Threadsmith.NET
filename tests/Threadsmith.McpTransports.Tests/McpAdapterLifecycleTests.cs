@@ -1,5 +1,6 @@
 namespace Threadsmith.McpTransports.Tests;
 
+using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Mcp;
@@ -154,6 +155,57 @@ public static class McpAdapterLifecycleTests
         await adapter.DisposeAsync();
     }
 
+    /// <summary>The central JSON sanitizer preserves successful MCP text results and lifecycle identity.</summary>
+    [Theory]
+    [InlineData("[\"password: fixture-value\"]")]
+    [InlineData("{\"content\":[{\"type\":\"text\",\"text\":\"password: fixture-value\"}]}")]
+    public static async Task Imported_tool_uses_shared_structured_sanitization(string json)
+    {
+        var transport = new ToolTransport { ResultJson = json };
+        var registry = new ToolRegistry([]);
+        var sanitizer = new SecretOutputSanitizer();
+        await using var adapter = new McpAdapter(
+            _ => transport, new EmptySecretStore(), sanitizer, NullLogger<McpAdapter>.Instance, TestPromptLoader.Instance, registry);
+        var connection = await adapter.ConnectAsync(CreateProfile());
+        var tool = Assert.Single(connection.Tools);
+        await using var events = new RecordingToolEvents();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
+        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            ToolId = tool.Definition.Id, ArgumentsJson = "{}", SessionId = SessionId.New(), RunId = RunId.New(), Phase = RunPhase.EvidenceCollection,
+            Context = new ToolInvocationContext { RepositoryPath = Environment.CurrentDirectory, TrustLevel = RepositoryTrustLevel.TrustedBuild, RequestedBy = "model" },
+        });
+
+        Assert.True(result.Succeeded, result.Error);
+        using var parsed = JsonDocument.Parse(result.ResultJson!);
+        Assert.DoesNotContain("fixture-value", result.ResultJson!, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", result.ResultJson!, StringComparison.OrdinalIgnoreCase);
+        var started = Assert.Single(events.Items.OfType<ToolInvocationStarted>());
+        var completed = Assert.Single(events.Items.OfType<ToolInvocationCompleted>());
+        Assert.Equal(started.ToolInvocationId, completed.ToolInvocationId);
+        Assert.Equal(ToolActivitySourceKind.Mcp, started.Source!.Kind);
+        Assert.True(completed.Succeeded);
+        Assert.DoesNotContain("fixture-value", completed.ResultJson!, StringComparison.Ordinal);
+    }
+
+    private sealed class RecordingToolEvents : IDomainEventStream
+    {
+        internal List<IDomainEvent> Items { get; } = [];
+
+        public Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Items.Add(domainEvent);
+            return Task.CompletedTask;
+        }
+
+        public IDomainEventSubscription Subscribe(Func<IDomainEvent, CancellationToken, Task> handler, int capacity = 256) => throw new NotSupportedException();
+
+        public Task PublishCommittedBatchAsync(IReadOnlyList<IDomainEvent> domainEvents, Func<bool> tryCommit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private static McpConnectionProfile CreateProfile()
     {
         return new()
@@ -272,6 +324,8 @@ public static class McpAdapterLifecycleTests
 
     private sealed class ToolTransport(ManualTimeProvider? timeProvider = null) : IMcpTransport
     {
+        public string ResultJson { get; init; } = "{}";
+
         public int? ProcessId => null;
 
         public Task<IReadOnlyList<McpImportedCapability>> StartAsync(
@@ -296,7 +350,7 @@ public static class McpAdapterLifecycleTests
             CancellationToken cancellationToken = default)
         {
             timeProvider?.Advance(TimeSpan.FromMilliseconds(1200));
-            return Task.FromResult(new McpTransportInvocation { Succeeded = true, ResultJson = "{}" });
+            return Task.FromResult(new McpTransportInvocation { Succeeded = true, ResultJson = ResultJson });
         }
 
         public Task<bool> StopAsync(

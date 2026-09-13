@@ -158,6 +158,61 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(verified, Assert.Single(native.Snapshot.Candidates));
     }
 
+    /// <summary>Large Claude groups persist every supported package while preserving unsupported-package rejection.</summary>
+    [Fact]
+    public async Task CompatibleCatalog_LargeClaudeGroup_EnableDisablePersistsEveryEligiblePackage()
+    {
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var claudeRoot = Path.Combine(package.Root, "claude");
+        for (var index = 0; index < 32; index++)
+        {
+            var directory = Path.Combine(claudeRoot, $"skill-{index:D2}");
+            Directory.CreateDirectory(directory);
+            var unsupported = index == 31 ? "context: fork\n" : string.Empty;
+            await File.WriteAllTextAsync(
+                Path.Combine(directory, "SKILL.md"),
+                $"---\nname: skill-{index:D2}\ndescription: Review repository\n{unsupported}---\nReview this repository.\n");
+        }
+
+        var catalog = new CompatibleSkillCatalog(
+            package.CreateCatalog(SkillScope.Maintained),
+            new ClaudeSkillCompatibilityCatalog([new ClaudeSkillRoot(SkillScope.User, claudeRoot, "user:claude", false)]));
+        await catalog.RefreshAsync();
+        var policyPath = Path.Combine(package.Root, "policy.json");
+        var policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        var application = CreateCatalogApplication(catalog, policy, package.Root);
+        var candidates = catalog.Snapshot.Candidates.Where(candidate => candidate.Provenance.Scope == SkillScope.User).ToArray();
+        Assert.Equal(32, candidates.Length);
+        var enabled = new List<SkillCatalogCandidate>();
+        foreach (var candidate in candidates)
+        {
+            enabled.Add(await application.HandleAsync(new SetSkillEnabledCommand(Selector(candidate, false), true)));
+        }
+
+        Assert.Equal(31, enabled.Count(candidate => candidate.Enabled));
+        Assert.Equal(SkillVerificationState.Invalid, Assert.Single(enabled, candidate => !candidate.Enabled).Verification);
+        var reloadedPolicy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        var reloadedApplication = CreateCatalogApplication(catalog, reloadedPolicy, package.Root);
+        foreach (var candidate in enabled)
+        {
+            var verified = await reloadedApplication.HandleAsync(new VerifySkillCommand(Selector(candidate, true)));
+            Assert.Equal(candidate.Enabled, verified.Enabled);
+            var disabled = await reloadedApplication.HandleAsync(new SetSkillEnabledCommand(Selector(candidate, true), false));
+            Assert.False(disabled.Enabled);
+        }
+
+        var finalPolicy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        var finalApplication = CreateCatalogApplication(catalog, finalPolicy, package.Root);
+        foreach (var candidate in enabled)
+        {
+            Assert.False((await finalApplication.HandleAsync(new VerifySkillCommand(Selector(candidate, true)))).Enabled);
+        }
+
+        static string Selector(SkillCatalogCandidate candidate, bool exact) =>
+            $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}"
+            + (exact ? "+" + candidate.Identity.Digest.Value : string.Empty);
+    }
+
     private static SkillApplication CreateCatalogApplication(
         CompatibleSkillCatalog catalog,
         ISkillTrustPolicyProvider policy,

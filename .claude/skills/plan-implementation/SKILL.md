@@ -17,6 +17,10 @@ description: Specifies the procedure for implementing a plan file in the impleme
 - The user must provide a plan name (e.g., "plan 95") and a corresponding plan file (e.g., "plan-95*.md") in the "./docs/implementation-plans" folder. The plan file should contain a list of steps to be executed.
 - Optionally, the user may supply a list of one or more Pi instances available to be sub-agents.
 
+## Review scope
+
+Every review assignment in this workflow must include the repository's [adversarial review requirements](../../../AGENTS.md#adversarial-review). Inspect the existing implementation paths outside the diff as needed to assess reuse, observable integration, and work proportional to scope. Report unavailable evidence and unassessed areas explicitly.
+
 ## Workflow
 
 ```

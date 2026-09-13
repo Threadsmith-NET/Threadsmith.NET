@@ -39,6 +39,15 @@ The host owns control flow; the model is a pluggable reasoning engine, not an au
 - **Keep terminal-library types out of core and extension contracts.** The interactive terminal is a projection of engine state; headless and interactive runs produce identical results.
 - **Do not stage, commit, push, or do destructive Git operations unless explicitly requested.**
 
+## Adversarial review
+
+Review the implementation against the user's intended behavior and the existing system, including relevant code outside the diff. Passing tests and matching a plan are evidence, not sufficient grounds for a clean review. Include these checks in review assignments and apply them wherever relevant:
+
+- **Reuse and ownership:** Find the established implementation of each added capability and trace the actual call sites. Challenge duplicate execution paths, state stores, lifecycle handling, readers, and renderers. Sharing a formatter or interface does not establish shared execution. Prefer reuse or a focused extension; a separate path needs a concrete explanation of why reuse is impossible or would introduce greater complexity.
+- **Observable integration:** Trace manual, model-driven, and internal entry points through existing policy, execution, events, logs, progress, completion, and cancellation boundaries. Look for silent work, duplicate activity, missing child-agent visibility, and paths that bypass normal tool or MCP handling. Check the underlying operation, not just its displayed label.
+- **Work proportional to scope:** Check what is fetched, scanned, read, repeated, retained, and serialized before useful work begins. Challenge unnecessary history, whole-repository preloads, per-file process loops, and paging that first buffers the entire input. Assess realistic repository/file/group sizes, output escaping, and time to first visible activity. Distinguish measurements from source-based estimates.
+- **Evidence and limits:** For each finding, identify the affected path, concrete trigger, consequence, and existing component that can be reused when applicable. Do not invent defects to satisfy a checklist. If required context or runtime evidence is unavailable, record the unassessed area rather than treating it as clean. Re-review fixes through the real entry points and check that they remove the competing implementation rather than add another wrapper.
+
 ## Dependency direction
 
 Enforced by `tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs` (the build gate; fails fast on a wrong reference):

@@ -90,7 +90,9 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             var modelContext = await CreateToolContextAsync(plan, cancellationToken);
-            var modelTools = BuildToolDefinitions(modelContext.AllowedToolIds);
+            var registrations = _tools.GetRegistrations(plan.Request.SessionId, plan.Request.RunId)
+                .ToDictionary(item => item.Tool.Definition.Id, StringComparer.OrdinalIgnoreCase);
+            var modelTools = BuildToolDefinitions(registrations.Values.Where(item => modelContext.AllowedToolIds.Contains(item.Tool.Definition.Id, StringComparer.OrdinalIgnoreCase)));
             var text = new StringBuilder();
             ToolRequestModelOutput? toolRequest = null;
             var outputReserveTokens = profile?.EffectiveRequestOutputTokenReserve ?? 0;
@@ -178,7 +180,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
             if (toolRequest is null)
             {
-                var output = _sanitizer.Sanitize(text.ToString()).Trim();
+                var output = JsonOutputSanitizer.SanitizeJsonOrText(text.ToString(), _sanitizer).Trim();
                 if (string.IsNullOrWhiteSpace(output))
                 {
                     throw new InvalidDataException("Skill procedure returned empty output.");
@@ -216,6 +218,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             }
 
             var context = await CreateToolContextAsync(plan, cancellationToken);
+            if (!modelTools.Any(tool => tool.Name.Equals(toolRequest.ToolName, StringComparison.OrdinalIgnoreCase)))
+            {
+                context = context with { DenyAllTools = true };
+            }
+
+            registrations.TryGetValue(toolRequest.ToolName, out var registration);
             var result = await _toolPipeline.InvokeAsync(
                 new ToolInvocationRequest
                 {
@@ -223,12 +231,13 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     RunId = plan.Request.RunId,
                     Phase = plan.Request.Phase,
                     ToolId = toolRequest.ToolName,
+                    ExpectedRegistration = registration,
                     ArgumentsJson = toolRequest.ArgumentsJson,
                     Context = context,
                 },
                 cancellationToken);
             var boundedResult = result.Succeeded
-                ? result.ResultJson ?? "null"
+                ? result.ModelResultContent ?? result.ResultJson ?? "null"
                 : SkillCanonicalJson.CanonicalizeValue(
                     System.Text.Json.JsonSerializer.Serialize(new
                     {
@@ -268,23 +277,19 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     ["ToolName"] = toolRequest.ToolName,
                     ["ToolResult"] = boundedResult,
                 });
+
+            // Legacy input needs the result text; structured messages already contain its tool response.
             prompt += continuation;
-            messages.Add(new ModelMessage
-            {
-                Role = ModelMessageRole.User,
-                SectionId = "skill-procedure-continuation",
-                Content = [new ModelContentPart { Content = continuation }],
-            });
         }
 
         throw new InvalidOperationException("Skill procedure model-turn budget is exhausted.");
     }
 
-    private IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IReadOnlyList<string> toolIds)
+    private static IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IEnumerable<ToolRegistration> registrations)
     {
-        return toolIds.Select(toolId =>
+        return registrations.Select(registration =>
         {
-            var definition = _tools.Get(toolId).Definition;
+            var definition = registration.Tool.Definition;
             return new ModelToolDefinition
             {
                 Name = definition.Id,

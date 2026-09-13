@@ -86,6 +86,9 @@ public sealed class FocusedReviewExecutor : IFocusedReviewExecutor
                         target.Branch,
                         target.Revision,
                         target.MergeBase,
+                        target.BaseBranch,
+                        target.ComparisonRevision,
+                        ScopeKind = target.ComparisonRevision is not null || target.MergeBase is not null ? "changes" : "snapshot",
                         target.Identity,
                         target.Instructions,
                         requirements = target.Requirements is null ? null : new

@@ -14,6 +14,7 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
     private readonly Func<SkillInvocationRequest, CancellationToken, Task<ToolInvocationContext>> _authority;
     private readonly string _stateRoot;
     private readonly int _maximumCorrections;
+    private readonly IDomainEventStream? _events;
 
     /// <summary>Initializes a new instance of the <see cref="FocusedReviewWorkflow"/> class.</summary>
     public FocusedReviewWorkflow(
@@ -22,7 +23,8 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
         IFocusedReviewExecutor executor,
         Func<SkillInvocationRequest, CancellationToken, Task<ToolInvocationContext>> authority,
         string stateRoot,
-        int maximumCorrections = 0)
+        int maximumCorrections = 0,
+        IDomainEventStream? events = null)
     {
         _private = privateResolver ?? throw new ArgumentNullException(nameof(privateResolver));
         _capture = capture ?? throw new ArgumentNullException(nameof(capture));
@@ -31,6 +33,7 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
         _stateRoot = Path.GetFullPath(stateRoot);
         ArgumentOutOfRangeException.ThrowIfNegative(maximumCorrections);
         _maximumCorrections = maximumCorrections;
+        _events = events;
     }
 
     /// <inheritdoc />
@@ -46,6 +49,9 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
         SkillWorkflowCheckpoint checkpoint,
         CancellationToken cancellationToken = default)
     {
+        Task ReportAsync(string message, CancellationToken token) => _events?.PublishAsync(
+            new SkillInvocationProgressObserved(checkpoint.SessionId, DateTimeOffset.UtcNow, checkpoint.InvocationId, checkpoint.Generation, message) { RunId = checkpoint.RunId }, token) ?? Task.CompletedTask;
+
         await _private.VerifyEntryAsync(candidate, plan, cancellationToken);
         var authority = await _authority(plan.Request, cancellationToken);
         if (authority.TrustLevel < RepositoryTrustLevel.TrustedRead || authority.WorkspaceId != plan.Request.WorkspaceId)
@@ -72,7 +78,7 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
             }
         }
 
-        var target = record?.Target ?? await _capture.CaptureAsync(input, plan.Request, authority, cancellationToken);
+        var target = record?.Target ?? await _capture.CaptureAsync(input, plan.Request, authority, cancellationToken, ReportAsync);
         foreach (var file in target.Files)
         {
             _ = ReviewPathAccess.Resolve(file.Path, authority);
@@ -93,6 +99,7 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
         var procedures = await _private.ResolveAsync(candidate, plan, target, generation, _maximumCorrections, cancellationToken);
         if (record is null)
         {
+            await ReportAsync("Preparing reviewers", cancellationToken);
             var batches = await _executor.PrepareAsync(plan, target, procedures, cancellationToken);
             record = new ReviewRecord(
                 2,
@@ -130,6 +137,7 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
                     await SaveAsync(recordPath, record, cancellationToken);
                 }
 
+                await ReportAsync("Running reviewers", cancellationToken);
                 var result = await _executor.ExecuteAsync(plan, batch, target, procedures, restoreOnly, cancellationToken);
                 outcomes.AddRange(result);
                 record = record with { Outcomes = outcomes.ToArray(), CompletedBatches = [.. record.CompletedBatches, batch.DelegationId] };
@@ -148,6 +156,7 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
                 deliveryError = "The existing inbox destination is invalid or unauthorized. Review content is retained; repair the destination and resume delivery.";
             }
 
+            await ReportAsync("Writing review report", cancellationToken);
             var markdown = FocusedReviewReportFormatter.Render(target, outcomes, inboxLinks: inbox is not null || deliveryError is not null);
             var filename = $"review-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssZ}-{plan.Request.InvocationId.Value:N}.md";
             record = record with

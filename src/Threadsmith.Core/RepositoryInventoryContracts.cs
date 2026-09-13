@@ -22,6 +22,9 @@ public enum GitComparisonMode
 /// <summary>A bounded Git diff request.</summary>
 public sealed record GitDiffRequest
 {
+    /// <summary>Context lines per hunk, from zero through fifty; defaults to three.</summary>
+    public int ContextLines { get; init; } = 3;
+
     /// <summary>Comparison mode. Defaults to <see cref="GitComparisonMode.WorkingTree" /> when omitted or null.</summary>
     public GitComparisonMode? Mode { get; init; } = GitComparisonMode.WorkingTree;
 
@@ -95,6 +98,21 @@ public enum GitObjectKind
 /// <summary>A bounded Git object request.</summary>
 public sealed record GitShowRequest
 {
+    /// <summary>Zero-based offset into a normalized inventory page.</summary>
+    public int InventoryOffset { get; init; }
+
+    /// <summary>Maximum entries in each inventory page, from one through five hundred.</summary>
+    public int InventoryMaximumEntries { get; init; } = 200;
+
+    /// <summary>Returns normalized immutable tree metadata rather than object text.</summary>
+    public bool Inventory { get; init; }
+
+    /// <summary>Includes current Git-tracked/untracked paths and a status digest in inventory mode.</summary>
+    public bool IncludeWorkingTree { get; init; }
+
+    /// <summary>Optional batch of up to 64 literal file paths at the same immutable revision; mutually exclusive with Path.</summary>
+    public IReadOnlyList<string> Paths { get; init; } = [];
+
     /// <summary>Validated revision or object identity.</summary>
     public required string Revision { get; init; }
 
@@ -103,7 +121,36 @@ public sealed record GitShowRequest
 }
 
 /// <summary>Bounded normalized Git object output.</summary>
-public sealed record GitShowResult(string Revision, GitObjectKind Kind, string Content, bool IsBinary, bool IsTruncated);
+public sealed record GitShowResult(string Revision, GitObjectKind Kind, string Content, bool IsBinary, bool IsTruncated)
+{
+    /// <summary>SHA256 of inventory content before pipeline sanitization.</summary>
+    public string? ContentDigest { get; init; }
+
+    /// <summary>Independently bounded files returned for an explicit path batch.</summary>
+    public IReadOnlyList<GitShowFile> Files { get; init; } = [];
+}
+
+/// <summary>Immutable file content and its raw UTF-8 digest, allowing host consumers to detect later redaction.</summary>
+public sealed record GitShowFile(string Path, string ObjectId, string? Content, string? ContentDigest, bool IsBinary, bool IsTruncated);
+
+/// <summary>One immutable Git tree file, without loading its body.</summary>
+public sealed record GitTreeFile(string Mode, string ObjectId, string Path, long Size);
+
+/// <summary>Normalized revision and file inventory for an explicit Git object query.</summary>
+public sealed record GitShowInventory(
+    string Revision,
+    string? Branch,
+    string? DefaultBranch,
+    string? StatusDigest,
+    IReadOnlyList<string> WorkingTreePaths,
+    IReadOnlyList<GitTreeFile> Files)
+{
+    /// <summary>Next inventory offset, or null when complete.</summary>
+    public int? NextOffset { get; init; }
+
+    /// <summary>Number of paths omitted from this page by current read policy.</summary>
+    public int OmittedPaths { get; init; }
+}
 
 /// <summary>A bounded blame request.</summary>
 public sealed record GitBlameRequest

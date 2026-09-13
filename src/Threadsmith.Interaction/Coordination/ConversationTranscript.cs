@@ -25,6 +25,7 @@ internal sealed class ConversationTranscript
     private readonly Dictionary<SemanticRefreshId, LinkedListNode<SemanticRefreshId>> _renderedSemanticRefreshStarts = [];
     private readonly LinkedList<SemanticRefreshId> _renderedSemanticRefreshStartOrder = [];
     private readonly Dictionary<ToolInvocationId, ToolInvocationStarted> _pendingTools = [];
+    private readonly Dictionary<SkillInvocationId, SkillWorkflowCheckpointWritten> _pendingSkills = [];
     private RunId? _activeMutationProposalRunId;
     private bool _answerActive;
     private bool _reasoningActive;
@@ -108,6 +109,37 @@ internal sealed class ConversationTranscript
                 AppendToolCompletion(toolStart, completed, toolProgress);
                 _answerActive = false;
                 return true;
+            case SkillWorkflowCheckpointWritten skill when skill.InvokingToolInvocationId is null:
+                if (!InteractionOperationActivities.EndsSkillActivity(skill.Status))
+                {
+                    if (!_pendingSkills.TryGetValue(skill.InvocationId, out var previous) || skill.Generation > previous.Generation)
+                    {
+                        _pendingSkills[skill.InvocationId] = skill;
+                    }
+
+                    return false;
+                }
+
+                if (!_pendingSkills.TryGetValue(skill.InvocationId, out var skillStart) || skillStart.Generation != skill.Generation)
+                {
+                    return false;
+                }
+
+                _pendingSkills.Remove(skill.InvocationId);
+                string? elapsed = null;
+                if (_showOperationDurations)
+                {
+                    OperationDurationFormatter.TryFormat(skill.OccurredAt - skillStart.OccurredAt, out elapsed);
+                }
+
+                AppendLifecycleBlock(InteractionPresentationFormatter.FormatOperationCompletion(
+                    "SKILLS",
+                    $"{skill.SkillId.Value}@{skill.Version}",
+                    $"Invocation: {skill.InvocationId.Value:D}",
+                    skill.Status.ToString().ToLowerInvariant(),
+                    elapsed));
+                _answerActive = false;
+                return true;
             case SemanticCheckStarted started:
                 _reasoningActive = false;
                 _answerActive = false;
@@ -125,6 +157,11 @@ internal sealed class ConversationTranscript
                 foreach (var id in _pendingTools.Where(pair => pair.Value.RunId == completed.RunId).Select(pair => pair.Key).ToArray())
                 {
                     _pendingTools.Remove(id);
+                }
+
+                foreach (var id in _pendingSkills.Where(pair => pair.Value.RunId == completed.RunId).Select(pair => pair.Key).ToArray())
+                {
+                    _pendingSkills.Remove(id);
                 }
 
                 RemovePendingSemanticChecks(completed.RunId);

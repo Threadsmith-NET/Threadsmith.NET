@@ -9,6 +9,7 @@ using Threadsmith.Execution;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
+using Threadsmith.Workspaces;
 using Xunit;
 
 public sealed partial class SkillSubsystemTests
@@ -137,7 +138,7 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task FocusedReview_SelectedScopeSkipsOversizedUnrelatedContentAndFreezesIgnoredRequirements()
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "AGENTS.md"), "Root guidance");
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, ".gitignore"), "requirements.md\n");
@@ -150,9 +151,19 @@ public sealed partial class SkillSubsystemTests
             await File.WriteAllTextAsync(Path.Combine(fixture.Root, "unrelated", $"{index}.txt"), large);
         }
 
-        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache);
+        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
         var input = FocusedReviewInput.Parse("{\"mode\":\"specialInstructions\",\"instructions\":\"Inspect selected source\",\"paths\":[\"tracked.txt\"],\"requirementsDocumentPath\":\"requirements.md\"}");
-        var target = await capture.CaptureAsync(input, ReviewRequest(), fixture.Authority);
+        var progress = new List<string>();
+        var target = await capture.CaptureAsync(input, ReviewRequest(), fixture.Authority, reportProgress: (message, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            progress.Add(message);
+            return Task.CompletedTask;
+        });
+        Assert.Equal("Inspecting source revisions", progress[0]);
+        Assert.Contains(progress, message => message.StartsWith("Preparing source snapshot:", StringComparison.Ordinal));
+        Assert.Equal("Source snapshot ready: 2 files", progress[^1]);
+        Assert.DoesNotContain(progress, message => message.Contains("tracked.txt", StringComparison.Ordinal) || message.Contains(fixture.Root, StringComparison.Ordinal));
         Assert.Equal(2, target.Files.Count);
         Assert.Contains(target.Files, file => file.Path == "AGENTS.md" && !file.InScope);
         Assert.Contains(target.Files, file => file.Path == "tracked.txt" && file.InScope);
@@ -165,14 +176,14 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task FocusedReview_CapturedFilenamesAreLiteralGitPaths()
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "a[1].cs"), "unchanged\n");
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "a1.cs"), "original\n");
         await fixture.GitAsync("add", "--all");
         await fixture.GitAsync("commit", "-m", "literal path fixture");
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "a1.cs"), "modified\n");
-        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache);
+        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
         var target = await capture.CaptureAsync(FocusedReviewInput.Parse("{\"baseBranch\":\"HEAD\"}"), ReviewRequest(), fixture.Authority);
         Assert.Empty(target.Files.Single(file => file.Path == "a[1].cs").ChangedRanges);
         Assert.NotEmpty(target.Files.Single(file => file.Path == "a1.cs").ChangedRanges);
@@ -182,7 +193,7 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task FocusedReview_RejectsRedactedGitFilenameIdentity()
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "password=secret.cs"), "source");
         await Assert.ThrowsAsync<InvalidDataException>(() => fixture.Processes.RunAsync(new ProcessExecutionRequest
@@ -195,7 +206,7 @@ public sealed partial class SkillSubsystemTests
             Origin = ProcessRequestOrigin.Host,
             StandardOutputFormat = ProcessStandardOutputFormat.ReviewRecords,
         }));
-        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache);
+        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
         await Assert.ThrowsAsync<InvalidDataException>(() => capture.CaptureAsync(FocusedReviewInput.Parse("{\"baseBranch\":\"HEAD\"}"), ReviewRequest(), fixture.Authority));
     }
 
@@ -203,14 +214,14 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task FocusedReview_ExcludesRedactedSourceAndRejectsAlteredRequirements()
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         const string source = "void Login(string password) { log(\"Login password: \" + password); Authenticate(); }";
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "dirty.cs"), source);
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "committed.cs"), source);
         await fixture.GitAsync("add", "committed.cs");
         await fixture.GitAsync("commit", "-m", "redaction fixture");
-        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache);
+        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
         var input = FocusedReviewInput.Parse("{\"baseBranch\":\"HEAD\"}");
         var target = await capture.CaptureAsync(input, ReviewRequest(), fixture.Authority);
         Assert.DoesNotContain(target.Files, file => file.Path is "dirty.cs" or "committed.cs");
@@ -255,7 +266,7 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task FocusedReview_CapturesCommittedStagedUnstagedAndUntrackedChangesWithoutMutation()
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "committed.txt"), "new committed content\n");
         await fixture.GitAsync("add", "committed.txt");
@@ -266,7 +277,7 @@ public sealed partial class SkillSubsystemTests
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "untracked.txt"), "untracked content\n");
         var before = await fixture.GitAsync("status", "--porcelain=v2");
         var invocation = ReviewRequest();
-        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache);
+        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
         var target = await capture.CaptureAsync(FocusedReviewInput.Parse("{\"baseBranch\":\"main\"}"), invocation, fixture.Authority);
         Assert.All(new[] { "committed.txt", "staged.txt", "tracked.txt", "untracked.txt" }, path => Assert.Contains(target.Files, file => file.Path == path && file.InScope));
         Assert.NotNull(target.MergeBase);
@@ -281,7 +292,7 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task FocusedReview_InboxPublicationIsConfinedAtomicAndIdempotent()
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         var target = ReviewTarget() with { InvokingRepository = fixture.Root };
         Assert.Null(FocusedReviewReportWriter.ResolveInbox(target, fixture.Authority));
         Assert.False(Directory.Exists(Path.Combine(fixture.Root, ".inbox")));
@@ -312,7 +323,7 @@ public sealed partial class SkillSubsystemTests
         bool inbox,
         bool defaultBudget)
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         if (inbox)
         {
@@ -324,14 +335,21 @@ public sealed partial class SkillSubsystemTests
         var verifier = new SkillPackageVerifier(new SkillTrustPolicySnapshot());
         var executor = new ReviewExecutorStub();
         var sanitizer = new SecretOutputSanitizer();
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
         var handler = new FocusedReviewWorkflow(
             ReviewResolver(verifier),
-            new FocusedReviewTargetCapture(fixture.Processes, sanitizer, fixture.Cache),
+            new FocusedReviewTargetCapture(fixture.Processes, sanitizer, fixture.Cache, fixture.Tools, fixture.Pipeline),
             executor,
             (_, _) => Task.FromResult(fixture.Authority),
-            fixture.State);
+            fixture.State,
+            events: events);
         var state = new InMemorySkillStateStore();
-        await using var events = new DomainEventStream();
         await using var workflow = new SkillWorkflowOrchestrator(
             catalog,
             verifier,
@@ -354,6 +372,12 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(defaultBudget ? 128 : 20, executor.PreparedBudget.ToolCalls);
         Assert.Equal(SkillInvocationStatus.Completed, result.Status);
         Assert.Empty(result.HostActions);
+        var checkpoints = observed.OfType<SkillWorkflowCheckpointWritten>().ToArray();
+        Assert.Equal(SkillInvocationStatus.Accepted, checkpoints[0].Status);
+        Assert.Equal(SkillInvocationStatus.Completed, checkpoints[^1].Status);
+        Assert.DoesNotContain(checkpoints, item => item.Status == SkillInvocationStatus.AwaitingHost);
+        Assert.All(checkpoints[1..^1], item => Assert.Equal(SkillInvocationStatus.Running, item.Status));
+        Assert.Contains(observed.OfType<SkillInvocationProgressObserved>(), item => item.Message == "Running reviewers");
         Assert.Equal(4, executor.ExecutedRoles.Count);
         var delivery = Assert.IsType<FocusedReviewDelivery>(result.ReviewDelivery);
         Assert.Equal(inbox ? "inbox" : "console", delivery.DeliveryMode);
@@ -501,7 +525,7 @@ public sealed partial class SkillSubsystemTests
         }
     }
 
-    private sealed class ReviewRepositoryFixture : IDisposable
+    private sealed class ReviewRepositoryFixture : IDisposable, IAsyncDisposable
     {
         private readonly string _container = Path.Combine(Path.GetTempPath(), "threadsmith-focused-review-" + Guid.NewGuid().ToString("N"));
 
@@ -512,6 +536,13 @@ public sealed partial class SkillSubsystemTests
             State = Path.Combine(_container, "state");
             Directory.CreateDirectory(Root);
             Processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
+            Tools = new ToolRegistry([new GitShowTool(new GitQueryService(), TestPromptLoader.Instance), new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance), new GitBranchComparisonTool(new GitQueryService(), TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance)]);
+            Pipeline = new ToolInvocationPipeline(Tools, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+            _toolSubscription = Events.Subscribe((item, _) =>
+            {
+                ToolEvents.Add(item);
+                return Task.CompletedTask;
+            });
         }
 
         public string Root { get; }
@@ -519,6 +550,16 @@ public sealed partial class SkillSubsystemTests
         public string Cache { get; }
 
         public string State { get; }
+
+        private readonly IDomainEventSubscription _toolSubscription;
+
+        public DomainEventStream Events { get; } = new();
+
+        public List<IDomainEvent> ToolEvents { get; } = [];
+
+        public IToolRegistry Tools { get; }
+
+        public IToolInvocationPipeline Pipeline { get; }
 
         public IProcessManager Processes { get; }
 
@@ -550,6 +591,13 @@ public sealed partial class SkillSubsystemTests
                 });
             Assert.Equal(0, result.ExitCode);
             return result.StandardOutput;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _toolSubscription.DisposeAsync();
+            await Events.DisposeAsync();
+            Dispose();
         }
 
         public void Dispose()

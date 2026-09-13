@@ -16,11 +16,11 @@ public sealed partial class SkillSubsystemTests
     [InlineData(true)]
     public async Task FocusedReview_RemoteRetrievalPinsExactRefsAndNeverWritesInvokingGit(bool compare)
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         var before = await fixture.GitAsync("status", "--porcelain=v2");
         var processes = new RemoteReviewProcessFixture();
-        var capture = new FocusedReviewTargetCapture(processes, new SecretOutputSanitizer(), fixture.Cache);
+        var capture = new FocusedReviewTargetCapture(processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, new RemoteSnapshotPipeline());
         var input = new FocusedReviewInput
         {
             Mode = "remoteBranch",
@@ -30,11 +30,15 @@ public sealed partial class SkillSubsystemTests
         };
         var target = await capture.CaptureAsync(input, ReviewRequest(), fixture.Authority with { AllowedNetworkHosts = ["github.com"] });
         Assert.Equal(RemoteReviewProcessFixture.Revision, target.Revision);
-        Assert.Equal(compare ? RemoteReviewProcessFixture.Baseline : null, target.MergeBase);
+        Assert.Equal(compare ? RemoteReviewProcessFixture.Baseline : null, target.ComparisonRevision);
+        Assert.Null(target.MergeBase);
         Assert.Equal(fixture.Root, target.InvokingRepository);
         Assert.Equal(input.Repository, target.Repository);
-        Assert.Contains("remote content", Assert.Single(target.Files).Content, StringComparison.Ordinal);
+        Assert.Contains("remote content", target.Files.Single(file => file.Path == "remote.txt").Content, StringComparison.Ordinal);
+        Assert.Equal(!compare, target.Files.Any(file => file.Path == "unchanged.txt"));
         var fetch = Assert.Single(processes.Requests, request => request.Arguments.Contains("fetch"));
+        Assert.Contains("--depth=1", fetch.Arguments);
+        Assert.DoesNotContain(processes.Requests, request => request.Arguments.Contains("merge-base"));
         Assert.Contains("refs/heads/feature/exact:refs/heads/review-target", fetch.Arguments);
         Assert.Equal(compare, fetch.Arguments.Contains("refs/heads/release/exact:refs/heads/review-base"));
         Assert.All(processes.Requests, request =>
@@ -60,7 +64,7 @@ public sealed partial class SkillSubsystemTests
     [Fact]
     public async Task FocusedReview_RepairsFailedDeliveryWithoutRepeatingInference()
     {
-        using var fixture = new ReviewRepositoryFixture();
+        await using var fixture = new ReviewRepositoryFixture();
         await fixture.InitializeAsync();
         var inbox = Path.Combine(fixture.Root, ".inbox");
         await File.WriteAllTextAsync(inbox, "blocking destination");
@@ -71,7 +75,7 @@ public sealed partial class SkillSubsystemTests
         var sanitizer = new SecretOutputSanitizer();
         var handler = new FocusedReviewWorkflow(
             ReviewResolver(verifier),
-            new FocusedReviewTargetCapture(fixture.Processes, sanitizer, fixture.Cache),
+            new FocusedReviewTargetCapture(fixture.Processes, sanitizer, fixture.Cache, fixture.Tools, fixture.Pipeline),
             executor,
             (_, _) => Task.FromResult(fixture.Authority),
             fixture.State);
@@ -110,6 +114,48 @@ public sealed partial class SkillSubsystemTests
         Assert.NotNull(result.ReviewDelivery?.SavedPath);
     }
 
+    private sealed class RemoteSnapshotPipeline : IToolInvocationPipeline
+    {
+        public Task<ToolInvocationResult> InvokeAsync(ToolInvocationRequest request, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal("git_show", request.ToolId);
+            Assert.NotNull(request.ExpectedRegistration);
+            const string content = "remote content";
+            var result = new GitShowResult("fixture", GitObjectKind.Blob, string.Empty, false, false)
+            {
+                Files = [],
+            };
+            var input = JsonSerializer.Deserialize<GitShowRequest>(request.ArgumentsJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+            if (input.Inventory)
+            {
+                var revision = input.Revision.Contains("review-base", StringComparison.Ordinal) ? RemoteReviewProcessFixture.Baseline : RemoteReviewProcessFixture.Revision;
+                var files = new List<GitTreeFile> { new("100644", new string('d', 40), "unchanged.txt", 14) };
+                if (revision != RemoteReviewProcessFixture.Baseline)
+                {
+                    files.Add(new("100644", new string('c', 40), "remote.txt", 14));
+                }
+
+                var inventory = new GitShowInventory(revision, null, null, null, [], files);
+                var metadata = JsonSerializer.Serialize(inventory);
+                result = new GitShowResult(revision, GitObjectKind.Tree, metadata, false, false)
+                {
+                    ContentDigest = FocusedReviewTargetCapture.Hash(System.Text.Encoding.UTF8.GetBytes(metadata)),
+                };
+            }
+            else
+            {
+                result = result with { Files = input.Paths.Select(path => new GitShowFile(path, new string(path == "remote.txt" ? 'c' : 'd', 40), content, FocusedReviewTargetCapture.Hash(System.Text.Encoding.UTF8.GetBytes(content)), false, false)).ToArray() };
+            }
+
+            return Task.FromResult(new ToolInvocationResult
+            {
+                ToolInvocationId = ToolInvocationId.New(), ToolId = request.ToolId, Succeeded = true, ResultJson = JsonSerializer.Serialize(result),
+            });
+        }
+
+        public ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests) => throw new NotSupportedException();
+    }
+
     private sealed class RemoteReviewProcessFixture : IProcessManager
     {
         public static readonly string Revision = new('a', 40);
@@ -141,11 +187,11 @@ public sealed partial class SkillSubsystemTests
             }
             else if (args.Contains("ls-tree"))
             {
-                result = JsonSerializer.Serialize(new[] { $"100644 blob {new string('c', 40)}\tremote.txt" });
+                result = JsonSerializer.Serialize(new[] { $"100644 blob {new string('c', 40)} 14\tremote.txt" });
             }
             else if (args.Contains("cat-file"))
             {
-                result = args.Contains("-s") ? "14" : "remote content";
+                result = "unused";
             }
             else if (args.Contains("diff"))
             {

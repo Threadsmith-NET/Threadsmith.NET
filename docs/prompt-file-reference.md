@@ -590,7 +590,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_diff-Description.md` | Advertised description for `git_diff`. | `None` |
+| `Tool-git_diff-Description.md` | Bounded Git comparisons, optional working-tree base, and patch context lines. | `None` |
 
 #### `git_log` family
 
@@ -602,7 +602,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_show-Description.md` | Advertised description for `git_show`. | `None` |
+| `Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and normalized inventory pages. | `None` |
 
 #### `git_status` family
 
@@ -645,7 +645,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-read_file-Description.md` | Advertised description for `read_file`. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
+| `Tool-read_file-Description.md` | Bounded line reads and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
 | `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
 #### `run_process` family
@@ -711,7 +711,7 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Procedure-Continuation.md` | Skill continuation guidance, appended as a user message after each native tool result and retained in the legacy input projection. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
+| `Skill-Procedure-Continuation.md` | Tool result and continuation guidance for the legacy input projection; structured model messages carry the result once as a tool response. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
 | `Skill-Procedure-Request.md` | Skill procedure guidance for `Procedure-Request`. | [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
 | `Skill-Procedure-System.md` | Skill procedure guidance for `Procedure-System`. | `None` |
 

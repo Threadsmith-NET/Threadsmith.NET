@@ -76,6 +76,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             {
                 InvocationId = SkillInvocationId.New(),
                 UseDefaultBudget = true,
+                InvokingToolInvocationId = context.ToolInvocationId,
                 ModelVisibleToolSnapshotId = context.Invocation.ModelVisibleToolSnapshotId,
                 SessionId = context.SessionId,
                 RunId = context.RunId,

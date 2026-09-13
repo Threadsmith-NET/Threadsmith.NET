@@ -2207,3 +2207,25 @@ Expected: observed costs distinguish ordinary/cache input and output without dou
 **Steps:** Invoke review interactively and headlessly with redirected output. Verify canonical report headings, escaped source text and optional criterion table. Interrupt before/after child completion and around report publication; explicitly resume. Retry a report whose destination was repaired.
 
 **Expected:** An absent inbox yields canonical Markdown once and no directory creation. Existing authorized inbox yields one complete UTF-8 file and a concise receipt. Conflicts/links/unwritable destinations fail without silent fallback. Remote reviews use the invoking inbox. Started inference is never silently repeated; completed siblings survive and missing coverage stays explicit. Delivery retry needs no model calls and does not overwrite a different report or leave an apparently complete partial file.
+
+
+## MTP-269 — Skills tree verification and availability
+
+Prerequisites: a disposable repository with native and Claude-style skill fixtures, an authorized external skill policy, and the retained frontend. Use only fixture packages when testing bulk enablement, corruption, or revocation.
+
+1. Run `/skills`. Expand Claude/Native and scope nodes; compare package counts with `/skills list`. Confirm opening does not verify packages or change policy.
+2. Use F2 to inspect description, provenance, digest, and current verification details. Filter by a package name or scope; collapse and expand nested groups and verify selection remains usable after resizing.
+3. Select an unverified maintained package, press F3, choose Verify, and confirm `[Maintained] enabled` appears immediately unless explicitly disabled. Verify a Claude package and confirm verification alone does not authorize it. Verify a filtered scope or format group and confirm only visible group members are touched.
+4. Use Space on leaves and groups to enable/disable several packages without closing. Include a large Claude group with one unsupported package: check progress and the partial completion count, then press Space again and confirm every eligible member is disabled. A mixed group disables on Space; a wholly disabled group enables. Press Esc during a slow toggle batch: the current package finishes, remaining packages are skipped, and the tree stays usable with acknowledged state. Confirm actual outcomes after policy rejection, an invalid asset, or revocation; repair a fixture and verify it again. Confirm an explicitly disabled maintained package stays disabled after verification. Close with Esc and inspect the same states with `/skills list` and `/skills inspect`.
+5. During a sufficiently slow verification, press Esc; confirm the operation stops, remaining group members are skipped, completed results remain, and the tree still accepts input. Change a selected catalog identity and refresh it through a controlled fixture; the old selection must request reopening instead of enabling new content.
+6. Exercise `/skills list`, `/skills refresh`, `/skills verify`, `/skills enable`, `/skills disable`, and an existing workflow command. Run bare `/skills` with the original frontend and use its Verify/Enable/Disable choices. Recheck `/tools` filtered group toggles and MCP's individual authentication actions.
+
+Expected: all outcomes use shared host commands and existing trust rules; failed/cancelled actions never appear as successful, unsigned Claude authorization remains explicit, and completed changes survive closing. Record physical terminal dimensions, theme, keyboard protocol, and resize/cancellation results separately from headless terminal checks.
+
+## MTP-270 — Shared skill invocation activity
+
+1. Launch an enabled skill with `/skills use`. Confirm one live `SKILLS` block uses the Tools/MCP activity component, with invocation identity and optional elapsed time, followed by one completion. Repeat `continue`, `resume`, failure, and cancellation.
+2. Launch a skill through model-driven `invoke_skill`. Confirm internal phase progress joins its existing tool block without a duplicate skill block. Observe concurrent tool/MCP work; completion must preserve sibling activity.
+3. Run an authorized remote branch comparison. Fetch progress must appear immediately, followed by ordinary `git_show` and `git_diff` tool activity during preparation. Confirm only source/base tips are fetched with depth one, no history/merge-base walk occurs, and changed files plus applicable instructions/requirements are captured.
+4. Confirm reviewer agents appear in the existing tabs when their assignments are admitted, and child tool/skill progress uses the same activity projection. Genuine host-input waits must release activity ownership; internal preparation must remain running.
+5. Repeat with the original frontend and a skill requesting host input. Its ordinary transient activity must yield to prompts, preserve outcome output, and join cancellation cleanup before session shutdown.

@@ -149,6 +149,12 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 /// <summary>Input for a bounded file-range read.</summary>
 public sealed record ReadFileInput
 {
+    /// <summary>Returns an exact bounded UTF-8 snapshot and digest instead of a line page.</summary>
+    public bool Snapshot { get; init; }
+
+    /// <summary>Zero-based UTF-8 byte offset returned by the previous snapshot page.</summary>
+    public int SnapshotOffset { get; init; }
+
     /// <summary>Repository-relative file path.</summary>
     public required string Path { get; init; }
 
@@ -182,7 +188,17 @@ public sealed record ReadFileOutput(
     IReadOnlyList<string> Lines,
     bool IsTruncated,
     int? NextStartLine,
-    ReadFileTruncationReason? TruncationReason);
+    ReadFileTruncationReason? TruncationReason)
+{
+    /// <summary>Exact UTF-8 content when snapshot mode is requested.</summary>
+    public string? Content { get; init; }
+
+    /// <summary>SHA256 of source bytes before sanitization for integrity-sensitive host consumers.</summary>
+    public string? ContentDigest { get; init; }
+
+    /// <summary>Next UTF-8 byte offset, or null when the exact snapshot is complete.</summary>
+    public int? NextSnapshotOffset { get; init; }
+}
 
 /// <summary>Reads a bounded UTF-8 file range.</summary>
 public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
@@ -246,31 +262,54 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
                 $"The requested file exceeds the {_limits.ReadFileMaximumBytes}-byte read limit.");
         }
 
+        if (input.Snapshot)
+        {
+            var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+            if (bytes.Length > _limits.ReadFileMaximumBytes)
+            {
+                throw new InvalidDataException("The requested snapshot grew beyond the configured content bound.");
+            }
+
+            var encoding = new UTF8Encoding(false, true);
+            var content = encoding.GetString(bytes);
+            if (content.Contains('\0'))
+            {
+                throw new InvalidDataException("The requested snapshot is not text.");
+            }
+
+            ArgumentOutOfRangeException.ThrowIfNegative(input.SnapshotOffset);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(input.SnapshotOffset, bytes.Length);
+            var end = (int)Math.Min(bytes.Length, (long)input.SnapshotOffset + _limits.ReadFileMaximumContentBytes);
+            while (end < bytes.Length && end > input.SnapshotOffset && (bytes[end] & 0xC0) == 0x80)
+            {
+                end--;
+            }
+
+            if (end == input.SnapshotOffset && end < bytes.Length)
+            {
+                throw new InvalidDataException("The configured snapshot page cannot fit one UTF-8 character.");
+            }
+
+            content = encoding.GetString(bytes, input.SnapshotOffset, end - input.SnapshotOffset);
+            var relativePath = Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/');
+            var snapshot = new ReadFileOutput(relativePath, 1, null, 0, [], false, null, null)
+            {
+                Content = content,
+                NextSnapshotOffset = end < bytes.Length ? end : null,
+                ContentDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+            };
+            return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", relativePath)]);
+        }
+
         var lines = await File.ReadAllLinesAsync(path, cancellationToken);
         var startIndex = Math.Min(input.StartLine - 1, lines.Length);
         var maximumLines = ResolveMaximumLines(input);
-        var selected = new List<string>(Math.Min(maximumLines, lines.Length - startIndex));
-        var selectedContentBytes = 0;
-        var contentLimitReached = false;
-        for (var index = startIndex; index < lines.Length && selected.Count < maximumLines; index++)
+        var page = BoundedTextLines.Select(lines, input.StartLine, maximumLines, _limits.ReadFileMaximumContentBytes, cancellationToken: cancellationToken);
+        var selected = page.Lines;
+        var contentLimitReached = page.ContentLimitReached;
+        if (selected.Count == 0 && contentLimitReached)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            var lineBytes = Encoding.UTF8.GetByteCount(lines[index]);
-            var separatorBytes = selected.Count == 0 ? 0 : 1;
-            if ((long)selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
-            {
-                if (selected.Count == 0)
-                {
-                    throw new InvalidOperationException(
-                        $"Line {index + 1} exceeds the {_limits.ReadFileMaximumContentBytes}-byte read content limit.");
-                }
-
-                contentLimitReached = true;
-                break;
-            }
-
-            selected.Add(lines[index]);
-            selectedContentBytes += separatorBytes + lineBytes;
+            throw new InvalidOperationException($"Line {input.StartLine} exceeds the {_limits.ReadFileMaximumContentBytes}-byte read content limit.");
         }
 
         int? endLine = selected.Count == 0 ? null : input.StartLine + selected.Count - 1;

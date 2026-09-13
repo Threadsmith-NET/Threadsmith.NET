@@ -110,19 +110,7 @@ internal sealed class FocusedReviewReadTool : Tool<FocusedReviewReadInput, Focus
             : new FocusedReviewFile(requirements.Path, requirements.Digest, requirements.Content, false, []);
         var content = input.Baseline ? file.BaselineContent ?? throw new InvalidDataException("No captured baseline content for this path.") : file.Content;
         var lines = content.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Split('\n');
-        var selected = new List<string>();
-        var bytes = 0;
-        foreach (var line in lines.Skip(input.StartLine - 1).Take(input.MaximumLines))
-        {
-            var length = Encoding.UTF8.GetByteCount(line) + 1;
-            if (bytes + length > 24000)
-            {
-                break;
-            }
-
-            selected.Add(line);
-            bytes += length;
-        }
+        var selected = BoundedTextLines.Select(lines, input.StartLine, input.MaximumLines, 24000, countTrailingNewline: true, cancellationToken: cancellationToken).Lines;
 
         if (selected.Count == 0)
         {

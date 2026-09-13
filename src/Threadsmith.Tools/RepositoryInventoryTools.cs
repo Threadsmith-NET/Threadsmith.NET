@@ -69,7 +69,9 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
     private void ValidateDiffRequest(GitDiffRequest input)
     {
         var mode = input.Mode ?? GitComparisonMode.WorkingTree;
-        if (mode == GitComparisonMode.Commit)
+        ArgumentOutOfRangeException.ThrowIfNegative(input.ContextLines);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(input.ContextLines, 50);
+        if (mode == GitComparisonMode.Commit || (mode == GitComparisonMode.WorkingTree && input.BaseRevision is not null))
         {
             ValidateRequiredRevision(input.BaseRevision, nameof(input.BaseRevision), "commit mode");
         }
@@ -224,6 +226,13 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
             input,
             cancellationToken);
         result = RepositoryInventoryToolPolicy.Confine(result, input, context.Invocation);
+        while (result.Files.Any(file => file.Content is not null)
+            && Encoding.UTF8.GetByteCount(JsonSerializer.SerializeToElement(result).GetRawText()) > Definition.MaximumOutputBytes)
+        {
+            var largest = result.Files.Where(file => file.Content is not null).MaxBy(file => file.Content?.Length ?? 0) ?? throw new InvalidDataException("Git batch has no content to bound.");
+            result = result with { Files = result.Files.Select(file => ReferenceEquals(file, largest) ? file with { Content = null, IsTruncated = true } : file).ToArray() };
+        }
+
         return new(
             result,
             [new ToolProvenanceSource("git-object", input.Revision, input.Path)],
@@ -234,6 +243,10 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
     protected override void ValidateInput(GitShowRequest input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Revision);
+        if (input.Paths.Count > 64 || (input.Path is not null && input.Paths.Count > 0) || input.Paths.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ArgumentException("Git show requires one path or up to 64 explicit batch paths.");
+        }
     }
 
     /// <inheritdoc />
@@ -241,7 +254,7 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
         GitShowRequest input,
         ToolInvocationContext context)
     {
-        return input.Path is null ? [context.RepositoryPath] : [input.Path];
+        return input.Paths.Count > 0 ? input.Paths : input.Path is null ? [context.RepositoryPath] : [input.Path];
     }
 
     /// <inheritdoc />
@@ -725,6 +738,52 @@ internal static class RepositoryInventoryToolPolicy
         GitShowRequest request,
         ToolInvocationContext context)
     {
+        if (request.Inventory)
+        {
+            var inventory = JsonSerializer.Deserialize<GitShowInventory>(result.Content)
+                ?? throw new InvalidDataException("Git inventory result was unavailable.");
+            var confined = inventory with
+            {
+                Files = inventory.Files.Where(file => IsAllowed(file.Path)).ToArray(),
+                WorkingTreePaths = inventory.WorkingTreePaths.Where(IsAllowed).ToArray(),
+                OmittedPaths = inventory.Files.Select(file => file.Path).Concat(inventory.WorkingTreePaths).Distinct(StringComparer.Ordinal).Count(path => !IsAllowed(path)),
+            };
+            var content = JsonSerializer.SerializeToElement(confined).GetRawText();
+            return result with
+            {
+                Content = content,
+                ContentDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant(),
+            };
+
+            bool IsAllowed(string path)
+            {
+                try
+                {
+                    _ = ToolPathRules.NormalizeAndValidate(path, context);
+                    return true;
+                }
+                catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+                {
+                    return false;
+                }
+            }
+        }
+
+        if (request.Paths.Count > 0)
+        {
+            foreach (var file in result.Files)
+            {
+                if (!request.Paths.Contains(file.Path, StringComparer.Ordinal))
+                {
+                    throw new UnauthorizedAccessException("Git show returned an unrequested file.");
+                }
+
+                _ = ToolPathRules.NormalizeAndValidate(file.Path, context);
+            }
+
+            return result;
+        }
+
         if (request.Path is not null || !IsRecursiveScopeRestricted(context))
         {
             return result;

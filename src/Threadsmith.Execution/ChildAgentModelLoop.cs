@@ -292,7 +292,9 @@ internal sealed class ChildAgentModelLoop
                     continue;
                 }
 
-                var acceptedResponse = _sanitizer.Sanitize(response.Text);
+                var acceptedResponse = _focused is null
+                    ? _sanitizer.Sanitize(response.Text)
+                    : JsonOutputSanitizer.SanitizeJsonOrText(response.Text, _sanitizer);
                 if (_focused is not null)
                 {
                     try

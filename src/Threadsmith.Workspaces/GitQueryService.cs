@@ -7,7 +7,7 @@ using System.Text;
 using Threadsmith.Core;
 
 /// <summary>Executes closed, bounded, local-only Git inspection queries.</summary>
-public sealed class GitQueryService : IGitQueryService
+public sealed partial class GitQueryService : IGitQueryService
 {
     private readonly GitResourceLimits _limits;
     private static readonly UTF8Encoding StrictUtf8 = new(
@@ -118,7 +118,7 @@ public sealed class GitQueryService : IGitQueryService
             cancellationToken);
         var patch = await RunAsync(
             root,
-            [.. common, "--unified=3", "--binary", .. comparison, .. Pathspec(path)],
+            [.. common, "--unified=" + request.ContextLines.ToString(CultureInfo.InvariantCulture), "--binary", .. comparison, .. Pathspec(path)],
             cancellationToken);
         var binaryPaths = ParseBinaryPaths(numstat.Text);
         IReadOnlyList<GitDiffEntry> allEntries = ParseNameStatus(names.Text)
@@ -176,6 +176,21 @@ public sealed class GitQueryService : IGitQueryService
         ValidateRevision(request.Revision, nameof(request.Revision));
 
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
+        if (request.Inventory)
+        {
+            return await ShowInventoryAsync(root, request, cancellationToken);
+        }
+
+        if (request.IncludeWorkingTree)
+        {
+            throw new ArgumentException("Working-tree metadata requires inventory mode.");
+        }
+
+        if (request.Paths.Count > 0)
+        {
+            return await ShowFilesAsync(root, request, cancellationToken);
+        }
+
         var path = ValidatePath(root, request.Path);
         var objectExpression = path is null ? request.Revision : $"{request.Revision}:{path}";
         var kindOutput = await RunAsync(root, ["cat-file", "-t", objectExpression], cancellationToken);
@@ -312,7 +327,7 @@ public sealed class GitQueryService : IGitQueryService
     {
         return mode switch
         {
-            GitComparisonMode.WorkingTree => [],
+            GitComparisonMode.WorkingTree => request.BaseRevision is null ? [] : [request.BaseRevision],
             GitComparisonMode.Staged => ["--cached"],
             GitComparisonMode.Commit => [],
             GitComparisonMode.Range => [request.BaseRevision ?? string.Empty, request.TargetRevision ?? string.Empty],
@@ -325,7 +340,9 @@ public sealed class GitQueryService : IGitQueryService
         GitDiffRequest request,
         GitComparisonMode mode)
     {
-        if (mode == GitComparisonMode.Commit)
+        ArgumentOutOfRangeException.ThrowIfNegative(request.ContextLines);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(request.ContextLines, 50);
+        if (mode == GitComparisonMode.Commit || (mode == GitComparisonMode.WorkingTree && request.BaseRevision is not null))
         {
             ValidateRevision(request.BaseRevision, nameof(request.BaseRevision));
         }
@@ -553,7 +570,8 @@ public sealed class GitQueryService : IGitQueryService
     private async Task<BoundedText> RunAsync(
         string repositoryPath,
         IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<StreamReader, CancellationToken, Task<BoundedText>>? readOutput = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
@@ -566,7 +584,7 @@ public sealed class GitQueryService : IGitQueryService
                 throw new InvalidOperationException("Git did not start.");
             }
 
-            var outputTask = ReadBoundedAsync(process.StandardOutput, timeout.Token);
+            var outputTask = (readOutput ?? ReadBoundedAsync)(process.StandardOutput, timeout.Token);
             var errorTask = ReadBoundedAsync(process.StandardError, timeout.Token);
             await using var registration = RegisterTermination(process, timeout.Token);
             await process.WaitForExitAsync(timeout.Token);
@@ -592,11 +610,13 @@ public sealed class GitQueryService : IGitQueryService
     private async Task<BoundedBytes> RunBytesAsync(
         string repositoryPath,
         IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? standardInput = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
         using var process = CreateProcess(repositoryPath, arguments);
+        process.StartInfo.RedirectStandardInput = standardInput is not null;
         try
         {
             if (!process.Start())
@@ -607,6 +627,13 @@ public sealed class GitQueryService : IGitQueryService
             var outputTask = ReadBoundedAsync(process.StandardOutput.BaseStream, timeout.Token);
             var errorTask = ReadBoundedAsync(process.StandardError, timeout.Token);
             await using var registration = RegisterTermination(process, timeout.Token);
+            if (standardInput is not null)
+            {
+                await process.StandardInput.WriteAsync(standardInput.AsMemory(), timeout.Token);
+                await process.StandardInput.FlushAsync(timeout.Token);
+                process.StandardInput.Close();
+            }
+
             await process.WaitForExitAsync(timeout.Token);
             var output = await outputTask;
             var error = await errorTask;
@@ -643,6 +670,7 @@ public sealed class GitQueryService : IGitQueryService
                 CreateNoWindow = true,
             },
         };
+        process.StartInfo.Environment["GIT_NO_REPLACE_OBJECTS"] = "1";
         process.StartInfo.Environment["GIT_OPTIONAL_LOCKS"] = "0";
         process.StartInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
         process.StartInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";

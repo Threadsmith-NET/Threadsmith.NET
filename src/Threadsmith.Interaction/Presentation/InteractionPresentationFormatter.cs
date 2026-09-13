@@ -49,15 +49,30 @@ internal static class InteractionPresentationFormatter
         ArgumentNullException.ThrowIfNull(timeProvider);
         var label = started.Source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS";
         var identity = GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, started.Source);
-        return new InteractionActivity(
-            $"{label}: {identity} - running",
+        return CreateOperationActivity(label, identity, GetToolDetail(started, null, started.Source), timeProvider, showOperationDurations);
+    }
+
+    /// <summary>Creates the shared live operation block used by tools, MCP, and manual skills.</summary>
+    internal static InteractionActivity CreateOperationActivity(
+        string category,
+        string identity,
+        string detail,
+        TimeProvider timeProvider,
+        bool showOperationDurations) => new(
+            $"{category}: {TruncateForDisplay(identity)} - running",
             timeProvider.GetTimestamp(),
             showOperationDurations,
             timeProvider)
         {
-            ToolDetail = GetToolDetail(started, null, started.Source),
+            ToolDetail = detail,
         };
-    }
+
+    /// <summary>Formats a simple lifecycle outcome through the same block renderer as tool completions.</summary>
+    internal static string FormatOperationCompletion(string category, string identity, string detail, string outcome, string? elapsed) =>
+        FormatBlock(new TuiBlockPresentation(
+            new TuiBlockHeader(category, identity, outcome, elapsed, PresentationTextRole.Status, PresentationTextRole.Status),
+            [new TuiBlockLine(TuiBlockLineKind.Item, detail, PresentationTextRole.Muted)],
+            ChildIndent: "  "));
 
     /// <summary>Formats one completed tool invocation as the compact interactive tools block.</summary>
     /// <param name="started">The matching invocation start event.</param>

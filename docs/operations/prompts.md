@@ -69,7 +69,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | `Threadsmith.Execution` | `prompts/Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | None |
 | `Tool-ReadAgentEvidence-Description.md` | `Threadsmith.Execution` | `prompts/Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of original results by previously delivered evidence ID. | None |
 | `Tool-list_files-Description.md` | `Threadsmith.Tools` | `prompts/Tool-list_files-Description.md` | Advertised description for `list_files`. | None |
-| `Tool-read_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-read_file-Description.md` | Advertised description for `read_file`. | `DefaultLines`, `MaximumLines`, `MaximumContentBytes`, `MaximumFileBytes` |
+| `Tool-read_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-read_file-Description.md` | Bounded line reads and exact UTF-8 snapshot pages with whole-file digest continuity. | `DefaultLines`, `MaximumLines`, `MaximumContentBytes`, `MaximumFileBytes` |
 | `Tool-write_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-write_file-Description.md` | Advertised description for `write_file`. | `MaximumContentBytes` |
 | `Tool-memories-Description.md` | `Threadsmith.Tools` | `prompts/Tool-memories-Description.md` | Advertised description for `memories`. | `MaximumTextCharacters` |
 | `Tool-search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-search-Description.md` | Advertised description for `search`. | `MaximumQueryCharacters` |
@@ -105,9 +105,9 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-generated_code_query-HiddenDocuments.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-HiddenDocuments.md` | Hidden-document notice in `generated_code_query` results. | `HiddenCount`, `Plural` |
 | `Tool-generated_code_query-ContentHostTruncation.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-ContentHostTruncation.md` | Host content-truncation notice in `generated_code_query` results. | None |
 | `Tool-generated_code_query-ContentProjectionTruncation.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-ContentProjectionTruncation.md` | Model-projection content-shortening notice in `generated_code_query` results. | None |
-| `Tool-git_diff-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_diff-Description.md` | Advertised description for `git_diff`. | None |
+| `Tool-git_diff-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_diff-Description.md` | Bounded Git comparisons, optional working-tree base, and patch context lines. | None |
 | `Tool-git_log-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_log-Description.md` | Advertised description for `git_log`. | None |
-| `Tool-git_show-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_show-Description.md` | Advertised description for `git_show`. | None |
+| `Tool-git_show-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and normalized inventory pages. | None |
 | `Tool-git_blame-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_blame-Description.md` | Advertised description for `git_blame`. | None |
 | `Tool-git_compare_branches-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_compare_branches-Description.md` | Advertised description for `git_compare_branches`. | None |
 | `Tool-dotnet_inventory-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_inventory-Description.md` | Advertised description for `dotnet_inventory`. | None |
@@ -182,7 +182,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Correction-Mutation-ReplaceTextAmbiguousExpectedText.md` | `Threadsmith.Execution` | `prompts/Correction-Mutation-ReplaceTextAmbiguousExpectedText.md` | Corrective guidance for ambiguous `ReplaceText` expected text. | `RelativePath` |
 | `Skill-Procedure-System.md` | `Threadsmith.Skills` | `prompts/Skill-Procedure-System.md` | Skill procedure guidance for `Procedure-System`. | None |
 | `Skill-Procedure-Request.md` | `Threadsmith.Skills` | `prompts/Skill-Procedure-Request.md` | Skill procedure guidance for `Procedure-Request`. | `PackageId`, `PackageVersion`, `PackageDigest`, `StepId`, `StepKind`, `Iteration`, `MaximumIterations`, `SkillAssets`, `InputJson` |
-| `Skill-Procedure-Continuation.md` | `Threadsmith.Skills` | `prompts/Skill-Procedure-Continuation.md` | Skill continuation guidance, appended as a user message after each native tool result and retained in the legacy input projection. | `ToolName`, `ToolResult` |
+| `Skill-Procedure-Continuation.md` | `Threadsmith.Skills` | `prompts/Skill-Procedure-Continuation.md` | Tool result and continuation guidance for the legacy input projection; structured model messages carry the result once as a tool response. | `ToolName`, `ToolResult` |
 | `Skill-Workflow-NextAction-ExecuteFirstEligibleStep.md` | `Threadsmith.Skills` | `prompts/Skill-Workflow-NextAction-ExecuteFirstEligibleStep.md` | Skill workflow next-action guidance for initial execution. | None |
 | `Skill-Workflow-NextAction-ResumeNextIncompleteSafeStep.md` | `Threadsmith.Skills` | `prompts/Skill-Workflow-NextAction-ResumeNextIncompleteSafeStep.md` | Skill workflow next-action guidance for resume. | None |
 | `Skill-Workflow-NextAction-ExecuteAfterHostResult.md` | `Threadsmith.Skills` | `prompts/Skill-Workflow-NextAction-ExecuteAfterHostResult.md` | Skill workflow next-action guidance after a host result. | None |

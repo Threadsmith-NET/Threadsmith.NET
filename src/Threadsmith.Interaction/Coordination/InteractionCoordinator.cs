@@ -429,7 +429,7 @@ public sealed partial class InteractionCoordinator
         var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, InteractionActivity>();
         var semanticActivityOrder = new List<SemanticActivityKey>();
         var toolSurface = _surface.Surface as IInteractionToolActivitySurface;
-        var toolActivities = new Dictionary<ToolInvocationId, (RunId RunId, InteractionActivity Activity)>();
+        var operationActivities = new InteractionOperationActivities(_timeProvider, _displayOptions.ShowOperationDurations);
         long? turnStartedTimestamp = null;
         var streamThinking = _sessionPreferences?.IncludeReasoningText ?? false;
         var retainActivityDuringOutput = _surface.Surface.Capabilities.SupportsRetainedActivity;
@@ -458,25 +458,7 @@ public sealed partial class InteractionCoordinator
                         continue;
                     }
 
-                    if (domainEvent is ToolInvocationStarted toolStarted)
-                    {
-                        toolActivities[toolStarted.ToolInvocationId] = (
-                            toolStarted.RunId,
-                            InteractionPresentationFormatter.CreateToolActivity(toolStarted, _timeProvider, _displayOptions.ShowOperationDurations));
-                        toolActivitiesChanged = true;
-                    }
-                    else if (domainEvent is ToolInvocationCompleted toolCompleted)
-                    {
-                        toolActivitiesChanged |= toolActivities.Remove(toolCompleted.ToolInvocationId);
-                    }
-                    else if (domainEvent is RunCompleted finishedRun)
-                    {
-                        foreach (var id in toolActivities.Where(pair => pair.Value.RunId == finishedRun.RunId).Select(pair => pair.Key).ToArray())
-                        {
-                            toolActivities.Remove(id);
-                            toolActivitiesChanged = true;
-                        }
-                    }
+                    toolActivitiesChanged |= operationActivities.Observe(domainEvent);
 
                     var occurredDuringStartup = domainEvent.OccurredAt <= startupCompletedAt;
                     if (occurredDuringStartup
@@ -553,7 +535,7 @@ public sealed partial class InteractionCoordinator
                                 _timeProvider.GetTimestamp(),
                                 _displayOptions.ShowOperationDurations,
                                 _timeProvider),
-                            ToolInvocationStarted started when toolSurface is null => toolActivities[started.ToolInvocationId].Activity,
+                            _ when toolSurface is null && operationActivities.ActivityFor(domainEvent) is { } operationActivity => operationActivity,
                             MutationProposalStarted => new InteractionActivity(
                                 "MUTATION PREVIEW",
                                 _timeProvider.GetTimestamp(),
@@ -699,9 +681,9 @@ public sealed partial class InteractionCoordinator
                             }
                         }
                     }
-                    else if (domainEvent is ToolInvocationCompleted && toolSurface is null && toolActivities.Count > 0)
+                    else if (PresentationActivityRules.EndsTransientActivity(domainEvent, false) && toolSurface is null && operationActivities.Activities.Count > 0)
                     {
-                        nextActivity = toolActivities.Values.Last().Activity;
+                        nextActivity = operationActivities.Activities.Last();
                         nextSemanticActivityKey = null;
                     }
                     else if ((domainEvent is ToolInvocationCompleted or ActiveTurnCompactionCompleted)
@@ -781,18 +763,13 @@ public sealed partial class InteractionCoordinator
                 {
                     if (agents is not null)
                     {
-                        foreach (var id in toolActivities.Keys.ToArray())
+                        foreach (var id in operationActivities.ToolIds.ToArray())
                         {
-                            var current = toolActivities[id];
-                            var progress = await agents.GetToolProgressAsync(id, false, token);
-                            if (!current.Activity.ToolProgress.SequenceEqual(progress))
-                            {
-                                toolActivities[id] = (current.RunId, current.Activity with { ToolProgress = progress });
-                            }
+                            operationActivities.SetToolProgress(id, await agents.GetToolProgressAsync(id, false, token));
                         }
                     }
 
-                    await toolSurface.PresentToolActivitiesAsync(toolActivities.Values.Select(item => item.Activity).ToArray(), token);
+                    await toolSurface.PresentToolActivitiesAsync(operationActivities.Activities, token);
                 }
 
                 if (output.Count > 0)
@@ -3476,7 +3453,7 @@ public sealed partial class InteractionCoordinator
         var separator = arguments.IndexOf(' ');
         if (separator < 0)
         {
-            operation = string.IsNullOrWhiteSpace(arguments) ? "list" : arguments;
+            operation = string.IsNullOrWhiteSpace(arguments) ? "manage" : arguments;
             remainder = string.Empty;
         }
         else
@@ -3489,6 +3466,10 @@ public sealed partial class InteractionCoordinator
         {
             switch (operation.ToLowerInvariant())
             {
+                case "manage":
+                    await ManageSkillsAsync(controller, cancellationToken);
+                    return;
+
                 case "list":
                     var candidates = await controller.ListSkillsAsync(
                         new SkillCatalogQuery
@@ -3611,10 +3592,11 @@ public sealed partial class InteractionCoordinator
 
                 case "use":
                     (var selector, var input) = ParseSkillUse(remainder);
+                    var invocationId = SkillInvocationId.New();
                     var invoked = await controller.InvokeSkillAsync(
                         new SkillInvocationRequest
                         {
-                            InvocationId = SkillInvocationId.New(),
+                            InvocationId = invocationId,
                             UseDefaultBudget = true,
                             SessionId = sessionId,
                             RunId = RunId.New(),
@@ -3636,10 +3618,7 @@ public sealed partial class InteractionCoordinator
 
                 case "continue":
                     (var continueId, var hostResult) = ParseSkillContinuation(remainder);
-                    var continued = await controller.ContinueSkillAsync(
-                        continueId,
-                        hostResult,
-                        cancellationToken);
+                    var continued = await controller.ContinueSkillAsync(continueId, hostResult, cancellationToken);
                     await _surface.WriteAsync(
                         FormatSkillInvocation(continued),
                         PresentationTextRole.Status,
@@ -3652,9 +3631,7 @@ public sealed partial class InteractionCoordinator
                         throw new ArgumentException("Skill resume requires an invocation GUID.");
                     }
 
-                    var resumed = await controller.ResumeSkillAsync(
-                        new SkillInvocationId(resumeId),
-                        cancellationToken);
+                    var resumed = await controller.ResumeSkillAsync(new SkillInvocationId(resumeId), cancellationToken);
                     await _surface.WriteAsync(
                         FormatSkillInvocation(resumed),
                         PresentationTextRole.Status,

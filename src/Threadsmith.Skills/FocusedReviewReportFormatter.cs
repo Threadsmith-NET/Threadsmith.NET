@@ -27,9 +27,9 @@ public static class FocusedReviewReportFormatter
             Escape(target.Repository))
             .Append("; ").Append(Escape(target.Branch ?? "explicit scope")).Append(
                 "; ")
-            .Append(target.MergeBase is null ? "snapshot audit" : "change review").Append("; revision ").Append(
+            .Append((target.ComparisonRevision ?? target.MergeBase) is null ? "snapshot audit" : "change review").Append("; revision ").Append(
                 Escape(target.Revision))
-            .Append("; comparison ").Append(Escape(target.MergeBase ?? "none")).Append("; snapshot ").Append(Escape(target.Identity)).Append('\n');
+            .Append("; comparison ").Append(Escape(target.ComparisonRevision ?? target.MergeBase ?? "none")).Append("; snapshot ").Append(Escape(target.Identity)).Append('\n');
         builder.Append("Review status: ").Append(complete ? "complete" : "partial").Append("; static advisory inspection; no tests or benchmarks executed.\n");
         if (target.Instructions.Length > 0)
         {

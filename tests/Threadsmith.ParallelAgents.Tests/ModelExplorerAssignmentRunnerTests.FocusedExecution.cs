@@ -2,6 +2,7 @@ namespace Threadsmith.ParallelAgents.Tests;
 
 using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -15,10 +16,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 {
     /// <summary>Verifies the focused review boundary and its observable result.</summary>
     [Theory]
-    [InlineData("")]
-    [InlineData("source")]
-    [InlineData("requirements")]
-    public async Task FocusedExecutorUsesExistingSchedulerAndSnapshotReaderForAllFourRoles(string redactedRange)
+    [InlineData("", false)]
+    [InlineData("", true)]
+    [InlineData("source", false)]
+    [InlineData("requirements", false)]
+    public async Task FocusedExecutorUsesExistingSchedulerAndSnapshotReaderForAllFourRoles(string redactedRange, bool redactOutput)
     {
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
@@ -32,7 +34,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var snapshots = new ConversationToolSnapshotStore();
         var registry = new ToolRegistry([new ReadFileTool(TestPromptLoader.Instance)]);
         var pipeline = CreatePipeline(registry, events, sanitizer);
-        var provider = new FocusedReadProvider { RedactedRange = redactedRange };
+        var provider = new FocusedReadProvider { RedactedRange = redactedRange, RedactOutput = redactOutput };
         var factory = new ModelExplorerAssignmentRunnerFactory(
             new AgentContextAssembler(evidence),
             new AgentFindingAdmission(evidence),
@@ -103,6 +105,18 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var resolver = new FocusedReviewPrivateResolver(AppContext.BaseDirectory, verifier, new SkillContentLoader(sanitizer), new BoundedJsonSchemaValidator());
         var policies = await resolver.ResolveAsync(candidate, invocation, target, 1, 0);
         var plans = await executor.PrepareAsync(invocation, target, policies);
+        foreach (var comparison in new string?[] { null, new('b', 40) })
+        {
+            var remote = target with { Mode = "remoteBranch", BaseBranch = comparison is null ? null : "main", ComparisonRevision = comparison };
+            var remotePlans = await executor.PrepareAsync(invocation, remote, policies);
+            foreach (var assignment in remotePlans.SelectMany(plan => plan.Assignments))
+            {
+                using var metadata = JsonDocument.Parse(assignment.InitialContext!);
+                Assert.Equal(comparison, metadata.RootElement.GetProperty("ComparisonRevision").GetString());
+                Assert.Equal(comparison is null ? "snapshot" : "changes", metadata.RootElement.GetProperty("ScopeKind").GetString());
+            }
+        }
+
         Assert.Equal(4, plans.Count);
         Assert.All(plans.SelectMany(plan => plan.Assignments), assignment => Assert.True(assignment.InitialContext!.Length < 8192));
         var outcomes = new List<AgentRunOutcome>();
@@ -134,6 +148,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     private sealed class FocusedReadProvider : IModelProvider
     {
         public string RedactedRange { get; init; } = string.Empty;
+
+        public bool RedactOutput { get; init; }
 
         public ConcurrentBag<ModelStreamRequest> Requests { get; } = [];
 
@@ -186,7 +202,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
                 yield return new ModelChunk
                 {
-                    Output = new TextModelOutput("""{"strengths":[{"text":"Inspected fixture source","evidence":[{"path":"review-fixture.cs","startLine":1,"endLine":1}]}],"architecture":[],"issues":[],"observations":[],"criteria":[],"coverage":["Inspected fixture source"]}"""),
+                    Output = new TextModelOutput("""{"strengths":[{"text":"Inspected fixture source","evidence":[{"path":"review-fixture.cs","startLine":1,"endLine":1}]}],"architecture":[],"issues":[],"observations":[],"criteria":[],"coverage":["Inspected fixture source"]}"""
+                        .Replace("Inspected fixture source", RedactOutput ? "password: fixture-value" : "Inspected fixture source", StringComparison.Ordinal)),
                 };
             }
         }

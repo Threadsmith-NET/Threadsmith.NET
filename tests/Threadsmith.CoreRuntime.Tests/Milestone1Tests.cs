@@ -30,7 +30,7 @@ using Xunit;
 
 /// <summary>Verifies the complete Milestone 1 command, event, shell, and durability contracts.</summary>
 [Collection("TUIKit terminal")]
-public static class Milestone1Tests
+public static partial class Milestone1Tests
 {
     /// <summary>Gets every legal non-terminal transition path used by the transition matrix.</summary>
     public static TheoryData<RunPhase[]> LegalTransitionPaths => [.. GetLegalTransitionPaths()];
@@ -2200,7 +2200,7 @@ public static class Milestone1Tests
             "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]"
                 + Environment.NewLine
                 + descriptionIndent
-                + "Govern skills",
+                + "Browse, verify, and toggle skills",
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -5966,6 +5966,7 @@ public static class Milestone1Tests
                 SkillInvocationStatus.AwaitingHost,
                 1,
                 "resolve host action"),
+            new SkillInvocationProgressObserved(sessionId, occurredAt, SkillInvocationId.New(), 1, "Preparing source snapshots"),
             new SkillInvocationCompleted(
                 sessionId,
                 occurredAt,
@@ -6035,6 +6036,8 @@ public static class Milestone1Tests
 
         internal int ToggleCount { get; private set; }
 
+        internal Func<InteractionToggleRequest, Func<string, bool, CancellationToken, Task<InteractionToggleResult>>, Func<string, string, CancellationToken, Task<InteractionToggleResult>>, CancellationToken, Task>? Manage { get; set; }
+
         internal Func<InteractionToggleRequest, Func<string, string, CancellationToken, Task<InteractionToggleResult>>, CancellationToken, Task>? Actions { get; set; }
 
         public Task SelectActionTogglesAsync(
@@ -6043,7 +6046,8 @@ public static class Milestone1Tests
             Func<string, string, CancellationToken, Task<InteractionToggleResult>> action,
             CancellationToken cancellationToken = default)
         {
-            return Actions is { } actions ? actions(request, action, cancellationToken) : SelectTogglesAsync(request, change, cancellationToken);
+            return Manage is { } manage ? manage(request, change, action, cancellationToken)
+                : Actions is { } actions ? actions(request, action, cancellationToken) : SelectTogglesAsync(request, change, cancellationToken);
         }
 
         public Task SelectTogglesAsync(InteractionToggleRequest request, Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change, CancellationToken cancellationToken = default)

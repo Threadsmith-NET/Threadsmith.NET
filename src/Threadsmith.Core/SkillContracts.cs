@@ -496,6 +496,9 @@ public sealed record SkillContextSegment
 /// <summary>Typed JSON invocation request encoded as bounded canonical JSON.</summary>
 public sealed record SkillInvocationRequest
 {
+    /// <summary>Host-only correlation to the tool that owns this invocation's visible lifecycle; grants no authority.</summary>
+    public ToolInvocationId? InvokingToolInvocationId { get; init; }
+
     /// <summary>Uses the host's defaults for an exactly bound workflow; explicit callers otherwise retain their supplied budget.</summary>
     public bool UseDefaultBudget { get; init; }
 
@@ -627,6 +630,9 @@ public sealed record SkillWorkflowStepResult
 /// <summary>Durable workflow checkpoint pinned to one immutable package.</summary>
 public sealed record SkillWorkflowCheckpoint
 {
+    /// <summary>Host-only correlation to the tool that owns this invocation's visible lifecycle; grants no authority.</summary>
+    public ToolInvocationId? InvokingToolInvocationId { get; init; }
+
     /// <summary>Canonical public review projection populated by the exact host-bound workflow.</summary>
     public FocusedReviewDelivery? ReviewDelivery { get; init; }
 

@@ -58,7 +58,11 @@ public sealed record FocusedReviewTarget
     /// <summary>Resolved comparison branch, when supplied or inferred from local metadata.</summary>
     public string? BaseBranch { get; init; }
 
-    /// <summary>Immutable merge base; null means snapshot audit.</summary>
+    /// <summary>Immutable comparison snapshot; remote review uses the requested base branch tip without history.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ComparisonRevision { get; init; }
+
+    /// <summary>Immutable local merge base, also retained for historical review snapshots.</summary>
     public string? MergeBase { get; init; }
 
     /// <summary>Content identity covering scope, revisions, files and exclusions.</summary>

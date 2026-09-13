@@ -15,6 +15,7 @@ internal static class PresentationActivityRules
             or MutationSetProposed
             or RunSteeringPaused
             or RunCompleted
+            || (domainEvent is SkillWorkflowCheckpointWritten skill && InteractionOperationActivities.EndsSkillActivity(skill.Status))
             || emittedModelOutput;
     }
 }

@@ -140,8 +140,9 @@ public sealed class McpImportedTool : ITool
                     ToElapsedMilliseconds(_timeProvider.GetElapsedTime(transportStarted)));
             }
 
-            var sanitized = _sanitizer.Sanitize(result.ResultJson ?? "null");
-            object value = JsonDocument.Parse(sanitized).RootElement.Clone();
+            // The central tool pipeline sanitizes structured values without changing JSON framing.
+            using var document = JsonDocument.Parse(result.ResultJson ?? "null");
+            object value = document.RootElement.Clone();
             var elapsed = _timeProvider.GetElapsedTime(transportStarted);
             return new ToolExecutionEnvelope(
                 value,

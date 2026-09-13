@@ -9,6 +9,16 @@ public sealed record AgentDisplayText(SessionId SessionId, RunId RunId, string T
 /// <summary>Nonblocking bounded child display channel with explicit loss reporting.</summary>
 public sealed class AgentDisplayStream
 {
+    /// <summary>Initializes a new instance of the <see cref="AgentDisplayStream"/> class.</summary>
+    public AgentDisplayStream(ExecutionLimits? limits = null)
+    {
+        Limits = limits ?? new();
+        Limits.Validate();
+    }
+
+    /// <summary>Immutable budgets shared with display writers.</summary>
+    internal ExecutionLimits Limits { get; }
+
     private readonly Queue<AgentDisplayText> _pending = new();
     private readonly Lock _gate = new();
     private long _omitted;
@@ -53,7 +63,7 @@ public sealed class AgentDisplayStream
                 return;
             }
 
-            if (observation.Text.Length > 4096 || _pending.Count == 256)
+            if (observation.Text.Length > Limits.MaxAgentDisplayFragmentCharacters || _pending.Count >= Limits.MaxAgentDisplayFragments)
             {
                 _omitted++;
             }
@@ -114,7 +124,7 @@ internal sealed class AgentDisplayTextWriter
 
         foreach (var character in text)
         {
-            if (_line.Length < MaximumLine && !_lineOmitted)
+            if (_line.Length < _stream.Limits.MaxAgentDisplayLineCharacters && !_lineOmitted)
             {
                 _line.Append(character);
             }
@@ -151,8 +161,10 @@ internal sealed class AgentDisplayTextWriter
         _holdRemainder = false;
         for (var offset = 0; offset < safe.Length;)
         {
-            var length = Math.Min(4096, safe.Length - offset);
-            if (offset + length < safe.Length && char.IsHighSurrogate(safe[offset + length - 1]))
+            var length = Math.Min(_stream.Limits.MaxAgentDisplayFragmentCharacters, safe.Length - offset);
+            if (offset + length < safe.Length
+                && char.IsHighSurrogate(safe[offset + length - 1])
+                && char.IsLowSurrogate(safe[offset + length]))
             {
                 length--;
             }

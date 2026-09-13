@@ -248,7 +248,6 @@ public static class WriteFileTests
     [Fact]
     public static async Task Conversation_WritesWithoutMutationWorkflow()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         using var fixture = new Fixture();
         await using var events = new DomainEventStream();
         var observed = new ConcurrentBag<IDomainEvent>();
@@ -273,6 +272,9 @@ public static class WriteFileTests
             toolRegistry: pipeline.Registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
+        // Bound the conversation itself; fixture setup is not part of a latency assertion.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
         var session = await application.HandleAsync(new CreateSessionCommand("report"), timeout.Token);
 
         var run = await application.HandleAsync(new SubmitRequestCommand(session, "Save a report to .inbox"), timeout.Token);
@@ -311,7 +313,7 @@ public static class WriteFileTests
     {
         public Fixture()
         {
-            Root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "threadsmith-write-tests-" + Guid.NewGuid().ToString("N"))).FullName;
+            Root = Directory.CreateDirectory(Path.Combine(PhysicalTemporaryPath(), "threadsmith-write-tests-" + Guid.NewGuid().ToString("N"))).FullName;
             Repository = Directory.CreateDirectory(Path.Combine(Root, "repo")).FullName;
             Context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
             {
@@ -331,12 +333,25 @@ public static class WriteFileTests
         public void Dispose()
         {
             if (!Path.GetFileName(Root).StartsWith("threadsmith-write-tests-", StringComparison.Ordinal)
-                || !string.Equals(Path.GetDirectoryName(Root), Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath())), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                || !string.Equals(Path.GetDirectoryName(Root), PhysicalTemporaryPath(), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             {
                 throw new InvalidOperationException("Unexpected fixture cleanup root.");
             }
 
             Directory.Delete(Root, recursive: true);
+        }
+
+        private static string PhysicalTemporaryPath()
+        {
+            var path = Path.GetFullPath(Path.GetTempPath());
+            var resolved = Path.GetPathRoot(path)!;
+            foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var directory = new DirectoryInfo(Path.Combine(resolved, segment));
+                resolved = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+            }
+
+            return Path.TrimEndingDirectorySeparator(resolved);
         }
     }
 

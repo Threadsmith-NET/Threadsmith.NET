@@ -30,48 +30,7 @@ public sealed partial class SessionApplication :
     ISemanticRefreshPublicationGate
 {
     private const string ProposePlanToolName = "propose_plan";
-    private const string ProposePlanArgumentsSchema = """
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
-          "properties": {
-            "schemaVersion": { "type": "integer", "const": 2 },
-            "revision": { "type": "integer", "minimum": 1 },
-            "summary": { "type": "string" },
-            "steps": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
-                "properties": {
-                  "stepId": { "type": "string", "format": "uuid" },
-                  "title": { "type": "string" },
-                  "description": { "type": "string" },
-                  "fileIntents": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["kind", "path"],
-                      "properties": {
-                        "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
-                        "path": { "type": "string" },
-                        "destinationPath": { "type": "string" }
-                      }
-                    }
-                  },
-                  "expectedOutcome": { "type": "string" },
-                  "validation": { "type": "array", "items": { "type": "string" } }
-                }
-              }
-            },
-            "risks": { "type": "array", "items": { "type": "string" } },
-            "outstandingQuestions": { "type": "array", "items": { "type": "string" } }
-          }
-        }
-        """;
+    private readonly string _proposePlanArgumentsSchema;
 
     private static readonly Meter _meter = new("Threadsmith.Execution");
     private static readonly Histogram<double> _semanticAdmissionWait = _meter.CreateHistogram<double>(
@@ -275,6 +234,7 @@ public sealed partial class SessionApplication :
         _toolRegistry = toolRegistry;
         _defaultModelProfileId = defaultModelProfileId;
         _limits = limits ?? ExecutionLimits.Default;
+        _proposePlanArgumentsSchema = CreateProposePlanArgumentsSchema(_limits.Plan);
         _sessionPreferences = sessionPreferences;
         _sessionUsage = sessionUsage;
         _selectActiveModel = selectActiveModel;
@@ -282,7 +242,7 @@ public sealed partial class SessionApplication :
         _repositoryMemories = repositoryMemories;
         _repositoryMemoryOptions = repositoryMemoryOptions;
         _conversationToolSnapshots = conversationToolSnapshots;
-        _steering = steering ?? new RunSteeringCoordinator();
+        _steering = steering ?? new RunSteeringCoordinator(_limits);
         _correctiveMessages = correctiveMessages;
         _prompts = prompts;
         _semanticRefreshCoordinator = semanticRefreshCoordinator;
@@ -758,6 +718,51 @@ public sealed partial class SessionApplication :
     /// <summary>Revokes admission for a newly created session whose repository binding failed.</summary>
     internal void UnregisterPreparedSession(SessionId sessionId) => _sessions.TryRemove(sessionId, out _);
 
+    private static string CreateProposePlanArgumentsSchema(PlanResourceLimits limits) => $$"""
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
+          "properties": {
+            "schemaVersion": { "type": "integer", "const": 2 },
+            "revision": { "type": "integer", "minimum": 1 },
+            "summary": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} },
+            "steps": {
+              "type": "array",
+              "maxItems": {{limits.MaximumSteps}},
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
+                "properties": {
+                  "stepId": { "type": "string", "format": "uuid" },
+                  "title": { "type": "string", "maxLength": {{limits.MaximumTitleCharacters}} },
+                  "description": { "type": "string", "maxLength": {{limits.MaximumDescriptionCharacters}} },
+                  "fileIntents": {
+                    "type": "array",
+                    "maxItems": {{limits.MaximumMetadataItems}},
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "path"],
+                      "properties": {
+                        "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
+                        "path": { "type": "string", "maxLength": {{limits.MaximumPathCharacters}} },
+                        "destinationPath": { "type": "string", "maxLength": {{limits.MaximumPathCharacters}} }
+                      }
+                    }
+                  },
+                  "expectedOutcome": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} },
+                  "validation": { "type": "array", "maxItems": {{limits.MaximumMetadataItems}}, "items": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} } }
+                }
+              }
+            },
+            "risks": { "type": "array", "maxItems": {{limits.MaximumMetadataItems}}, "items": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} } },
+            "outstandingQuestions": { "type": "array", "maxItems": {{limits.MaximumMetadataItems}}, "items": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} } }
+          }
+        }
+        """;
+
     private CorrectiveMessageFactory RequireCorrectiveMessages()
     {
         return _correctiveMessages;
@@ -931,13 +936,17 @@ public sealed partial class SessionApplication :
                 return;
             }
 
+            registration.Cancellation.Token.ThrowIfCancellationRequested();
+
+            // Once the terminal state commits, publish its outcome and release waiters even
+            // if cancellation arrives while subscribers are processing that final publication.
             await registration.Machine.TransitionAsync(
                 RunPhase.Completion,
                 "scripted activity completed",
-                registration.Cancellation.Token);
+                CancellationToken.None);
             await _events.PublishAsync(
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, true),
-                registration.Cancellation.Token);
+                CancellationToken.None);
             registration.Completion.TrySetResult(true);
         }
         catch (OperationCanceledException)

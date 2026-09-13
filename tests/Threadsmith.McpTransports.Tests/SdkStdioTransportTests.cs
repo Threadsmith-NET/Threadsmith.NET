@@ -12,6 +12,37 @@ using Xunit;
 /// <summary>Verifies the SDK-backed stdio MCP transport against the in-repository server.</summary>
 public sealed class SdkStdioTransportTests
 {
+    /// <summary>Prompt mapping honors both invocation and prompt-specific argument bounds.</summary>
+    [Fact]
+    public void PromptArguments_HonorInvocationCountAndNameLimits()
+    {
+        var mapping = new McpTransportMapping(new McpResourceLimits
+        {
+            MaximumPromptArguments = 10,
+            MaximumArguments = 1,
+            MaximumArgumentNameCharacters = 3,
+        });
+        Assert.Single(mapping.MapArguments(new Dictionary<string, string> { ["one"] = "value" }));
+        Assert.Throws<InvalidOperationException>(() => mapping.MapArguments(new Dictionary<string, string>
+        {
+            ["one"] = "first",
+            ["two"] = "second",
+        }));
+        Assert.Throws<InvalidOperationException>(() => mapping.MapArguments(new Dictionary<string, string> { ["long"] = "value" }));
+    }
+
+    /// <summary>The byte following the largest configured line is still rejected without counter overflow.</summary>
+    [Fact]
+    public void LineGuard_RejectsByteBeyondIntegerMaximum()
+    {
+        using var bounded = new McpBoundedLineReadStream(new MemoryStream([0x41]), int.MaxValue);
+
+        // Seed only the already-consumed count; do not allocate or scan a 2 GiB fixture.
+        var count = typeof(McpBoundedLineReadStream).GetField("_currentLineBytes", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        count.SetValue(bounded, int.MaxValue);
+        Assert.Throws<InvalidDataException>(() => bounded.ReadByte());
+    }
+
     /// <summary>Host profiles map to isolated SDK stdio process options.</summary>
     [Fact]
     public void Profile_maps_to_scoped_stdio_options()

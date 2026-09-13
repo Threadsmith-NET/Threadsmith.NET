@@ -14,6 +14,139 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static class AppBootstrapTests
 {
+    /// <summary>Repository settings cannot change limits governing user-wide approval and skill stores.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(int.MaxValue)]
+    public static void PolicyStoreLimits_UseOnlyTrustedConfiguration(int requested)
+    {
+        var defaults = new PolicyStoreResourceLimits();
+        var empty = new ConfigurationBuilder().Build();
+        foreach (var property in typeof(PolicyStoreResourceLimits).GetProperties())
+        {
+            var key = $"limits:policyStores:{property.Name}";
+            var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [key] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }).Build();
+            var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [key] = "123",
+            }).Build();
+            Assert.Equal(defaults, HostFoundation.LoadOperationalLimits(effective, empty).PolicyStores);
+            Assert.Equal(123, property.GetValue(HostFoundation.LoadOperationalLimits(effective, host).PolicyStores));
+        }
+    }
+
+    /// <summary>Repository options can narrow but cannot enlarge the trusted quadratic diff budget.</summary>
+    [Theory]
+    [InlineData(20000, null, 512)]
+    [InlineData(20000, 1024, 1024)]
+    [InlineData(64, 1024, 64)]
+    public static void OperationalLimits_ConstrainDiffAllocationToTrustedConfiguration(int requested, int? trusted, int expected)
+    {
+        var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["limits:workspace:maximumDiffLinesForLcs"] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["limits:workspace:maximumDiffLinesForLcs"] = trusted?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+
+        Assert.Equal(expected, HostFoundation.LoadOperationalLimits(effective, host).Workspace.MaximumDiffLinesForLcs);
+    }
+
+    /// <summary>Repositories may narrow prompt appends but cannot raise trusted admission bounds.</summary>
+    [Theory]
+    [InlineData(100000, 200000, null, null, 32768, 65536)]
+    [InlineData(100000, 200000, 50000, 100000, 50000, 100000)]
+    [InlineData(1000, 2000, 50000, 100000, 1000, 2000)]
+    [InlineData(100000, 1000, null, null, 1000, 1000)]
+    public static void PromptAppendLimits_RespectTrustedCeilings(int file, int total, int? trustedFile, int? trustedTotal, int expectedFile, int expectedTotal)
+    {
+        var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["context:promptAppends:limits:maximumFileBytes"] = file.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["context:promptAppends:limits:maximumTotalBytes"] = total.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["context:promptAppends:limits:maximumFileBytes"] = trustedFile?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["context:promptAppends:limits:maximumTotalBytes"] = trustedTotal?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }.Where(pair => pair.Value is not null)).Build();
+
+        var result = HostFoundation.LoadPromptAppendLimits(effective, host);
+        Assert.Equal(expectedFile, result.MaximumFileBytes);
+        Assert.Equal(expectedTotal, result.MaximumTotalBytes);
+    }
+
+    /// <summary>Untrusted Claude skill configuration can only narrow each host ceiling.</summary>
+    [Theory]
+    [InlineData(1000000, null, 262144)]
+    [InlineData(1000000, 500000, 500000)]
+    [InlineData(1000, 500000, 1000)]
+    public static void ClaudeSkillLimits_RespectTrustedCeilings(int requested, int? trusted, int expected)
+    {
+        var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["skills:claudeLimits:maximumInstructionBytes"] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["skills:claudeLimits:maximumInstructionBytes"] = trusted?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }.Where(pair => pair.Value is not null)).Build();
+        Assert.Equal(expected, ApplicationComposition.LoadClaudeSkillLimits(effective, host).MaximumInstructionBytes);
+    }
+
+    /// <summary>Every skill ceiling preserves its default and permits only narrowing below trusted configuration.</summary>
+    [Theory]
+    [InlineData("catalogLimits")]
+    [InlineData("schemaLimits")]
+    [InlineData("claudeLimits")]
+    [InlineData("installerLimits")]
+    public static void AllSkillLimitFields_RespectTrustedCeilings(string group)
+    {
+        object defaults = group switch
+        {
+            "catalogLimits" => new Threadsmith.Skills.SkillCatalogOptions(),
+            "schemaLimits" => new Threadsmith.Skills.SkillSchemaOptions(),
+            "claudeLimits" => new Threadsmith.Skills.ClaudeSkillCompatibilityOptions(),
+            "installerLimits" => new Threadsmith.Skills.SkillInstallerOptions(),
+            _ => throw new ArgumentOutOfRangeException(nameof(group)),
+        };
+        var empty = new ConfigurationBuilder().Build();
+        Assert.Equal(defaults, Bind(empty, empty));
+
+        foreach (var property in defaults.GetType().GetProperties())
+        {
+            var original = Convert.ToInt64(property.GetValue(defaults), System.Globalization.CultureInfo.InvariantCulture);
+            var key = $"skills:{group}:{property.Name}";
+            var widened = Configure(key, property.PropertyType == typeof(long) ? long.MaxValue : int.MaxValue);
+            var trusted = Configure(key, original * 2);
+            var narrowed = Configure(key, Math.Max(1, original / 2));
+
+            Assert.Equal(original, Convert.ToInt64(property.GetValue(Bind(widened, empty)), System.Globalization.CultureInfo.InvariantCulture));
+            Assert.Equal(original * 2, Convert.ToInt64(property.GetValue(Bind(widened, trusted)), System.Globalization.CultureInfo.InvariantCulture));
+            Assert.Equal(Math.Max(1, original / 2), Convert.ToInt64(property.GetValue(Bind(narrowed, trusted)), System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        object Bind(IConfiguration effective, IConfiguration trusted) => group switch
+        {
+            "catalogLimits" => ApplicationComposition.LoadSkillCatalogLimits(effective, trusted),
+            "schemaLimits" => ApplicationComposition.LoadSkillSchemaLimits(effective, trusted),
+            "claudeLimits" => ApplicationComposition.LoadClaudeSkillLimits(effective, trusted),
+            "installerLimits" => ApplicationComposition.LoadSkillInstallerLimits(effective, trusted),
+            _ => throw new ArgumentOutOfRangeException(nameof(group)),
+        };
+
+        static IConfiguration Configure(string key, long value) => new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [key] = value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }).Build();
+    }
+
     /// <summary>Local reranker CPU concurrency is a bounded startup snapshot.</summary>
     [Fact]
     public static void RerankerCpuThreads_DefaultAndBoundsAreValidated()
@@ -23,11 +156,11 @@ public static class AppBootstrapTests
 
         var configured = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["reranking:cpuThreads"] = "12",
+            ["reranking:cpuThreads"] = "33",
         }).Build();
-        Assert.Equal(12, ApplicationComposition.GetRerankerCpuThreads(configured));
+        Assert.Equal(33, ApplicationComposition.GetRerankerCpuThreads(configured));
 
-        foreach (var value in new[] { "0", "33" })
+        foreach (var value in new[] { "0", "-1" })
         {
             var invalid = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
@@ -343,6 +476,24 @@ public static class AppBootstrapTests
         Assert.Null(trusted["webSearch:provider:secretReference"]);
         Assert.Null(trusted["context:activeTurnCompaction:profileId"]);
         Assert.False(trusted.GetSection("mcp:profiles").Exists());
+    }
+
+    /// <summary>Repository event deadlines cannot override the trusted persistence deadline.</summary>
+    [Fact]
+    public static void ConfigurationBootstrap_EventDeadline_UsesTrustedLayers()
+    {
+        using var temporary = new TemporaryDirectory("event-deadline");
+        var paths = CreatePaths(temporary.Root);
+        Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
+        File.WriteAllText(paths.RepositoryConfiguration, "{\"events\":{\"committedDeliveryTimeoutMilliseconds\":1}}");
+        File.WriteAllText(paths.SessionConfiguration, "{\"events\":{\"committedDeliveryTimeoutMilliseconds\":2}}");
+        var trusted = ConfigurationBootstrap.BuildTrusted(paths);
+        Assert.Equal(5000, trusted.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000));
+
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.UserConfiguration)!);
+        File.WriteAllText(paths.UserConfiguration, "{\"events\":{\"committedDeliveryTimeoutMilliseconds\":15000}}");
+        trusted = ConfigurationBootstrap.BuildTrusted(paths);
+        Assert.Equal(15000, trusted.GetValue("events:committedDeliveryTimeoutMilliseconds", 5000));
     }
 
     /// <summary>Secret environment values remain resolver-only while ordinary prefixed settings still bind.</summary>

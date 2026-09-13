@@ -9,14 +9,17 @@ using Threadsmith.Core;
 /// <summary>Creates and explicitly removes Git worktrees without invoking a shell.</summary>
 public sealed class GitWorktreeManager
 {
-    private const int _maximumProcessOutputCharacters = 64 * 1024;
+    private readonly int _maximumProcessOutputCharacters;
     private readonly ILogger<GitWorktreeManager> _logger;
     private readonly HashSet<string> _ownedWorktrees = new(PathComparer);
     private readonly Lock _gate = new();
 
     /// <summary>Initializes a new instance of the <see cref="GitWorktreeManager"/> class.</summary>
-    public GitWorktreeManager(ILogger<GitWorktreeManager>? logger = null)
+    public GitWorktreeManager(ILogger<GitWorktreeManager>? logger = null, WorkspaceResourceLimits? limits = null)
     {
+        var resourceLimits = limits ?? new();
+        resourceLimits.Validate();
+        _maximumProcessOutputCharacters = resourceLimits.MaximumProcessOutputCharacters;
         _logger = logger ?? NullLogger<GitWorktreeManager>.Instance;
     }
 

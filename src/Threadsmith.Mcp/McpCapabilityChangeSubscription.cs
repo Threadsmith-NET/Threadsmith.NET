@@ -13,6 +13,7 @@ internal sealed class McpCapabilityChangeSubscription : IAsyncDisposable
     private readonly ILogger<McpCapabilityChangeSubscription> _logger;
     private readonly McpClient _client;
     private readonly McpConnectionProfile _profile;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<McpImportedCapability>>> _discover;
     private readonly IReadOnlyList<IAsyncDisposable> _registrations;
     private readonly CancellationTokenSource _lifetime = new();
     private Func<IReadOnlyList<McpImportedCapability>, CancellationToken, Task>? _handler;
@@ -25,11 +26,14 @@ internal sealed class McpCapabilityChangeSubscription : IAsyncDisposable
     internal McpCapabilityChangeSubscription(
         McpClient client,
         McpConnectionProfile profile,
-        ILogger<McpCapabilityChangeSubscription> logger)
+        ILogger<McpCapabilityChangeSubscription> logger,
+        Func<CancellationToken, Task<IReadOnlyList<McpImportedCapability>>> discover)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(profile);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(discover);
+        _discover = discover;
         _client = client;
         _profile = profile;
         _logger = logger;
@@ -153,10 +157,7 @@ internal sealed class McpCapabilityChangeSubscription : IAsyncDisposable
             try
             {
                 await Task.Delay(DebounceDelay, cancellationToken);
-                var capabilities = await SdkHttpTransport.DiscoverCapabilitiesAsync(
-                    _client,
-                    _profile,
-                    cancellationToken);
+                var capabilities = await _discover(cancellationToken);
                 await handler(capabilities, cancellationToken);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

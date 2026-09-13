@@ -43,10 +43,10 @@ public sealed class ConversationalShell
         (var catalog, var defaultThemeId) = TuiThemeConfigurationLoader.Load(configuration);
         var themePreferences = new SessionThemePreferences(catalog, defaultThemeId);
         var displayOptions = TuiDisplayOptions.Load(configuration);
-        var surface = new PrettyPromptConsoleSurface(themePreferences.ActiveTheme);
+        var surface = new PrettyPromptConsoleSurface(themePreferences.ActiveTheme, limits: displayOptions.Limits);
         var preferenceStore = string.IsNullOrWhiteSpace(userConfigurationPath)
             ? null
-            : new UserConfigurationThemePreferenceStore(userConfigurationPath);
+            : new UserConfigurationThemePreferenceStore(userConfigurationPath, configuration?.GetValue("repository:configurationBytes", 1024 * 1024) ?? 1024 * 1024);
         var themeCommands = new ThemeCommandContribution(
             themePreferences,
             surface.SetThemeAsync,

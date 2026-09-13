@@ -1,0 +1,426 @@
+// Optional resource-limit defaults. Merge selected sections into config.json; this file is not auto-loaded.
+// See docs/operations/resource-limits.md for trusted-only settings and interacting limits.
+// Numbers ending in Bytes are bytes; Characters are UTF-16 code units. Defaults preserve prior behavior.
+{
+  "limits": {
+    "workspace": {
+      "maximumSdkConfigurationBytes": 1048576,
+      "maximumBaselineContentBytes": 268435456,
+      "maximumMutations": 100,
+      "maximumMutationCharacters": 4194304,
+      "maximumRationaleCharacters": 8192,
+      // Machine/user/environment ceiling; other layers can only narrow it. Larger matrices use the linear diff fallback.
+      "maximumDiffLinesForLcs": 512,
+      "maximumConcurrentConflictHashes": 4,
+      "maximumConcurrentBaselineHashes": 8,
+      "maximumBaselineStatusLines": 1000,
+      "maximumProcessOutputCharacters": 65536,
+      "maximumMutationMetadataItems": 100,
+      "maximumMutationPathCharacters": 1024,
+      "maximumMutationSymbolIdCharacters": 4096,
+      "maximumValidationPolicyCharacters": 256
+    },
+    "semantic": {
+      "maximumFallbackEntries": 50000,
+      "maximumFallbackFiles": 10000,
+      "maximumFallbackMatches": 500,
+      "maximumFallbackFileBytes": 1048576,
+      "maximumInventoryProjects": 2000,
+      "maximumInventoryXmlBytes": 1048576,
+      "maximumGeneratedDocuments": 100,
+      "maximumGeneratedContentCharacters": 16384,
+      "maximumTraversalDepth": 8,
+      "maximumTraversalNodes": 1000,
+      "maximumTraversalEdges": 5000,
+      "maximumTraversalTimeoutMilliseconds": 60000,
+      "maximumPatternMatches": 1000,
+      "maximumPatternNameCharacters": 256,
+      "maximumPatternPredicateValues": 16,
+      "maximumSymbolIdCharacters": 2048,
+      "modelMaximumCallEdges": 32,
+      "modelMaximumCallSymbols": 32,
+      "modelMaximumImpactItems": 32,
+      "modelMaximumPatternMatches": 40,
+      "modelMaximumGeneratedDocuments": 12,
+      "modelMaximumGeneratedContentCharacters": 4096,
+      "modelMaximumOmissions": 8,
+      "maximumModelItemsPerProject": 12,
+      "maximumModelOmissions": 20,
+      "maximumModelProjects": 25,
+      "maximumModelResultCharacters": 131072,
+      "maximumModelTargetFrameworks": 12
+    },
+    "git": {
+      "timeoutMilliseconds": 30000,
+      "maximumCapturedCharacters": 524288,
+      "maximumCommits": 500,
+      "maximumBlameLines": 500,
+      "maximumChangedPaths": 500,
+      "maximumDiffEntries": 200,
+      "maximumPatchCharacters": 131072,
+      "maximumShowCharacters": 131072
+    },
+    "validation": {
+      "maximumProjectXmlBytes": 1048576,
+      "timeoutMilliseconds": 120000,
+      "diagnosticPageSize": 100,
+      "maximumAdvisories": 200,
+      "maximumOutputCharacters": 524288,
+      "maximumDependencies": 1000,
+      "maximumDiscoveredTests": 500,
+      "maximumAssetsBytes": 16777216,
+      "maximumBuildOutputCharacters": 1048576,
+      "maximumAdvisorySources": 16,
+      "maximumModelAdvisories": 200,
+      "maximumModelDependencies": 100,
+      "maximumModelDiagnostics": 100,
+      "maximumModelTests": 200,
+      "maximumModelOmissions": 20,
+      "maximumModelAttachments": 10,
+      "maximumModelLabelCharacters": 64,
+      "maximumModelIdentifierCharacters": 128,
+      "maximumModelNameCharacters": 256,
+      "maximumModelSummaryCharacters": 512,
+      "maximumModelPathCharacters": 1024,
+      "maximumModelMessageCharacters": 2048,
+      "maximumModelOutputCharacters": 16384
+    },
+    "plan": {
+      "maximumSteps": 100,
+      "maximumMetadataItems": 100,
+      "maximumSummaryCharacters": 4096,
+      "maximumTitleCharacters": 256,
+      "maximumDescriptionCharacters": 8192,
+      "maximumPathCharacters": 1024
+    },
+    "process": {
+      "maximumEnvironmentVariables": 16,
+      "maximumEnvironmentNameCharacters": 128,
+      "maximumEnvironmentValueCharacters": 16384,
+      "drainTimeoutMilliseconds": 5000
+    },
+    // User/environment/CLI only: these stores are user-wide; repository overrides do not apply.
+    "policyStores": {
+      "maximumApprovalEntries": 4096,
+      // Validated on load and before persisting updates.
+      "maximumPolicyFileBytes": 1048576,
+      "maximumSkillPolicyEntries": 2048,
+      "maximumSkillPolicyItemCharacters": 1024
+    }
+  },
+  "tui": {
+    "limits": {
+      "maximumBufferedKeys": 100000,
+      "maximumDraftBytes": 1048576,
+      "maximumUndoBytes": 1048576,
+      "maximumUndoEntries": 200,
+      "maximumHistoryBytes": 1048576,
+      "maximumHistoryEntries": 1000,
+      "clipboardTimeoutMilliseconds": 2000,
+      "maximumClipboardCopyBytes": 65536,
+      "maximumToggleOptions": 2048,
+      "maximumTranscriptBytes": 524288,
+      "maximumTranscriptLines": 1024,
+      "maximumTranscriptLineCharacters": 16384,
+      "maximumGlyphCacheRows": 512,
+      "maximumLinks": 512,
+      "maximumChildTranscriptBytes": 4194304,
+      "maximumChildTranscriptLines": 8192,
+      "maximumRetainedDelegations": 64,
+      "maximumPendingAgentUpdates": 256,
+      "maximumAgentProgressCharacters": 240,
+      "maximumFilterCharacters": 256,
+      "maximumCommandTitleCharacters": 512,
+      "maximumAgentNames": 128,
+      "maximumAgentNameCharacters": 32,
+      "maximumThemes": 32,
+      "maximumThemeNameCharacters": 80,
+      "maximumThemeUiCharacters": 40,
+      "maximumTrackedRefreshStarts": 128,
+      "maximumDisplayedDelegations": 12,
+      "maximumTrackedDelegations": 64,
+      "maximumToolInspectionCharacters": 98304,
+      "markdown": {
+        "maximumSourceBytes": 262144,
+        "maximumNodes": 10000,
+        // 1..32: recursive traversal retains its stack-overflow safety ceiling.
+        "maximumDepth": 32,
+        "maximumListItems": 1000,
+        "maximumTableRows": 200,
+        "maximumTableColumns": 20,
+        "maximumCellCharacters": 4096,
+        "maximumCodeCharacters": 131072,
+        "maximumLinkCharacters": 2048,
+        "maximumLanguageCharacters": 64
+      }
+    }
+  },
+  "mcp": {
+    "limits": {
+      "maximumContentItems": 64,
+      "maximumIdentityJsonDepth": 16,
+      "maximumResourceLabelCharacters": 1024,
+      "maximumHeaderValueCharacters": 8192,
+      "maximumArguments": 32,
+      "maximumArgumentCharacters": 16384,
+      "maximumCapabilities": 256,
+      "maximumFailureCharacters": 1024,
+      "maximumProfiles": 64,
+      "maximumRecentLatencySamples": 32,
+      "maximumCapabilitiesPerKind": 256,
+      "maximumContentCharacters": 262144,
+      "maximumDescriptionCharacters": 2048,
+      "maximumIdentityCharacters": 4096,
+      "maximumPromptArguments": 32,
+      "maximumSchemaCharacters": 65536,
+      "maximumResponseBytes": 1048576,
+      "maximumLineBytes": 1048576,
+      "maximumNameCharacters": 256,
+      "maximumArgumentNameCharacters": 128,
+      "maximumArgumentDescriptionCharacters": 1024,
+      "maximumProfileIdCharacters": 128,
+      "maximumCommandCharacters": 4096,
+      "maximumProfileArguments": 64,
+      "maximumProfileArgumentCharacters": 8192,
+      "maximumEnvironmentVariables": 64,
+      "maximumEnvironmentValueCharacters": 32768,
+      "maximumHeaders": 64,
+      "maximumSecretReferences": 64,
+      "maximumSecretReferenceCharacters": 512,
+      "maximumScopes": 64,
+      "maximumScopeCharacters": 256,
+      "maximumClientIdCharacters": 1024,
+      "maximumStandardErrorLineCharacters": 8192,
+      "maximumOAuthAuthorizationServers": 4,
+      // Contiguous metadata payloads must fit Array.MaxLength; allocated incrementally.
+      "maximumOAuthMetadataBytes": 65536,
+      "maximumCallbackHeaderBytes": 32768,
+      "maximumCallbackHeaders": 64,
+      // Must fit Array.MaxLength; short lines do not allocate the configured ceiling.
+      "maximumCallbackLineBytes": 8192
+    },
+    "maximumConcurrentConnections": 4
+  },
+  "hooks": {
+    "limits": {
+      "maximumHandlers": 64,
+      "maximumHookPoints": 16,
+      "maximumAggregateTimeoutMilliseconds": 120000,
+      "maximumTargetCharacters": 2048,
+      "maximumIdCharacters": 128,
+      "maximumVersionCharacters": 64,
+      "maximumSecretReferences": 16,
+      "maximumSecretReferenceCharacters": 128,
+      "maximumFindings": 32,
+      "maximumFindingCharacters": 1024,
+      "maximumCodeCharacters": 64,
+      "maximumPayloadEntries": 32,
+      "maximumPayloadKeyCharacters": 64,
+      "maximumPayloadValueCharacters": 2048
+    }
+  },
+  "secretResolution": {
+    "limits": {
+      "maximumStoreBytes": 65536,
+      "maximumProperties": 512,
+      "maximumJsonDepth": 16,
+      "maximumValueCharacters": 65536,
+      "providerTimeoutMilliseconds": 5000
+    }
+  },
+  "model": {
+    // Trusted machine/user/environment settings only.
+    "catalogLimits": {
+      "maximumFileBytes": 1048576,
+      "maximumDepth": 32,
+      "maximumProviders": 32,
+      "maximumModelsPerProvider": 128,
+      "maximumModels": 512,
+      "maximumStringLength": 4096,
+      "maximumPropertiesPerObject": 128
+    }
+  },
+  "skills": {
+    // Trusted host ceilings; repository settings may narrow these bounds.
+    "catalogLimits": {
+      "maximumManifestBytes": 262144,
+      "maximumPackages": 512,
+      "maximumAssetsPerPackage": 64,
+      "maximumAssetBytes": 4194304,
+      "maximumTextCharacters": 4096,
+      "maximumRequiredTools": 64,
+      "maximumContractVersions": 128,
+      "maximumApprovalCategories": 32,
+      "maximumWorkloads": 16,
+      "maximumModelProfiles": 128,
+      "maximumIdentifierCharacters": 128,
+      "maximumVersionCharacters": 64,
+      "maximumPathCharacters": 512
+    },
+    // Trusted host ceilings; repository settings may narrow these bounds.
+    "schemaLimits": {
+      "maximumSchemaBytes": 131072,
+      "maximumValueBytes": 1048576,
+      // At most 64: recursive schema/value validation must remain stack-safe.
+      "maximumDepth": 16,
+      "maximumProperties": 256,
+      "maximumArrayItems": 1024,
+      "maximumPropertyNameCharacters": 128,
+      "maximumEnumValues": 256,
+      "maximumMetadataCharacters": 4096
+    },
+    // Trusted host ceilings; repository settings may narrow these bounds.
+    "claudeLimits": {
+      "maximumRoots": 16,
+      "maximumCandidates": 256,
+      "maximumFrontmatterBytes": 32768,
+      "maximumInstructionBytes": 262144,
+      "maximumFiles": 64,
+      "maximumAggregateBytes": 1048576
+    },
+    // Trusted host ceilings; repository settings may narrow these bounds.
+    "installerLimits": {
+      "maximumArchiveBytes": 16777216,
+      "maximumExtractedBytes": 67108864,
+      "maximumFiles": 256
+    },
+    "runtimeLimits": {
+      "maximumInputCharacters": 1048576,
+      "maximumSelectorCharacters": 1024,
+      "maximumModelOutputCharacters": 1048576
+    }
+  },
+  "tools": {
+    "config": {
+      "memories": {
+        "maxNumberOfRepoMemories": 20,
+        "maxRepoMemoriesInContext": 3,
+        "standingPreferenceWarningThreshold": 3,
+        "semanticMinimum": 0.47,
+        "rerankerCandidateLimit": 8,
+        "maximumTextCharacters": 2000,
+        "maximumQueryCharacters": 8000,
+        "maximumQueryTerms": 32,
+        "maximumCacheEntries": 64,
+        "maximumDiagnostics": 64,
+        "maximumListBytes": 49152
+      },
+      "csharp_script": {
+        "timeout_ms": 5000,
+        "max_output_bytes": 65536,
+        "max_code_characters": 65536,
+        "max_assemblies": 32,
+        "max_assembly_name_characters": 128,
+        "max_assembly_setting_characters": 4096
+      }
+    },
+    "runtime": {
+      "presentation": {
+        "maximumActivityDetailCharacters": 240,
+        "maximumTransientActivityDetailCharacters": 8192,
+        "maximumPreflightReasonCharacters": 512
+      },
+      "defaults": {},
+      "byTool": []
+    },
+    "writeFile": {
+      "maxContentBytes": 1048576,
+      "maxPathCharacters": 4096
+    },
+    "semantic": {
+      "maxModelResults": 100
+    },
+    "search": {
+      "maxQueryCharacters": 500,
+      // Regex engine finite timeout ceiling: 2147483646 milliseconds.
+      "regexTimeoutMilliseconds": 250,
+      "processTimeoutMilliseconds": 25000
+    }
+  },
+  "context": {
+    // Trusted host ceilings; repository settings may narrow these bounds.
+    "promptAppends": {
+      "limits": {
+        "maximumFileBytes": 32768,
+        "maximumTotalBytes": 65536
+      }
+    },
+    "instructions": {
+      "limits": {
+        "maximumDepth": 32,
+        "maximumFiles": 32,
+        "maximumFileBytes": 65536,
+        "maximumTotalBytes": 262144
+      }
+    },
+    // Host assets: machine/user/environment only; repository/session/CLI overrides do not apply.
+    "deployedPrompts": {
+      "limits": {
+        "maximumFileBytes": 131072,
+        "maximumCatalogBytes": 4194304
+      }
+    }
+  },
+  "semanticRefresh": {
+    "limits": {
+      "maximumPendingPaths": 1024,
+      "maximumRecentHostEchoIdentities": 1024,
+      "maximumSafeReasonLength": 256,
+      "maximumStableFileReadAttempts": 2
+    }
+  },
+  "execution": {
+    "maxRetainedToolCalls": 256,
+    "maxSourceFrontierEntries": 256,
+    "maxPlanSanityIssues": 32,
+    "maxSteeringCharacters": 100000,
+    "maxAgentDisplayFragments": 256,
+    "maxAgentDisplayFragmentCharacters": 4096,
+    "maxAgentDisplayLineCharacters": 16384
+  },
+  "agents": {
+    "delegation": {
+      "maximumDisagreements": 8,
+      "maximumDisagreementSubjectCharacters": 256
+    }
+  },
+  "events": {
+    // Trusted machine/user/environment setting; repository/session/CLI overrides are excluded.
+    "committedDeliveryTimeoutMilliseconds": 5000
+  },
+  "embeddings": {
+    "disposalTimeoutMilliseconds": 10000
+  },
+  "reranking": {
+    "cpuThreads": 8,
+    "disposalTimeoutMilliseconds": 10000
+  },
+  "extensions": {
+    "stabilityQuietPeriodMilliseconds": 250,
+    "stabilityTimeoutMilliseconds": 30000
+  },
+  "webFetch": {
+    "maximumHtmlTokens": 100000,
+    "maximumHtmlDepth": 128,
+    "maximumJsonTokens": 100000,
+    "maximumJsonDepth": 64,
+    "maximumStringCharacters": 131072,
+    "referenceLifetimeSeconds": 600,
+    "maximumScannedUserCharacters": 32768,
+    "maximumUserUrlCandidates": 8,
+    "maximumReferences": 100
+  },
+  "webSearch": {
+    "provider": {
+      "maximumQueryCharacters": 500,
+      "maximumJsonDepth": 16,
+      // Cannot extend earlier than DateOnly.MinValue (0001-01-01).
+      "maximumFreshnessDays": 365,
+      "maximumTitleCharacters": 300,
+      "maximumSnippetCharacters": 1000
+    }
+  },
+  "repository": {
+    "configurationBytes": 1048576
+  }
+}

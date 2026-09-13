@@ -61,7 +61,7 @@ dotnet --version
 4. Run the test suite:
 
    ```powershell
-   dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
+   dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
    ```
 
 5. Create a focused branch:
@@ -100,6 +100,14 @@ dotnet format src/Threadsmith.sln --verify-no-changes --no-restore
 
 If formatting must be applied, limit it to the files or projects involved in your change and review the resulting diff carefully.
 
+Visual Studio also displays suggestion-level analyzer diagnostics. A build summary with zero warnings and errors does not include those suggestions. Check them explicitly when verifying changed code:
+
+```powershell
+dotnet format analyzers src/Threadsmith.sln --verify-no-changes --no-restore --severity info
+```
+
+Use `--include` with the changed file paths to focus this check. Correct relevant findings in the code; do not disable their rules to obtain a clean result.
+
 ## Testing changes
 
 Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the focused test project covering your change. Before submitting a pull request, run the same product build and test commands used by CI:
@@ -107,17 +115,18 @@ Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the f
 ```powershell
 dotnet restore src/Threadsmith.sln
 dotnet build src/Threadsmith.sln --configuration Debug --no-restore
-dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
+dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
 ```
 
 Also run checks owned by the area you changed:
 
 - Architecture or project-reference changes: `tests/Threadsmith.Architecture.Tests`.
 - Release automation changes: run the relevant release contract checks under `eng/release/`.
-- Spike changes: build `spikes/Spikes.sln` and run the affected headless-safe spike.
 - Interactive terminal changes: update automated projection tests and the maintained [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md) when real-terminal behavior changes.
 
 If a relevant check cannot be run locally, explain why in the pull request and identify the check that remains outstanding.
+
+`Threadsmith.NativeTools.Tests` runs independent test fixtures sequentially because the pinned Roslyn 5.6 dependency [shares one in-memory SQLite write cache across workspaces on non-Windows platforms](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs), while scheduling writes per workspace. Concurrency exercised explicitly inside a test remains enabled. Other test assemblies can still run in parallel.
 
 ## Commits
 

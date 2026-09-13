@@ -1,5 +1,7 @@
 namespace Threadsmith.Tui.TuiKit;
 
+using Threadsmith.Interaction.Contracts;
+
 using Threadsmith.Interaction.Presentation;
 using TUIKit;
 using TUIKit.Input;
@@ -13,7 +15,8 @@ internal readonly record struct Choice(string Id, string Label);
 /// <summary>Filters a fixed option set without changing selection authority.</summary>
 internal sealed class ChoiceModal : Modal
 {
-    private readonly ComposerBuffer _filter = new();
+    private readonly ComposerBuffer _filter;
+    private readonly TuiResourceLimits _limits;
     private readonly CachedTextRun _hintRun = new();
     private readonly Dictionary<string, CachedTextRun> _optionRuns = new(StringComparer.Ordinal);
     private readonly CachedTextRun _plainPrefixRun = new();
@@ -33,8 +36,11 @@ internal sealed class ChoiceModal : Modal
     private TranscriptView? _detail;
 
     /// <summary>Initializes a new instance of the <see cref="ChoiceModal"/> class.</summary>
-    internal ChoiceModal(string title, IReadOnlyList<Choice> options)
+    internal ChoiceModal(string title, IReadOnlyList<Choice> options, TuiResourceLimits? limits = null)
     {
+        _limits = limits ?? new();
+        _limits.Validate();
+        _filter = new ComposerBuffer(_limits);
         _title = title;
         _options = [.. options];
         _matches = _options;
@@ -99,7 +105,7 @@ internal sealed class ChoiceModal : Modal
             _details = !_details;
             if (_details)
             {
-                _detail = new TranscriptView { ResolveStyle = ResolveStyle };
+                _detail = new TranscriptView(_limits) { ResolveStyle = ResolveStyle };
                 if (_matches.Length > 0)
                 {
                     _detail.Present(new PresentationBatch([
@@ -158,7 +164,7 @@ internal sealed class ChoiceModal : Modal
                 _filter.Delete(true);
                 Filter();
                 break;
-            case KeyCode.Character when key.Modifiers == KeyModifiers.None && _filter.Text.Length < 256:
+            case KeyCode.Character when key.Modifiers == KeyModifiers.None && _filter.Text.Length < _limits.MaximumFilterCharacters:
                 _filter.Insert(char.ConvertFromUtf32(key.Rune));
                 Filter();
                 break;
@@ -170,7 +176,7 @@ internal sealed class ChoiceModal : Modal
     /// <inheritdoc/>
     public override bool HandlePaste(string text)
     {
-        if (_fits && !_details && text.Length <= 256 - _filter.Text.Length)
+        if (_fits && !_details && text.Length <= _limits.MaximumFilterCharacters - _filter.Text.Length)
         {
             _filter.Insert(text.ReplaceLineEndings(" "));
             Filter();

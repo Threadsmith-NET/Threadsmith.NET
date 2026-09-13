@@ -27,6 +27,7 @@ internal static class IntegrationComposition
         CapabilityRegistry capabilityRegistry,
         InvocationLeaseAuthority leaseAuthority,
         ILoggerFactory loggerFactory,
+        IConfiguration? configuration = null,
         CancellationToken cancellationToken = default)
     {
         var extensionHost = new ExtensionHost(
@@ -34,7 +35,10 @@ internal static class IntegrationComposition
             loggerFactory.CreateLogger<ExtensionHost>(),
             capabilityRegistry: capabilityRegistry,
             leaseAuthority: leaseAuthority,
-            extensionLoggerFactory: loggerFactory);
+            extensionLoggerFactory: loggerFactory,
+            shadowCopier: new ShadowCopier(
+                TimeSpan.FromMilliseconds(configuration?.GetValue("extensions:stabilityQuietPeriodMilliseconds", 250) ?? 250),
+                TimeSpan.FromMilliseconds(configuration?.GetValue("extensions:stabilityTimeoutMilliseconds", 30000) ?? 30000)));
         var selectionPath = Path.Combine(repositoryRoot, ".threadsmith", "extensions.json");
         var selection = ExtensionSelectionConfig.LoadOrDefault(selectionPath);
         extensionHost.SetDiscoveryDirectory(
@@ -97,11 +101,13 @@ internal static class IntegrationComposition
         ArgumentNullException.ThrowIfNull(loggerFactory);
         ArgumentNullException.ThrowIfNull(prompts);
 
+        var resourceLimits = trustedConfiguration.GetSection("mcp:limits").Get<McpResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        resourceLimits.Validate();
         IBrowserLauncher browserLauncher = useInteractiveTerminal
             ? new SystemBrowserLauncher()
             : new ConsoleBrowserLauncher(Console.Error);
         IOAuthCallbackListener callbackListener = useInteractiveTerminal
-            ? new LoopbackOAuthCallbackListener()
+            ? new LoopbackOAuthCallbackListener(resourceLimits)
             : new ConsoleOAuthCallbackListener(Console.In, Console.Error);
         var lifecycleSecretStore = new SecretResolverStoreAdapter(
             secretResolver,
@@ -119,8 +125,8 @@ internal static class IntegrationComposition
         var adapter = new McpAdapter(
             profile => profile.Transport switch
             {
-                McpTransport.Stdio => new SdkStdioTransport(sanitizer, loggerFactory),
-                McpTransport.Sse or McpTransport.Http => new SdkHttpTransport(secretResolver, loggerFactory, oauthFlow),
+                McpTransport.Stdio => new SdkStdioTransport(sanitizer, loggerFactory, resourceLimits),
+                McpTransport.Sse or McpTransport.Http => new SdkHttpTransport(secretResolver, loggerFactory, oauthFlow, limits: resourceLimits),
                 _ => throw new PlatformNotSupportedException(
                     $"MCP transport '{profile.Transport}' is not supported."),
             },
@@ -128,8 +134,9 @@ internal static class IntegrationComposition
             sanitizer,
             loggerFactory.CreateLogger<McpAdapter>(),
             prompts,
-            toolRegistry);
-        var identityManager = new McpIdentityManager(tokenStore, secretResolver);
+            toolRegistry,
+            limits: resourceLimits);
+        var identityManager = new McpIdentityManager(tokenStore, secretResolver, limits: resourceLimits);
         var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
         Func<McpConnectionResult, CancellationToken, Task>? connectedCallback = null;
         if (hookCoordinator is not null)
@@ -147,6 +154,8 @@ internal static class IntegrationComposition
             identityManager,
             sanitizer,
             loggerFactory.CreateLogger<McpManager>(),
+            maximumConcurrentConnections: trustedConfiguration.GetValue("mcp:maximumConcurrentConnections", 4),
+            limits: resourceLimits,
             connectedCallback: connectedCallback,
             explicitReadAuthorizer: async (profile, capability, token) =>
             {
@@ -229,11 +238,13 @@ internal static class IntegrationComposition
         IHookCoordinator? hookCoordinator = null,
         CancellationToken cancellationToken = default)
     {
+        var resourceLimits = trustedConfiguration.GetSection("mcp:limits").Get<McpResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        resourceLimits.Validate();
         IBrowserLauncher browserLauncher = useInteractiveTerminal
             ? new SystemBrowserLauncher()
             : new ConsoleBrowserLauncher(Console.Error);
         IOAuthCallbackListener callbackListener = useInteractiveTerminal
-            ? new LoopbackOAuthCallbackListener()
+            ? new LoopbackOAuthCallbackListener(resourceLimits)
             : new ConsoleOAuthCallbackListener(Console.In, Console.Error);
         var lifecycleSecretStore = new SecretResolverStoreAdapter(
             secretResolver,
@@ -250,8 +261,8 @@ internal static class IntegrationComposition
         var adapter = new McpAdapter(
             profile => profile.Transport switch
             {
-                McpTransport.Stdio => new SdkStdioTransport(sanitizer, loggerFactory),
-                McpTransport.Sse or McpTransport.Http => new SdkHttpTransport(secretResolver, loggerFactory, oauthFlow),
+                McpTransport.Stdio => new SdkStdioTransport(sanitizer, loggerFactory, resourceLimits),
+                McpTransport.Sse or McpTransport.Http => new SdkHttpTransport(secretResolver, loggerFactory, oauthFlow, limits: resourceLimits),
                 _ => throw new PlatformNotSupportedException(
                     $"MCP transport '{profile.Transport}' is not supported."),
             },
@@ -259,10 +270,11 @@ internal static class IntegrationComposition
             sanitizer,
             loggerFactory.CreateLogger<McpAdapter>(),
             prompts,
-            toolRegistry);
+            toolRegistry,
+            limits: resourceLimits);
         var profiles = McpProfileConfigurationLoader.Load(trustedConfiguration);
         var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Mcp");
-        if (profiles.Count > 0)
+        if (profiles.Count > 0 && startupLogger.IsEnabled(LogLevel.Information))
         {
             startupLogger.LogInformation("Loaded {Count} MCP connection profile(s).", profiles.Count);
         }

@@ -133,10 +133,15 @@ public sealed class McpOAuthFlowTests
     }
 
     /// <summary>An automatically selected loopback port remains bound until the callback is accepted.</summary>
-    [Fact]
-    public async Task Automatic_redirect_port_remains_reserved_until_callback_wait()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Automatic_redirect_port_remains_reserved_until_callback_wait(bool maximumRepresentableLimit)
     {
-        var listener = new LoopbackOAuthCallbackListener();
+        var listener = new LoopbackOAuthCallbackListener(new McpResourceLimits
+        {
+            MaximumCallbackLineBytes = maximumRepresentableLimit ? Array.MaxLength : 8192,
+        });
         var redirectUri = listener.ReserveRedirectUri(0);
         var competingListener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, redirectUri.Port);
 
@@ -152,6 +157,40 @@ public sealed class McpOAuthFlowTests
         Assert.Equal(System.Net.HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("localhost", redirectUri.Host);
         Assert.Equal("code-value", ParseQuery(received.Query)["code"]);
+    }
+
+    /// <summary>Unrepresentable contiguous buffer sizes fail validation before connecting.</summary>
+    [Fact]
+    public void OAuthBufferLimitsRejectUnrepresentableSizes()
+    {
+        var metadata = new McpResourceLimits { MaximumOAuthMetadataBytes = int.MaxValue };
+        var callback = new McpResourceLimits { MaximumCallbackLineBytes = int.MaxValue };
+        Assert.Throws<ArgumentOutOfRangeException>(metadata.Validate);
+        Assert.Throws<ArgumentOutOfRangeException>(callback.Validate);
+    }
+
+    /// <summary>The terminating blank line does not consume a configured HTTP header slot.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CallbackHeaderCountExcludesBlankTerminator(bool extraHeader)
+    {
+        var listener = new LoopbackOAuthCallbackListener(new McpResourceLimits { MaximumCallbackHeaders = 1 });
+        var uri = listener.ReserveRedirectUri(0);
+        var callback = listener.WaitForCallbackAsync(uri, TestContext.Current.CancellationToken);
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, uri.Port, TestContext.Current.CancellationToken);
+        var request = "GET /callback?code=test HTTP/1.1\r\nHost: localhost\r\n"
+            + (extraHeader ? "X-Extra: value\r\n" : string.Empty) + "\r\n";
+        await client.GetStream().WriteAsync(Encoding.ASCII.GetBytes(request), TestContext.Current.CancellationToken);
+        if (extraHeader)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => callback.WaitAsync(TestContext.Current.CancellationToken));
+        }
+        else
+        {
+            Assert.Equal("test", ParseQuery((await callback).Query)["code"]);
+        }
     }
 
     /// <summary>An unused callback reservation is explicitly releasable by its connection-attempt owner.</summary>

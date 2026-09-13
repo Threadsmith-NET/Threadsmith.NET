@@ -79,7 +79,7 @@ public sealed class SessionLifecycleApplication :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
-        if (command.MaximumCount is < 1 or > 500)
+        if (command.MaximumCount < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(command));
         }

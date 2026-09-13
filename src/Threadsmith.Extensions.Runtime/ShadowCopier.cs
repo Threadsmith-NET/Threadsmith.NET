@@ -9,14 +9,19 @@ using System.IO;
 public sealed class ShadowCopier
 {
     private readonly TimeSpan _stabilityQuietPeriod;
+    private readonly TimeSpan _stabilityTimeout;
 
     /// <summary>Initializes a new instance of the <see cref="ShadowCopier"/> class.</summary>
     /// <param name="stabilityQuietPeriod">
     /// The minimum quiet period after the last file change before a package is considered stable.
     /// </param>
-    public ShadowCopier(TimeSpan? stabilityQuietPeriod = null)
+    /// <param name="stabilityTimeout">Maximum wait for a stable package.</param>
+    public ShadowCopier(TimeSpan? stabilityQuietPeriod = null, TimeSpan? stabilityTimeout = null)
     {
         _stabilityQuietPeriod = stabilityQuietPeriod ?? TimeSpan.FromMilliseconds(250);
+        _stabilityTimeout = stabilityTimeout ?? TimeSpan.FromSeconds(30);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_stabilityQuietPeriod, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThan(_stabilityTimeout, _stabilityQuietPeriod);
     }
 
     /// <summary>Waits for package stability, then shadow-copies <paramref name="sourceDirectory"/> under the staging root.</summary>
@@ -76,7 +81,7 @@ public sealed class ShadowCopier
         // DirectoryNotFoundException escape and defeat the bounded wait (F4).
         (var size, var count) = MeasurePackage(sourceDirectory);
         var elapsed = TimeSpan.Zero;
-        var deadline = TimeSpan.FromSeconds(30);
+        var deadline = _stabilityTimeout;
         while (elapsed < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();

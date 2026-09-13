@@ -50,6 +50,7 @@ public sealed record McpIdentityMutationResult
 public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly McpResourceLimits _limits;
     private readonly bool _ownsHttpClient;
     private readonly ISecretResolver _secretResolver;
     private readonly IMcpOAuthTokenStore _tokenStore;
@@ -58,14 +59,17 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
     public McpIdentityManager(
         IMcpOAuthTokenStore tokenStore,
         ISecretResolver secretResolver,
-        HttpClient? httpClient = null)
+        HttpClient? httpClient = null,
+        McpResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(tokenStore);
         ArgumentNullException.ThrowIfNull(secretResolver);
+        _limits = limits ?? new();
+        _limits.Validate();
         _tokenStore = tokenStore;
         _secretResolver = secretResolver;
         _httpClient = httpClient ?? new HttpClient(new McpBoundedHttpResponseHandler(
-            SdkHttpTransport.CreateMetadataCompatibilityHandler()))
+            SdkHttpTransport.CreateMetadataCompatibilityHandler(_limits), _limits.MaximumResponseBytes))
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
@@ -406,38 +410,40 @@ public sealed class McpIdentityManager : IMcpIdentityManager, IDisposable
             : null;
     }
 
-    private static async Task<JsonDocument> ReadBoundedMetadataAsync(
+    private async Task<JsonDocument> ReadBoundedMetadataAsync(
         HttpContent content,
         CancellationToken cancellationToken)
     {
-        const int maximumBytes = 64 * 1024;
-        if (content.Headers.ContentLength is > maximumBytes)
+        var maximumBytes = _limits.MaximumOAuthMetadataBytes;
+        if (content.Headers.ContentLength > maximumBytes)
         {
             throw new InvalidDataException("Authorization-server metadata exceeds the host bound.");
         }
 
         await using var stream = await content.ReadAsStreamAsync(cancellationToken);
-        var buffer = new byte[maximumBytes + 1];
-        var offset = 0;
-        while (offset < buffer.Length)
+        var buffer = new byte[Math.Min(maximumBytes, 4096)];
+        using var captured = new MemoryStream();
+        while (true)
         {
-            var read = await stream.ReadAsync(buffer.AsMemory(offset, buffer.Length - offset), cancellationToken);
+            var remainingWithSentinel = (long)maximumBytes - captured.Length + 1;
+            var read = await stream.ReadAsync(
+                buffer.AsMemory(0, (int)Math.Min(buffer.Length, remainingWithSentinel)), cancellationToken);
             if (read == 0)
             {
                 break;
             }
 
-            offset += read;
-        }
+            if (read > maximumBytes - captured.Length)
+            {
+                throw new InvalidDataException("Authorization-server metadata exceeds the host bound.");
+            }
 
-        if (offset > maximumBytes)
-        {
-            throw new InvalidDataException("Authorization-server metadata exceeds the host bound.");
+            await captured.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
         }
 
         return JsonDocument.Parse(
-            buffer.AsMemory(0, offset),
-            new JsonDocumentOptions { MaxDepth = 16 });
+            captured.GetBuffer().AsMemory(0, checked((int)captured.Length)),
+            new JsonDocumentOptions { MaxDepth = _limits.MaximumIdentityJsonDepth });
     }
 
     private static Uri BuildMetadataUri(Uri issuer)

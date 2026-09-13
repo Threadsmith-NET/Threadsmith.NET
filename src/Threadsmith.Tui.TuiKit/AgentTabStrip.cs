@@ -43,7 +43,7 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
         if (surface is BufferSurface buffer && surface.Size.Width > 1)
         {
             _tabs.Render(buffer.CreateView(new Rect(0, 0, surface.Size.Width - 1, 1)));
-            foreach (var hit in _hits.Take(Math.Max(0, _hits.Count - 1)))
+            foreach (var hit in _hits)
             {
                 surface.Fill(
                     new Rect(hit.Left + hit.Width, 0, 1, 1),

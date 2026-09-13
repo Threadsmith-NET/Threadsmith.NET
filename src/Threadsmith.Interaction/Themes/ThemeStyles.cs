@@ -139,7 +139,6 @@ internal sealed record TuiTheme
     {
         return role switch
         {
-            PresentationTextRole.SessionStatus or PresentationTextRole.TitleBarRole or PresentationTextRole.AgentSelectedTabRole => new TuiTextStyle(Decorations: TuiTextDecoration.Invert),
             PresentationTextRole.MarkdownHeading or PresentationTextRole.MarkdownStrong or PresentationTextRole.MarkdownListMarker
                 => new TuiTextStyle(Decorations: TuiTextDecoration.Bold),
             PresentationTextRole.MarkdownEmphasis => new TuiTextStyle(Decorations: TuiTextDecoration.Italic),
@@ -151,7 +150,7 @@ internal sealed record TuiTheme
     }
 }
 
-/// <summary>Resolves partial theme styles through the system theme and terminal defaults.</summary>
+/// <summary>Resolves role styles through only the active theme's Default role and terminal defaults.</summary>
 internal sealed class TuiThemeResolver
 {
     private readonly TuiTheme _theme;
@@ -210,18 +209,9 @@ internal sealed class TuiThemeResolver
 
         _theme.Styles.TryGetValue(PresentationTextRole.Default, out var themeDefault);
         _theme.Styles.TryGetValue(role, out var requested);
-        var systemDefault = TuiTheme.System.Styles[PresentationTextRole.Default];
-        var systemRole = TuiTheme.System.Styles.TryGetValue(role, out var value)
-            ? value
-            : systemDefault;
-        var decorations = requested?.Decorations
-            ?? systemRole.Decorations
-            ?? themeDefault?.Decorations
-            ?? systemDefault.Decorations
-            ?? TuiTextDecoration.None;
         return new TuiTextStyle(
-            requested?.Foreground ?? themeDefault?.Foreground ?? systemRole.Foreground ?? systemDefault.Foreground,
-            requested?.Background ?? themeDefault?.Background ?? systemRole.Background ?? systemDefault.Background,
-            decorations);
+            requested?.Foreground ?? themeDefault?.Foreground,
+            requested?.Background ?? themeDefault?.Background,
+            requested?.Decorations ?? themeDefault?.Decorations ?? TuiTextDecoration.None);
     }
 }

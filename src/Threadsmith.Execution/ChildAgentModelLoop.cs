@@ -174,6 +174,14 @@ internal sealed class ChildAgentModelLoop
                 ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
                 cancellationToken.ThrowIfCancellationRequested();
                 history.MarkDelivered();
+                if (response.InvocationFailure is { } failure)
+                {
+                    var correctionStart = messages.Count;
+                    AddCorrection(messages, ledger, failure.SafeMessage, prompt, [], registrationById, assignment, round, transientState);
+                    history.RecordExchange(correctionStart, round, []);
+                    continue;
+                }
+
                 if (response.ToolRequests.Count > 0)
                 {
                     if (_steering is not null)
@@ -411,6 +419,7 @@ internal sealed class ChildAgentModelLoop
         var reasoningTokens = 0;
         var toolRequestTokens = 0;
         ModelUsage? usage = null;
+        MalformedInvocationDiagnostic? invocationFailure = null;
         var usageRequestId = new ModelRequestUsageId(
             assignment.ChildRunId,
             "delegate-agent",
@@ -500,6 +509,13 @@ internal sealed class ChildAgentModelLoop
                 }
             }
         }
+        catch (MalformedInvocationException exception) when (!transientState.HasResponses)
+        {
+            // Unsigned malformed responses have no replay envelope to preserve. Discard the
+            // entire pending batch and use the same accounted correction path as tool validation.
+            invocationFailure = exception.Diagnostic;
+            toolRequests.Clear();
+        }
         finally
         {
             displayReasoning.Flush(false);
@@ -525,7 +541,7 @@ internal sealed class ChildAgentModelLoop
             throw new InvalidDataException("The child provider returned invalid usage.");
         }
 
-        return new ModelRoundResponse(responseText, toolRequests, modelTokens);
+        return new ModelRoundResponse(responseText, toolRequests, modelTokens, invocationFailure);
     }
 
     private static int ResolveDesiredOutputTokens(AgentModelSelection model)
@@ -587,13 +603,13 @@ internal sealed class ChildAgentModelLoop
                         Phase = RunPhase.EvidenceCollection,
                         ToolId = request.ToolName,
                         ArgumentsJson = request.ArgumentsJson,
-                        Context = registration.Tool is ChildAgentEvidenceTool
+                        Context = registration.Implementation is ChildAgentEvidenceTool
                             ? childContext with { AllowedToolIds = [ChildAgentEvidenceTool.ToolId] }
                             : childContext,
                     });
             }),
         ];
-        var reads = batch.Where(item => item.Invocation.ExpectedRegistration?.Tool is ChildAgentEvidenceTool).ToArray();
+        var reads = batch.Where(item => item.Invocation.ExpectedRegistration?.Implementation is ChildAgentEvidenceTool).ToArray();
         foreach (var read in reads)
         {
             registrations[ChildAgentEvidenceTool.ToolId].Tool.DeserializeInput(read.Invocation.ArgumentsJson);
@@ -842,7 +858,8 @@ internal sealed class ChildAgentModelLoop
     private sealed record ModelRoundResponse(
         string Text,
         IReadOnlyList<ToolRequestModelOutput> ToolRequests,
-        long ModelTokens);
+        long ModelTokens,
+        MalformedInvocationDiagnostic? InvocationFailure);
 
     private sealed record StoredToolEvidence(EvidenceId EvidenceId, string Content);
 

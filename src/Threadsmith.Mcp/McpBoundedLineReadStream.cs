@@ -6,13 +6,16 @@ internal sealed class McpBoundedLineReadStream : Stream
     /// <summary>Maximum encoded bytes accepted in one newline-delimited protocol frame.</summary>
     internal const int MaximumLineBytes = 1024 * 1024;
 
+    private readonly int _maximumLineBytes;
     private readonly Stream _inner;
-    private int _currentLineBytes;
+    private long _currentLineBytes;
 
     /// <summary>Initializes a new instance of the <see cref="McpBoundedLineReadStream"/> class.</summary>
-    internal McpBoundedLineReadStream(Stream inner)
+    internal McpBoundedLineReadStream(Stream inner, int maximumLineBytes = MaximumLineBytes)
     {
         ArgumentNullException.ThrowIfNull(inner);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumLineBytes);
+        _maximumLineBytes = maximumLineBytes;
         _inner = inner;
     }
 
@@ -98,7 +101,7 @@ internal sealed class McpBoundedLineReadStream : Stream
             }
 
             _currentLineBytes++;
-            if (_currentLineBytes > MaximumLineBytes)
+            if (_currentLineBytes > _maximumLineBytes)
             {
                 throw new InvalidDataException("The MCP stdio message exceeds the host wire bound.");
             }

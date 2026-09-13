@@ -20,15 +20,16 @@ using System.Text.Json.Nodes;
 /// </remarks>
 internal sealed class McpOAuthMetadataCompatibilityHandler : DelegatingHandler
 {
-    private const int MaximumAuthorizationServers = 4;
-    private const int MaximumMetadataBytes = 64 * 1024;
+    private readonly McpResourceLimits _limits;
     private readonly ConcurrentDictionary<string, byte[]> _metadataByCanonicalLocation =
         new(StringComparer.Ordinal);
 
     /// <summary>Initializes a new instance of the <see cref="McpOAuthMetadataCompatibilityHandler"/> class.</summary>
-    internal McpOAuthMetadataCompatibilityHandler(HttpMessageHandler innerHandler)
+    internal McpOAuthMetadataCompatibilityHandler(HttpMessageHandler innerHandler, McpResourceLimits? limits = null)
         : base(innerHandler)
     {
+        _limits = limits ?? new();
+        _limits.Validate();
     }
 
     /// <inheritdoc />
@@ -70,10 +71,10 @@ internal sealed class McpOAuthMetadataCompatibilityHandler : DelegatingHandler
             return response;
         }
 
-        if (authorizationServers.Count > MaximumAuthorizationServers)
+        if (authorizationServers.Count > _limits.MaximumOAuthAuthorizationServers)
         {
             throw new InvalidDataException(
-                $"MCP protected-resource metadata advertises more than {MaximumAuthorizationServers} authorization servers.");
+                $"MCP protected-resource metadata advertises more than {_limits.MaximumOAuthAuthorizationServers} authorization servers.");
         }
 
         var canonicalServers = new JsonArray();
@@ -183,11 +184,11 @@ internal sealed class McpOAuthMetadataCompatibilityHandler : DelegatingHandler
             StringComparison.Ordinal);
     }
 
-    private static async Task<JsonObject> ReadMetadataAsync(
+    private async Task<JsonObject> ReadMetadataAsync(
         HttpContent content,
         CancellationToken cancellationToken)
     {
-        await content.LoadIntoBufferAsync(MaximumMetadataBytes, cancellationToken);
+        await content.LoadIntoBufferAsync(_limits.MaximumOAuthMetadataBytes, cancellationToken);
         return JsonNode.Parse(await content.ReadAsByteArrayAsync(cancellationToken))?.AsObject()
             ?? throw new InvalidDataException("MCP OAuth metadata is not a JSON object.");
     }

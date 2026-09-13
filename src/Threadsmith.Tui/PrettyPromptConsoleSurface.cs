@@ -224,11 +224,12 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
         ConfiguredTheme? initialTheme = null,
         bool? isOutputRedirected = null,
         IAnsiConsole? ansiConsole = null,
-        IConsole? promptConsole = null)
+        IConsole? promptConsole = null,
+        TuiResourceLimits? limits = null)
     {
         _ansiConsole = ansiConsole ?? AnsiConsole.Console;
         _isOutputRedirected = isOutputRedirected ?? Console.IsOutputRedirected;
-        _promptConsole = new BufferedPromptConsole(promptConsole ?? new SystemConsole());
+        _promptConsole = new BufferedPromptConsole(promptConsole ?? new SystemConsole(), limits);
         _redirectedOutput = _ansiConsole.Profile.Out.Writer;
         var suppressionReason = TuiThemeResolver.GetSuppressionReason(
             _isOutputRedirected,

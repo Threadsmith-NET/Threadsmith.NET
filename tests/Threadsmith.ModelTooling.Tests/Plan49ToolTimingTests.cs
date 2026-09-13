@@ -69,6 +69,36 @@ public static class Plan49ToolTimingTests
             .GetByteCount(detail);
     }
 
+    /// <summary>Configured ceilings bound text without driving allocation or overflowing derived capacities.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(240)]
+    [InlineData(int.MaxValue)]
+    public static async Task Pipeline_ConfiguredActivityDetailLimit_PreservesToolExecution(int maximumCharacters)
+    {
+        var timeProvider = new ManualTimeProvider();
+        var tool = new TimedTool(timeProvider, shouldFail: false);
+        await using var events = new DomainEventStream();
+        ToolInvocationStarted? started = null;
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            started = item as ToolInvocationStarted ?? started;
+            return Task.CompletedTask;
+        });
+        var pipeline = CreatePipeline(events, tool, timeProvider, new ToolPresentationLimits
+        {
+            MaximumActivityDetailCharacters = maximumCharacters,
+        });
+
+        var result = await pipeline.InvokeAsync(CreateRequest(tool.Definition.Id));
+
+        Assert.True(result.Succeeded);
+        var detail = Assert.IsType<string>(started?.ActivityDetail);
+        Assert.InRange(detail.Length, 1, maximumCharacters);
+        Assert.Equal(maximumCharacters < 9 ? "..."[..maximumCharacters] : "README.md", detail);
+    }
+
     /// <summary>Adapter-owned timing replaces the outer clock in results, events, and latency telemetry.</summary>
     [Fact]
     public static async Task Pipeline_AuthoritativeAdapterDuration_PropagatesConsistently()
@@ -259,7 +289,8 @@ public static class Plan49ToolTimingTests
     private static ToolInvocationPipeline CreatePipeline(
         IDomainEventStream events,
         ITool tool,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        ToolPresentationLimits? presentationLimits = null)
     {
         return new ToolInvocationPipeline(
             new ToolRegistry([tool]),
@@ -268,7 +299,8 @@ public static class Plan49ToolTimingTests
             events,
             new TestSanitizer(),
             NullLogger<ToolInvocationPipeline>.Instance,
-            timeProvider: timeProvider);
+            timeProvider: timeProvider,
+            presentationLimits: presentationLimits);
     }
 
     private static ToolInvocationRequest CreateRequest(

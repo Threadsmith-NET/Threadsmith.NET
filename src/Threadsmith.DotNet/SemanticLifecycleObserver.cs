@@ -159,6 +159,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
         await foreach (var workItem in _requests.Reader.ReadAllAsync(_lifetimeCancellation.Token))
         {
             var request = workItem.Request;
+            var failureReason = "Semantic solution loading failed. Check the solution and SDK installation, then reopen the repository.";
             try
             {
                 if (!IsCurrent(workItem))
@@ -205,6 +206,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
 
                 if (_refreshCoordinator is not null && !workItem.ReusedWorkspaceBinding)
                 {
+                    failureReason = "Semantic initialization failed while setting up file monitoring or verifying repository inputs. Check filesystem access and operating-system watcher availability, then reopen the repository.";
                     await _refreshCoordinator.CompleteBindingAsync(
                         request,
                         workItem.RefreshBindingGeneration,
@@ -251,16 +253,23 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
                         await _refreshCoordinator.FailBindingAsync(
                             request.SessionId,
                             workItem.RefreshBindingGeneration,
-                            "Semantic loading could not establish a current repository model.",
+                            failureReason,
                             _lifetimeCancellation.Token);
                     }
 
+                    await _events.PublishAsync(
+                        new DiagnosticObserved(
+                            request.SessionId,
+                            DateTimeOffset.UtcNow,
+                            "TSSEMLOAD",
+                            failureReason),
+                        _lifetimeCancellation.Token);
                     await _events.PublishAsync(
                         new SemanticLoadCompleted(
                             request.SessionId,
                             DateTimeOffset.UtcNow,
                             request.WorkspaceId,
-                            SemanticConfidenceLevel.None.ToString()),
+                            nameof(SemanticConfidenceLevel.None)),
                         _lifetimeCancellation.Token);
                 }
             }

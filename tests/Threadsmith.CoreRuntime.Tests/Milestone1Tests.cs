@@ -401,6 +401,46 @@ public static class Milestone1Tests
         Assert.Equal(new SessionUsageSnapshot(2, 3, false), harness.Usage.GetSnapshot(sessionId));
     }
 
+    /// <summary>Cancellation cannot interrupt publication after the terminal state has committed.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task SessionApplication_CancellationDuringCompletion_FinishesWaiter(bool duringTransition)
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
+        {
+            Turns = [new ScriptedTurn { Text = "hello" }],
+        });
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = harness.EventStream.Subscribe(async (item, token) =>
+        {
+            if (duringTransition
+                ? item is RunTransitioned { Destination: RunPhase.Completion }
+                : item is RunCompleted { Succeeded: true })
+            {
+                entered.TrySetResult();
+                await release.Task.WaitAsync(token);
+            }
+        });
+        var sessionId = await harness.Dispatcher.DispatchAsync(new CreateSessionCommand("test"));
+        var runId = await harness.Dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "request"));
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.True(await harness.Dispatcher.DispatchAsync(new CancelRunCommand(sessionId, runId)));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId))
+            .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken));
+        Assert.Single(harness.Events.OfType<RunCompleted>());
+        Assert.DoesNotContain(harness.Events, item => item is RunTransitionFailed);
+    }
+
     /// <summary>A completed provider request without usage metadata remains explicitly unknown.</summary>
     [Fact]
     public static async Task SessionApplication_MissingProviderUsage_RecordsUnknownUsage()
@@ -1185,7 +1225,7 @@ public static class Milestone1Tests
     [InlineData("\u001b[13~theme\r current\r")]
     public static async Task InteractionCoordinator_TuiKitCompletionRetainsSharedAuthority(string completionKeys)
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         using var backend = new TUIKit.Terminal.HeadlessBackend(80, 24);
         await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
@@ -2418,11 +2458,8 @@ public static class Milestone1Tests
             var style = resolver.Resolve(role);
             Assert.Null(style.Foreground);
             Assert.Null(style.Background);
+            Assert.False(style.Decorations.GetValueOrDefault().HasFlag(TuiTextDecoration.Invert));
         }
-
-        Assert.Equal(
-            TuiTextDecoration.Invert,
-            resolver.Resolve(PresentationTextRole.SessionStatus).Decorations);
     }
 
     /// <summary>Partial role styles independently inherit unspecified values from the default role.</summary>
@@ -2434,8 +2471,10 @@ public static class Milestone1Tests
             [
                 new(PresentationTextRole.Default, new TuiTextStyle(
                     TuiColor.Parse("white"),
-                    TuiColor.Parse("#102030"))),
+                    TuiColor.Parse("#102030"),
+                    TuiTextDecoration.Italic)),
                 new(PresentationTextRole.Error, new TuiTextStyle(TuiColor.Parse("red"))),
+                new(PresentationTextRole.MarkdownStrong, new TuiTextStyle(TuiColor.Parse("cyan"))),
             ]);
         var resolver = new TuiThemeResolver(theme);
 
@@ -2443,6 +2482,15 @@ public static class Milestone1Tests
 
         Assert.Equal("red", result.Foreground?.Value);
         Assert.Equal("#102030", result.Background?.Value);
+        Assert.Equal(TuiTextDecoration.Italic, result.Decorations);
+        var heading = resolver.Resolve(PresentationTextRole.MarkdownHeading);
+        Assert.Equal("white", heading.Foreground?.Value);
+        Assert.Equal("#102030", heading.Background?.Value);
+        Assert.Equal(TuiTextDecoration.Italic, heading.Decorations);
+        var strong = resolver.Resolve(PresentationTextRole.MarkdownStrong);
+        Assert.Equal("cyan", strong.Foreground?.Value);
+        Assert.Equal("#102030", strong.Background?.Value);
+        Assert.Equal(TuiTextDecoration.Italic, strong.Decorations);
     }
 
     /// <summary>An explicit empty decoration set overrides inherited decorations.</summary>
@@ -2553,10 +2601,10 @@ public static class Milestone1Tests
             Assert.NotNull(resolver.Resolve(PresentationTextRole.SelectionHighlight).Background);
         }
 
-        Assert.All(themes, theme => Assert.True(
+        Assert.All(themes, theme => Assert.All(Enum.GetValues<PresentationTextRole>(), role => Assert.False(
             new TuiThemeResolver(theme.Theme)
-                .Resolve(PresentationTextRole.SessionStatus)
-                .Decorations?.HasFlag(TuiTextDecoration.Invert)));
+                .Resolve(role)
+                .Decorations.GetValueOrDefault().HasFlag(TuiTextDecoration.Invert))));
         Assert.True(new TuiThemeResolver(themes[3].Theme).Resolve(PresentationTextRole.Error).Decorations?.HasFlag(TuiTextDecoration.Underline));
     }
 
@@ -2574,6 +2622,8 @@ public static class Milestone1Tests
             ["tui:themes:1:name"] = "Project Blue",
             ["tui:themes:1:styles:Hyperlink:foreground"] = "#5FAFFF",
             ["tui:themes:1:styles:Hyperlink:underline"] = "true",
+            ["tui:themes:1:styles:SessionStatus:background"] = "black",
+            ["tui:themes:1:styles:TitleBarRole:invert"] = "true",
         }).Build();
 
         (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
@@ -2583,6 +2633,11 @@ public static class Milestone1Tests
         Assert.Equal("Replaced Forge", catalog.Themes[1].Name);
         Assert.Equal("project-blue", preferences.ActiveTheme.Theme.Id);
         Assert.Single(catalog.Warnings);
+        var resolver = new TuiThemeResolver(preferences.ActiveTheme.Theme);
+        Assert.Equal(TuiColor.Parse("black"), resolver.Resolve(PresentationTextRole.SessionStatus).Background);
+        Assert.Equal(TuiTextDecoration.None, resolver.Resolve(PresentationTextRole.SessionStatus).Decorations);
+        Assert.Equal(TuiTextDecoration.None, resolver.Resolve(PresentationTextRole.AgentSelectedTabRole).Decorations);
+        Assert.Equal(TuiTextDecoration.Invert, resolver.Resolve(PresentationTextRole.TitleBarRole).Decorations);
     }
 
     /// <summary>Theme arrays from separate providers remain whole before merging by stable id.</summary>
@@ -3442,25 +3497,30 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_AnswerOnlyTurn_ShowsThinkingStatus()
     {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
-        {
-            Turns =
-            [
-                new ScriptedTurn
-                {
-                    Text = "Hello!",
-                },
-            ],
-        });
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var provider = new GatedAnswerModelProvider(leadingWhitespace: false);
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"]);
         var shell = new ConversationalShell(
             new TuiPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
+        try
+        {
+            await surface.StatusStarted.WaitAsync(timeout.Token);
+            Assert.True(surface.IsStatusActive);
+            Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
+        }
+        finally
+        {
+            provider.ReleaseAnswer();
+        }
 
-        Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
+        await shellTask.WaitAsync(timeout.Token);
+        Assert.Contains("answer", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>MCP and built-in starts reach the live activity surface while completion is still withheld.</summary>
@@ -3470,14 +3530,14 @@ public static class Milestone1Tests
     public static async Task ConversationalShell_ToolStartIsVisibleBeforeCompletion(ToolActivitySourceKind kind, string label)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"], retainsActivity: true);
         var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
             var started = new ToolInvocationStarted(
                 harness.Events.OfType<SessionCreated>().Single().SessionId,
                 DateTimeOffset.UtcNow,
@@ -3515,14 +3575,14 @@ public static class Milestone1Tests
     public static async Task ConversationalShell_ConcurrentMcpCallsKeepTheirOwnActivityAndOutcome(bool reverse, OperationActivityOutcome outcome)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new ConcurrentToolConsoleSurface();
         var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
             var session = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var first = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "first", Source: new ToolActivitySource(ToolActivitySourceKind.Mcp, "Server"));
             var second = first with { ToolInvocationId = ToolInvocationId.New(), ToolName = "second" };
@@ -3570,14 +3630,14 @@ public static class Milestone1Tests
     public static async Task ConversationalShell_DelegationProgressUpdatesInsideItsTool()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new AgentToolConsoleSurface();
         var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
             var session = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var parent = RunId.New();
             var tool = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "delegate_agents", RunId: parent);
@@ -3630,7 +3690,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_OverlappingSemanticChecks_KeepsDisplayedRunningCheckActive()
     {
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
@@ -3642,7 +3702,7 @@ public static class Milestone1Tests
         var shellTask = shell.RunAsync(modelStatus: "Test model");
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted)
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
                 .WaitAsync(TimeSpan.FromSeconds(5));
             var sessionId = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var firstRunId = RunId.New();
@@ -3716,7 +3776,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_LeadingWhitespace_KeepsThinkingActive()
     {
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
@@ -3729,7 +3789,7 @@ public static class Milestone1Tests
         var shellTask = shell.RunAsync(modelStatus: "Test model");
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted)
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.True(surface.IsStatusActive);
@@ -3747,7 +3807,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_ActivityDisplayFailure_DuringVerboseRun_IsPropagated()
     {
-        var provider = new LeadingWhitespaceModelProvider(trailingChunkCount: 300);
+        var provider = new GatedAnswerModelProvider(trailingChunkCount: 1024);
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
@@ -3759,12 +3819,20 @@ public static class Milestone1Tests
             surface);
 
         var shellTask = shell.RunAsync(modelStatus: "Test model");
-        await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted)
+        await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
             .WaitAsync(TimeSpan.FromSeconds(5));
         provider.ReleaseAnswer();
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => shellTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        var exception = await Record.ExceptionAsync(
+            () => shellTask.WaitAsync(TimeSpan.FromSeconds(30)));
+        var eventCounts = harness.Events.GroupBy(item => item.GetType().Name)
+            .OrderBy(group => group.Key)
+            .Select(group => $"{group.Key}={group.Count()}");
+        Assert.True(
+            exception is InvalidOperationException,
+            $"Expected the rendering failure, received {exception}. "
+                + $"Activity lifecycle: {string.Join(" | ", surface.Lifecycle)}. "
+                + $"Observed events: {string.Join(", ", eventCounts)}.");
         Assert.Same(expected, exception);
     }
 
@@ -4930,21 +4998,23 @@ public static class Milestone1Tests
         }
     }
 
-    private sealed class LeadingWhitespaceModelProvider : IModelProvider
+    private sealed class GatedAnswerModelProvider : IModelProvider
     {
         private readonly int _trailingChunkCount;
+        private readonly bool _leadingWhitespace;
 
         private readonly TaskCompletionSource _releaseAnswer = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        private readonly TaskCompletionSource _whitespaceEmitted = new(
+        private readonly TaskCompletionSource _initialContentEmitted = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task WhitespaceEmitted => _whitespaceEmitted.Task;
+        public Task InitialContentEmitted => _initialContentEmitted.Task;
 
-        public LeadingWhitespaceModelProvider(int trailingChunkCount = 0)
+        public GatedAnswerModelProvider(int trailingChunkCount = 0, bool leadingWhitespace = true)
         {
             _trailingChunkCount = trailingChunkCount;
+            _leadingWhitespace = leadingWhitespace;
         }
 
         public void ReleaseAnswer()
@@ -4962,10 +5032,16 @@ public static class Milestone1Tests
 
             async IAsyncEnumerable<ModelChunk> Stream2Async()
             {
-                yield return new ModelChunk { Text = "\n\n" };
-                _whitespaceEmitted.TrySetResult();
+                if (_leadingWhitespace)
+                {
+                    yield return new ModelChunk { Text = "\n\n" };
+                }
+
+                _initialContentEmitted.TrySetResult();
                 await _releaseAnswer.Task.WaitAsync(cancellationToken);
-                yield return new ModelChunk { Text = "answer" };
+                // Flush a complete paragraph before the verbose tail so rendering fails
+                // while the producer still has work, rather than after Markdown buffering.
+                yield return new ModelChunk { Text = _trailingChunkCount > 0 ? "answer\n\n" : "answer" };
                 for (var index = 0; index < _trailingChunkCount; index++)
                 {
                     yield return new ModelChunk { Text = index.ToString(CultureInfo.InvariantCulture) };

@@ -406,16 +406,12 @@ public sealed record DotNetInventoryInput;
 /// <summary>Gets normalized solution, project, target-framework, reference, package, and test inventory.</summary>
 public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInventoryResult>
 {
-    private const int MaximumModelItemsPerProject = 12;
-    private const int MaximumModelOmissions = 20;
-    private const int MaximumModelProjects = 25;
-    private const int MaximumModelResultCharacters = 128 * 1024;
-    private const int MaximumModelTargetFrameworks = 12;
     private static readonly JsonSerializerOptions ModelJsonOptions = new(JsonSerializerDefaults.Web);
+    private readonly SemanticResourceLimits _limits;
     private readonly IDotNetInventoryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="DotNetInventoryTool"/> class.</summary>
-    public DotNetInventoryTool(IDotNetInventoryService service, IPromptLoader promptLoader)
+    public DotNetInventoryTool(IDotNetInventoryService service, IPromptLoader promptLoader, SemanticResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(promptLoader);
@@ -431,6 +427,8 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
         {
             RequiresWorkspace = true,
         };
+        _limits = limits ?? new();
+        _limits.Validate();
         _service = service;
     }
 
@@ -488,40 +486,40 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
         };
     }
 
-    private static string CreateModelResultContent(DotNetInventoryResult result)
+    private string CreateModelResultContent(DotNetInventoryResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         var projects = result.Solution.Projects
-            .Take(MaximumModelProjects)
+            .Take(_limits.MaximumModelProjects)
             .Select(project => new DotNetInventoryModelProject(
                 Bound(project.Name, 128),
                 Bound(project.Path, 512),
                 project.IsTestProject,
-                project.TargetFrameworks.Take(MaximumModelTargetFrameworks)
+                project.TargetFrameworks.Take(_limits.MaximumModelTargetFrameworks)
                     .Select(framework => Bound(framework.Name, 64)).ToArray(),
-                project.ProjectReferences.Take(MaximumModelItemsPerProject)
+                project.ProjectReferences.Take(_limits.MaximumModelItemsPerProject)
                     .Select(reference => Bound(reference.Path, 512)).ToArray(),
-                project.PackageReferences.Take(MaximumModelItemsPerProject)
+                project.PackageReferences.Take(_limits.MaximumModelItemsPerProject)
                     .Select(package => new DotNetInventoryModelPackage(
                         Bound(package.Id, 128),
                         BoundNullable(package.Version, 128),
                         package.VersionSource.ToString()))
                     .ToArray(),
-                Math.Max(0, project.TargetFrameworks.Count - MaximumModelTargetFrameworks),
-                Math.Max(0, project.ProjectReferences.Count - MaximumModelItemsPerProject),
-                Math.Max(0, project.PackageReferences.Count - MaximumModelItemsPerProject)))
+                Math.Max(0, project.TargetFrameworks.Count - _limits.MaximumModelTargetFrameworks),
+                Math.Max(0, project.ProjectReferences.Count - _limits.MaximumModelItemsPerProject),
+                Math.Max(0, project.PackageReferences.Count - _limits.MaximumModelItemsPerProject)))
             .ToArray();
         var projection = new DotNetInventoryModelProjection(
             Bound(result.Solution.Path, 512),
             result.Confidence.ToString(),
             result.Solution.Projects.Count,
             projects,
-            Math.Max(0, result.Solution.Projects.Count - MaximumModelProjects),
-            result.Omissions.Take(MaximumModelOmissions)
+            Math.Max(0, result.Solution.Projects.Count - _limits.MaximumModelProjects),
+            result.Omissions.Take(_limits.MaximumModelOmissions)
                 .Select(omission => Bound(omission, 512)).ToArray(),
-            Math.Max(0, result.Omissions.Count - MaximumModelOmissions));
+            Math.Max(0, result.Omissions.Count - _limits.MaximumModelOmissions));
         var content = JsonSerializer.Serialize(projection, ModelJsonOptions);
-        if (content.Length <= MaximumModelResultCharacters)
+        if (content.Length <= _limits.MaximumModelResultCharacters)
         {
             return content;
         }
@@ -533,9 +531,12 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
             OmittedProjectReferences = project.OmittedProjectReferences + project.ProjectReferences.Count,
             OmittedPackages = project.OmittedPackages + project.Packages.Count,
         }).ToArray();
-        return JsonSerializer.Serialize(
+        content = JsonSerializer.Serialize(
             projection with { Projects = summarizedProjects },
             ModelJsonOptions);
+        return content.Length <= _limits.MaximumModelResultCharacters
+            ? content
+            : Bound("Inventory omitted: the summarized result exceeds the configured model-result character limit.", _limits.MaximumModelResultCharacters);
     }
 
     private static string Bound(string value, int maximumCharacters)

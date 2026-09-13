@@ -2,6 +2,7 @@ namespace Threadsmith.Tui.TuiKit;
 
 using System.Globalization;
 using System.Text;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 using TUIKit;
 using TUIKit.Input;
@@ -13,6 +14,17 @@ using TUIKit.Widgets;
 /// <summary>Retains a bounded, selectable transcript independently of durable session history.</summary>
 internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 {
+    private readonly TuiResourceLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="TranscriptView"/> class.</summary>
+    internal TranscriptView(TuiResourceLimits? limits = null)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+        _byteBudget = _limits.MaximumTranscriptBytes;
+        _lineBudget = _limits.MaximumTranscriptLines;
+    }
+
     /// <summary>Maximum retained logical line chunks.</summary>
     internal const int LineLimit = 1024;
 
@@ -251,12 +263,16 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         foreach (var item in batch.Items)
         {
             Retain(item);
-            foreach (var segment in Project(item, Math.Max(40, _width)))
-            {
-                segment.Validate();
-                AppendContent(segment);
-            }
+            AppendItem(item);
         }
+    }
+
+    /// <summary>Retains an input echo with exactly one blank line before it, including after reflow.</summary>
+    internal void EchoInput(string prompt, string text)
+    {
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(text);
+        Present(new PresentationBatch([new UserInputEcho(prompt, text)]));
     }
 
     /// <summary>Projects shared semantic items using the existing Markdown layout rules.</summary>
@@ -266,6 +282,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         bool startsAnswer;
         switch (item)
         {
+            case UserInputEcho echo:
+                return [new(echo.Prompt, PresentationTextRole.ComposerPrompt), new(echo.Text + "\n", PresentationTextRole.UserPrompt)];
             case PresentationTextItem text:
                 return text.Segments;
             case PresentationSourceItem source:
@@ -314,7 +332,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     /// <summary>Gets only validated targets belonging to retained, projected text.</summary>
     internal IReadOnlyList<Uri> Links => _styles.Values.SelectMany(ranges => ranges)
-        .Select(range => range.Link).OfType<Uri>().Distinct().Take(512).ToArray();
+        .Select(range => range.Link).OfType<Uri>().Distinct().Take(_limits.MaximumLinks).ToArray();
 
     /// <summary>Starts a fresh viewport while keeping bounded history available above it.</summary>
     internal void ClearView()
@@ -386,8 +404,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <summary>Shares the aggregate child retention budget without disturbing surviving selection anchors.</summary>
     internal void SetRetentionBudget(int bytes, int lines)
     {
-        _byteBudget = Math.Clamp(bytes, 0, ByteLimit);
-        _lineBudget = Math.Clamp(lines, 0, LineLimit);
+        _byteBudget = Math.Clamp(bytes, 0, _limits.MaximumTranscriptBytes);
+        _lineBudget = Math.Clamp(lines, 0, _limits.MaximumTranscriptLines);
         while (_items.Count > _lineBudget || _itemBytes > _byteBudget)
         {
             _itemBytes -= PresentationBytes(_items.Dequeue());
@@ -413,6 +431,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     {
         return item switch
         {
+            UserInputEcho echo => Encoding.UTF8.GetByteCount(echo.Prompt) + Encoding.UTF8.GetByteCount(echo.Text) + 1,
             PresentationTextItem text => text.Segments.Sum(segment => Encoding.UTF8.GetByteCount(segment.Text)),
             PresentationSourceItem source => Encoding.UTF8.GetByteCount(source.SafeSource),
             PresentationMarkdownItem markdown => Encoding.UTF8.GetByteCount(markdown.SafeSource),
@@ -439,10 +458,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         AtBottom = true;
         foreach (var item in _items)
         {
-            foreach (var segment in Project(item, Math.Max(40, _width)))
-            {
-                AppendContent(segment);
-            }
+            AppendItem(item);
         }
 
         AtBottom = followedTail;
@@ -507,7 +523,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             return cached;
         }
 
-        if (_rowGlyphs.Count >= RowGlyphCacheLimit)
+        if (_rowGlyphs.Count >= _limits.MaximumGlyphCacheRows)
         {
             _rowGlyphs.Clear();
         }
@@ -664,6 +680,41 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         _rows.Add(new Row(line, start, end));
     }
 
+    private void AppendItem(PresentationItem item)
+    {
+        if (item is UserInputEcho)
+        {
+            NormalizeInputBoundary();
+        }
+
+        foreach (var segment in Project(item, Math.Max(40, _width)))
+        {
+            segment.Validate();
+            AppendContent(segment);
+        }
+    }
+
+    private void NormalizeInputBoundary()
+    {
+        while (_lines.Count > 0 && string.IsNullOrWhiteSpace(_lines[^1].Text))
+        {
+            var line = _lines[^1];
+            _lines.RemoveAt(_lines.Count - 1);
+            RetainedBytes -= line.Bytes;
+            _styles.Remove(line.Id);
+            RemoveRows(line.Id);
+            if (_anchor?.Line == line.Id || _end?.Line == line.Id)
+            {
+                _anchor = _end = null;
+            }
+        }
+
+        // One empty separator row and one writable row for the echo. Removing the previous
+        // empty tail first makes this exact rather than dependent on preceding event newlines.
+        AddLine(string.Empty, CellStyle.Default, false);
+        AddLine(string.Empty, CellStyle.Default, false);
+    }
+
     private void AppendContent(PresentationTextSegment segment)
     {
         var safe = Safe(segment.Text);
@@ -687,7 +738,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
                     AddLine(string.Empty, CellStyle.Default, true);
                 }
 
-                if (_lines[^1].Text.Length >= 16 * 1024)
+                if (_lines[^1].Text.Length >= _limits.MaximumTranscriptLineCharacters)
                 {
                     AddLine(string.Empty, CellStyle.Default, true);
                 }
@@ -699,21 +750,33 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
                 var line = _lines[^1];
                 var remaining = text[offset..];
-                var length = Math.Min((16 * 1024) - line.Text.Length, remaining.Length);
+                var length = Math.Min(_limits.MaximumTranscriptLineCharacters - line.Text.Length, remaining.Length);
                 if (length < remaining.Length)
                 {
-                    var boundaries = StringInfo.ParseCombiningCharacters(remaining.ToString());
-                    length = boundaries.LastOrDefault(value => value <= length);
-                    if (length == 0)
+                    var boundary = 0;
+                    while (boundary < length)
                     {
-                        length = boundaries.Length > 1 ? boundaries[1] : remaining.Length;
+                        var elementLength = StringInfo.GetNextTextElementLength(remaining[boundary..]);
+                        if (elementLength > length - boundary)
+                        {
+                            if (boundary == 0)
+                            {
+                                boundary = elementLength;
+                            }
+
+                            break;
+                        }
+
+                        boundary += elementLength;
                     }
+
+                    length = boundary;
                 }
 
                 var fragment = remaining[..length].ToString();
 
                 // A pathological combining sequence must not defeat bounded retention.
-                if (Encoding.UTF8.GetByteCount(fragment) > ByteLimit)
+                if (Encoding.UTF8.GetByteCount(fragment) > _limits.MaximumTranscriptBytes)
                 {
                     fragment = "[oversized grapheme omitted]";
                 }
@@ -798,6 +861,8 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             Evicted++;
         }
     }
+
+    private sealed record UserInputEcho(string Prompt, string Text) : PresentationItem;
 
     private sealed record Line(long Id, string Text, CellStyle Style, int Bytes, bool Continued);
 

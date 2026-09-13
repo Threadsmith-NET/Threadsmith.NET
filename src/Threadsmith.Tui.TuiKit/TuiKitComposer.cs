@@ -1,5 +1,6 @@
 namespace Threadsmith.Tui.TuiKit;
 
+using Threadsmith.Interaction.Contracts;
 using TUIKit;
 using TUIKit.Input;
 using TUIKit.Widgets;
@@ -7,6 +8,13 @@ using TUIKit.Widgets;
 /// <summary>A small retained composer; text is independent of its wrapped cell layout.</summary>
 internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseAware
 {
+    /// <summary>Initializes a new instance of the <see cref="TuiKitComposer"/> class.</summary>
+    internal TuiKitComposer(TuiResourceLimits? limits = null)
+    {
+        Buffer = new ComposerBuffer(limits);
+        History = new ComposerHistory(limits);
+    }
+
     private readonly List<Position> _positions = [];
     private readonly List<Glyph> _glyphs = [];
     private int _firstRowOffset;
@@ -17,10 +25,10 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
     private int? _preferredColumn;
 
     /// <summary>Gets the bounded editable draft.</summary>
-    internal ComposerBuffer Buffer { get; } = new();
+    internal ComposerBuffer Buffer { get; }
 
     /// <summary>Gets this composer purpose's independent submission history.</summary>
-    internal ComposerHistory History { get; } = new();
+    internal ComposerHistory History { get; }
 
     /// <summary>Gets whether this composer owns keyboard focus.</summary>
     internal bool IsFocused { get; private set; }

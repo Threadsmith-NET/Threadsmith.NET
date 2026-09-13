@@ -14,7 +14,7 @@ using Threadsmith.Core;
 /// <summary>Provider-neutral bounded web-search request.</summary>
 public sealed record WebSearchRequest
 {
-    /// <summary>Plain text disclosed to the provider, at most 500 characters and 75 words.</summary>
+    /// <summary>Plain text disclosed to the provider, within the configured character bound and the provider's 75-word bound.</summary>
     public required string Query { get; init; }
 
     /// <summary>Requested result count, from one through twenty.</summary>
@@ -94,6 +94,21 @@ public sealed record WebSearchOptions
     /// <summary>Minimum interval between requests in this process.</summary>
     public TimeSpan MinimumRequestInterval { get; init; } = TimeSpan.FromMilliseconds(200);
 
+    /// <summary>Maximum provider response JSON depth.</summary>
+    public int MaximumJsonDepth { get; init; } = 16;
+
+    /// <summary>Maximum query characters, at most the provider's 600-character limit.</summary>
+    public int MaximumQueryCharacters { get; init; } = 500;
+
+    /// <summary>Maximum requested freshness window in days.</summary>
+    public int MaximumFreshnessDays { get; init; } = 365;
+
+    /// <summary>Maximum normalized result title characters.</summary>
+    public int MaximumTitleCharacters { get; init; } = 300;
+
+    /// <summary>Maximum normalized result snippet characters.</summary>
+    public int MaximumSnippetCharacters { get; init; } = 1000;
+
     /// <summary>Binds and validates trusted layered provider settings.</summary>
     public static WebSearchOptions FromConfiguration(IConfiguration configuration)
     {
@@ -117,10 +132,10 @@ public sealed record WebSearchOptions
         var maximumBytes = configuration.GetValue("webSearch:provider:maximumResponseBytes", 1_048_576);
         var retries = configuration.GetValue("webSearch:provider:retryLimit", 1);
         var intervalMilliseconds = configuration.GetValue("webSearch:provider:minimumRequestIntervalMilliseconds", 200);
-        if (timeoutSeconds is < 1 or > 60
-            || maximumBytes is < 1024 or > 4_194_304
-            || retries is < 0 or > 2
-            || intervalMilliseconds is < 0 or > 60_000)
+        if (timeoutSeconds <= 0 || timeoutSeconds > (uint.MaxValue - 1L) / 1000
+            || maximumBytes <= 0
+            || retries < 0
+            || intervalMilliseconds < 0)
         {
             throw new InvalidOperationException("Web-search provider limits are outside host bounds.");
         }
@@ -132,10 +147,20 @@ public sealed record WebSearchOptions
             throw new InvalidOperationException("Web-search authentication must use a secrets: reference.");
         }
 
+        var maximumQueryCharacters = ReadPositive("webSearch:provider:maximumQueryCharacters", 500);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumQueryCharacters, WebSearchRequestContract.MaximumQueryCharacters);
+        var maximumFreshnessDays = ReadPositive("webSearch:provider:maximumFreshnessDays", 365);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumFreshnessDays, DateOnly.FromDateTime(DateTime.UtcNow).DayNumber);
         return new WebSearchOptions
         {
+            MaximumQueryCharacters = maximumQueryCharacters,
             ProviderId = configuration["webSearch:provider:id"] ?? "brave",
             Kind = "brave",
+            MaximumJsonDepth = ReadPositive("webSearch:provider:maximumJsonDepth", 16),
+            MaximumFreshnessDays = maximumFreshnessDays,
+            MaximumTitleCharacters = ReadPositive("webSearch:provider:maximumTitleCharacters", 300),
+            MaximumSnippetCharacters = ReadPositive("webSearch:provider:maximumSnippetCharacters", 1000),
+
             Endpoint = endpoint,
             SecretReference = secretReference,
             Timeout = TimeSpan.FromSeconds(timeoutSeconds),
@@ -143,6 +168,13 @@ public sealed record WebSearchOptions
             RetryLimit = retries,
             MinimumRequestInterval = TimeSpan.FromMilliseconds(intervalMilliseconds),
         };
+
+        int ReadPositive(string key, int fallback)
+        {
+            var value = configuration.GetValue(key, fallback);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value, key);
+            return value;
+        }
     }
 }
 
@@ -166,6 +198,8 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(secretResolver);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(options.Timeout, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(options.Timeout, TimeSpan.FromMilliseconds(uint.MaxValue - 1L));
         ArgumentNullException.ThrowIfNull(prompts);
         _httpClient = httpClient;
         _secretResolver = secretResolver;
@@ -188,7 +222,7 @@ public sealed class BraveWebSearchClient : IWebSearchClient
         WebSearchRequest request,
         CancellationToken cancellationToken = default)
     {
-        WebSearchRequestContract.Validate(request);
+        WebSearchRequestContract.Validate(request, _options.MaximumFreshnessDays, _options.MaximumQueryCharacters);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(_options.Timeout);
         var secretRequest = new SecretResolutionRequest
@@ -327,7 +361,7 @@ public sealed class BraveWebSearchClient : IWebSearchClient
 
     private WebSearchResponse Normalize(byte[] payload, WebSearchRequest request)
     {
-        using var document = JsonDocument.Parse(payload, new JsonDocumentOptions { MaxDepth = 16 });
+        using var document = JsonDocument.Parse(payload, new JsonDocumentOptions { MaxDepth = _options.MaximumJsonDepth });
         var results = document.RootElement.GetProperty("web").GetProperty("results");
         var normalized = new List<WebSearchResult>();
         foreach (var item in results.EnumerateArray().Take(request.MaximumResults))
@@ -340,9 +374,9 @@ public sealed class BraveWebSearchClient : IWebSearchClient
             }
 
             normalized.Add(new WebSearchResult(
-                NormalizeText(item.GetProperty("title").GetString(), 300),
+                NormalizeText(item.GetProperty("title").GetString(), _options.MaximumTitleCharacters),
                 url.GetComponents(UriComponents.HttpRequestUrl, UriFormat.UriEscaped),
-                NormalizeText(item.TryGetProperty("description", out var description) ? description.GetString() : null, 1000),
+                NormalizeText(item.TryGetProperty("description", out var description) ? description.GetString() : null, _options.MaximumSnippetCharacters),
                 normalized.Count + 1,
                 _options.ProviderId));
         }
@@ -404,7 +438,11 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
         _fetchAuthorization = fetchAuthorization;
         var definition = ToolDefinitionFactory.Create<WebSearchRequest, WebSearchResponse>(
             "web_search",
-            promptLoader.Get(PromptFileNames.ToolWebSearchDescription),
+            promptLoader.Render(PromptFileNames.ToolWebSearchDescription, new Dictionary<string, string>
+            {
+                ["MaximumQueryCharacters"] = options.MaximumQueryCharacters.ToString(CultureInfo.InvariantCulture),
+                ["MaximumFreshnessDays"] = options.MaximumFreshnessDays.ToString(CultureInfo.InvariantCulture),
+            }),
             ToolCategory.ExternalSearch,
             RepositoryTrustLevel.UntrustedInspection,
             ApprovalLevel.None,
@@ -459,7 +497,7 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
     /// <inheritdoc />
     protected override void ValidateInput(WebSearchRequest input)
     {
-        WebSearchRequestContract.Validate(input);
+        WebSearchRequestContract.Validate(input, _options.MaximumFreshnessDays, _options.MaximumQueryCharacters);
         RejectSensitiveQuery(input.Query);
     }
 
@@ -475,7 +513,7 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
         return [_options.Endpoint.Host];
     }
 
-    private static ToolDefinition AddInputBounds(ToolDefinition definition)
+    private ToolDefinition AddInputBounds(ToolDefinition definition)
     {
         var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)?.AsObject()
             ?? throw new InvalidOperationException("The generated web-search schema was empty.");
@@ -484,7 +522,7 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
         var query = properties["query"]?.AsObject()
             ?? throw new InvalidOperationException("The generated web-search schema has no query.");
         query["minLength"] = 1;
-        query["maxLength"] = WebSearchRequestContract.MaximumQueryCharacters;
+        query["maxLength"] = _options.MaximumQueryCharacters;
 
         // Keep the advertised expression usable by finite-state generation grammars.
         // The host independently enforces all query bounds before credentials or HTTP.
@@ -502,7 +540,7 @@ public sealed class WebSearchTool : Tool<WebSearchRequest, WebSearchResponse>, I
         var freshness = properties["freshnessDays"]?.AsObject()
             ?? throw new InvalidOperationException("The generated web-search schema has no freshness window.");
         freshness["minimum"] = 1;
-        freshness["maximum"] = WebSearchRequestContract.MaximumFreshnessDays;
+        freshness["maximum"] = _options.MaximumFreshnessDays;
         return definition with
         {
             InputSchema = definition.InputSchema with { JsonSchema = schema.ToJsonString() },

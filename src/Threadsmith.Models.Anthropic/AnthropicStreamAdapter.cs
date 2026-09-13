@@ -10,7 +10,7 @@ using Threadsmith.Models;
 /// <summary>Consumes SDK event unions and releases executable calls only after a complete valid response.</summary>
 internal sealed class AnthropicStreamAdapter
 {
-    private const int MaximumContentBlocks = 4096;
+    private readonly AnthropicResourceLimits _limits;
     private readonly List<AnthropicResponseBlock> _blocks = [];
     private readonly ModelStreamRequest _request;
     private readonly ModelProfile _profile;
@@ -27,8 +27,10 @@ internal sealed class AnthropicStreamAdapter
     private int? _openBlock;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicStreamAdapter"/> class.</summary>
-    internal AnthropicStreamAdapter(ModelStreamRequest request, ModelProfile profile, AnthropicModelCompatibility compatibility, string providerId, string apiKey)
+    internal AnthropicStreamAdapter(ModelStreamRequest request, ModelProfile profile, AnthropicModelCompatibility compatibility, string providerId, string apiKey, AnthropicResourceLimits? limits = null)
     {
+        _limits = limits ?? new();
+        _limits.Validate();
         _request = request;
         _profile = profile;
         _compatibility = compatibility;
@@ -79,7 +81,7 @@ internal sealed class AnthropicStreamAdapter
         if (item.TryPickContentBlockStart(out _))
         {
             var index = Index(root);
-            if (_stopReason is not null || _openBlock is not null || index != _blocks.Count || index >= MaximumContentBlocks)
+            if (_stopReason is not null || _openBlock is not null || index != _blocks.Count || index >= _limits.MaximumContentBlocks)
             {
                 throw new MalformedModelOutputException("Anthropic content blocks are out of order or exceed their count ceiling.");
             }
@@ -92,7 +94,7 @@ internal sealed class AnthropicStreamAdapter
                     throw new MalformedInvocationException("Anthropic returned a missing or unadvertised tool name.");
                 }
 
-                if (string.IsNullOrWhiteSpace(block.WireId) || block.WireId.Length > 256
+                if (string.IsNullOrWhiteSpace(block.WireId) || block.WireId.Length > _limits.MaximumToolCallIdCharacters
                     || block.WireId.Any(character => !char.IsAsciiLetterOrDigit(character) && character is not ('_' or '-'))
                     || !_wireIds.Add(block.WireId))
                 {
@@ -265,7 +267,7 @@ internal sealed class AnthropicStreamAdapter
         });
         try
         {
-            var maximumReplay = _profile.MaximumStreamedBytes == 0 ? ModelProfile.DefaultMaximumStreamedBytes : Math.Min(_profile.MaximumStreamedBytes, ModelProfile.DefaultMaximumStreamedBytes);
+            var maximumReplay = _limits.MaximumReplayBytes;
             if (payload.Length > maximumReplay - (_request.TransientState?.RetainedBytes ?? 0))
             {
                 throw new ModelProviderException("Anthropic active tool-turn replay exceeded its retained-byte ceiling.");

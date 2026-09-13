@@ -286,23 +286,26 @@ public static class CurrentUserUrlRecognizer
     public const int MaximumCandidates = 8;
 
     /// <summary>Returns whether the bounded raw message contains at least one structurally eligible candidate.</summary>
-    public static bool HasEligibleCandidate(string rawMessage, int maximumUrlCharacters = 2048)
+    public static bool HasEligibleCandidate(string rawMessage, int maximumUrlCharacters = 2048, WebFetchOptions? options = null)
     {
-        return Recognize(rawMessage, maximumUrlCharacters).Count > 0;
+        return Recognize(rawMessage, maximumUrlCharacters, options).Count > 0;
     }
 
     /// <summary>Returns bounded unique normalized candidates with protected exact URLs.</summary>
     internal static IReadOnlyList<RecognizedUserUrl> Recognize(
         string rawMessage,
-        int maximumUrlCharacters)
+        int maximumUrlCharacters,
+        WebFetchOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(rawMessage);
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumUrlCharacters, 1);
-        var length = Math.Min(rawMessage.Length, MaximumScannedCharacters);
-        var results = new List<RecognizedUserUrl>(MaximumCandidates);
+        options ??= new();
+        options.Validate();
+        var length = Math.Min(rawMessage.Length, options.MaximumScannedUserCharacters);
+        var results = new List<RecognizedUserUrl>();
         var digests = new HashSet<string>(StringComparer.Ordinal);
         var searchIndex = 0;
-        while (searchIndex < length && results.Count < MaximumCandidates)
+        while (searchIndex < length && results.Count < options.MaximumUserUrlCandidates)
         {
             var start = rawMessage.IndexOf("https://", searchIndex, length - searchIndex, StringComparison.OrdinalIgnoreCase);
             if (start < 0)
@@ -461,6 +464,13 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
     /// <summary>Gets the maximum number of URLs accepted in one direct authorization chain.</summary>
     public int MaximumDirectUrlCount => _options.Current.MaximumRedirects + 1;
 
+    /// <summary>Recognizes current-message URLs using this authority's configured discovery limits.</summary>
+    public bool HasCurrentMessageUrlCandidate(string rawMessage)
+    {
+        var options = _options.Current;
+        return CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage, options.MaximumUrlCharacters, options);
+    }
+
     /// <summary>Returns whether live schema-3 consent still covers ergonomic routes in one repository.</summary>
     public bool HasCurrentMessageRouteConsent(string repositoryRoot)
     {
@@ -504,7 +514,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             var now = _timeProvider.GetUtcNow();
             var repositoryIdentity = OutboundConsentStore.DeriveRepositoryIdentity(repositoryRoot);
             var hostScope = (repositoryIdentity, sessionId, producingRunId, normalizedUrl.IdnHost.ToLowerInvariant());
-            if (!_searchHostGrants.ContainsKey(hostScope) && _searchHostGrants.Count >= MaximumReferences)
+            if (!_searchHostGrants.ContainsKey(hostScope) && _searchHostGrants.Count >= _options.Current.MaximumReferences)
             {
                 var oldest = _searchHostGrants.OrderBy(item => item.Value).First().Key;
                 _searchHostGrants.Remove(oldest);
@@ -548,7 +558,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
         var options = _options.Current;
         var candidates =
-            CurrentUserUrlRecognizer.Recognize(rawMessage, options.MaximumUrlCharacters);
+            CurrentUserUrlRecognizer.Recognize(rawMessage, options.MaximumUrlCharacters, options);
         lock (_gate)
         {
             PruneCore();
@@ -624,7 +634,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         ArgumentNullException.ThrowIfNull(urls);
         var options = _options.Current;
-        if (urls.Count < 1 || urls.Count > options.MaximumRedirects + 1)
+        if (urls.Count < 1 || urls.Count > (long)options.MaximumRedirects + 1)
         {
             throw new ArgumentOutOfRangeException(nameof(urls), "A direct fetch chain must fit the configured redirect bound.");
         }
@@ -883,7 +893,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
             if (outcome == DirectFetchApprovalOutcome.ApprovedForSession)
             {
                 var key = (OutboundConsentStore.DeriveRepositoryIdentity(context.Invocation.RepositoryPath), context.SessionId, normalized.IdnHost.ToLowerInvariant());
-                if (!_sessionHostGrants.ContainsKey(key) && _sessionHostGrants.Count >= MaximumReferences)
+                if (!_sessionHostGrants.ContainsKey(key) && _sessionHostGrants.Count >= _options.Current.MaximumReferences)
                 {
                     _sessionHostGrants.Remove(_sessionHostGrants.OrderBy(item => item.Value).First().Key);
                 }
@@ -1307,7 +1317,7 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
 
     private void MakeReferenceCapacityCore()
     {
-        while (_searchReferences.Count + _userReferences.Count >= MaximumReferences)
+        while (_searchReferences.Count + _userReferences.Count >= _options.Current.MaximumReferences)
         {
             (string Id, bool IsUser, DateTimeOffset IssuedAt) oldest = _searchReferences
                 .Select(item => (item.Key, false, item.Value.IssuedAt))

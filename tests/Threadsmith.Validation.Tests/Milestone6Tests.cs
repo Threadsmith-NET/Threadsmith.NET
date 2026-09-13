@@ -272,7 +272,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -348,7 +348,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -1049,7 +1049,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -1070,24 +1070,7 @@ public sealed class Milestone6Tests
             var stopwatch = Stopwatch.StartNew();
             var childPidPath = Path.Combine(baseline.RepositoryPath, "child.pid");
             var childPid = 0;
-            var cancellationCoordinator = Task.Run(async () =>
-            {
-                for (var attempt = 0; attempt < 200 && !File.Exists(childPidPath); attempt++)
-                {
-                    await Task.Delay(TimeSpan.FromMilliseconds(25));
-                }
-
-                Assert.True(File.Exists(childPidPath), "The delayed child process did not publish its process id.");
-                var childPidText = await File.ReadAllTextAsync(childPidPath);
-                Assert.True(int.TryParse(
-                    childPidText,
-                    NumberStyles.None,
-                    CultureInfo.InvariantCulture,
-                    out childPid));
-                await cancellation.CancelAsync();
-            });
-
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => executor.ExecuteAsync(
+            var buildTask = executor.ExecuteAsync(
                 new BuildValidationRequest
                 {
                     SessionId = new SessionId(Guid.NewGuid()),
@@ -1095,8 +1078,38 @@ public sealed class Milestone6Tests
                     Baseline = baseline,
                     Confidence = SemanticConfidenceLevel.FullSemantic,
                 },
-                cancellation.Token));
-            await cancellationCoordinator;
+                cancellation.Token);
+            try
+            {
+                // Cold MSBuild startup is separate from cancellation latency.
+                for (var attempt = 0; attempt < 1200 && !File.Exists(childPidPath) && !buildTask.IsCompleted; attempt++)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(25));
+                }
+
+                Assert.True(File.Exists(childPidPath), "The delayed child process did not publish its process id.");
+                var childPidText = await File.ReadAllTextAsync(childPidPath);
+                Assert.True(int.TryParse(
+                    childPidText.Trim(),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out childPid));
+                stopwatch.Restart();
+                await cancellation.CancelAsync();
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => buildTask.WaitAsync(TestContext.Current.CancellationToken));
+            }
+            finally
+            {
+                await cancellation.CancelAsync();
+                try
+                {
+                    await buildTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Observe cancellation even when the startup assertion failed.
+                }
+            }
 
             var childExited = false;
             for (var attempt = 0; attempt < 200 && !childExited; attempt++)
@@ -1122,7 +1135,7 @@ public sealed class Milestone6Tests
         }
         finally
         {
-            Directory.Delete(baseline.RepositoryPath, recursive: true);
+            await DeleteBuildFixtureAsync(baseline.RepositoryPath);
         }
     }
 
@@ -1703,6 +1716,25 @@ public sealed class Milestone6Tests
             TrustLevel: trustLevel);
     }
 
+    private static async Task DeleteBuildFixtureAsync(string path)
+    {
+        // Windows can report the terminated process as exited before its directory
+        // handle is released. Retry only fixture cleanup; lifecycle assertions run first.
+        var cleanup = Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (cleanup.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25), TestContext.Current.CancellationToken);
+            }
+        }
+    }
+
     private static async Task<WorkspaceBaseline> CreateBuildableBaselineAsync(bool includeDelay)
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-build-{Guid.NewGuid():N}");
@@ -1710,8 +1742,8 @@ public sealed class Milestone6Tests
         var delayProperties = includeDelay
             ? """
                   <PropertyGroup>
-                    <DelayCommand Condition="'$(OS)' == 'Windows_NT'">powershell -NoProfile -Command "$PID | Set-Content -NoNewline '&quot;$(MSBuildProjectDirectory)\child.pid&quot;'; Start-Sleep -Seconds 30"</DelayCommand>
-                    <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid"; sleep 30'</DelayCommand>
+                    <DelayCommand Condition="'$(OS)' == 'Windows_NT'">powershell -NoProfile -Command "[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\child.pid.tmp', '$(MSBuildProjectDirectory)\child.pid'); Start-Sleep -Seconds 30"</DelayCommand>
+                    <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; sleep 30'</DelayCommand>
                   </PropertyGroup>
                   <Target Name="DelayBuild" BeforeTargets="BeforeBuild">
                     <Exec Command="$(DelayCommand)" />

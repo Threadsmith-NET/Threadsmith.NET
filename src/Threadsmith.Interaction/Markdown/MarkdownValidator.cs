@@ -12,7 +12,7 @@ internal static class MarkdownValidator
     internal static void Validate(MarkdownDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var state = new ValidationState();
+        var state = new ValidationState(document.Limits);
         ValidateBlocks(document.Blocks, state, 0);
     }
 
@@ -43,9 +43,9 @@ internal static class MarkdownValidator
                     ValidateList(list, state, depth + 1);
                     break;
                 case MarkdownCodeBlock code:
-                    ValidateText(code.Code, MarkdownParser.MaximumCodeCharacters, state);
+                    ValidateText(code.Code, state.Limits.MaximumCodeCharacters, state);
                     if (code.Language is not null
-                        && (code.Language.Length > 64
+                        && (code.Language.Length > state.Limits.MaximumLanguageCharacters
                             || code.Language.Any(character => !(char.IsAsciiLetterOrDigit(character)
                                 || character is '-' or '_' or '+' or '#'))))
                     {
@@ -69,7 +69,7 @@ internal static class MarkdownValidator
     private static void ValidateList(MarkdownList list, ValidationState state, int depth)
     {
         state.CheckDepth(depth);
-        if (list.Start < 0 || list.Items.Length > MarkdownParser.MaximumListItems)
+        if (list.Start < 0 || list.Items.Length > state.Limits.MaximumListItems)
         {
             throw new ArgumentException("Markdown list metadata exceeded its bounds.", nameof(list));
         }
@@ -84,7 +84,7 @@ internal static class MarkdownValidator
 
     private static void ValidateTable(MarkdownTable table, ValidationState state)
     {
-        if (table.Rows.Length > MarkdownParser.MaximumTableRows)
+        if (table.Rows.Length > state.Limits.MaximumTableRows)
         {
             throw new ArgumentException("Markdown table exceeded its row bound.", nameof(table));
         }
@@ -93,7 +93,7 @@ internal static class MarkdownValidator
         {
             ArgumentNullException.ThrowIfNull(row);
             state.AddNode();
-            if (row.Cells.Length > MarkdownParser.MaximumTableColumns)
+            if (row.Cells.Length > state.Limits.MaximumTableColumns)
             {
                 throw new ArgumentException("Markdown table exceeded its column bound.", nameof(table));
             }
@@ -103,7 +103,7 @@ internal static class MarkdownValidator
                 state.AddNode();
                 var before = state.CharacterCount;
                 ValidateSpans(cell, state);
-                if (state.CharacterCount - before > MarkdownParser.MaximumCellCharacters)
+                if (state.CharacterCount - before > state.Limits.MaximumCellCharacters)
                 {
                     throw new ArgumentException("Markdown table cell exceeded its character bound.", nameof(table));
                 }
@@ -122,7 +122,7 @@ internal static class MarkdownValidator
                 throw new ArgumentException("Markdown span contains unsupported style flags.", nameof(spans));
             }
 
-            ValidateText(span.Text, MarkdownParser.MaximumSourceBytes, state);
+            ValidateText(span.Text, state.Limits.MaximumSourceBytes, state);
             if (span.LinkTarget is { } target)
             {
                 var value = target.OriginalString;
@@ -130,7 +130,7 @@ internal static class MarkdownValidator
                     || target.Scheme is not "http" and not "https"
                     || string.IsNullOrEmpty(target.Host)
                     || !string.IsNullOrEmpty(target.UserInfo)
-                    || value.Length > MarkdownParser.MaximumLinkCharacters
+                    || value.Length > state.Limits.MaximumLinkCharacters
                     || value.Any(char.IsControl)
                     || Uri.UnescapeDataString(value).Any(char.IsControl))
                 {
@@ -156,12 +156,20 @@ internal static class MarkdownValidator
     {
         private int _nodeCount;
 
+        internal MarkdownRenderingLimits Limits { get; }
+
+        internal ValidationState(MarkdownRenderingLimits limits)
+        {
+            limits.Validate();
+            Limits = limits;
+        }
+
         internal int CharacterCount { get; private set; }
 
         internal void AddCharacters(int count)
         {
             CharacterCount = checked(CharacterCount + count);
-            if (CharacterCount > MarkdownParser.MaximumSourceBytes)
+            if (CharacterCount > Limits.MaximumSourceBytes)
             {
                 throw new ArgumentException("Markdown semantic text exceeded its total bound.", nameof(count));
             }
@@ -170,7 +178,7 @@ internal static class MarkdownValidator
         internal void AddNode()
         {
             _nodeCount++;
-            if (_nodeCount > MarkdownParser.MaximumNodes)
+            if (_nodeCount > Limits.MaximumNodes)
             {
                 throw new ArgumentException("Markdown semantic nodes exceeded their total bound.");
             }
@@ -178,7 +186,7 @@ internal static class MarkdownValidator
 
         internal void CheckDepth(int depth)
         {
-            if (_nodeCount > MarkdownParser.MaximumNodes || depth > MarkdownParser.MaximumDepth)
+            if (_nodeCount > Limits.MaximumNodes || depth > Limits.MaximumDepth)
             {
                 throw new ArgumentException("Markdown semantic nesting exceeded its bound.", nameof(depth));
             }

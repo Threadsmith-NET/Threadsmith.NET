@@ -889,7 +889,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData("inspect_metadata", "{")]
     [InlineData("inspect_metadata", "{\"unexpected\":true}")]
     [InlineData(DelegateAgentsContract.ToolId, "{}")]
-    public async Task RunAsync_InvalidToolRequest_RepairsBeforeAcceptingOrdinaryResponse(string toolId, string argumentsJson)
+    [InlineData("inspect_metadata", "{}", true)]
+    public async Task RunAsync_InvalidToolRequest_RepairsBeforeAcceptingOrdinaryResponse(string toolId, string argumentsJson, bool providerFailure = false)
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
@@ -900,7 +901,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
         var plan = CreatePlan(assignment);
         var attempt = new ToolRequestModelOutput(toolId, argumentsJson);
-        var provider = new ToolAttemptThenResponseProvider(attempt);
+        var provider = new ToolAttemptThenResponseProvider(attempt) { RejectAtProvider = providerFailure };
         var runner = CreateRunner(
             provider,
             CreatePipeline(registry, events, sanitizer),
@@ -915,8 +916,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal("The requested tool could not be used.", outcome.Response);
         Assert.Equal(1, outcome.Usage.Corrections);
         Assert.Equal(2, provider.Requests.Count);
-        AssertRejectedToolHistory(provider.Requests[1], toolId == tool.Definition.Id ? [attempt] : []);
-        if (toolId != tool.Definition.Id)
+        AssertRejectedToolHistory(provider.Requests[1], !providerFailure && toolId == tool.Definition.Id ? [attempt] : []);
+        if (providerFailure || toolId != tool.Definition.Id)
         {
             Assert.DoesNotContain(provider.Requests[1].Messages, message => message.ToolCallId is not null);
         }
@@ -1691,6 +1692,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
+        public bool RejectAtProvider { get; init; }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
             [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -1708,6 +1711,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 foreach (var attempt in _attempts)
                 {
                     yield return new ModelChunk { Output = attempt, Usage = new ModelUsage(20, 10) };
+                }
+
+                if (RejectAtProvider)
+                {
+                    throw new MalformedInvocationException("The provider emitted tool parameters as assistant text.");
                 }
 
                 yield break;

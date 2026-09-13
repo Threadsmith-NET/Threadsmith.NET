@@ -7,7 +7,6 @@ using Threadsmith.Core;
 /// <summary>Shared explicit-operation policy; inference always finishes before transactional persistence.</summary>
 public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
 {
-    private const int MaximumTextCharacters = 2_000;
     private readonly ILogger<RepositoryMemoryService> _logger;
     private readonly ITextEmbeddingGenerator _generator;
     private readonly IOutputSanitizer _sanitizer;
@@ -53,9 +52,9 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
 
         var text = Normalize(_sanitizer.Sanitize(request.Text ?? string.Empty));
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
-        if (text.Length > MaximumTextCharacters)
+        if (text.Length > request.Options.MaximumTextCharacters)
         {
-            throw new ArgumentException("Memory text must fit 2,000 characters after sanitization. Shorten the memory and retry.");
+            throw new ArgumentException($"Memory text must fit {request.Options.MaximumTextCharacters.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} characters after sanitization. Shorten the memory and retry.");
         }
 
         var existing = request.Id is { } id ? snapshot.Entries.FirstOrDefault(entry => entry.Id == id) : null;

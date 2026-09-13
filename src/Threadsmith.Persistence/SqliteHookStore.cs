@@ -113,7 +113,7 @@ public sealed class SqliteHookStore : IHookStore
     /// <inheritdoc />
     public async Task<IReadOnlyList<HookAuditRecord>> QueryAuditAsync(string? repositoryIdentity, HookHandlerId? handlerId, int maximumCount, CancellationToken cancellationToken = default)
     {
-        if (maximumCount is < 1 or > 1000)
+        if (maximumCount < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(maximumCount));
         }

@@ -6,17 +6,20 @@ using Threadsmith.Core;
 /// <summary>Projects the loaded semantic workspace into normalized .NET repository inventory.</summary>
 public sealed class DotNetInventoryService : IDotNetInventoryService
 {
-    private const int MaximumProjects = 2000;
+    private readonly SemanticResourceLimits _resourceLimits;
     private readonly IGitQueryService _gitQueries;
     private readonly SemanticEngineRegistry _registry;
 
     /// <summary>Initializes a new instance of the <see cref="DotNetInventoryService"/> class.</summary>
     public DotNetInventoryService(
         SemanticEngineRegistry registry,
-        IGitQueryService gitQueries)
+        IGitQueryService gitQueries,
+        SemanticResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(gitQueries);
+        _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
+        _resourceLimits.Validate();
         _registry = registry;
         _gitQueries = gitQueries;
     }
@@ -51,15 +54,15 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         var semanticProjects = _registry.GetProjects(request.WorkspaceId);
         var confidence = _registry.GetConfidence(request.WorkspaceId);
         var omissions = new List<string>();
-        if (semanticProjects.Count > MaximumProjects)
+        if (semanticProjects.Count > _resourceLimits.MaximumInventoryProjects)
         {
             omissions.Add(ModelVisibleStructuredFact.Exact(
-                $"Project inventory was limited to {MaximumProjects} entries."));
+                $"Project inventory was limited to {_resourceLimits.MaximumInventoryProjects} entries."));
         }
 
         var centralVersions = ReadCentralVersions(repositoryRoot, omissions);
         ProjectInventory[] projects = [.. semanticProjects
-            .Take(MaximumProjects)
+            .Take(_resourceLimits.MaximumInventoryProjects)
             .Select(project => CreateProject(repositoryRoot, project, centralVersions, omissions, cancellationToken))
             .OrderBy(project => project.Path, StringComparer.OrdinalIgnoreCase)];
         if (projects.Length == 0)
@@ -81,7 +84,7 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         return result;
     }
 
-    private static ProjectInventory CreateProject(
+    private ProjectInventory CreateProject(
         string repositoryRoot,
         SemanticProjectInfo semantic,
         IReadOnlyDictionary<string, string> centralVersions,
@@ -91,7 +94,7 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         cancellationToken.ThrowIfCancellationRequested();
         var projectPath = NormalizeUnderRoot(repositoryRoot, semantic.FilePath);
         var packages = new Dictionary<string, PackageReferenceInventory>(StringComparer.OrdinalIgnoreCase);
-        if (File.Exists(projectPath) && new FileInfo(projectPath).Length <= 1024 * 1024)
+        if (File.Exists(projectPath) && new FileInfo(projectPath).Length <= _resourceLimits.MaximumInventoryXmlBytes)
         {
             try
             {
@@ -161,7 +164,7 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
             semantic.Confidence);
     }
 
-    private static IReadOnlyDictionary<string, string> ReadCentralVersions(
+    private IReadOnlyDictionary<string, string> ReadCentralVersions(
         string repositoryRoot,
         List<string> omissions)
     {
@@ -173,7 +176,7 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
 
         try
         {
-            if (new FileInfo(path).Length > 1024 * 1024)
+            if (new FileInfo(path).Length > _resourceLimits.MaximumInventoryXmlBytes)
             {
                 omissions.Add(ModelVisibleStructuredFact.Exact(
                     "Directory.Packages.props exceeds the 1 MiB inventory limit."));

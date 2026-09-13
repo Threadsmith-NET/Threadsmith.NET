@@ -69,7 +69,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             try
             {
                 // Only the compiled direct-write capability can use its separate folder grant.
-                _ = tool is WriteFileTool writeFile
+                _ = ConfiguredTool.Unwrap(tool) is WriteFileTool writeFile
                     ? writeFile.ValidatePath(resourcePath, context)
                     : ToolPathRules.NormalizeAndValidate(resourcePath, context);
             }
@@ -117,7 +117,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             var configuredHost = context.AllowedNetworkHosts.Contains(
                 networkHost,
                 StringComparer.OrdinalIgnoreCase);
-            var hostAuthorized = tool is IHostAuthorizedNetworkClaims scopedClaims
+            var hostAuthorized = ConfiguredTool.Unwrap(tool) is IHostAuthorizedNetworkClaims scopedClaims
                 && scopedClaims.IsNetworkHostAuthorized(input, context, networkHost);
             if (!configuredHost && !hostAuthorized)
             {

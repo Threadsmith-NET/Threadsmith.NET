@@ -37,6 +37,28 @@ public sealed class McpManagerTests
         Assert.Equal([McpCapabilityKind.ResourceTemplate], profile.AllowedCapabilities);
     }
 
+    /// <summary>Each configurable profile deadline is validated before creating a runtime timer.</summary>
+    [Theory]
+    [InlineData("startupTimeoutSeconds")]
+    [InlineData("requestTimeoutSeconds")]
+    [InlineData("drainKillTimeoutSeconds")]
+    public static void ProfileLoader_RejectsTimerOverflow(string setting)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["mcp:profiles:0:id"] = "fixture",
+            ["mcp:profiles:0:name"] = "Fixture",
+            ["mcp:profiles:0:command"] = "fixture-server",
+            [$"mcp:profiles:0:{setting}"] = "4294968",
+        };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        var exception = Assert.Throws<InvalidOperationException>(() => McpProfileConfigurationLoader.Load(configuration));
+        Assert.Contains("runtime timer limit", exception.Message, StringComparison.Ordinal);
+
+        configuration[$"mcp:profiles:0:{setting}"] = "4294967";
+        Assert.Single(McpProfileConfigurationLoader.Load(configuration));
+    }
+
     /// <summary>Malformed profile entries fail closed instead of silently disappearing from inspection.</summary>
     [Fact]
     public static void ProfileLoader_MissingRequiredField_FailsClosed()
@@ -56,7 +78,7 @@ public sealed class McpManagerTests
     [Fact]
     public static void ResourceMapping_OversizedFirstItem_ReportsTruncation()
     {
-        var result = McpTransportMapping.MapResourceContent(new ReadResourceResult
+        var result = new McpTransportMapping().MapResourceContent(new ReadResourceResult
         {
             Contents =
             [
@@ -78,7 +100,7 @@ public sealed class McpManagerTests
     [Fact]
     public static void ToolMapping_MultipleLargeBlocks_UsesAggregateBound()
     {
-        var result = McpTransportMapping.MapInvocation(new CallToolResult
+        var result = new McpTransportMapping().MapInvocation(new CallToolResult
         {
             Content =
             [
@@ -96,7 +118,7 @@ public sealed class McpManagerTests
     [Fact]
     public static void ToolMapping_NonTextContent_IsVisibleAndIncomplete()
     {
-        var result = McpTransportMapping.MapInvocation(new CallToolResult
+        var result = new McpTransportMapping().MapInvocation(new CallToolResult
         {
             Content =
             [
@@ -135,12 +157,17 @@ public sealed class McpManagerTests
     }
 
     /// <summary>Automatic OAuth connections suppress UX while an explicit connection retains it.</summary>
-    [Fact]
-    public async Task AutoConnect_OAuthProfile_SuppressesOnlyAutomaticUserInteraction()
+    [Theory]
+    [InlineData(256)]
+    [InlineData(1)]
+    public async Task AutoConnect_OAuthProfile_SuppressesOnlyAutomaticUserInteraction(int maximumCapabilities)
     {
         var adapter = new FakeAdapter();
         var profile = Profile("remote", oauth: true) with { AutoConnect = true };
-        await using var manager = CreateManager([profile], adapter);
+        await using var manager = CreateManager(
+            [profile],
+            adapter,
+            limits: new McpResourceLimits { MaximumCapabilities = maximumCapabilities });
 
         await manager.AutoConnectAsync();
         _ = await manager.ExecuteAsync(new McpManagementRequest
@@ -585,8 +612,10 @@ public sealed class McpManagerTests
     }
 
     /// <summary>Revocation reuses the validated metadata-proxy path after a process restart.</summary>
-    [Fact]
-    public async Task IdentityManager_RevocationResolvesCompatibleProxyMetadata()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IdentityManager_RevocationResolvesCompatibleProxyMetadata(bool maximumRepresentableLimit)
     {
         var store = new FakeOAuthTokenStore(new Dictionary<string, string>(StringComparer.Ordinal)
         {
@@ -619,7 +648,10 @@ public sealed class McpManagerTests
                 + "\"revocation_endpoint\":\"https://auth.example/revoke\"}"));
         }));
         using var httpClient = new HttpClient(handler);
-        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient);
+        using var identity = new McpIdentityManager(store, new UnusedSecretResolver(), httpClient, new McpResourceLimits
+        {
+            MaximumOAuthMetadataBytes = maximumRepresentableLimit ? Array.MaxLength : 65536,
+        });
         var profile = Profile("server", oauth: true) with
         {
             Command = "https://mcp.example/mcp",
@@ -872,6 +904,82 @@ public sealed class McpManagerTests
         Assert.Equal(McpManagementFailureKind.RevocationUnsupported, result.FailureKind);
         Assert.Equal(1, requests);
         Assert.Equal("access-canary", store.Values["mcp:oauth:server:accessToken"]);
+    }
+
+    /// <summary>Capability inspection honors configured metadata and argument limits.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CapabilityInspection_HonorsConfiguredMetadataLimits(bool widened)
+    {
+        var limits = widened ? new McpResourceLimits
+        {
+            MaximumNameCharacters = 400,
+            MaximumDescriptionCharacters = 3000,
+            MaximumIdentityCharacters = 5000,
+            MaximumSchemaCharacters = 70000,
+            MaximumArgumentNameCharacters = 200,
+            MaximumArgumentDescriptionCharacters = 1500,
+        }
+        : new McpResourceLimits();
+        var capability = new McpImportedCapability
+        {
+            Id = "server:prompt:review",
+            Kind = McpCapabilityKind.Prompt,
+            ServerName = new string('n', 400),
+            Description = new string('d', 3000),
+            MimeType = new string('m', 400),
+            ResourceIdentity = new string('i', 5000),
+            InputSchemaJson = new string('s', 70000),
+            Digest = "digest",
+            PromptArguments = [new() { Name = new string('a', 200), Description = new string('b', 1500) }],
+        };
+        await using var manager = CreateManager([Profile("server")], new FakeAdapter { Capabilities = [capability] }, limits: limits);
+        _ = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.Connect, ProfileId = "server" });
+        var result = await manager.ExecuteAsync(new McpManagementRequest
+        {
+            Action = McpManagementAction.InspectCapability,
+            ProfileId = "server",
+            CapabilityId = capability.Id,
+        });
+
+        Assert.True(result.Succeeded, result.Message);
+        var mapped = Assert.Single(result.Capabilities);
+        Assert.Equal(limits.MaximumNameCharacters, mapped.Name.Length);
+        Assert.Equal(limits.MaximumNameCharacters, mapped.MimeType?.Length);
+        Assert.Equal(limits.MaximumDescriptionCharacters, mapped.Description.Length);
+        Assert.Equal(limits.MaximumIdentityCharacters, mapped.ResourceIdentity?.Length);
+        Assert.Equal(limits.MaximumSchemaCharacters, mapped.InputSchemaJson?.Length);
+        var argument = Assert.Single(mapped.Arguments);
+        Assert.Equal(limits.MaximumArgumentNameCharacters, argument.Name.Length);
+        Assert.Equal(limits.MaximumArgumentDescriptionCharacters, argument.Description.Length);
+    }
+
+    /// <summary>Final projections honor raised bounds and mark narrower label/MIME truncation.</summary>
+    [Theory]
+    [InlineData(2048, 512, false)]
+    [InlineData(12, 8, true)]
+    public async Task ResourceRead_HonorsConfiguredLabelAndMimeBounds(int labelLimit, int mimeLimit, bool truncated)
+    {
+        var adapter = new FakeAdapter { ResourceLabel = new string('l', 1800), ResourceMimeType = new string('m', 400) };
+        await using var manager = CreateManager(
+            [Profile("server")],
+            adapter,
+            limits: new McpResourceLimits { MaximumResourceLabelCharacters = labelLimit, MaximumNameCharacters = mimeLimit });
+        _ = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.Connect, ProfileId = "server" });
+
+        var result = await manager.ExecuteAsync(new McpManagementRequest
+        {
+            Action = McpManagementAction.ReadResource,
+            ProfileId = "server",
+            CapabilityId = "server:resource:fixture",
+        });
+
+        Assert.True(result.Succeeded, result.Message);
+        var item = Assert.Single(result.Content);
+        Assert.Equal(Math.Min(1800, labelLimit), item.Label.Length);
+        Assert.Equal(Math.Min(400, mimeLimit), item.MimeType?.Length);
+        Assert.Equal(truncated, item.IsTruncated);
     }
 
     /// <summary>Explicit external content is redacted before it crosses the Core result boundary.</summary>
@@ -1132,6 +1240,39 @@ public sealed class McpManagerTests
         }
     }
 
+    /// <summary>A rejected oversized approval write preserves previously granted approvals.</summary>
+    [Fact]
+    public async Task ToolStateManager_ApprovalByteLimit_PreservesExistingApprovals()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "threadsmith-approval-limit-" + Guid.NewGuid().ToString("N"));
+        var configPath = Path.Combine(root, ".threadsmith", "config.json");
+        var approvalPath = Path.Combine(root, "user", "approvals.json");
+        try
+        {
+            var first = McpToolDefinition("mcp-first");
+            var second = McpToolDefinition("mcp-second") with { Id = "server:other" };
+            var configuration = new ConfigurationBuilder().Build();
+            var manager = new ToolStateManager([first, second], configuration, configPath, mcpApprovalPath: approvalPath);
+            await manager.EnableAsync(first.Id);
+            configuration = new ConfigurationBuilder().AddJsonFile(configPath).Build();
+            var original = await File.ReadAllBytesAsync(approvalPath);
+            var limits = new PolicyStoreResourceLimits { MaximumPolicyFileBytes = original.Length };
+            manager = new ToolStateManager([first, second], configuration, configPath, mcpApprovalPath: approvalPath, policyStoreLimits: limits);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => manager.EnableAsync(second.Id));
+            Assert.Equal(original, await File.ReadAllBytesAsync(approvalPath));
+            var reloaded = new ToolStateManager([first, second], configuration, configPath, mcpApprovalPath: approvalPath, policyStoreLimits: limits);
+            Assert.True(reloaded.IsEnabled(first.Id));
+            Assert.False(reloaded.IsEnabled(second.Id));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
+    }
+
     /// <summary>An approval for one repository cannot be replayed by another repository with the same MCP identity.</summary>
     [Fact]
     public async Task ToolStateManager_McpApproval_IsRepositoryBound()
@@ -1202,7 +1343,8 @@ public sealed class McpManagerTests
         FakeToolStateManager? tools = null,
         FakeIdentityManager? identityManager = null,
         IOutputSanitizer? sanitizer = null,
-        ILogger<McpManager>? logger = null)
+        ILogger<McpManager>? logger = null,
+        McpResourceLimits? limits = null)
     {
         return new McpManager(
             profiles,
@@ -1210,7 +1352,8 @@ public sealed class McpManagerTests
             tools ?? new FakeToolStateManager(),
             identityManager ?? new FakeIdentityManager(),
             sanitizer ?? new IdentitySanitizer(),
-            logger ?? NullLogger<McpManager>.Instance);
+            logger ?? NullLogger<McpManager>.Instance,
+            limits: limits);
     }
 
     private static string GetServerAssemblyPath()
@@ -1405,7 +1548,7 @@ public sealed class McpManagerTests
         private readonly Dictionary<string, McpConnectionStatus> _connections = new(StringComparer.Ordinal);
         private int _activeConnects;
 
-        internal IReadOnlyList<McpImportedCapability> Capabilities { get; } =
+        internal IReadOnlyList<McpImportedCapability> Capabilities { get; init; } =
         [
             new()
             {
@@ -1444,6 +1587,10 @@ public sealed class McpManagerTests
         internal McpConnectionState DisconnectOutcome { get; init; } = McpConnectionState.Disconnected;
 
         internal bool ExternalContentIsTruncated { get; init; }
+
+        internal string ResourceLabel { get; init; } = "resource";
+
+        internal string? ResourceMimeType { get; init; }
 
         internal bool ProcessPresent { get; init; }
 
@@ -1544,7 +1691,7 @@ public sealed class McpManagerTests
         {
             return Task.FromResult(new McpTransportContentResult
             {
-                Content = [new McpTransportContentItem { Label = "resource", Text = "untrusted-resource" }],
+                Content = [new McpTransportContentItem { Label = ResourceLabel, Text = "untrusted-resource", MimeType = ResourceMimeType }],
                 IsTruncated = ExternalContentIsTruncated,
             });
         }

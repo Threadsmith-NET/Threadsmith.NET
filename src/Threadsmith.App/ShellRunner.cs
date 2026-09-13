@@ -303,11 +303,9 @@ internal static class ShellRunner
     private static bool TryGetStandingPreferenceWarning(string resultJson, out string warning)
     {
         warning = string.Empty;
-        if (resultJson.Length > 64 * 1024)
-        {
-            return false;
-        }
 
+        // Completed tool results already obey the configured tool-output limit. A second fixed
+        // ceiling here would silently drop warnings from otherwise valid memory results.
         try
         {
             using var document = JsonDocument.Parse(resultJson);
@@ -341,6 +339,9 @@ internal sealed record ShellRunContext
 
     /// <summary>Gets the effective normal-layer configuration.</summary>
     internal required IConfiguration Configuration { get; init; }
+
+    /// <summary>Gets the machine/user-owned ceiling for reading and rewriting user configuration.</summary>
+    internal required int MaximumUserConfigurationBytes { get; init; }
 
     /// <summary>Gets the host command dispatcher shared by terminal modes.</summary>
     internal required CommandDispatcher Dispatcher { get; init; }

@@ -18,15 +18,9 @@ public static class SemanticRefreshCoordinatorTests
     {
         var limits = SemanticRefreshResourceLimits.Production;
 
-        Assert.Equal(4096, limits.MaximumAuthoritativeInputPaths);
-        Assert.Equal(64, limits.MaximumGraphScanDepth);
-        Assert.Equal(20000, limits.MaximumGraphScanEntries);
         Assert.Equal(1024, limits.MaximumPendingPaths);
         Assert.Equal(1024, limits.MaximumRecentHostEchoIdentities);
         Assert.Equal(256, limits.MaximumSafeReasonLength);
-        Assert.Equal(512, limits.MaximumWatcherDirectories);
-        Assert.Equal(64L * 1024 * 1024, limits.MaximumAuthoritativeSnapshotBytes);
-        Assert.Equal(4L * 1024 * 1024, limits.MaximumStableReadBytes);
     }
 
     /// <summary>Invalid semantic refresh resource limits fail before a coordinator is created.</summary>
@@ -35,18 +29,9 @@ public static class SemanticRefreshCoordinatorTests
     {
         Func<SemanticRefreshResourceLimits>[] invalidConstructions =
         [
-            () => new SemanticRefreshResourceLimits(maximumAuthoritativeInputPaths: 0),
-            () => new SemanticRefreshResourceLimits(maximumGraphScanDepth: 0),
-            () => new SemanticRefreshResourceLimits(maximumGraphScanEntries: 0),
             () => new SemanticRefreshResourceLimits(maximumPendingPaths: 0),
             () => new SemanticRefreshResourceLimits(maximumRecentHostEchoIdentities: 0),
             () => new SemanticRefreshResourceLimits(maximumSafeReasonLength: 0),
-            () => new SemanticRefreshResourceLimits(maximumWatcherDirectories: 0),
-            () => new SemanticRefreshResourceLimits(maximumAuthoritativeSnapshotBytes: 0),
-            () => new SemanticRefreshResourceLimits(maximumStableReadBytes: 0),
-            () => new SemanticRefreshResourceLimits(
-                maximumAuthoritativeSnapshotBytes: 1,
-                maximumStableReadBytes: 2),
         ];
 
         Assert.All(
@@ -296,44 +281,6 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(SemanticRefreshMode.Full, result.Mode);
         Assert.True(coordinator.IsCurrent(repository.SessionId));
         Assert.Equal(1, backend.RefreshCount);
-    }
-
-    /// <summary>The watcher topology bound counts ignored entries without constructing a huge fixture.</summary>
-    [Fact]
-    public static async Task BindAsync_WatcherTopologyCountsIgnoredEntriesAgainstScanBound()
-    {
-        using var repository = new TemporaryRepository();
-        await File.WriteAllTextAsync(Path.Combine(repository.Root, "ignored.tmp"), "ignored");
-        await using var events = new DomainEventStream();
-        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        await using var coordinator = CreateCoordinator(
-            backend,
-            events,
-            watchFileSystem: true,
-            watcherScanEntryLimit: 2);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => coordinator.BindAsync(
-            repository.CreateRequest()));
-    }
-
-    /// <summary>The watcher directory walk counts ignored children before filtering them.</summary>
-    [Fact]
-    public static async Task BindAsync_WatcherDirectoryWalkCountsIgnoredChildrenAgainstScanBound()
-    {
-        using var repository = new TemporaryRepository();
-        Directory.CreateDirectory(Path.Combine(repository.Root, ".git"));
-        Directory.CreateDirectory(Path.Combine(repository.Root, "bin"));
-        Directory.CreateDirectory(Path.Combine(repository.Root, "obj"));
-        await using var events = new DomainEventStream();
-        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        await using var coordinator = CreateCoordinator(
-            backend,
-            events,
-            watchFileSystem: true,
-            watcherScanEntryLimit: 2);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => coordinator.BindAsync(
-            repository.CreateRequest()));
     }
 
     /// <summary>A post-full watcher failure keeps the workspace dirty until recovery succeeds.</summary>
@@ -1509,140 +1456,6 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(0, backend.RefreshCount);
     }
 
-    /// <summary>Oversized loaded text documents fail one refresh cycle without self-queuing another full reload.</summary>
-    [Theory]
-    [InlineData("source")]
-    [InlineData("additional")]
-    [InlineData("analyzer-config")]
-    public static async Task EnsureCurrentAsync_OversizedLoadedTextFailsClosedWithoutRefreshSpin(
-        string documentKind)
-    {
-        const long stableReadByteLimit = 32;
-        const long snapshotByteLimit = 64;
-        using var repository = new TemporaryRepository();
-        await using var events = new DomainEventStream();
-        var refreshFailure = new TaskCompletionSource<SemanticRefreshFailed>(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        await using var subscription = events.Subscribe((domainEvent, _) =>
-        {
-            if (domainEvent is SemanticRefreshFailed failed
-                && failed.SessionId == repository.SessionId)
-            {
-                refreshFailure.TrySetResult(failed);
-            }
-
-            return Task.CompletedTask;
-        });
-        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        var documentPath = repository.SourcePath;
-        if (documentKind == "additional")
-        {
-            documentPath = Path.Combine(repository.Root, "additional.txt");
-            await File.WriteAllTextAsync(documentPath, "initial");
-            backend.AddAdditionalDocument(repository.WorkspaceId, documentPath);
-        }
-        else if (documentKind == "analyzer-config")
-        {
-            documentPath = Path.Combine(repository.Root, ".globalconfig");
-            await File.WriteAllTextAsync(documentPath, "is_global = true");
-            backend.AddAnalyzerConfigDocument(repository.WorkspaceId, documentPath);
-        }
-
-        var resourceLimits = new SemanticRefreshResourceLimits(
-            maximumAuthoritativeSnapshotBytes: snapshotByteLimit,
-            maximumStableReadBytes: stableReadByteLimit);
-        await using var coordinator = CreateCoordinator(
-            backend,
-            events,
-            resourceLimits: resourceLimits);
-        await coordinator.BindAsync(repository.CreateRequest());
-        await File.WriteAllTextAsync(documentPath, new string('x', (int)stableReadByteLimit + 1));
-        await coordinator.ObserveChangeAsync(new SemanticFileChange(
-            repository.SessionId,
-            documentPath,
-            SemanticFileChangeKind.Changed));
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.EnsureCurrentAsync(
-            repository.SessionId,
-            SemanticRefreshReason.UserAdmission));
-        var failure = await refreshFailure.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal(SemanticRefreshFailureKind.UnstableSnapshot, failure.FailureKind);
-        Assert.Equal(1, backend.RefreshCount);
-        Assert.False(coordinator.IsCurrent(repository.SessionId));
-    }
-
-    /// <summary>A direct binding fails closed when graph discovery exceeds its depth bound.</summary>
-    [Fact]
-    public static async Task BindAsync_IncompleteAuthoritativeScanRemainsFailedWithoutRefreshSpin()
-    {
-        const int graphDepthLimit = 2;
-        using var repository = new TemporaryRepository();
-        await using var events = new DomainEventStream();
-        var directory = repository.Root;
-        for (var depth = 0; depth < graphDepthLimit + 1; depth++)
-        {
-            directory = Path.Combine(directory, "d");
-            Directory.CreateDirectory(directory);
-        }
-
-        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        var resourceLimits = new SemanticRefreshResourceLimits(
-            maximumGraphScanDepth: graphDepthLimit);
-        await using var coordinator = CreateCoordinator(
-            backend,
-            events,
-            resourceLimits: resourceLimits);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => coordinator.BindAsync(
-            repository.CreateRequest()));
-        Assert.False(coordinator.IsCurrent(repository.SessionId));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.EnsureCurrentAsync(
-            repository.SessionId,
-            SemanticRefreshReason.UserAdmission));
-        Assert.Equal(0, backend.RefreshCount);
-    }
-
-    /// <summary>A direct binding fails closed when authoritative inputs exceed the aggregate byte budget.</summary>
-    [Fact]
-    public static async Task BindAsync_AuthoritativeInputsOverAggregateBudgetRemainFailed()
-    {
-        const long snapshotByteLimit = 64;
-        const int firstInputByteCount = 20;
-        using var repository = new TemporaryRepository();
-        await using var events = new DomainEventStream();
-        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        var existingInputByteCount = new FileInfo(repository.SolutionPath).Length;
-        var secondInputByteCount = snapshotByteLimit
-            + 1
-            - existingInputByteCount
-            - firstInputByteCount;
-        Assert.InRange(secondInputByteCount, 1, snapshotByteLimit);
-        int[] inputByteCounts = [firstInputByteCount, (int)secondInputByteCount];
-        for (var index = 0; index < inputByteCounts.Length; index++)
-        {
-            var referencePath = Path.Combine(repository.Root, $"Library{index}.dll");
-            await File.WriteAllBytesAsync(referencePath, new byte[inputByteCounts[index]]);
-            backend.AddFullReloadInput(repository.WorkspaceId, referencePath);
-        }
-
-        Assert.Equal(
-            snapshotByteLimit + 1,
-            existingInputByteCount + inputByteCounts.Sum());
-        var resourceLimits = new SemanticRefreshResourceLimits(
-            maximumAuthoritativeSnapshotBytes: snapshotByteLimit,
-            maximumStableReadBytes: snapshotByteLimit);
-        await using var coordinator = CreateCoordinator(
-            backend,
-            events,
-            resourceLimits: resourceLimits);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => coordinator.BindAsync(
-            repository.CreateRequest()));
-        Assert.False(coordinator.IsCurrent(repository.SessionId));
-        Assert.Equal(0, backend.RefreshCount);
-    }
-
     /// <summary>Ignored artifact caches and temporary files stay outside the startup snapshot.</summary>
     [Fact]
     public static async Task BeginBindingAsync_IgnoredArtifactCachesAreExcludedFromStartupSnapshot()
@@ -1685,39 +1498,6 @@ public static class SemanticRefreshCoordinatorTests
         Assert.DoesNotContain(
             fileSnapshotReader.ReadPaths,
             path => ignoredPaths.Contains(path, StringComparer.OrdinalIgnoreCase));
-    }
-
-    /// <summary>A non-excluded repository binary remains subject to authoritative-input bounds.</summary>
-    [Fact]
-    public static async Task BeginBindingAsync_OversizedUninventoriedBinaryRemainsBounded()
-    {
-        const long snapshotByteLimit = 64;
-        using var repository = new TemporaryRepository();
-        await using var events = new DomainEventStream();
-        var libraryDirectory = Path.Combine(repository.Root, "lib");
-        Directory.CreateDirectory(libraryDirectory);
-        var existingInputByteCount = new FileInfo(repository.SolutionPath).Length;
-        var libraryByteCount = snapshotByteLimit + 1 - existingInputByteCount;
-        Assert.Equal(
-            snapshotByteLimit + 1,
-            existingInputByteCount + libraryByteCount);
-        await File.WriteAllBytesAsync(
-            Path.Combine(libraryDirectory, "Library.dll"),
-            new byte[libraryByteCount]);
-
-        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        var resourceLimits = new SemanticRefreshResourceLimits(
-            maximumAuthoritativeSnapshotBytes: snapshotByteLimit,
-            maximumStableReadBytes: snapshotByteLimit);
-        await using var coordinator = CreateCoordinator(
-            backend,
-            events,
-            resourceLimits: resourceLimits);
-
-        await Assert.ThrowsAsync<InvalidDataException>(() => coordinator.BeginBindingAsync(
-            repository.CreateRequest()));
-        Assert.False(coordinator.IsCurrent(repository.SessionId));
-        Assert.Equal(0, backend.RefreshCount);
     }
 
     /// <summary>An old workspace write registration cannot affect a rebound workspace.</summary>
@@ -2196,7 +1976,6 @@ public static class SemanticRefreshCoordinatorTests
         TimeSpan? recentHostEchoLifetime = null,
         bool watchFileSystem = false,
         Func<string, FileSystemWatcher>? watcherFactory = null,
-        int? watcherScanEntryLimit = null,
         SemanticRefreshResourceLimits? resourceLimits = null,
         TimeProvider? timeProvider = null)
     {
@@ -2213,7 +1992,6 @@ public static class SemanticRefreshCoordinatorTests
             pathSafetyValidator: pathSafetyValidator,
             recentHostEchoLifetime: recentHostEchoLifetime,
             watcherFactory: watcherFactory,
-            watcherScanEntryLimit: watcherScanEntryLimit,
             resourceLimits: resourceLimits);
     }
 

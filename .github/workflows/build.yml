@@ -36,56 +36,44 @@ jobs:
         run: dotnet build src/Threadsmith.sln --configuration Debug --no-restore
 
       - name: Test
-        run: dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build
+        run: dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
 
-  # Spikes are throwaway validation projects (plan-01 tasks 10-15). They build as a set;
-  # the Terminal.Gui spike is headless-safe (no TTY required for the PASS assertion).
-  spikes:
-    name: build spikes (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest, windows-latest ]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup .NET 10
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.204'
-
-      - name: Build spikes
-        run: dotnet build spikes/Spikes.sln --configuration Debug
-
-      # Run the headless-safe spikes. (Spike.TerminalGui runs in headless mode when CI is set.)
-      - name: Run Spike.OpenAiStreaming
-        run: dotnet run --project spikes/Spike.OpenAiStreaming/Spike.OpenAiStreaming.csproj --configuration Debug --no-build
-        env:
-          CI: 'true'
-
-      - name: Run Spike.Sqlite
-        run: dotnet run --project spikes/Spike.Sqlite/Spike.Sqlite.csproj --configuration Debug --no-build
-
-      # Build the extension in Release to match the spike's Release run configuration.
-      # The spike probes Release then Debug, so either works, but aligning configs is cleaner.
-      - name: Run Spike.CollectibleAlc
+      - name: Report macOS native test crashes
+        if: ${{ failure() && runner.os == 'macOS' }}
+        shell: bash
         run: |
-          dotnet build spikes/Spike.CollectibleAlc.Extension/Spike.CollectibleAlc.Extension.csproj --configuration Release
-          dotnet run --project spikes/Spike.CollectibleAlc/Spike.CollectibleAlc.csproj --configuration Release
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
 
-      - name: Run Spike.ProcessTree
-        run: |
-          dotnet build spikes/Spike.ProcessTree.Worker/Spike.ProcessTree.Worker.csproj --configuration Debug
-          dotnet run --project spikes/Spike.ProcessTree/Spike.ProcessTree.csproj --configuration Debug --no-build
-
-      - name: Run Spike.TerminalGui (headless)
-        run: dotnet run --project spikes/Spike.TerminalGui/Spike.TerminalGui.csproj --configuration Debug --no-build
-        env:
-          CI: 'true'
-
-      - name: Run Spike.MsBuildWorkspace
-        run: dotnet run --project spikes/Spike.MsBuildWorkspace/Spike.MsBuildWorkspace.csproj --configuration Debug --no-build
+          decoder = json.JSONDecoder()
+          report_roots = [
+              Path.home() / "Library/Logs/DiagnosticReports",
+              Path("/Library/Logs/DiagnosticReports"),
+          ]
+          count = 0
+          for root in report_roots:
+              for path in sorted(root.glob("*.ips")):
+                  if not any(name in path.name.lower() for name in ("dotnet", "threadsmith", "testhost")):
+                      continue
+                  try:
+                      raw = path.read_text()
+                      header, offset = decoder.raw_decode(raw)
+                      report = json.loads(raw[offset:].strip()) if raw[offset:].strip() else header
+                      threads = report.get("threads", [])
+                      index = report.get("faultingThread", -1)
+                      frames = threads[index].get("frames", []) if 0 <= index < len(threads) else []
+                      images = report.get("usedImages", [])
+                      print(json.dumps({
+                          "report": path.name,
+                          "process": report.get("procName"),
+                          "exception": report.get("exception"),
+                          "termination": report.get("termination"),
+                          "faultingFrames": frames,
+                          "images": [{"name": image.get("name"), "base": image.get("base")} for image in images],
+                      }, indent=2))
+                      count += 1
+                  except (OSError, ValueError, TypeError) as error:
+                      print(f"Could not read {path.name}: {error}")
+          print(f"Native crash reports found: {count}")
+          PY

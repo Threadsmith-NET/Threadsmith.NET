@@ -1,11 +1,21 @@
 namespace Threadsmith.Tui.TuiKit;
 
 using System.Text;
+using Threadsmith.Interaction.Contracts;
 using TUIKit.Unicode;
 
 /// <summary>One draft with text-element editing and byte-bounded delta history.</summary>
 internal sealed class ComposerBuffer
 {
+    private readonly TuiResourceLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="ComposerBuffer"/> class.</summary>
+    internal ComposerBuffer(TuiResourceLimits? limits = null)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+    }
+
     /// <summary>Maximum accepted UTF-8 draft size.</summary>
     internal const int MaximumDraftBytes = 1024 * 1024;
     private const int MaximumHistoryBytes = 1024 * 1024;
@@ -257,13 +267,13 @@ internal sealed class ComposerBuffer
         return text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
     }
 
-    private static int GetValidatedByteCount(string text)
+    private int GetValidatedByteCount(string text)
     {
         // A strict encoder rejects malformed input before it can enter history or a cell.
         var bytes = _strictUtf8.GetByteCount(text);
-        if (bytes > MaximumDraftBytes)
+        if (bytes > _limits.MaximumDraftBytes)
         {
-            throw new InvalidOperationException("Composer input exceeds the 1 MiB input limit.");
+            throw new InvalidOperationException($"Composer input exceeds the configured {_limits.MaximumDraftBytes:N0}-byte limit.");
         }
 
         return bytes;
@@ -306,9 +316,9 @@ internal sealed class ComposerBuffer
         var removedUtf8Bytes = _strictUtf8.GetByteCount(removed);
         var insertedUtf8Bytes = GetValidatedByteCount(inserted);
         var textBytes = _textBytes - removedUtf8Bytes + insertedUtf8Bytes;
-        if (textBytes > MaximumDraftBytes)
+        if (textBytes > _limits.MaximumDraftBytes)
         {
-            throw new InvalidOperationException("Composer input exceeds the 1 MiB input limit.");
+            throw new InvalidOperationException($"Composer input exceeds the configured {_limits.MaximumDraftBytes:N0}-byte limit.");
         }
 
         var text = string.Concat(Text.AsSpan(0, start), inserted, Text.AsSpan(end));
@@ -337,7 +347,7 @@ internal sealed class ComposerBuffer
         _redo.Clear();
         _undo.Add(edit);
         _historyBytes += edit.Bytes;
-        while (_undo.Count > MaximumHistoryEntries || _historyBytes > MaximumHistoryBytes)
+        while (_undo.Count > _limits.MaximumUndoEntries || _historyBytes > _limits.MaximumUndoBytes)
         {
             _historyBytes -= _undo[0].Bytes;
             _undo.RemoveAt(0);

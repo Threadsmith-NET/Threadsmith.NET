@@ -93,6 +93,24 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Equal(1, captured.Limits.MaximumDepth);
             Assert.Equal(200, captured.Limits.MaximumNodes);
             Assert.Equal(500, captured.Limits.MaximumEdges);
+            var reducedLimits = new SemanticResourceLimits
+            {
+                MaximumTraversalDepth = 1,
+                MaximumTraversalNodes = 10,
+                MaximumTraversalEdges = 15,
+                MaximumTraversalTimeoutMilliseconds = 100,
+            };
+            var reduced = new CallHierarchyTool(service, TestPromptLoader.Instance, reducedLimits);
+            await ((ITool)reduced).ExecuteAsync(
+                new CallHierarchyInput { SymbolId = captured.SymbolId },
+                CreateToolExecutionContext(repositoryPath),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(
+                new SemanticTraversalLimits
+                {
+                    MaximumDepth = 1, MaximumNodes = 10, MaximumEdges = 15, TimeoutMilliseconds = 100,
+                },
+                service.CapturedCallHierarchyRequest.Limits);
             Assert.NotNull(execution.ModelResultContent);
             var expectedHeader = TestPromptLoader.Instance.Render(
                 PromptFileNames.ToolCallHierarchyResultHeader,
@@ -323,6 +341,20 @@ public sealed class Plan43AdvancedSemanticToolTests
             var captured = service.CapturedSymbolImpactRequest ?? throw new InvalidOperationException("Expected symbol-impact request capture.");
             Assert.Equal("symbol:root", captured.SymbolId);
             Assert.Equal(2, captured.Limits.MaximumDepth);
+            var reduced = new SymbolImpactTool(service, TestPromptLoader.Instance, new SemanticResourceLimits
+            {
+                MaximumTraversalDepth = 1,
+                MaximumTraversalNodes = 10,
+                MaximumTraversalEdges = 15,
+                MaximumTraversalTimeoutMilliseconds = 100,
+            });
+            await ((ITool)reduced).ExecuteAsync(input, CreateToolExecutionContext(repositoryPath), TestContext.Current.CancellationToken);
+            Assert.Equal(
+                new SemanticTraversalLimits
+                {
+                    MaximumDepth = 1, MaximumNodes = 10, MaximumEdges = 15, TimeoutMilliseconds = 100,
+                },
+                service.CapturedSymbolImpactRequest.Limits);
             Assert.NotNull(execution.ModelResultContent);
             var expectedHeader = TestPromptLoader.Instance.Render(
                 PromptFileNames.ToolSymbolImpactResultHeader,
@@ -392,7 +424,9 @@ public sealed class Plan43AdvancedSemanticToolTests
             TestContext.Current.CancellationToken)).Single(result =>
                 result.Symbol.DisplayName.Contains("IWorker.Execute", StringComparison.Ordinal));
 
-        var result = await fixture.Service.QuerySymbolImpactAsync(
+        var clock = new ExpiredDeadlineTimeProvider();
+        var service = new AdvancedSemanticQueryService(fixture.Registry, TestPromptLoader.Instance, timeProvider: clock);
+        var result = await service.QuerySymbolImpactAsync(
             fixture.WorkspaceId,
             new SymbolImpactRequest
             {
@@ -401,6 +435,7 @@ public sealed class Plan43AdvancedSemanticToolTests
             },
             TestContext.Current.CancellationToken);
 
+        Assert.Equal(TimeSpan.FromMilliseconds(1), clock.LastDueTime);
         Assert.True(result.Traversal.TimeLimitReached);
         Assert.Contains(result.Traversal.Omissions, omission => omission.Contains("time", StringComparison.OrdinalIgnoreCase));
     }
@@ -925,6 +960,19 @@ public sealed class Plan43AdvancedSemanticToolTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(GeneratedResult ?? throw new NotSupportedException());
+        }
+    }
+
+    private sealed class ExpiredDeadlineTimeProvider : TimeProvider
+    {
+        public TimeSpan LastDueTime { get; private set; }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            LastDueTime = dueTime;
+            var timer = TimeProvider.System.CreateTimer(callback, state, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            callback(state);
+            return timer;
         }
     }
 

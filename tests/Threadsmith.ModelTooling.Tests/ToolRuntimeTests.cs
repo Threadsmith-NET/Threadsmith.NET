@@ -23,6 +23,41 @@ public static class ToolRuntimeTests
 {
     private const string SanitizerExpansionMarker = "token=x";
 
+    /// <summary>Increasing read content admits the serialized result through the actual tool pipeline.</summary>
+    [Theory]
+    [InlineData('x')]
+    [InlineData('"')]
+    public static async Task ReadFile_LargerConfiguredContent_PassesRuntimeOutputBound(char character)
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var content = new string(character, 400 * 1024);
+            await File.WriteAllTextAsync(Path.Combine(repository, "large.txt"), content);
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new ToolLimits { ReadFileMaximumContentBytes = 512 * 1024 });
+            await using var events = new DomainEventStream();
+            var pipeline = CreatePipeline(events, [tool]);
+            var result = await pipeline.InvokeAsync(CreateBatchRequest(
+                0,
+                "large-read",
+                "read_file",
+                CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.TrustedRead },
+                "{\"path\":\"large.txt\"}").Invocation);
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.NotNull(result.ResultJson);
+            var output = JsonSerializer.Deserialize<ReadFileOutput>(result.ResultJson);
+            Assert.NotNull(output);
+            Assert.Equal(content, Assert.Single(output.Lines));
+            Assert.False(output.IsTruncated);
+            Assert.Equal(384 * 1024, new ReadFileTool(TestPromptLoader.Instance).Definition.MaximumOutputBytes);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>A model-requested tool produces attributable durable output and visible activity.</summary>
     [Fact]
     public static async Task ModelToolRequest_IsTypedPersistedAndVisible()
@@ -2002,7 +2037,17 @@ public static class ToolRuntimeTests
         Assert.All(
             tools,
             tool => Assert.Equal(
-                TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
+                tool.Definition.Id == "search"
+                    ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string> { ["MaximumQueryCharacters"] = "500" })
+                    : tool.Definition.Id == "read_file"
+                        ? TestPromptLoader.Instance.Render(assets[tool.Definition.Id], new Dictionary<string, string>
+                        {
+                            ["DefaultLines"] = "2000",
+                            ["MaximumLines"] = "2000",
+                            ["MaximumContentBytes"] = "51200",
+                            ["MaximumFileBytes"] = "1048576",
+                        })
+                        : TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
                 tool.Definition.Description));
 
         var runProcess = new RunProcessTool(
@@ -2298,27 +2343,30 @@ public static class ToolRuntimeTests
 
     /// <summary>Cancelling a process request terminates its child process tree.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task ProcessManager_Cancellation_KillsChildTree(bool infiniteTimeout)
+    [InlineData(false, 5000)]
+    [InlineData(true, 5000)]
+    [InlineData(false, 1)]
+    public static async Task ProcessManager_Cancellation_KillsChildTree(bool infiniteTimeout, int drainTimeoutMilliseconds)
     {
         var repository = CreateTemporaryDirectory();
         var processIdPath = Path.Combine(repository, "child.pid");
         using var cancellation = new CancellationTokenSource();
         Process? child = null;
+        Task<ProcessExecutionResult>? running = null;
         try
         {
             var manager = new ProcessManager(
                 new TestSanitizer(),
-                NullLogger<ProcessManager>.Instance);
+                NullLogger<ProcessManager>.Instance,
+                limits: new ProcessResourceLimits { DrainTimeoutMilliseconds = drainTimeoutMilliseconds });
             var request = CreateTreeProcessRequest(repository, processIdPath);
             if (infiniteTimeout)
             {
                 request = request with { Timeout = Timeout.InfiniteTimeSpan };
             }
 
-            var running = manager.RunAsync(request, cancellation.Token);
-            await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(10));
+            running = manager.RunAsync(request, cancellation.Token);
+            await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(30));
             var processIdText = await File.ReadAllTextAsync(processIdPath);
             var processId = int.Parse(processIdText, System.Globalization.CultureInfo.InvariantCulture);
             child = Process.GetProcessById(processId);
@@ -2342,14 +2390,66 @@ public static class ToolRuntimeTests
         }
         finally
         {
+            await cancellation.CancelAsync();
+            if (running is not null)
+            {
+                try
+                {
+                    await running;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Observe teardown even when the process-start assertion failed.
+                }
+            }
+
             if (child is { HasExited: false })
             {
                 child.Kill(entireProcessTree: true);
+                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
             }
 
             child?.Dispose();
-            Directory.Delete(repository, recursive: true);
+            // Windows can retain a directory handle briefly after process-tree exit.
+            // Process termination is asserted above; cleanup must not mask that result.
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    Directory.Delete(repository, recursive: true);
+                    break;
+                }
+                catch (IOException) when (OperatingSystem.IsWindows() && attempt < 99)
+                {
+                    await Task.Delay(50);
+                }
+            }
         }
+    }
+
+    /// <summary>A tiny post-kill drain deadline preserves the process timeout outcome.</summary>
+    [Fact]
+    public static async Task ProcessManager_TinyDrainDeadline_PreservesTimeoutResult()
+    {
+        var manager = new ProcessManager(
+            new TestSanitizer(),
+            NullLogger<ProcessManager>.Instance,
+            limits: new ProcessResourceLimits { DrainTimeoutMilliseconds = 1 });
+        var request = new ProcessExecutionRequest
+        {
+            ToolInvocationId = ToolInvocationId.New(),
+            RunId = RunId.New(),
+            FileName = OperatingSystem.IsWindows() ? "powershell.exe" : "sh",
+            Arguments = OperatingSystem.IsWindows()
+                ? ["-NoProfile", "-NonInteractive", "-Command", "Start-Sleep -Seconds 30"]
+                : ["-c", "sleep 30"],
+            WorkingDirectory = Path.GetTempPath(),
+            Timeout = TimeSpan.FromMilliseconds(100),
+        };
+        var result = await manager.RunAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.True(result.TimedOut);
+        Assert.Empty(manager.ActiveProcesses);
     }
 
     /// <summary>NUL-delimited process output is parsed before the generic sanitizer removes control characters.</summary>
@@ -2680,7 +2780,8 @@ public static class ToolRuntimeTests
             IConfiguration configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    ["tools:config:csharp_script:timeout_ms"] = "5000",
+                    // Successful cases include cold worker startup and Roslyn compilation on shared CI hosts.
+                    ["tools:config:csharp_script:timeout_ms"] = "30000",
                     ["tools:config:csharp_script:max_output_bytes"] = "256",
                     ["tools:config:csharp_script:allowed_assemblies"] = "System.Linq,System.Collections,System.Collections.Generic",
                 })
@@ -2763,6 +2864,21 @@ public static class ToolRuntimeTests
         {
             Directory.Delete(repository, recursive: true);
         }
+    }
+
+    /// <summary>Derived capture sizes outside the process contract fail before a worker starts.</summary>
+    [Fact]
+    public static async Task CSharpScriptEngine_RejectsUnrepresentableOutputBeforeStartingWorker()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:csharp_script:max_output_bytes"] = "357913259",
+        }).Build();
+        var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance);
+        var engine = new CSharpScriptEngine(processManager, new ToolConfig(configuration), Path.Combine(Path.GetTempPath(), "missing-worker.dll"));
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), CreateContext(Environment.CurrentDirectory));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => engine.ExecuteAsync("1 + 1", ScriptKind.Expression, context));
+        Assert.Empty(processManager.ActiveProcesses);
     }
 
     /// <summary>A staged self-contained worker apphost is launched directly without the dotnet muxer.</summary>
@@ -3587,11 +3703,11 @@ public static class ToolRuntimeTests
         if (OperatingSystem.IsWindows())
         {
             var escapedPath = processIdPath.Replace("'", "''", StringComparison.Ordinal);
-            var script = "$child = Start-Process -FilePath powershell.exe "
-                + "-ArgumentList @('-NoProfile','-NonInteractive','-Command',"
-                + "'Start-Sleep -Seconds 60') -PassThru; "
+            var script = "$start = [Diagnostics.ProcessStartInfo]::new('ping.exe', '-n 60 127.0.0.1'); "
+                + "$start.UseShellExecute = $false; $start.CreateNoWindow = $true; "
+                + "$child = [Diagnostics.Process]::Start($start); "
                 + $"[IO.File]::WriteAllText('{escapedPath}', $child.Id.ToString()); "
-                + "Wait-Process -Id $child.Id";
+                + "$child.WaitForExit()";
             return new ProcessExecutionRequest
             {
                 ToolInvocationId = ToolInvocationId.New(),

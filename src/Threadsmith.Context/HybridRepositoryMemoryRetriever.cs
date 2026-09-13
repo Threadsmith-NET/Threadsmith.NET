@@ -9,9 +9,6 @@ using Threadsmith.Core;
 /// <summary>Small exact hybrid search with snapshot-consistent candidates and bounded turn-query caches.</summary>
 public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRetriever, IDisposable
 {
-    private const int MaximumQueryCharacters = 8_000;
-    private const int MaximumQueryTerms = 32;
-    private const int MaximumCacheEntries = 64;
     private const double FusionConstant = 60;
     private static readonly HashSet<string> StopWords = new(
         ["a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "how", "i", "in", "is", "it", "of", "on", "or", "please", "that", "the", "this", "to", "was", "we", "what", "when", "where", "which", "with", "you"],
@@ -54,7 +51,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            var terms = Tokenize(query).Where(term => !StopWords.Contains(term)).Take(MaximumQueryTerms).ToArray();
+            var terms = Tokenize(query).Where(term => !StopWords.Contains(term)).Take(request.Options.MaximumQueryTerms).ToArray();
             var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, cancellationToken);
             memorySetRevision = snapshot.Revision;
             standingPreferences = SelectStandingPreferences(snapshot);
@@ -76,8 +73,8 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             var queryKey = model.SpaceId + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(query)));
 
             // Retrieval settings affect selections, while the embedding cache remains model/query-only.
-            var minimumKey = semanticMinimum.ToString("R", CultureInfo.InvariantCulture);
-            var diagnostics = new List<string>(snapshot.Warnings.Take(32));
+            var minimumKey = string.Join(':', semanticMinimum.ToString("R", CultureInfo.InvariantCulture), request.Options.MaximumQueryTerms, request.Options.MaximumDiagnostics);
+            var diagnostics = new List<string>(snapshot.Warnings.Take(request.Options.MaximumDiagnostics));
             var crossEncoderModel = request.Options.RerankerEnabled ? GetCrossEncoderModel(diagnostics) : null;
             var rerankerKey = request.Options.RerankerEnabled
                 ? string.Join(':', crossEncoderModel?.ModelId ?? "unavailable", crossEncoderModel?.MaxInputTokens, crossEncoderModel?.MaxBatchSize, request.Options.RerankerCandidateLimit, request.Options.RerankerMinimumScore?.ToString("R", CultureInfo.InvariantCulture) ?? "none")
@@ -102,7 +99,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                         throw new InvalidOperationException("The query embedding is invalid.");
                     }
 
-                    AddBounded(_queryCache, queryKey, embedding);
+                    AddBounded(_queryCache, queryKey, embedding, request.Options.MaximumCacheEntries);
                 }
                 catch (OperationCanceledException)
                 {
@@ -160,13 +157,13 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             }
 
             diagnostics.Add($"Memory search used embedding space {model.SpaceId}; semanticMinimum={minimumKey}, lexical={lexical.Count}, semantic={semantic.Count}, selected={selected.Length}, elapsed={timer.Elapsed.TotalMilliseconds:F1}ms.");
-            foreach (var entry in snapshot.Entries.Where(entry => !selected.Any(candidate => candidate.Entry.Id == entry.Id)).Take(32))
+            foreach (var entry in snapshot.Entries.Where(entry => !selected.Any(candidate => candidate.Entry.Id == entry.Id)).Take(request.Options.MaximumDiagnostics))
             {
                 diagnostics.Add($"Memory {entry.Id.Value:D}: omitted by branch qualification, reranking, or configured selection limit.");
             }
 
-            IReadOnlyList<string> boundedDiagnostics = diagnostics.Count <= 64
-                ? diagnostics : [.. diagnostics.Take(63), $"Omitted {diagnostics.Count - 63} additional memory diagnostics."];
+            IReadOnlyList<string> boundedDiagnostics = diagnostics.Count <= request.Options.MaximumDiagnostics
+                ? diagnostics : [.. diagnostics.Take(request.Options.MaximumDiagnostics - 1), $"Omitted {diagnostics.Count - request.Options.MaximumDiagnostics + 1} additional memory diagnostics."];
             var result = new RepositoryMemoryRetrievalResult(selected, boundedDiagnostics, snapshot.Revision, truncated, queryCacheHit, false)
             {
                 StandingPreferences = standingPreferences,
@@ -174,11 +171,11 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             var degraded = embedding is null || rerankerDegraded || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
             if (!degraded)
             {
-                AddBounded(_rankingCache, rankKey, result);
+                AddBounded(_rankingCache, rankKey, result, request.Options.MaximumCacheEntries);
             }
             else if (request.UserTurnId is { } userTurn)
             {
-                AddBounded(_rankingCache, rankKey + ":degraded:" + userTurn.Value.ToString("D"), result);
+                AddBounded(_rankingCache, rankKey + ":degraded:" + userTurn.Value.ToString("D"), result, request.Options.MaximumCacheEntries);
             }
 
             return result;
@@ -230,9 +227,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         return snapshot with { Entries = entries, LexicalMatches = [.. snapshot.LexicalMatches.Where(match => ids.Contains(match.Id))] };
     }
 
-    private static void AddBounded<T>(Dictionary<string, T> cache, string key, T value)
+    private static void AddBounded<T>(Dictionary<string, T> cache, string key, T value, int maximumCacheEntries)
     {
-        if (cache.Count >= MaximumCacheEntries)
+        while (cache.Count >= maximumCacheEntries)
         {
             cache.Remove(cache.Keys.First());
         }
@@ -245,17 +242,17 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         var current = request.CurrentInstruction.Trim();
         var task = request.TaskIntent?.Trim();
         var includeTask = !string.IsNullOrWhiteSpace(task) && !string.Equals(current, task, StringComparison.Ordinal);
-        bounded = current.Length + (includeTask ? 1L + task?.Length : 0) > MaximumQueryCharacters;
-        var builder = new StringBuilder(MaximumQueryCharacters);
-        builder.Append(current.AsSpan(0, Math.Min(current.Length, MaximumQueryCharacters)));
-        if (includeTask && task is not null && builder.Length < MaximumQueryCharacters)
+        bounded = current.Length + (includeTask ? 1L + task?.Length : 0) > request.Options.MaximumQueryCharacters;
+        var builder = new StringBuilder(Math.Min(current.Length, request.Options.MaximumQueryCharacters));
+        builder.Append(current.AsSpan(0, Math.Min(current.Length, request.Options.MaximumQueryCharacters)));
+        if (includeTask && task is not null && builder.Length < request.Options.MaximumQueryCharacters)
         {
             builder.Append('\n');
-            builder.Append(task.AsSpan(0, Math.Min(task.Length, MaximumQueryCharacters - builder.Length)));
+            builder.Append(task.AsSpan(0, Math.Min(task.Length, request.Options.MaximumQueryCharacters - builder.Length)));
         }
 
         var text = builder.ToString();
-        var length = Math.Min(text.Length, MaximumQueryCharacters);
+        var length = Math.Min(text.Length, request.Options.MaximumQueryCharacters);
         if (length > 0 && char.IsHighSurrogate(text[length - 1]))
         {
             length--;

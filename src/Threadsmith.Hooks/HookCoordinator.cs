@@ -25,6 +25,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
     private readonly IOutputSanitizer _sanitizer;
     private readonly IHookStore _store;
     private readonly TimeProvider _timeProvider;
+    private readonly HookResourceLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="HookCoordinator"/> class.</summary>
     public HookCoordinator(
@@ -35,7 +36,8 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         IOutputSanitizer sanitizer,
         ILogger<HookCoordinator> logger,
         IDomainEventStream? events = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        HookResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(handlers);
         ArgumentNullException.ThrowIfNull(adapters);
@@ -43,7 +45,9 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
-        _handlers = HookDescriptorValidator.Normalize(handlers);
+        _limits = limits ?? new();
+        _limits.Validate();
+        _handlers = HookDescriptorValidator.Normalize(handlers, _limits);
         _adapters = new ConcurrentDictionary<HookAdapterKind, IHookHandlerAdapter>(
             adapters.ToDictionary(adapter => adapter.Kind));
         _policy = policy;
@@ -441,7 +445,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
         };
     }
 
-    private static void ValidateResult(HookHandlerResult result, int maximumBytes)
+    private void ValidateResult(HookHandlerResult result, int maximumBytes)
     {
         ArgumentNullException.ThrowIfNull(result);
         if (result.SchemaVersion != 1 || JsonSerializer.SerializeToUtf8Bytes(result, result.GetType()).Length > maximumBytes)
@@ -451,24 +455,24 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
 
         switch (result)
         {
-            case HookAdviceResult advice when advice.Findings.Count > 32
-                || advice.Findings.Any(finding => string.IsNullOrWhiteSpace(finding) || finding.Length > 1024):
+            case HookAdviceResult advice when advice.Findings.Count > _limits.MaximumFindings
+                || advice.Findings.Any(finding => string.IsNullOrWhiteSpace(finding) || finding.Length > _limits.MaximumFindingCharacters):
             case HookDenyResult denial when string.IsNullOrWhiteSpace(denial.Code)
-                || denial.Code.Length > 64 || denial.Explanation.Length > 1024:
+                || denial.Code.Length > _limits.MaximumCodeCharacters || denial.Explanation.Length > _limits.MaximumFindingCharacters:
             case HookFailureResult failure when string.IsNullOrWhiteSpace(failure.Code)
-                || failure.Code.Length > 64 || failure.Explanation.Length > 1024:
+                || failure.Code.Length > _limits.MaximumCodeCharacters || failure.Explanation.Length > _limits.MaximumFindingCharacters:
                 throw new InvalidDataException("Hook result fields exceed bounds.");
         }
     }
 
-    private static IReadOnlyDictionary<string, string> ValidatePayload(IReadOnlyDictionary<string, string>? payload)
+    private IReadOnlyDictionary<string, string> ValidatePayload(IReadOnlyDictionary<string, string>? payload)
     {
         if (payload is null)
         {
             return new Dictionary<string, string>();
         }
 
-        if (payload.Count > 32 || payload.Any(pair => pair.Key.Length > 64 || pair.Value.Length > 2048))
+        if (payload.Count > _limits.MaximumPayloadEntries || payload.Any(pair => pair.Key.Length > _limits.MaximumPayloadKeyCharacters || pair.Value.Length > _limits.MaximumPayloadValueCharacters))
         {
             throw new ArgumentOutOfRangeException(nameof(payload), "Hook payload exceeds metadata bounds.");
         }
@@ -478,7 +482,7 @@ public sealed class HookCoordinator : IHookCoordinator, IAsyncDisposable
 
     private string? Bound(string? value)
     {
-        return value is null ? null : _sanitizer.Sanitize(value)[..Math.Min(1024, _sanitizer.Sanitize(value).Length)];
+        return value is null ? null : _sanitizer.Sanitize(value)[..Math.Min(_limits.MaximumFindingCharacters, _sanitizer.Sanitize(value).Length)];
     }
 
     private Task PublishAsync(IDomainEvent domainEvent, CancellationToken cancellationToken)

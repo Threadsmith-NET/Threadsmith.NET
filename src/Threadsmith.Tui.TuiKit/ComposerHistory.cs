@@ -1,12 +1,22 @@
 namespace Threadsmith.Tui.TuiKit;
 
 using System.Text;
+using Threadsmith.Interaction.Contracts;
 
 // Session-local history. Store exact inputs once, with bounded entry/byte retention.
 
 /// <summary>Retains bounded submissions with prefix-first navigation and draft restoration.</summary>
 internal sealed class ComposerHistory
 {
+    private readonly TuiResourceLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="ComposerHistory"/> class.</summary>
+    internal ComposerHistory(TuiResourceLimits? limits = null)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+    }
+
     /// <summary>Maximum number of submitted entries retained.</summary>
     internal const int EntryLimit = 1000;
 
@@ -36,7 +46,7 @@ internal sealed class ComposerHistory
         var entry = new Entry(text, Encoding.UTF8.GetByteCount(text));
         _entries.Add(entry);
         _bytes += entry.Bytes;
-        while (_entries.Count > EntryLimit || _bytes > ByteLimit)
+        while (_entries.Count > _limits.MaximumHistoryEntries || _bytes > _limits.MaximumHistoryBytes)
         {
             _bytes -= _entries[0].Bytes;
             _entries.RemoveAt(0);

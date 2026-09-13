@@ -194,29 +194,34 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
     public ReadFileTool(IPromptLoader promptLoader, ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
+        _limits = limits ?? ToolLimits.Default;
+
+        // Keep the historical envelope and add worst-case JSON escaping and line-array overhead.
+        var outputBytes = (384L * 1024)
+            + (6L * Math.Max(0, (long)_limits.ReadFileMaximumContentBytes - ToolLimits.DefaultReadFileContentByteLimit))
+            + (3L * Math.Max(0, (long)_limits.ReadFileMaxLines - ToolLimits.DefaultReadFileLineLimit));
         _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
             "read_file",
-            promptLoader.Get(PromptFileNames.ToolReadFileDescription),
+            promptLoader.Render(PromptFileNames.ToolReadFileDescription, new Dictionary<string, string>
+            {
+                ["DefaultLines"] = _limits.ReadFileDefaultLines.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["MaximumLines"] = _limits.ReadFileMaxLines.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["MaximumContentBytes"] = _limits.ReadFileMaximumContentBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["MaximumFileBytes"] = _limits.ReadFileMaximumBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }),
             ToolCategory.FileRead,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(10),
-            384 * 1024);
-        _limits = limits ?? ToolLimits.Default;
+            (int)Math.Min(int.MaxValue, outputBytes));
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaxLines, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(
-            _limits.ReadFileMaxLines,
-            ToolLimits.ReadFileLineLimitCeiling);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(
             _limits.ReadFileDefaultLines,
             _limits.ReadFileMaxLines);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumContentBytes, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(
-            _limits.ReadFileMaximumContentBytes,
-            ToolLimits.ReadFileContentByteLimitCeiling);
     }
 
     /// <inheritdoc />
@@ -252,7 +257,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             cancellationToken.ThrowIfCancellationRequested();
             var lineBytes = Encoding.UTF8.GetByteCount(lines[index]);
             var separatorBytes = selected.Count == 0 ? 0 : 1;
-            if (selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
+            if ((long)selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
             {
                 if (selected.Count == 0)
                 {
@@ -398,7 +403,10 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         ArgumentException.ThrowIfNullOrWhiteSpace(ripgrepExecutable);
         _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
             "search",
-            promptLoader.Get(PromptFileNames.ToolSearchDescription),
+            promptLoader.Render(PromptFileNames.ToolSearchDescription, new Dictionary<string, string>
+            {
+                ["MaximumQueryCharacters"] = (limits ?? ToolLimits.Default).SearchMaximumQueryCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }),
             ToolCategory.FileSearch,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -427,7 +435,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             ? new Regex(
                 input.Query,
                 RegexOptions.CultureInvariant,
-                TimeSpan.FromMilliseconds(250))
+                TimeSpan.FromMilliseconds(_limits.SearchRegexTimeoutMilliseconds))
             : null;
         var repositoryPath = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
         var searchPath = ToolPathRules.NormalizeAndValidate(input.Path ?? ".", context.Invocation);
@@ -544,13 +552,14 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Glob);
-        if (input.Query.Length > 500 || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
+        if (input.Query.Length > _limits.SearchMaximumQueryCharacters || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
         {
             throw new ToolArgumentValidationException(
                 _prompts.Render(
                     PromptFileNames.CorrectionSearchBounds,
                     new Dictionary<string, string>(StringComparer.Ordinal)
                     {
+                        ["MaximumQueryCharacters"] = _limits.SearchMaximumQueryCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture),
                         ["MaximumMatches"] = _limits.SearchMaxMatches.ToString(
                             System.Globalization.CultureInfo.InvariantCulture),
                     }));
@@ -560,7 +569,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         {
             try
             {
-                _ = new Regex(input.Query, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
+                _ = new Regex(input.Query, RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(_limits.SearchRegexTimeoutMilliseconds));
             }
             catch (ArgumentException exception)
             {
@@ -655,7 +664,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                     FileName = _ripgrepExecutable,
                     Arguments = arguments,
                     WorkingDirectory = repositoryPath,
-                    Timeout = TimeSpan.FromSeconds(25),
+                    Timeout = TimeSpan.FromMilliseconds(_limits.SearchProcessTimeoutMilliseconds),
                     MaximumOutputCharacters = Definition.MaximumOutputBytes,
                     StandardOutputFormat = ProcessStandardOutputFormat.RipgrepJsonLines,
                     Origin = ProcessRequestOrigin.Host,
@@ -1260,7 +1269,7 @@ public sealed class FindSymbolTool : Tool<FindSymbolInput, IReadOnlyList<SymbolR
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
             truncated,
-            LegacySemanticToolOutput.Render(selected, truncated));
+            LegacySemanticToolOutput.Render(selected, truncated, _limits.SemanticMaximumModelResults));
     }
 
     /// <inheritdoc />
@@ -1346,7 +1355,7 @@ public sealed class FindReferencesTool : Tool<FindReferencesInput, IReadOnlyList
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
             truncated,
-            LegacySemanticToolOutput.Render(selected, truncated));
+            LegacySemanticToolOutput.Render(selected, truncated, _limits.SemanticMaximumModelResults));
     }
 
     /// <inheritdoc />
@@ -1428,7 +1437,7 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
                 $"{result.Location.FilePath}:L{result.Location.Range.StartLine}"))
                 .ToArray(),
             truncated,
-            LegacySemanticToolOutput.Render(selected, truncated));
+            LegacySemanticToolOutput.Render(selected, truncated, _limits.SemanticMaximumModelResults));
     }
 
     /// <inheritdoc />
@@ -1455,8 +1464,6 @@ public sealed class FindImplementationsTool : Tool<FindImplementationsInput, IRe
 /// <summary>Confines legacy semantic results and creates bounded, flat model-facing projections.</summary>
 internal static class LegacySemanticToolOutput
 {
-    private const int MaximumResults = 100;
-
     /// <summary>Returns whether a semantic location is within the invocation path policy.</summary>
     internal static bool IsAllowed(
         SemanticSourceLocation location,
@@ -1474,38 +1481,42 @@ internal static class LegacySemanticToolOutput
     }
 
     /// <summary>Projects symbol declarations.</summary>
-    internal static string Render(IReadOnlyList<SymbolResult> results, bool truncated)
+    internal static string Render(IReadOnlyList<SymbolResult> results, bool truncated, int maximumResults)
     {
         return Render(
             results.Select(static result => CreateItem(result.Symbol, result.Location)),
             results.Count,
-            truncated);
+            truncated,
+            maximumResults);
     }
 
     /// <summary>Projects symbol references.</summary>
-    internal static string Render(IReadOnlyList<ReferenceResult> results, bool truncated)
+    internal static string Render(IReadOnlyList<ReferenceResult> results, bool truncated, int maximumResults)
     {
         return Render(
             results.Select(static result => CreateItem(result.Symbol, result.Location)),
             results.Count,
-            truncated);
+            truncated,
+            maximumResults);
     }
 
     /// <summary>Projects symbol implementations.</summary>
-    internal static string Render(IReadOnlyList<ImplementationResult> results, bool truncated)
+    internal static string Render(IReadOnlyList<ImplementationResult> results, bool truncated, int maximumResults)
     {
         return Render(
             results.Select(static result => CreateItem(result.Symbol, result.Location)),
             results.Count,
-            truncated);
+            truncated,
+            maximumResults);
     }
 
     private static string Render(
         IEnumerable<LegacySemanticProjectionItem> results,
         int resultCount,
-        bool truncated)
+        bool truncated,
+        int maximumResults)
     {
-        var selected = results.Take(MaximumResults).ToArray();
+        var selected = results.Take(maximumResults).ToArray();
         return JsonSerializer.Serialize(new
         {
             results = selected,
@@ -1595,7 +1606,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             RepositoryTrustLevel.TrustedBuild,
             requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
             ToolSideEffect.ExecutesCode,
-            TimeSpan.FromSeconds(60),
+            TimeSpan.FromSeconds(_limits.RunProcessMaxTimeoutSeconds),
             256 * 1024) with
         {
             ConversationAvailable = shellAllowed && !requireApproval,

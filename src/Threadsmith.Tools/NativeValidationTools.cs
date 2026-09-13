@@ -7,13 +7,15 @@ using Threadsmith.Core;
 /// <summary>Inspects NuGet dependency and advisory health without restoring or mutating packages.</summary>
 public sealed class NuGetHealthTool : Tool<NuGetDependencyHealthRequest, NuGetDependencyHealthResult>
 {
+    private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="NuGetHealthTool"/> class.</summary>
-    public NuGetHealthTool(INativeValidationToolService service, IPromptLoader promptLoader)
+    public NuGetHealthTool(INativeValidationToolService service, IPromptLoader promptLoader, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _projection = new NativeValidationModelProjection(limits);
         _definition = NativeValidationToolDefinitions.Create<NuGetDependencyHealthRequest, NuGetDependencyHealthResult>(
             "nuget_health",
             promptLoader,
@@ -41,7 +43,7 @@ public sealed class NuGetHealthTool : Tool<NuGetDependencyHealthRequest, NuGetDe
             result,
             result.Sources.Select(source => new ToolProvenanceSource("nuget", source, input.ProjectPath)).ToArray(),
             result.IsTruncated,
-            ModelResultContent: NativeValidationModelProjection.Create(result));
+            ModelResultContent: _projection.Create(result));
     }
 
     /// <inheritdoc />
@@ -86,7 +88,7 @@ public sealed class NuGetHealthTool : Tool<NuGetDependencyHealthRequest, NuGetDe
 public sealed class DotNetBuildTool : NativeValidationTargetTool<BuildToolRequest>
 {
     /// <summary>Initializes a new instance of the <see cref="DotNetBuildTool"/> class.</summary>
-    public DotNetBuildTool(INativeValidationToolService service, IPromptLoader promptLoader)
+    public DotNetBuildTool(INativeValidationToolService service, IPromptLoader promptLoader, ValidationResourceLimits? limits = null)
         : base(
             service,
             NativeValidationToolDefinitions.Create<BuildToolRequest, ValidationToolResult>(
@@ -94,7 +96,8 @@ public sealed class DotNetBuildTool : NativeValidationTargetTool<BuildToolReques
                 promptLoader,
                 PromptFileNames.ToolDotnetBuildDescription,
                 RepositoryTrustLevel.TrustedBuild,
-                executable: true))
+                executable: true),
+            limits)
     {
     }
 
@@ -113,7 +116,7 @@ public sealed class DotNetBuildTool : NativeValidationTargetTool<BuildToolReques
 public sealed class DotNetAnalyzerTool : NativeValidationTargetTool<AnalyzerToolRequest>
 {
     /// <summary>Initializes a new instance of the <see cref="DotNetAnalyzerTool"/> class.</summary>
-    public DotNetAnalyzerTool(INativeValidationToolService service, IPromptLoader promptLoader)
+    public DotNetAnalyzerTool(INativeValidationToolService service, IPromptLoader promptLoader, ValidationResourceLimits? limits = null)
         : base(
             service,
             NativeValidationToolDefinitions.Create<AnalyzerToolRequest, ValidationToolResult>(
@@ -121,7 +124,8 @@ public sealed class DotNetAnalyzerTool : NativeValidationTargetTool<AnalyzerTool
                 promptLoader,
                 PromptFileNames.ToolDotnetAnalyzersDescription,
                 RepositoryTrustLevel.TrustedBuild,
-                executable: true))
+                executable: true),
+            limits)
     {
     }
 
@@ -139,13 +143,15 @@ public sealed class DotNetAnalyzerTool : NativeValidationTargetTool<AnalyzerTool
 /// <summary>Checks formatter drift without writing repository files.</summary>
 public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationToolResult>
 {
+    private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="DotNetFormatCheckTool"/> class.</summary>
-    public DotNetFormatCheckTool(INativeValidationToolService service, IPromptLoader promptLoader)
+    public DotNetFormatCheckTool(INativeValidationToolService service, IPromptLoader promptLoader, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _projection = new NativeValidationModelProjection(limits);
         _definition = NativeValidationToolDefinitions.Create<FormatCheckRequest, ValidationToolResult>(
             "dotnet_format_check",
             promptLoader,
@@ -173,7 +179,7 @@ public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationT
             result,
             [new ToolProvenanceSource("validation", result.InvocationId, result.EffectiveScope)],
             result.IsTruncated,
-            ModelResultContent: NativeValidationModelProjection.Create(result));
+            ModelResultContent: _projection.Create(result));
     }
 
     /// <inheritdoc />
@@ -200,13 +206,15 @@ public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationT
 /// <summary>Queries normalized exploratory diagnostics.</summary>
 public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryResult>
 {
+    private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="DiagnosticQueryTool"/> class.</summary>
-    public DiagnosticQueryTool(INativeValidationToolService service, IPromptLoader promptLoader)
+    public DiagnosticQueryTool(INativeValidationToolService service, IPromptLoader promptLoader, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _projection = new NativeValidationModelProjection(limits);
         _definition = NativeValidationToolDefinitions.Create<DiagnosticQuery, DiagnosticQueryResult>(
             "diagnostic_query",
             promptLoader,
@@ -241,7 +249,7 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
             result,
             [new ToolProvenanceSource("diagnostic-index", input.InvocationId ?? "current")],
             isTruncated,
-            ModelResultContent: NativeValidationModelProjection.Create(result, isTruncated));
+            ModelResultContent: _projection.Create(result, isTruncated));
     }
 
     /// <inheritdoc />
@@ -289,13 +297,15 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
 /// <summary>Discovers stable test identities in one supported project.</summary>
 public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscoveryResult>
 {
+    private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="TestDiscoveryTool"/> class.</summary>
-    public TestDiscoveryTool(INativeValidationToolService service, IPromptLoader promptLoader)
+    public TestDiscoveryTool(INativeValidationToolService service, IPromptLoader promptLoader, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _projection = new NativeValidationModelProjection(limits);
         _definition = NativeValidationToolDefinitions.Create<TestDiscoveryRequest, TestDiscoveryResult>(
             "test_discover",
             promptLoader,
@@ -323,7 +333,7 @@ public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscovery
             result,
             [new ToolProvenanceSource("test-discovery", input.ProjectPath, result.DiscoveryId)],
             result.IsTruncated,
-            ModelResultContent: NativeValidationModelProjection.Create(result));
+            ModelResultContent: _projection.Create(result));
     }
 
     /// <inheritdoc />
@@ -368,13 +378,15 @@ public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscovery
 /// <summary>Runs exactly one previously discovered stable test identity.</summary>
 public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestResult>
 {
+    private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
     private readonly INativeValidationToolService _service;
 
     /// <summary>Initializes a new instance of the <see cref="TargetedTestTool"/> class.</summary>
-    public TargetedTestTool(INativeValidationToolService service, IPromptLoader promptLoader)
+    public TargetedTestTool(INativeValidationToolService service, IPromptLoader promptLoader, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _projection = new NativeValidationModelProjection(limits);
         _definition = NativeValidationToolDefinitions.Create<TargetedTestRequest, TargetedTestResult>(
             "test_run_targeted",
             promptLoader,
@@ -402,7 +414,7 @@ public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestRes
             result,
             [new ToolProvenanceSource("test", result.Test.Id.Value, result.EffectiveFilter)],
             result.IsTruncated,
-            ModelResultContent: NativeValidationModelProjection.Create(result));
+            ModelResultContent: _projection.Create(result));
     }
 
     /// <inheritdoc />
@@ -435,12 +447,14 @@ public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestRes
 public abstract class NativeValidationTargetTool<TRequest> : Tool<TRequest, ValidationToolResult>
     where TRequest : DotNetValidationTargetRequest
 {
+    private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
 
     /// <summary>Initializes a new instance of the <see cref="NativeValidationTargetTool{TRequest}"/> class.</summary>
-    protected NativeValidationTargetTool(INativeValidationToolService service, ToolDefinition definition)
+    protected NativeValidationTargetTool(INativeValidationToolService service, ToolDefinition definition, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
+        _projection = new NativeValidationModelProjection(limits);
         ArgumentNullException.ThrowIfNull(definition);
         Service = service;
         _definition = definition;
@@ -467,7 +481,7 @@ public abstract class NativeValidationTargetTool<TRequest> : Tool<TRequest, Vali
             result,
             [new ToolProvenanceSource("validation", result.InvocationId, result.EffectiveScope)],
             result.IsTruncated,
-            ModelResultContent: NativeValidationModelProjection.Create(result));
+            ModelResultContent: _projection.Create(result));
     }
 
     /// <inheritdoc />
@@ -527,36 +541,42 @@ internal static class NativeValidationToolDefinitions
 }
 
 /// <summary>Creates bounded model-facing projections while retaining audit-rich native results host-side.</summary>
-internal static class NativeValidationModelProjection
+internal sealed class NativeValidationModelProjection
 {
-    private const int MaximumModelAdvisories = 200;
-    private const int MaximumModelDependencies = 100;
-    private const int MaximumModelDiagnostics = 100;
-    private const int MaximumModelTests = 200;
+    private readonly ValidationResourceLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="NativeValidationModelProjection"/> class.</summary>
+    internal NativeValidationModelProjection(ValidationResourceLimits? limits)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+    }
+
     private static readonly JsonSerializerOptions ModelJsonOptions = new(JsonSerializerDefaults.Web);
 
     /// <summary>Projects package health for model consumption.</summary>
-    internal static string Create(NuGetDependencyHealthResult result)
+    internal string Create(NuGetDependencyHealthResult result)
     {
+        var bounds = new TextBounds();
         var dependencies = result.Dependencies
-            .Take(MaximumModelDependencies)
+            .Take(_limits.MaximumModelDependencies)
             .Select(dependency => new
             {
-                id = Bound(dependency.Id, 256),
-                version = Bound(dependency.ResolvedVersion, 128),
+                id = bounds.Bound(dependency.Id, _limits.MaximumModelNameCharacters),
+                version = bounds.Bound(dependency.ResolvedVersion, _limits.MaximumModelIdentifierCharacters),
                 direct = dependency.IsDirect,
-                framework = Bound(dependency.TargetFramework, 128),
+                framework = bounds.Bound(dependency.TargetFramework, _limits.MaximumModelIdentifierCharacters),
             })
             .ToArray();
         var advisories = result.Advisories
-            .Take(MaximumModelAdvisories)
+            .Take(_limits.MaximumModelAdvisories)
             .Select(advisory => new
             {
-                package = Bound(advisory.PackageId, 256),
-                version = Bound(advisory.ResolvedVersion, 128),
+                package = bounds.Bound(advisory.PackageId, _limits.MaximumModelNameCharacters),
+                version = bounds.Bound(advisory.ResolvedVersion, _limits.MaximumModelIdentifierCharacters),
                 kind = advisory.Kind.ToString(),
-                severity = Bound(advisory.Severity, 64),
-                url = BoundNullable(advisory.AdvisoryUrl, 2048),
+                severity = bounds.Bound(advisory.Severity, _limits.MaximumModelLabelCharacters),
+                url = bounds.BoundNullable(advisory.AdvisoryUrl, _limits.MaximumModelMessageCharacters),
             })
             .ToArray();
         return JsonSerializer.Serialize(
@@ -566,129 +586,143 @@ internal static class NativeValidationModelProjection
                 complete = result.IsComplete,
                 offline = result.IsOffline,
                 stale = result.IsStale,
-                truncated = result.IsTruncated || dependencies.Length != result.Dependencies.Count,
                 dependencies,
                 omittedDependencies = result.Dependencies.Count - dependencies.Length,
                 advisories,
-                omissions = result.Omissions.Take(20).Select(omission => Bound(omission, 512)).ToArray(),
+                omittedAdvisories = result.Advisories.Count - advisories.Length,
+                omissions = result.Omissions.Take(_limits.MaximumModelOmissions).Select(omission => bounds.Bound(omission, _limits.MaximumModelSummaryCharacters)).ToArray(),
+                omittedOmissions = Math.Max(0, result.Omissions.Count - _limits.MaximumModelOmissions),
+                truncated = bounds.IsTruncated || result.IsTruncated || dependencies.Length != result.Dependencies.Count
+                    || advisories.Length != result.Advisories.Count || result.Omissions.Count > _limits.MaximumModelOmissions,
             },
             ModelJsonOptions);
     }
 
     /// <summary>Projects build, analyzer, or formatting evidence for model consumption.</summary>
-    internal static string Create(ValidationToolResult result)
+    internal string Create(ValidationToolResult result)
     {
+        var bounds = new TextBounds();
         var diagnostics = result.Diagnostics
-            .Take(MaximumModelDiagnostics)
-            .Select(CreateDiagnostic)
+            .Take(_limits.MaximumModelDiagnostics)
+            .Select(diagnostic => CreateDiagnostic(diagnostic, bounds))
             .ToArray();
         return JsonSerializer.Serialize(
             new
             {
                 success = result.Succeeded,
                 timedOut = result.TimedOut,
-                truncated = result.IsTruncated || diagnostics.Length != result.Diagnostics.Count,
                 diagnostics,
                 omittedDiagnostics = result.Diagnostics.Count - diagnostics.Length,
-                output = result.Succeeded ? null : Bound(result.Output, 16 * 1024),
+                output = result.Succeeded ? null : bounds.Bound(result.Output, _limits.MaximumModelOutputCharacters),
+                truncated = bounds.IsTruncated || result.IsTruncated || diagnostics.Length != result.Diagnostics.Count,
             },
             ModelJsonOptions);
     }
 
     /// <summary>Projects one diagnostic page without repeated run provenance.</summary>
-    internal static string Create(DiagnosticQueryResult result, bool isTruncated)
+    internal string Create(DiagnosticQueryResult result, bool isTruncated)
     {
+        var bounds = new TextBounds();
         return JsonSerializer.Serialize(
             new
             {
                 total = result.Total,
-                diagnostics = result.Items.Select(item => CreateDiagnostic(item.Diagnostic)).ToArray(),
+                diagnostics = result.Items.Select(item => CreateDiagnostic(item.Diagnostic, bounds)).ToArray(),
                 continuationToken = result.ContinuationToken,
-                truncated = isTruncated,
+                truncated = bounds.IsTruncated || isTruncated,
             },
             ModelJsonOptions);
     }
 
     /// <summary>Projects stable discovered test identities for model consumption.</summary>
-    internal static string Create(TestDiscoveryResult result)
+    internal string Create(TestDiscoveryResult result)
     {
+        var bounds = new TextBounds();
         var tests = result.Tests
-            .Take(MaximumModelTests)
+            .Take(_limits.MaximumModelTests)
             .Select(test => new
             {
-                id = Bound(test.Id.Value, 128),
-                name = Bound(test.FullyQualifiedName, 1024),
-                project = Bound(test.ProjectPath, 1024),
+                id = bounds.Bound(test.Id.Value, _limits.MaximumModelIdentifierCharacters),
+                name = bounds.Bound(test.FullyQualifiedName, _limits.MaximumModelPathCharacters),
+                project = bounds.Bound(test.ProjectPath, _limits.MaximumModelPathCharacters),
             })
             .ToArray();
         return JsonSerializer.Serialize(
             new
             {
                 tests,
-                truncated = result.IsTruncated || tests.Length != result.Tests.Count,
+                truncated = bounds.IsTruncated || result.IsTruncated || tests.Length != result.Tests.Count,
                 omittedTests = result.Tests.Count - tests.Length,
             },
             ModelJsonOptions);
     }
 
     /// <summary>Projects targeted test outcome while omitting successful raw output.</summary>
-    internal static string Create(TargetedTestResult result)
+    internal string Create(TargetedTestResult result)
     {
+        var bounds = new TextBounds();
         return JsonSerializer.Serialize(
             new
             {
                 test = new
                 {
-                    id = Bound(result.Test.Id.Value, 128),
-                    name = Bound(result.Test.FullyQualifiedName, 1024),
-                    project = Bound(result.Test.ProjectPath, 1024),
+                    id = bounds.Bound(result.Test.Id.Value, _limits.MaximumModelIdentifierCharacters),
+                    name = bounds.Bound(result.Test.FullyQualifiedName, _limits.MaximumModelPathCharacters),
+                    project = bounds.Bound(result.Test.ProjectPath, _limits.MaximumModelPathCharacters),
                 },
                 outcome = result.Outcome.ToString(),
                 passed = result.Passed,
                 failed = result.Failed,
                 skipped = result.Skipped,
                 timedOut = result.TimedOut,
-                truncated = result.IsTruncated,
-                output = result.Outcome == TestOutcome.Passed ? null : Bound(result.Output, 16 * 1024),
-                attachments = result.Attachments.Take(10).Select(attachment => Bound(attachment, 1024)).ToArray(),
+                output = result.Outcome == TestOutcome.Passed ? null : bounds.Bound(result.Output, _limits.MaximumModelOutputCharacters),
+                attachments = result.Attachments.Take(_limits.MaximumModelAttachments).Select(attachment => bounds.Bound(attachment, _limits.MaximumModelPathCharacters)).ToArray(),
+                truncated = bounds.IsTruncated || result.IsTruncated || result.Attachments.Count > _limits.MaximumModelAttachments,
             },
             ModelJsonOptions);
     }
 
-    private static object CreateDiagnostic(Diagnostic diagnostic)
+    private object CreateDiagnostic(Diagnostic diagnostic, TextBounds bounds)
     {
         return new
         {
-            code = Bound(diagnostic.Code, 128),
+            code = bounds.Bound(diagnostic.Code, _limits.MaximumModelIdentifierCharacters),
             severity = diagnostic.Severity.ToString(),
-            project = Bound(diagnostic.Project, 512),
-            framework = Bound(diagnostic.TargetFramework, 128),
-            file = BoundNullable(diagnostic.File, 1024),
+            project = bounds.Bound(diagnostic.Project, _limits.MaximumModelSummaryCharacters),
+            framework = bounds.Bound(diagnostic.TargetFramework, _limits.MaximumModelIdentifierCharacters),
+            file = bounds.BoundNullable(diagnostic.File, _limits.MaximumModelPathCharacters),
             range = diagnostic.Range,
-            message = Bound(diagnostic.Message, 2048),
+            message = bounds.Bound(diagnostic.Message, _limits.MaximumModelMessageCharacters),
             classification = diagnostic.Classification.ToString(),
         };
     }
 
-    private static string Bound(string value, int maximumCharacters)
+    /// <summary>Tracks text clipping for one projection without sharing mutable state across calls.</summary>
+    private sealed class TextBounds
     {
-        ArgumentNullException.ThrowIfNull(value);
-        var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
-        foreach (var rune in value.EnumerateRunes())
+        internal bool IsTruncated { get; private set; }
+
+        internal string Bound(string value, int maximumCharacters)
         {
-            if (builder.Length + rune.Utf16SequenceLength > maximumCharacters)
+            ArgumentNullException.ThrowIfNull(value);
+            var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
+            foreach (var rune in value.EnumerateRunes())
             {
-                break;
+                if (rune.Utf16SequenceLength > maximumCharacters - builder.Length)
+                {
+                    IsTruncated = true;
+                    break;
+                }
+
+                builder.Append(rune.ToString());
             }
 
-            builder.Append(rune.ToString());
+            return builder.ToString();
         }
 
-        return builder.ToString();
-    }
-
-    private static string? BoundNullable(string? value, int maximumCharacters)
-    {
-        return value is null ? null : Bound(value, maximumCharacters);
+        internal string? BoundNullable(string? value, int maximumCharacters)
+        {
+            return value is null ? null : Bound(value, maximumCharacters);
+        }
     }
 }

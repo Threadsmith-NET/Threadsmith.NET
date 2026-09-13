@@ -119,12 +119,17 @@ public static class Program
         using var loggerFactory = LoggerFactory.Create(builder => builder.AddDebug());
         var promptLoader = await DeployedPromptLoader.LoadAsync(
             AppContext.BaseDirectory,
+            trustedConfiguration.GetSection("context:deployedPrompts:limits").Get<DeployedPromptLoadLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
             CancellationToken.None);
-        loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts").LogInformation(
-            "Loaded {PromptCount} deployed prompt assets totaling {PromptBytes} bytes with catalog digest {CatalogDigest}.",
-            promptLoader.Assets.Count,
-            promptLoader.TotalBytes,
-            promptLoader.CatalogDigest);
+        var promptLogger = loggerFactory.CreateLogger("Threadsmith.Context.DeployedPrompts");
+        if (promptLogger.IsEnabled(LogLevel.Information))
+        {
+            promptLogger.LogInformation(
+                "Loaded {PromptCount} deployed prompt assets totaling {PromptBytes} bytes with catalog digest {CatalogDigest}.",
+                promptLoader.Assets.Count,
+                promptLoader.TotalBytes,
+                promptLoader.CatalogDigest);
+        }
 
         // Initialize durable state and shared host services before composing applications that consume them.
         await using var foundation = await HostFoundation.CreateAsync(
@@ -200,6 +205,7 @@ public static class Program
                     Events = foundation.Events,
                     Projections = foundation.Projections,
                     ExecutionLimits = foundation.ExecutionLimits,
+                    OperationalLimits = foundation.OperationalLimits,
                     Sanitizer = foundation.Sanitizer,
                     PromptAppendLoader = foundation.PromptAppendLoader,
                     PromptLoader = foundation.PromptLoader,
@@ -257,6 +263,7 @@ public static class Program
                 foundation.ExtensionCapabilityRegistry,
                 foundation.ExtensionLeaseAuthority,
                 loggerFactory,
+                configuration,
                 processCancellation.Token);
         }
 
@@ -267,6 +274,7 @@ public static class Program
                 CommandLine = commandLine,
                 Paths = paths,
                 Configuration = configuration,
+                MaximumUserConfigurationBytes = trustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
                 Dispatcher = dispatcher,
                 Projections = foundation.Projections,
                 Events = foundation.Events,
@@ -426,7 +434,7 @@ public static class Program
         var registration = concretePipeline.Registry.GetRegistration(toolId);
         var identityMatches = descriptor.AdapterKind switch
         {
-            HookAdapterKind.Mcp when registration.Tool is McpImportedTool mcp =>
+            HookAdapterKind.Mcp when registration.Implementation is McpImportedTool mcp =>
                 string.Equals(mcp.Profile.Id, target[0], StringComparison.Ordinal)
                 && string.Equals(mcp.Capability.ServerName, target[1], StringComparison.Ordinal)
                 && string.Equals(
@@ -434,7 +442,7 @@ public static class Program
                         .ToLowerInvariant(),
                     target[2],
                     StringComparison.Ordinal),
-            HookAdapterKind.Extension when registration.Tool is CapabilityProxy extension =>
+            HookAdapterKind.Extension when registration.Implementation is CapabilityProxy extension =>
                 Guid.TryParse(target[0], out var generationId)
                 && extension.GenerationId == new ExtensionGenerationId(generationId),
             _ => false,

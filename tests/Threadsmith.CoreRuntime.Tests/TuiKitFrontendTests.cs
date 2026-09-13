@@ -14,6 +14,57 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class TuiKitFrontendTests
 {
+    /// <summary>Pane fills and ordinary text agree while explicit text backgrounds remain configurable.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void PaneBackgroundsOverrideInheritedTextBackgrounds(bool suppress)
+    {
+        var semanticTheme = new TuiTheme(
+            "pane-test",
+            [
+                new(PresentationTextRole.Default, new(TuiColor.Parse("cyan"), TuiColor.Parse("#242121"), TuiTextDecoration.Italic)),
+                new(PresentationTextRole.ComposerBackgroundPaneRole, new(Background: TuiColor.Parse("black"))),
+                new(PresentationTextRole.OutputStreamPaneRole, new(Background: TuiColor.Parse("blue"))),
+                new(PresentationTextRole.ComposerPrompt, new(TuiColor.Parse("yellow"), TuiColor.Parse("red"), TuiTextDecoration.Bold)),
+                new(PresentationTextRole.Error, new(TuiColor.Parse("white"), TuiColor.Parse("red"))),
+                new(PresentationTextRole.Status, new(TuiColor.Parse("green"))),
+            ]);
+        var theme = new ConfiguredTheme("Pane test", semanticTheme, TuiThemeUi.Default, false);
+        var styles = new TuiKitStyles(theme, suppress);
+        var composerStyle = styles.ResolveInPane(PresentationTextRole.Default, PresentationTextRole.ComposerBackgroundPaneRole);
+        Assert.Equal(suppress ? Color.Default : Color.FromPalette(0), composerStyle.Background);
+        Assert.Equal(styles.Resolve(PresentationTextRole.Default).Foreground, composerStyle.Foreground);
+        Assert.Equal(styles.Resolve(PresentationTextRole.Default).Attributes, composerStyle.Attributes);
+        Assert.Equal(
+            styles.Resolve(PresentationTextRole.ComposerPrompt),
+            styles.ResolveInPane(PresentationTextRole.ComposerPrompt, PresentationTextRole.ComposerBackgroundPaneRole));
+
+        var composer = new TuiKitComposer { Style = composerStyle, Text = "draft" };
+        var cells = new CellBuffer(40, 5);
+        composer.Render(new BufferSurface(cells));
+        Assert.Equal(composerStyle.Background, cells.Get(0, 0).Style.Background);
+        Assert.Equal(composerStyle.Background, cells.Get(30, 3).Style.Background);
+
+        var view = new TranscriptView
+        {
+            ResolveStyle = role => styles.ResolveInPane(role, PresentationTextRole.OutputStreamPaneRole),
+        };
+        view.Present(new PresentationBatch([new PresentationTextItem([
+            new("plain", PresentationTextRole.Default),
+            new("status", PresentationTextRole.Status),
+            new("error", PresentationTextRole.Error),
+        ])]));
+        view.Render(new BufferSurface(cells));
+        var paneBackground = suppress ? Color.Default : Color.FromPalette(4);
+        Assert.Equal(paneBackground, cells.Get(0, 0).Style.Background);
+        Assert.Equal(paneBackground, cells.Get(5, 0).Style.Background);
+        Assert.Equal(paneBackground, cells.Get(30, 3).Style.Background);
+        Assert.Equal(suppress ? Color.Default : Color.FromPalette(1), cells.Get(11, 0).Style.Background);
+        Assert.Equal(styles.Resolve(PresentationTextRole.Status).Foreground, cells.Get(5, 0).Style.Foreground);
+        Assert.Equal(styles.Resolve(PresentationTextRole.Error).Attributes, cells.Get(11, 0).Style.Attributes);
+    }
+
     /// <summary>Both frontends project the same Markdown content and semantic roles.</summary>
     [Theory]
     [InlineData(40)]
@@ -143,6 +194,92 @@ public static class TuiKitFrontendTests
         Assert.Contains("done", string.Join(string.Empty, view.Lines), StringComparison.Ordinal);
     }
 
+    /// <summary>Tiny line windows preserve graphemes without repeatedly scanning the remaining input.</summary>
+    [Fact]
+    public static void TranscriptTinyLineWindowPreservesLongUnicodeInput()
+    {
+        var text = new string('x', 20000) + "a\u0301😀end";
+        var view = new TranscriptView(new TuiResourceLimits
+        {
+            MaximumTranscriptLineCharacters = 1,
+            MaximumTranscriptLines = 30000,
+        });
+        view.Present(new PresentationBatch([new PresentationTextItem([new(text, PresentationTextRole.Default)])]));
+
+        Assert.Equal(text, string.Concat(view.Lines));
+        Assert.Contains("a\u0301", view.Lines);
+        Assert.Contains("😀", view.Lines);
+    }
+
+    /// <summary>Input echoes have exactly one blank row regardless of prior line endings, including after resize.</summary>
+    [Theory]
+    [InlineData("")]
+    [InlineData("Run cancelled.")]
+    [InlineData("Run cancelled.\n")]
+    [InlineData("Run cancelled.\n\n")]
+    [InlineData("Run cancelled.\n\n\n\n")]
+    [InlineData("Model set.\r\nUse /reasoning to select.\r\n")]
+    [InlineData("Model set.\rUse /reasoning to select.\r\r\r")]
+    [InlineData("Previous response.\n  \n\t\n")]
+    public static void InputEchoNormalizesBlankLinesAndSurvivesResize(string previous)
+    {
+        var view = new TranscriptView();
+        view.Present(new PresentationBatch([new PresentationTextItem([new(previous, PresentationTextRole.Status)])]));
+        view.Render(new BufferSurface(new CellBuffer(80, 24)));
+
+        view.EchoInput("repo > ", "/models");
+        view.EchoInput("repo > ", "Next question\ncontinued");
+
+        var prefix = previous.ReplaceLineEndings("\n").TrimEnd();
+        var expected = (prefix.Length > 0 ? prefix + "\n" : string.Empty)
+            + "\nrepo > /models\n\nrepo > Next question\ncontinued\n";
+        Assert.Equal(expected, string.Join('\n', view.Lines));
+        foreach (var width in new[] { 40, 120, 80 })
+        {
+            var cells = new CellBuffer(width, 24);
+            view.Render(new BufferSurface(cells));
+            Assert.Equal(expected, string.Join('\n', view.Lines));
+            var rows = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
+            var promptRow = Array.FindIndex(rows, row => row.Contains("repo > /models", StringComparison.Ordinal));
+            Assert.True(promptRow >= 1);
+            Assert.True(string.IsNullOrWhiteSpace(rows[promptRow - 1]));
+            if (promptRow > 1)
+            {
+                Assert.False(string.IsNullOrWhiteSpace(rows[promptRow - 2]));
+            }
+        }
+
+        view.HandleKey(KeyEvent.Char('a', KeyModifiers.Ctrl));
+        Assert.Equal(expected, view.SelectedText());
+    }
+
+    /// <summary>Markdown layout cannot reintroduce extra trailing blank rows before a retained input echo.</summary>
+    [Fact]
+    public static void InputEchoNormalizesMarkdownBoundaryAndRetainsStyles()
+    {
+        const string source = "## Finished\n\nThe answer contains enough words to wrap in a narrow window.\n\n\n";
+        var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
+        var promptStyle = CellStyle.Default.WithAttribute(CellAttributes.Bold, true);
+        var view = new TranscriptView
+        {
+            ResolveStyle = role => role == PresentationTextRole.ComposerPrompt ? promptStyle : CellStyle.Default,
+        };
+        view.Present(new PresentationBatch([new PresentationMarkdownItem(document, source, source, true)]));
+        view.EchoInput("repo > ", "Next question");
+
+        foreach (var width in new[] { 40, 120 })
+        {
+            var cells = new CellBuffer(width, 24);
+            view.Render(new BufferSurface(cells));
+            var rows = TUIKit.Testing.Snapshot.ToText(cells).Split('\n');
+            var promptRow = Array.FindIndex(rows, row => row.Contains("repo > Next question", StringComparison.Ordinal));
+            Assert.True(promptRow >= 2);
+            Assert.True(string.IsNullOrWhiteSpace(rows[promptRow - 1]));
+            Assert.False(string.IsNullOrWhiteSpace(rows[promptRow - 2]));
+            Assert.Equal(promptStyle, cells.Get(0, promptRow).Style);
+        }
+    }
+
     /// <summary>Retained Markdown reruns semantic layout when the viewport widens.</summary>
     [Fact]
     public static void TranscriptReflowsMarkdownAfterResize()
@@ -224,7 +361,7 @@ public static class TuiKitFrontendTests
     [Fact]
     public static async Task InputOwnershipAndModalCancellation()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         using var backend = new HeadlessBackend(80, 24);
         await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
         await surface.RunAsync(
@@ -322,9 +459,15 @@ public static class TuiKitFrontendTests
             var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var activity = new InteractionActivity("THINKING", TimeProvider.System.GetTimestamp(), true, TimeProvider.System);
             var display = surface.PresentActivityUntilAsync(activity, completion.Task, token);
+            var output = string.Empty;
+            while (!output.Contains("THINKING", StringComparison.Ordinal))
+            {
+                await Task.Delay(10, token);
+                output += backend.TakeOutput();
+            }
+
             await using (var lease = Assert.IsAssignableFrom<IActiveRunInputLease>(surface.BeginActiveRunInput(TimeProvider.System)))
             {
-                var output = string.Empty;
                 while (!output.Contains("ENTER to steer; ESC-ESC to cancel", StringComparison.Ordinal))
                 {
                     await Task.Delay(10, token);

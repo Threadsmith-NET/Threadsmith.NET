@@ -30,6 +30,9 @@ public interface IToolStateManager
     /// <summary>Returns whether the revised current-message URL disclosure still requires consent.</summary>
     bool RequiresCurrentMessageUrlConsent();
 
+    /// <summary>Checks the current input using the configured URL discovery limits.</summary>
+    bool HasCurrentMessageUrlCandidate(string rawMessage) => CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage);
+
     /// <summary>Disables a non-essential registered tool.</summary>
     Task DisableAsync(string toolId, CancellationToken cancellationToken = default);
 
@@ -95,7 +98,8 @@ public sealed class ToolStateManager : IToolStateManager
         string? userConsentPath = null,
         string? mcpApprovalPath = null,
         WebFetchAuthorizationAuthority? fetchAuthorization = null,
-        WriteFileConfiguration? writeFileConfiguration = null)
+        WriteFileConfiguration? writeFileConfiguration = null,
+        PolicyStoreResourceLimits? policyStoreLimits = null)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -106,7 +110,7 @@ public sealed class ToolStateManager : IToolStateManager
         _repositoryRoot = Path.GetDirectoryName(Path.GetDirectoryName(_repositoryConfigurationPath))
             ?? throw new InvalidOperationException("Repository configuration path must be under a repository directory.");
         _consentStore = new OutboundConsentStore(userConsentPath);
-        _mcpApprovals = new McpToolApprovalStore(mcpApprovalPath);
+        _mcpApprovals = new McpToolApprovalStore(mcpApprovalPath, policyStoreLimits);
         _fetchAuthorization = fetchAuthorization;
         _writeFileConfiguration = writeFileConfiguration;
         _fetchAuthorization?.SetCurrentMessageConsentEvaluator(
@@ -257,6 +261,10 @@ public sealed class ToolStateManager : IToolStateManager
             throw;
         }
     }
+
+    /// <inheritdoc />
+    public bool HasCurrentMessageUrlCandidate(string rawMessage)
+        => _fetchAuthorization?.HasCurrentMessageUrlCandidate(rawMessage) ?? CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage);
 
     /// <inheritdoc />
     public bool RequiresCurrentMessageUrlConsent()

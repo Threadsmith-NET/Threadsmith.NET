@@ -16,6 +16,41 @@ using Xunit;
 /// <summary>Verifies governed skill discovery, trust, schemas, loading, workflow, restoration, and persistence.</summary>
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>Skill deadlines must fit the timer before a workflow can save its checkpoint.</summary>
+    [Fact]
+    public static void SkillBudget_RejectsUnrepresentableTimerDuration()
+    {
+        SkillManifestValidator.ValidateBudget(new SkillBudget { WallTime = TimeSpan.FromMilliseconds(uint.MaxValue - 1d) });
+        Assert.Throws<InvalidDataException>(() => SkillManifestValidator.ValidateBudget(
+            new SkillBudget { WallTime = TimeSpan.FromMilliseconds(uint.MaxValue) }));
+    }
+
+    /// <summary>Long acyclic and cyclic dependency chains are validated without consuming recursive stack frames.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void WorkflowValidationHandlesDeepGraphsWithoutRecursiveStackUse(bool cyclic)
+    {
+        const int count = 20000;
+        var steps = Enumerable.Range(0, count).Select(index => new SkillWorkflowStep
+        {
+            StepId = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            Kind = SkillWorkflowStepKind.AwaitPlanApproval,
+            DependsOn = index + 1 < count
+                ? [(index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)]
+                : cyclic ? ["0"] : [],
+        }).ToArray();
+        var workflow = new SkillWorkflowDefinition { WorkflowId = "deep-graph", Steps = steps };
+        if (cyclic)
+        {
+            Assert.Throws<InvalidDataException>(() => SkillManifestValidator.ValidateWorkflow(workflow, []));
+        }
+        else
+        {
+            SkillManifestValidator.ValidateWorkflow(workflow, []);
+        }
+    }
+
     /// <summary>Verifies startup discovery reads metadata while a declared body is exclusively locked.</summary>
     [Fact]
     public async Task CatalogRefresh_DoesNotOpenDeclaredBodies()
@@ -172,6 +207,43 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(SkillVerificationState.DigestAllowlisted, after.Verification);
         Assert.True(after.Enabled);
         Assert.DoesNotContain(package.PackageRoot, await File.ReadAllTextAsync(policyPath));
+    }
+
+    /// <summary>Rejected updates preserve both the persisted policy and its active snapshot.</summary>
+    [Fact]
+    public async Task UserPolicy_ConfiguredWriteBounds_PreserveReloadableState()
+    {
+        using var package = TemporaryPackage.CopyMaintained("upgrade-package");
+        var candidate = Assert.Single((await package.CreateCatalog(SkillScope.Repository).RefreshAsync()).Candidates);
+        var path = Path.Combine(package.Root, "policy.json");
+        var limits = new PolicyStoreResourceLimits { MaximumSkillPolicyEntries = 1 };
+        var provider = new FileSkillTrustPolicyProvider(path, new SkillTrustPolicySnapshot(), limits);
+        await provider.SetEnabledAsync(candidate, true);
+        var original = await File.ReadAllTextAsync(path);
+        var other = candidate with { Provenance = candidate.Provenance with { Scope = SkillScope.User } };
+        await Assert.ThrowsAsync<InvalidDataException>(() => provider.SetEnabledAsync(other, true));
+        Assert.Equal(original, await File.ReadAllTextAsync(path));
+        Assert.Single(provider.Snapshot.EnabledSelectors);
+        Assert.Single(new FileSkillTrustPolicyProvider(path, new SkillTrustPolicySnapshot(), limits).Snapshot.EnabledSelectors);
+
+        var tinyPath = Path.Combine(package.Root, "tiny-policy.json");
+        var tiny = new FileSkillTrustPolicyProvider(tinyPath, new SkillTrustPolicySnapshot(), new PolicyStoreResourceLimits { MaximumPolicyFileBytes = 1 });
+        await Assert.ThrowsAsync<InvalidDataException>(() => tiny.SetEnabledAsync(candidate, true));
+        Assert.False(File.Exists(tinyPath));
+        Assert.Empty(tiny.Snapshot.EnabledSelectors);
+    }
+
+    /// <summary>Configured recursion depth cannot exceed the original stack-safety ceiling.</summary>
+    [Theory]
+    [InlineData(65)]
+    [InlineData(int.MaxValue)]
+    public void SchemaValidator_RejectsUnsafeRecursionDepth(int depth)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new BoundedJsonSchemaValidator(new SkillSchemaOptions { MaximumDepth = depth }));
+        var validator = new BoundedJsonSchemaValidator(new SkillSchemaOptions { MaximumDepth = 64 });
+        Assert.NotNull(validator.Compile("{\"type\":\"string\"}"));
+        Assert.Equal(16, new SkillSchemaOptions().MaximumDepth);
     }
 
     /// <summary>Verifies unsupported references, unknown keywords, extra values, and integer mismatch fail closed.</summary>

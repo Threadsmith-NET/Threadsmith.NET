@@ -7,17 +7,19 @@ using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 
 /// <summary>Translates SDK client values into bounded host-owned MCP transport contracts.</summary>
-internal static class McpTransportMapping
+internal sealed class McpTransportMapping
 {
-    private const int MaximumCapabilitiesPerKind = 256;
-    private const int MaximumContentCharacters = 256 * 1024;
-    private const int MaximumDescriptionCharacters = 2048;
-    private const int MaximumIdentityCharacters = 4096;
-    private const int MaximumPromptArguments = 32;
-    private const int MaximumSchemaCharacters = 64 * 1024;
+    private readonly McpResourceLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="McpTransportMapping"/> class.</summary>
+    internal McpTransportMapping(McpResourceLimits? limits = null)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+    }
 
     /// <summary>Maps discovered SDK tools into host-owned imported capability records.</summary>
-    internal static IReadOnlyList<McpImportedCapability> MapTools(
+    internal IReadOnlyList<McpImportedCapability> MapTools(
         McpConnectionProfile profile,
         IEnumerable<McpClientTool> tools)
     {
@@ -27,9 +29,9 @@ internal static class McpTransportMapping
             .Select(tool =>
             {
                 var name = NormalizeRequired(tool.ProtocolTool.Name, 128, "tool name");
-                var description = NormalizeOptional(tool.Description, MaximumDescriptionCharacters);
+                var description = NormalizeOptional(tool.Description, _limits.MaximumDescriptionCharacters);
                 var schema = tool.JsonSchema.GetRawText();
-                if (schema.Length > MaximumSchemaCharacters)
+                if (schema.Length > _limits.MaximumSchemaCharacters)
                 {
                     throw new InvalidOperationException("An MCP tool input schema exceeds the host metadata bound.");
                 }
@@ -48,7 +50,7 @@ internal static class McpTransportMapping
     }
 
     /// <summary>Maps discovered SDK resources into host-owned imported capability records.</summary>
-    internal static IReadOnlyList<McpImportedCapability> MapResources(
+    internal IReadOnlyList<McpImportedCapability> MapResources(
         McpConnectionProfile profile,
         IEnumerable<McpClientResource> resources)
     {
@@ -57,11 +59,11 @@ internal static class McpTransportMapping
         return Bound(resources, "resources")
             .Select(resource =>
             {
-                var uri = NormalizeRequired(resource.Uri, MaximumIdentityCharacters, "resource URI");
+                var uri = NormalizeRequired(resource.Uri, _limits.MaximumIdentityCharacters, "resource URI");
                 _ = new Uri(uri, UriKind.Absolute);
-                var name = NormalizeRequired(resource.Name, 256, "resource name");
-                var description = NormalizeOptional(resource.Description, MaximumDescriptionCharacters);
-                var mimeType = NormalizeNullable(resource.MimeType, 256);
+                var name = NormalizeRequired(resource.Name, _limits.MaximumNameCharacters, "resource name");
+                var description = NormalizeOptional(resource.Description, _limits.MaximumDescriptionCharacters);
+                var mimeType = NormalizeNullable(resource.MimeType, _limits.MaximumNameCharacters);
                 return new McpImportedCapability
                 {
                     Id = $"{profile.Id}:resource:{ShortDigest(uri)}",
@@ -77,7 +79,7 @@ internal static class McpTransportMapping
     }
 
     /// <summary>Maps discovered SDK resource templates into host-owned imported capability records.</summary>
-    internal static IReadOnlyList<McpImportedCapability> MapResourceTemplates(
+    internal IReadOnlyList<McpImportedCapability> MapResourceTemplates(
         McpConnectionProfile profile,
         IEnumerable<McpClientResourceTemplate> templates)
     {
@@ -88,7 +90,7 @@ internal static class McpTransportMapping
             {
                 var uriTemplate = NormalizeRequired(
                     template.UriTemplate,
-                    MaximumIdentityCharacters,
+                    _limits.MaximumIdentityCharacters,
                     "resource URI template");
                 var expandedIdentity = uriTemplate
                     .Replace("{", string.Empty, StringComparison.Ordinal)
@@ -98,9 +100,9 @@ internal static class McpTransportMapping
                     throw new InvalidOperationException("An MCP resource template is not an absolute URI template.");
                 }
 
-                var name = NormalizeRequired(template.Name, 256, "resource-template name");
-                var description = NormalizeOptional(template.Description, MaximumDescriptionCharacters);
-                var mimeType = NormalizeNullable(template.MimeType, 256);
+                var name = NormalizeRequired(template.Name, _limits.MaximumNameCharacters, "resource-template name");
+                var description = NormalizeOptional(template.Description, _limits.MaximumDescriptionCharacters);
+                var mimeType = NormalizeNullable(template.MimeType, _limits.MaximumNameCharacters);
                 return new McpImportedCapability
                 {
                     Id = $"{profile.Id}:resource-template:{ShortDigest(uriTemplate)}",
@@ -116,7 +118,7 @@ internal static class McpTransportMapping
     }
 
     /// <summary>Maps discovered SDK prompts into host-owned imported capability records.</summary>
-    internal static IReadOnlyList<McpImportedCapability> MapPrompts(
+    internal IReadOnlyList<McpImportedCapability> MapPrompts(
         McpConnectionProfile profile,
         IEnumerable<McpClientPrompt> prompts)
     {
@@ -126,19 +128,27 @@ internal static class McpTransportMapping
             .Select(prompt =>
             {
                 var name = NormalizeRequired(prompt.Name, 128, "prompt name");
-                var description = NormalizeOptional(prompt.Description, MaximumDescriptionCharacters);
+                var description = NormalizeOptional(prompt.Description, _limits.MaximumDescriptionCharacters);
                 var protocolArguments = prompt.ProtocolPrompt.Arguments ?? [];
-                if (protocolArguments.Count > MaximumPromptArguments)
+                if (protocolArguments.Count > Math.Min(_limits.MaximumPromptArguments, _limits.MaximumArguments))
                 {
                     throw new InvalidOperationException("An MCP prompt declares too many arguments.");
+                }
+
+                if (protocolArguments.Any(argument => string.IsNullOrWhiteSpace(argument.Name)
+                    || argument.Name.Length > _limits.MaximumArgumentNameCharacters
+                    || argument.Name.Any(char.IsControl))
+                    || protocolArguments.Select(argument => argument.Name).Distinct(StringComparer.Ordinal).Count() != protocolArguments.Count)
+                {
+                    throw new InvalidOperationException("An MCP prompt declares invalid, duplicate, or oversized argument names.");
                 }
 
                 McpImportedPromptArgument[] arguments =
                 [
                     .. protocolArguments.Select(argument => new McpImportedPromptArgument
                     {
-                        Name = NormalizeRequired(argument.Name, 128, "prompt argument name"),
-                        Description = NormalizeOptional(argument.Description, 1024),
+                        Name = argument.Name,
+                        Description = NormalizeOptional(argument.Description, _limits.MaximumArgumentDescriptionCharacters),
                         Required = argument.Required is true,
                     }),
                 ];
@@ -157,13 +167,13 @@ internal static class McpTransportMapping
     }
 
     /// <summary>Maps a resource result into bounded textual untrusted content.</summary>
-    internal static McpTransportContentResult MapResourceContent(ReadResourceResult result)
+    internal McpTransportContentResult MapResourceContent(ReadResourceResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         var content = new List<McpTransportContentItem>();
         var retainedCharacters = 0;
         var truncated = false;
-        foreach (var item in result.Contents.Take(64))
+        foreach (var item in result.Contents.Take(_limits.MaximumContentItems))
         {
             var text = item switch
             {
@@ -172,7 +182,7 @@ internal static class McpTransportMapping
                     => $"[binary MCP resource withheld; encoded length {blobResource.Blob.Length}]",
                 _ => "[unsupported MCP resource content withheld]",
             };
-            var remaining = MaximumContentCharacters - retainedCharacters;
+            var remaining = _limits.MaximumContentCharacters - retainedCharacters;
             if (remaining <= 0)
             {
                 truncated = true;
@@ -185,9 +195,9 @@ internal static class McpTransportMapping
             retainedCharacters += text.Length;
             content.Add(new McpTransportContentItem
             {
-                Label = NormalizeOptional(item.Uri, 1024),
+                Label = NormalizeOptional(item.Uri, _limits.MaximumResourceLabelCharacters),
                 Text = text,
-                MimeType = NormalizeNullable(item.MimeType, 256),
+                MimeType = NormalizeNullable(item.MimeType, _limits.MaximumNameCharacters),
                 IsTruncated = itemTruncated,
             });
         }
@@ -197,13 +207,13 @@ internal static class McpTransportMapping
     }
 
     /// <summary>Maps a prompt result into bounded textual untrusted content.</summary>
-    internal static McpTransportContentResult MapPromptContent(GetPromptResult result)
+    internal McpTransportContentResult MapPromptContent(GetPromptResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         var content = new List<McpTransportContentItem>();
         var retainedCharacters = 0;
         var truncated = false;
-        foreach (var message in result.Messages.Take(64))
+        foreach (var message in result.Messages.Take(_limits.MaximumContentItems))
         {
             var text = message.Content switch
             {
@@ -211,11 +221,11 @@ internal static class McpTransportMapping
                 EmbeddedResourceBlock { Resource: TextResourceContents resource } => resource.Text,
                 EmbeddedResourceBlock { Resource: BlobResourceContents resource }
                     => $"[binary embedded MCP resource withheld; encoded length {resource.Blob.Length}]",
-                ImageContentBlock image => $"[MCP image withheld; media type {NormalizeOptional(image.MimeType, 256)}]",
-                AudioContentBlock audio => $"[MCP audio withheld; media type {NormalizeOptional(audio.MimeType, 256)}]",
+                ImageContentBlock image => $"[MCP image withheld; media type {NormalizeOptional(image.MimeType, _limits.MaximumNameCharacters)}]",
+                AudioContentBlock audio => $"[MCP audio withheld; media type {NormalizeOptional(audio.MimeType, _limits.MaximumNameCharacters)}]",
                 _ => "[unsupported MCP prompt content withheld]",
             };
-            var remaining = MaximumContentCharacters - retainedCharacters;
+            var remaining = _limits.MaximumContentCharacters - retainedCharacters;
             if (remaining <= 0)
             {
                 truncated = true;
@@ -239,16 +249,16 @@ internal static class McpTransportMapping
     }
 
     /// <summary>Maps an SDK call result into the bounded host transport invocation contract.</summary>
-    internal static McpTransportInvocation MapInvocation(CallToolResult result)
+    internal McpTransportInvocation MapInvocation(CallToolResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         var text = new List<string>();
         var retainedCharacters = 0;
         var truncated = false;
-        ContentBlock[] contentBlocks = [.. result.Content.Take(65)];
-        foreach (var block in contentBlocks.Take(64))
+        ContentBlock[] contentBlocks = [.. result.Content.Take(_limits.MaximumContentItems == int.MaxValue ? int.MaxValue : _limits.MaximumContentItems + 1)];
+        foreach (var block in contentBlocks.Take(_limits.MaximumContentItems))
         {
-            var remaining = MaximumContentCharacters - retainedCharacters;
+            var remaining = _limits.MaximumContentCharacters - retainedCharacters;
             if (remaining <= 0)
             {
                 truncated = true;
@@ -259,13 +269,13 @@ internal static class McpTransportMapping
             {
                 TextContentBlock textBlock => textBlock.Text ?? string.Empty,
                 ImageContentBlock image
-                    => $"[MCP image withheld; media type {NormalizeOptional(image.MimeType, 256)}]",
+                    => $"[MCP image withheld; media type {NormalizeOptional(image.MimeType, _limits.MaximumNameCharacters)}]",
                 AudioContentBlock audio
-                    => $"[MCP audio withheld; media type {NormalizeOptional(audio.MimeType, 256)}]",
+                    => $"[MCP audio withheld; media type {NormalizeOptional(audio.MimeType, _limits.MaximumNameCharacters)}]",
                 EmbeddedResourceBlock { Resource: TextResourceContents resource }
-                    => $"[embedded MCP text resource withheld; URI {NormalizeOptional(resource.Uri, 1024)}]",
+                    => $"[embedded MCP text resource withheld; URI {NormalizeOptional(resource.Uri, _limits.MaximumResourceLabelCharacters)}]",
                 EmbeddedResourceBlock { Resource: BlobResourceContents resource }
-                    => $"[embedded MCP binary resource withheld; URI {NormalizeOptional(resource.Uri, 1024)}]",
+                    => $"[embedded MCP binary resource withheld; URI {NormalizeOptional(resource.Uri, _limits.MaximumResourceLabelCharacters)}]",
                 _ => "[unsupported MCP tool content withheld]",
             };
             var itemTruncated = value.Length > remaining;
@@ -299,12 +309,12 @@ internal static class McpTransportMapping
     }
 
     /// <summary>Converts bounded user string arguments to the SDK argument shape.</summary>
-    internal static IReadOnlyDictionary<string, object?> MapArguments(
+    internal IReadOnlyDictionary<string, object?> MapArguments(
         IReadOnlyDictionary<string, string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
-        if (arguments.Count > MaximumPromptArguments
-            || arguments.Any(pair => pair.Key.Length is 0 or > 128 || pair.Value.Length > 16 * 1024))
+        if (arguments.Count > Math.Min(_limits.MaximumPromptArguments, _limits.MaximumArguments)
+            || arguments.Any(pair => (pair.Key.Length == 0 || pair.Key.Length > _limits.MaximumArgumentNameCharacters) || pair.Value.Length > _limits.MaximumArgumentCharacters))
         {
             throw new InvalidOperationException("MCP resource or prompt arguments exceed host bounds.");
         }
@@ -315,10 +325,10 @@ internal static class McpTransportMapping
             StringComparer.Ordinal);
     }
 
-    private static IEnumerable<T> Bound<T>(IEnumerable<T> values, string kind)
+    private IEnumerable<T> Bound<T>(IEnumerable<T> values, string kind)
     {
-        T[] bounded = [.. values.Take(MaximumCapabilitiesPerKind + 1)];
-        if (bounded.Length > MaximumCapabilitiesPerKind)
+        T[] bounded = [.. values.Take((int)Math.Min((long)_limits.MaximumCapabilitiesPerKind + 1, int.MaxValue))];
+        if (bounded.Length > _limits.MaximumCapabilitiesPerKind)
         {
             throw new InvalidOperationException($"The MCP server advertises too many {kind}.");
         }

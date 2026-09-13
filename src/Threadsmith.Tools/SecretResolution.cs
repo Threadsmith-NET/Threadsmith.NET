@@ -183,12 +183,13 @@ public sealed class SecretValue
     private readonly string _value;
 
     /// <summary>Initializes a new instance of the <see cref="SecretValue"/> class.</summary>
-    public SecretValue(string value)
+    public SecretValue(string value, int maximumCharacters = 65536)
     {
         ArgumentException.ThrowIfNullOrEmpty(value);
-        if (value.Length > 65_536)
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
+        if (value.Length > maximumCharacters)
         {
-            throw new ArgumentException("Secret values cannot exceed 65,536 characters.", nameof(value));
+            throw new ArgumentException("Secret value exceeds the configured character limit.", nameof(value));
         }
 
         _value = value;
@@ -220,11 +221,11 @@ public sealed record SecretProviderResult
     public required string DiagnosticCode { get; init; }
 
     /// <summary>Creates a successful result.</summary>
-    public static SecretProviderResult Found(string value)
+    public static SecretProviderResult Found(string value, int maximumCharacters = 65536)
     {
         return new()
         {
-            Value = new SecretValue(value),
+            Value = new SecretValue(value, maximumCharacters),
             Failure = SecretResolutionFailure.None,
             DiagnosticCode = "found",
         };
@@ -346,9 +347,10 @@ public sealed class SecretResolver : ISecretResolver
 {
     private static readonly AsyncLocal<HashSet<string>?> ActiveRequests = new();
     private readonly IReadOnlyList<ISecretProvider> _providers;
+    private readonly SecretResourceLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="SecretResolver"/> class.</summary>
-    public SecretResolver(IEnumerable<ISecretProvider> providers)
+    public SecretResolver(IEnumerable<ISecretProvider> providers, SecretResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(providers);
         ISecretProvider[] ordered = [.. providers.OrderByDescending(provider => provider.Priority).ThenBy(provider => provider.Id, StringComparer.Ordinal)];
@@ -361,6 +363,8 @@ public sealed class SecretResolver : ISecretResolver
         }
 
         _providers = ordered;
+        _limits = limits ?? new();
+        _limits.Validate();
     }
 
     /// <inheritdoc />
@@ -375,12 +379,17 @@ public sealed class SecretResolver : ISecretResolver
             || request.Purpose.Length > 256
             || request.Purpose.Any(char.IsControl)
             || request.ProviderTimeout <= TimeSpan.Zero
-            || request.ProviderTimeout > TimeSpan.FromSeconds(30))
+            || request.ProviderTimeout.TotalMilliseconds > uint.MaxValue - 1d)
         {
             throw new ArgumentException("Secret requests require bounded safe component, purpose, and timeout values.", nameof(request));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (request.ProviderTimeout == SecretResolutionRequest.DefaultProviderTimeout)
+        {
+            request = request with { ProviderTimeout = TimeSpan.FromMilliseconds(_limits.ProviderTimeoutMilliseconds) };
+        }
+
         var cycleKey = request.ComponentId + "\n" + request.Reference.CanonicalName;
         var active = ActiveRequests.Value ??= new(StringComparer.OrdinalIgnoreCase);
         if (!active.Add(cycleKey))
@@ -444,6 +453,15 @@ public sealed class SecretResolver : ISecretResolver
                 diagnostics.Add(provider.Id + ":" + diagnosticCode);
                 if (result.Value is not null)
                 {
+                    if (result.Value.Reveal().Length > _limits.MaximumValueCharacters)
+                    {
+                        return new SecretResolutionResult
+                        {
+                            Failure = SecretResolutionFailure.ProviderFailed,
+                            Diagnostics = ["secret-value-exceeds-configured-limit"],
+                        };
+                    }
+
                     return new SecretResolutionResult
                     {
                         Value = result.Value,
@@ -486,6 +504,15 @@ public sealed class SecretResolver : ISecretResolver
 /// <summary>Resolves the exact compatible <c>THREADSMITH_</c> environment variable.</summary>
 public sealed class EnvironmentSecretProvider : ISecretProvider
 {
+    private readonly SecretResourceLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="EnvironmentSecretProvider"/> class.</summary>
+    public EnvironmentSecretProvider(SecretResourceLimits? limits = null)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+    }
+
     /// <inheritdoc />
     public string Id => "environment";
 
@@ -512,7 +539,7 @@ public sealed class EnvironmentSecretProvider : ISecretProvider
         var value = Environment.GetEnvironmentVariable(variable);
         return Task.FromResult(string.IsNullOrEmpty(value)
             ? SecretProviderResult.NotFound(value is null ? "not-found" : "empty-rejected")
-            : SecretProviderResult.Found(value));
+            : SecretProviderResult.Found(value, _limits.MaximumValueCharacters));
     }
 }
 
@@ -520,8 +547,8 @@ public sealed class EnvironmentSecretProvider : ISecretProvider
 public sealed class UserFileSecretProvider : JsonFileSecretProvider
 {
     /// <summary>Initializes a new instance of the <see cref="UserFileSecretProvider"/> class.</summary>
-    public UserFileSecretProvider(string path)
-        : base(path)
+    public UserFileSecretProvider(string path, SecretResourceLimits? limits = null)
+        : base(path, limits)
     {
     }
 
@@ -554,12 +581,15 @@ public sealed class UserFileSecretProvider : JsonFileSecretProvider
 public sealed class RepositorySecretProvider : ISecretProvider
 {
     private readonly Lock _gate = new();
+    private readonly SecretResourceLimits _limits;
     private RepositoryFileSecretProvider _current;
 
     /// <summary>Initializes a new instance of the <see cref="RepositorySecretProvider"/> class.</summary>
-    public RepositorySecretProvider(string repositoryRoot)
+    public RepositorySecretProvider(string repositoryRoot, SecretResourceLimits? limits = null)
     {
-        _current = new RepositoryFileSecretProvider(repositoryRoot);
+        _limits = limits ?? new();
+        _limits.Validate();
+        _current = new RepositoryFileSecretProvider(repositoryRoot, _limits);
     }
 
     /// <inheritdoc />
@@ -581,7 +611,7 @@ public sealed class RepositorySecretProvider : ISecretProvider
     public void BindRepository(string repositoryRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        var next = new RepositoryFileSecretProvider(repositoryRoot);
+        var next = new RepositoryFileSecretProvider(repositoryRoot, _limits);
         lock (_gate)
         {
             _current = next;
@@ -609,8 +639,8 @@ public sealed class RepositorySecretProvider : ISecretProvider
 public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
 {
     /// <summary>Initializes a new instance of the <see cref="RepositoryFileSecretProvider"/> class.</summary>
-    public RepositoryFileSecretProvider(string repositoryRoot)
-        : base(Path.Combine(Path.GetFullPath(repositoryRoot), ".threadsmith", "secrets", "config.json"))
+    public RepositoryFileSecretProvider(string repositoryRoot, SecretResourceLimits? limits = null)
+        : base(Path.Combine(Path.GetFullPath(repositoryRoot), ".threadsmith", "secrets", "config.json"), limits)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         RepositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryRoot));
@@ -806,14 +836,32 @@ public sealed class RepositoryFileSecretProvider : JsonFileSecretProvider
 /// <summary>Shared strict, bounded, read-only JSON provider implementation.</summary>
 public abstract class JsonFileSecretProvider : ISecretProvider
 {
-    private const int MaximumBytes = 64 * 1024;
-    private const int MaximumProperties = 512;
+    private const uint GenericRead = 0x80000000;
+    private const int OpenExisting = 3;
+    private const int FileFlagOpenReparsePoint = 0x00200000;
+    private const int FileFlagOverlapped = 0x40000000;
+    private const int FileFlagSequentialScan = 0x08000000;
+    private const int UnixOpenReadOnly = 0;
+    private const int LinuxOpenNoFollow = 0x00020000;
+    private const int LinuxOpenCloseOnExec = 0x00080000;
+    private const int LinuxOpenNonBlocking = 0x00000800;
+    private const int LinuxAtEmptyPath = 0x00001000;
+    private const uint LinuxStatxType = 0x00000001;
+    private const int MacOpenNoFollow = 0x00000100;
+    private const int MacOpenCloseOnExec = 0x01000000;
+    private const int MacOpenNonBlocking = 0x00000004;
+    private const ushort UnixFileTypeMask = 0xF000;
+    private const ushort UnixRegularFile = 0x8000;
+
+    private readonly SecretResourceLimits _limits;
 
     /// <summary>Initializes a new instance of the <see cref="JsonFileSecretProvider"/> class.</summary>
-    protected JsonFileSecretProvider(string storePath)
+    protected JsonFileSecretProvider(string storePath, SecretResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storePath);
         StorePath = Path.GetFullPath(storePath);
+        _limits = limits ?? new();
+        _limits.Validate();
     }
 
     /// <inheritdoc />
@@ -864,7 +912,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
             {
                 AllowTrailingCommas = false,
                 CommentHandling = JsonCommentHandling.Disallow,
-                MaxDepth = 16,
+                MaxDepth = _limits.MaximumJsonDepth,
             });
             var propertyCount = 0;
             if (!ValidateElement(document.RootElement, ref propertyCount))
@@ -909,7 +957,7 @@ public abstract class JsonFileSecretProvider : ISecretProvider
             var value = current.GetString();
             return string.IsNullOrEmpty(value)
                 ? SecretProviderResult.NotFound("empty-rejected")
-                : SecretProviderResult.Found(value);
+                : SecretProviderResult.Found(value, _limits.MaximumValueCharacters);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -962,25 +1010,28 @@ public abstract class JsonFileSecretProvider : ISecretProvider
         }
 
         ValidateOpenedStore(stream);
-        if (stream.Length > MaximumBytes)
+        if (stream.Length > _limits.MaximumStoreBytes)
         {
             return null;
         }
 
-        var buffer = new byte[MaximumBytes + 1];
-        var total = 0;
-        while (total < buffer.Length)
+        var buffer = new byte[4096];
+        using var content = new MemoryStream();
+        while (true)
         {
-            var read = await stream.ReadAsync(buffer.AsMemory(total), cancellationToken).ConfigureAwait(false);
+            var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
             if (read == 0)
             {
-                break;
+                return content.ToArray();
             }
 
-            total += read;
-        }
+            if (content.Length + read > _limits.MaximumStoreBytes)
+            {
+                return null;
+            }
 
-        return total > MaximumBytes ? null : buffer[..total];
+            await content.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static FileStream OpenFileWithoutFollowingLinks(string path)
@@ -1084,14 +1135,8 @@ public abstract class JsonFileSecretProvider : ISecretProvider
 
         if (OperatingSystem.IsMacOS())
         {
-            var path = new byte[1024];
-            if (GetFilePathMac(handle.DangerousGetHandle().ToInt32(), MacGetPath, path) != 0)
-            {
-                throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
-            }
-
-            var terminator = Array.IndexOf(path, (byte)0);
-            return Encoding.UTF8.GetString(path, 0, terminator >= 0 ? terminator : path.Length);
+            return MacFileHandlePath.GetPath(handle)
+                ?? throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
         }
 
         var descriptorPath = $"/proc/self/fd/{handle.DangerousGetHandle()}";
@@ -1100,50 +1145,37 @@ public abstract class JsonFileSecretProvider : ISecretProvider
             ?? throw new UnauthorizedAccessException("Secret store path could not be safely opened.");
     }
 
-    private static bool ValidateElement(JsonElement element, ref int propertyCount)
+    private bool ValidateElement(JsonElement element, ref int propertyCount)
     {
-        if (element.ValueKind == JsonValueKind.String)
+        var pending = new Stack<JsonElement>();
+        pending.Push(element);
+        while (pending.TryPop(out var current))
         {
-            return true;
-        }
+            if (current.ValueKind == JsonValueKind.String)
+            {
+                continue;
+            }
 
-        if (element.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
-
-        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var property in element.EnumerateObject())
-        {
-            propertyCount++;
-            if (propertyCount > MaximumProperties
-                || !names.Add(property.Name)
-                || !ValidateElement(property.Value, ref propertyCount))
+            if (current.ValueKind != JsonValueKind.Object)
             {
                 return false;
+            }
+
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var property in current.EnumerateObject())
+            {
+                if (propertyCount >= _limits.MaximumProperties || !names.Add(property.Name))
+                {
+                    return false;
+                }
+
+                propertyCount++;
+                pending.Push(property.Value);
             }
         }
 
         return true;
     }
-
-    private const uint GenericRead = 0x80000000;
-    private const int OpenExisting = 3;
-    private const int FileFlagOpenReparsePoint = 0x00200000;
-    private const int FileFlagOverlapped = 0x40000000;
-    private const int FileFlagSequentialScan = 0x08000000;
-    private const int UnixOpenReadOnly = 0;
-    private const int LinuxOpenNoFollow = 0x00020000;
-    private const int LinuxOpenCloseOnExec = 0x00080000;
-    private const int LinuxOpenNonBlocking = 0x00000800;
-    private const int LinuxAtEmptyPath = 0x00001000;
-    private const uint LinuxStatxType = 0x00000001;
-    private const int MacOpenNoFollow = 0x00000100;
-    private const int MacOpenCloseOnExec = 0x01000000;
-    private const int MacOpenNonBlocking = 0x00000004;
-    private const int MacGetPath = 50;
-    private const ushort UnixFileTypeMask = 0xF000;
-    private const ushort UnixRegularFile = 0x8000;
 
     // Linux statx has a fixed 256-byte ABI; stx_mode is the 16-bit field at byte offset 28.
     [StructLayout(LayoutKind.Explicit, Size = 256)]
@@ -1195,7 +1227,4 @@ public abstract class JsonFileSecretProvider : ISecretProvider
     private static extern int GetFileStatusMac(
         int fileDescriptor,
         out DarwinFileStatus status);
-
-    [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
-    private static extern int GetFilePathMac(int fileDescriptor, int command, byte[] path);
 }

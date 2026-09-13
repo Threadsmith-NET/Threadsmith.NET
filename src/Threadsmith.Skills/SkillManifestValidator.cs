@@ -17,9 +17,10 @@ internal static partial class SkillManifestValidator
     };
 
     /// <summary>Validates declared host, tool, trust, approval, and model requirements.</summary>
-    internal static void ValidateRequirements(SkillRequirementSet requirements)
+    internal static void ValidateRequirements(SkillRequirementSet requirements, SkillCatalogOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(requirements);
+        options ??= new();
         ValidateVersion(requirements.MinimumHostVersion, "minimum host version");
         ValidateVersion(requirements.MaximumHostVersion, "maximum host version");
         if (SemanticVersionComparer.Instance.Compare(
@@ -29,8 +30,8 @@ internal static partial class SkillManifestValidator
             throw new InvalidDataException("Skill host version range is inverted.");
         }
 
-        ValidateIds(requirements.RequiredTools, "required tools", 64);
-        ValidateIds(requirements.OptionalTools, "optional tools", 64);
+        ValidateIds(requirements.RequiredTools, "required tools", options.MaximumRequiredTools, options.MaximumIdentifierCharacters);
+        ValidateIds(requirements.OptionalTools, "optional tools", options.MaximumRequiredTools, options.MaximumIdentifierCharacters);
         if (requirements.RequiredTools.Intersect(
             requirements.OptionalTools,
             StringComparer.OrdinalIgnoreCase).Any())
@@ -48,54 +49,54 @@ internal static partial class SkillManifestValidator
                 "Skills cannot declare nested-skill, direct process/network/script, planning, or mutation tools.");
         }
 
-        if (requirements.ToolContractVersions.Count > 128
+        if (requirements.ToolContractVersions.Count > options.MaximumContractVersions
             || requirements.ToolContractVersions.Any(pair =>
                 string.IsNullOrWhiteSpace(pair.Key)
                 || string.IsNullOrWhiteSpace(pair.Value)
-                || pair.Key.Length > 128
-                || pair.Value.Length > 64))
+                || pair.Key.Length > options.MaximumIdentifierCharacters
+                || pair.Value.Length > options.MaximumVersionCharacters))
         {
             throw new InvalidDataException("Skill tool contract requirements exceed their bounds.");
         }
 
-        if (requirements.ApprovalCategories.Count > 32
+        if (requirements.ApprovalCategories.Count > options.MaximumApprovalCategories
             || requirements.ApprovalCategories.Any(item =>
-                string.IsNullOrWhiteSpace(item) || item.Length > 128))
+                string.IsNullOrWhiteSpace(item) || item.Length > options.MaximumIdentifierCharacters))
         {
             throw new InvalidDataException("Skill approval disclosures exceed their bounds.");
         }
 
         var model = requirements.Model;
-        if (model.MinimumContextWindow is < 0 or > 10_000_000
-            || model.Workloads.Count > 16
-            || model.Workloads.Any(item => string.IsNullOrWhiteSpace(item) || item.Length > 64)
-            || model.AllowedProfiles.Count > 128
-            || model.DeniedProfiles.Count > 128
+        if (model.MinimumContextWindow < 0
+            || model.Workloads.Count > options.MaximumWorkloads
+            || model.Workloads.Any(item => string.IsNullOrWhiteSpace(item) || item.Length > options.MaximumVersionCharacters)
+            || model.AllowedProfiles.Count > options.MaximumModelProfiles
+            || model.DeniedProfiles.Count > options.MaximumModelProfiles
             || model.AllowedProfiles.Intersect(model.DeniedProfiles).Any())
         {
             throw new InvalidDataException("Skill model requirements exceed their bounds or conflict.");
         }
     }
 
-    /// <summary>Validates a finite skill budget against hard host ceilings.</summary>
+    /// <summary>Validates a finite configured skill budget and its internal relationships.</summary>
     internal static void ValidateBudget(SkillBudget budget)
     {
         ArgumentNullException.ThrowIfNull(budget);
-        if (budget.ContentTokens is < 1 or > 1_000_000
-            || budget.WorkflowSteps is < 1 or > 256
-            || budget.ModelTurns is < 0 or > 256
-            || budget.ToolCalls is < 0 or > 10_000
-            || budget.Mutations is < 0 or > 1_000
-            || budget.ValidationAttempts is < 0 or > 256
-            || budget.DelegatedChildren is < 0 or > 64
-            || budget.ParallelChildren is < 0 or > 32
+        if (budget.ContentTokens < 1
+            || budget.WorkflowSteps < 1
+            || budget.ModelTurns < 0
+            || budget.ToolCalls < 0
+            || budget.Mutations < 0
+            || budget.ValidationAttempts < 0
+            || budget.DelegatedChildren < 0
+            || budget.ParallelChildren < 0
             || budget.ParallelChildren > budget.DelegatedChildren
-            || budget.Worktrees is < 0 or > 32
-            || budget.ReviewerFindings is < 0 or > 10_000
+            || budget.Worktrees < 0
+            || budget.ReviewerFindings < 0
             || budget.WallTime <= TimeSpan.Zero
-            || budget.WallTime > TimeSpan.FromHours(24))
+            || budget.WallTime.TotalMilliseconds > uint.MaxValue - 1d)
         {
-            throw new InvalidDataException("Skill budget is invalid or exceeds hard host limits.");
+            throw new InvalidDataException("Skill budget values or relationships are invalid.");
         }
     }
 
@@ -107,8 +108,7 @@ internal static partial class SkillManifestValidator
         ArgumentNullException.ThrowIfNull(workflow);
         if (workflow.SchemaVersion != 1
             || string.IsNullOrWhiteSpace(workflow.WorkflowId)
-            || workflow.WorkflowId.Length > 128
-            || workflow.Steps.Count is < 1 or > 256)
+            || workflow.Steps.Count < 1)
         {
             throw new InvalidDataException("Skill workflow identity, schema, or size is invalid.");
         }
@@ -118,10 +118,8 @@ internal static partial class SkillManifestValidator
         foreach (var step in workflow.Steps)
         {
             if (string.IsNullOrWhiteSpace(step.StepId)
-                || step.StepId.Length > 128
                 || !steps.TryAdd(step.StepId, step)
-                || step.MaximumIterations is < 1 or > 16
-                || step.DependsOn.Count > 32
+                || step.MaximumIterations < 1
                 || step.DependsOn.Count != step.DependsOn.Distinct(StringComparer.Ordinal).Count())
             {
                 throw new InvalidDataException("Skill workflow step identity, loop, or dependencies are invalid.");
@@ -167,12 +165,12 @@ internal static partial class SkillManifestValidator
         SkillWorkflowDefinition workflow,
         SkillBudget budget)
     {
-        var iterations = workflow.Steps.Sum(item => item.MaximumIterations);
+        var iterations = workflow.Steps.Sum(item => (long)item.MaximumIterations);
         var modelTurns = workflow.Steps
             .Where(item => item.Kind is SkillWorkflowStepKind.InvokeProcedure
                 or SkillWorkflowStepKind.CollectEvidence
                 or SkillWorkflowStepKind.Summarize)
-            .Sum(item => item.MaximumIterations);
+            .Sum(item => (long)item.MaximumIterations);
         if (iterations > budget.WorkflowSteps || modelTurns > budget.ModelTurns)
         {
             throw new InvalidDataException("Skill workflow iterations exceed the declared aggregate budget.");
@@ -186,7 +184,7 @@ internal static partial class SkillManifestValidator
         SkillBudget budget)
     {
         ArgumentNullException.ThrowIfNull(agents);
-        if (agents.Count > 16 || agents.Sum(item => item.MaximumChildren) > budget.DelegatedChildren)
+        if (agents.Sum(item => (long)item.MaximumChildren) > budget.DelegatedChildren)
         {
             throw new InvalidDataException("Skill agent templates exceed the delegation budget.");
         }
@@ -194,7 +192,7 @@ internal static partial class SkillManifestValidator
         var paths = assets.Select(item => item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var agent in agents)
         {
-            if (agent.MaximumChildren is < 1 or > 16 || !paths.Contains(agent.OutputSchemaPath))
+            if (agent.MaximumChildren < 1 || !paths.Contains(agent.OutputSchemaPath))
             {
                 throw new InvalidDataException("Skill agent template is invalid or references a missing schema.");
             }
@@ -212,37 +210,40 @@ internal static partial class SkillManifestValidator
 
     private static void DetectCycles(IReadOnlyDictionary<string, SkillWorkflowStep> steps)
     {
-        var visiting = new HashSet<string>(StringComparer.Ordinal);
-        var visited = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var id in steps.Keys)
+        var remainingDependencies = steps.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.DependsOn.Count,
+            StringComparer.Ordinal);
+        var dependents = steps.Keys.ToDictionary(
+            id => id,
+            _ => new List<string>(),
+            StringComparer.Ordinal);
+        foreach (var step in steps.Values)
         {
-            Visit(id, steps, visiting, visited);
-        }
-    }
-
-    private static void Visit(
-        string id,
-        IReadOnlyDictionary<string, SkillWorkflowStep> steps,
-        HashSet<string> visiting,
-        HashSet<string> visited)
-    {
-        if (visited.Contains(id))
-        {
-            return;
+            foreach (var dependency in step.DependsOn)
+            {
+                dependents[dependency].Add(step.StepId);
+            }
         }
 
-        if (!visiting.Add(id))
+        var ready = new Queue<string>(remainingDependencies.Where(pair => pair.Value == 0).Select(pair => pair.Key));
+        var visited = 0;
+        while (ready.TryDequeue(out var id))
+        {
+            visited++;
+            foreach (var dependent in dependents[id])
+            {
+                if (--remainingDependencies[dependent] == 0)
+                {
+                    ready.Enqueue(dependent);
+                }
+            }
+        }
+
+        if (visited != steps.Count)
         {
             throw new InvalidDataException("Skill workflow graph contains a cycle.");
         }
-
-        foreach (var dependency in steps[id].DependsOn)
-        {
-            Visit(dependency, steps, visiting, visited);
-        }
-
-        visiting.Remove(id);
-        visited.Add(id);
     }
 
     private static bool ActionMatchesStepKind(SkillWorkflowStepKind step)
@@ -282,11 +283,11 @@ internal static partial class SkillManifestValidator
         }
     }
 
-    private static void ValidateIds(IReadOnlyList<string> values, string name, int maximum)
+    private static void ValidateIds(IReadOnlyList<string> values, string name, int maximum, int maximumCharacters)
     {
         if (values.Count > maximum
             || values.Count != values.Distinct(StringComparer.OrdinalIgnoreCase).Count()
-            || values.Any(item => string.IsNullOrWhiteSpace(item) || item.Length > 128))
+            || values.Any(item => string.IsNullOrWhiteSpace(item) || item.Length > maximumCharacters))
         {
             throw new InvalidDataException($"Skill {name} exceed bounds or contain duplicates.");
         }
@@ -308,10 +309,10 @@ internal static partial class SkillManifestValidator
 internal static class SkillPathPolicy
 {
     /// <summary>Rejects rooted, traversing, alternate-stream, and ambiguous asset paths.</summary>
-    internal static void ValidateRelativePath(string path)
+    internal static void ValidateRelativePath(string path, int maximumCharacters = int.MaxValue)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        if (path.Length > 512 || Path.IsPathRooted(path) || path.Contains(':', StringComparison.Ordinal))
+        if (path.Length > maximumCharacters || Path.IsPathRooted(path) || path.Contains(':', StringComparison.Ordinal))
         {
             throw new InvalidDataException("Skill asset path must be bounded and package-relative.");
         }

@@ -14,18 +14,20 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
         "skill.json",
     };
 
+    private readonly SkillCatalogOptions _catalogOptions;
     private readonly ISkillTrustPolicyProvider _policyProvider;
 
     /// <summary>Initializes a new instance of the <see cref="SkillPackageVerifier"/> class.</summary>
-    public SkillPackageVerifier(SkillTrustPolicySnapshot policy)
-        : this(new FixedSkillTrustPolicyProvider(policy))
+    public SkillPackageVerifier(SkillTrustPolicySnapshot policy, SkillCatalogOptions? catalogOptions = null)
+        : this(new FixedSkillTrustPolicyProvider(policy), catalogOptions)
     {
     }
 
     /// <summary>Initializes a new instance of the <see cref="SkillPackageVerifier"/> class with refreshable policy.</summary>
-    public SkillPackageVerifier(ISkillTrustPolicyProvider policyProvider)
+    public SkillPackageVerifier(ISkillTrustPolicyProvider policyProvider, SkillCatalogOptions? catalogOptions = null)
     {
         ArgumentNullException.ThrowIfNull(policyProvider);
+        _catalogOptions = catalogOptions ?? new();
         _policyProvider = policyProvider;
     }
 
@@ -87,7 +89,7 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
         }
     }
 
-    private static async Task VerifyManifestUnchangedAsync(
+    private async Task VerifyManifestUnchangedAsync(
         SkillCatalogCandidate candidate,
         CancellationToken cancellationToken)
     {
@@ -101,7 +103,8 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
                     candidate.Provenance.Source,
                     IsRepositoryControlled: candidate.Provenance.Scope == SkillScope.Repository,
                     IsMaintained: candidate.Provenance.Scope == SkillScope.Maintained),
-            ]);
+            ],
+            _catalogOptions);
         var snapshot = await catalog.RefreshAsync(cancellationToken);
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
@@ -261,7 +264,7 @@ public sealed class SkillContentLoader : ISkillContentLoader
             throw new UnauthorizedAccessException("Only enabled verified skill content may be loaded.");
         }
 
-        if (maximumTokens is < 1 or > 1_000_000)
+        if (maximumTokens < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(maximumTokens));
         }
@@ -341,18 +344,21 @@ public sealed class SkillPackageInstaller
     private readonly string _contentStoreRoot;
     private readonly string _quarantineRoot;
     private readonly SkillInstallerOptions _options;
+    private readonly SkillCatalogOptions _catalogOptions;
 
     /// <summary>Initializes a new instance of the <see cref="SkillPackageInstaller"/> class.</summary>
     public SkillPackageInstaller(
         string contentStoreRoot,
         string quarantineRoot,
-        SkillInstallerOptions? options = null)
+        SkillInstallerOptions? options = null,
+        SkillCatalogOptions? catalogOptions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentStoreRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(quarantineRoot);
         _contentStoreRoot = Path.GetFullPath(contentStoreRoot);
         _quarantineRoot = Path.GetFullPath(quarantineRoot);
         _options = options ?? new SkillInstallerOptions();
+        _catalogOptions = catalogOptions ?? new();
         if (!string.Equals(
             Path.GetPathRoot(_contentStoreRoot),
             Path.GetPathRoot(_quarantineRoot),
@@ -361,9 +367,9 @@ public sealed class SkillPackageInstaller
             throw new ArgumentException("Skill quarantine and content store must share one volume.");
         }
 
-        if (_options.MaximumArchiveBytes is < 1 or > 1024L * 1024 * 1024
+        if (_options.MaximumArchiveBytes < 1
             || _options.MaximumExtractedBytes < _options.MaximumArchiveBytes
-            || _options.MaximumFiles is < 1 or > 10_000)
+            || _options.MaximumFiles < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Skill installer limits are invalid.");
         }
@@ -394,7 +400,8 @@ public sealed class SkillPackageInstaller
         {
             await ExtractAsync(archivePath, quarantine, cancellationToken);
             var catalog = new SkillCatalog(
-                [new SkillCatalogSource(scope, quarantine, source)]);
+                [new SkillCatalogSource(scope, quarantine, source)],
+                _catalogOptions);
             var snapshot = await catalog.RefreshAsync(cancellationToken);
             var candidate = AssertSingle(snapshot.Candidates);
             var verified = await verifier.VerifyAsync(candidate, cancellationToken);
@@ -499,6 +506,7 @@ public sealed class SkillPackageInstaller
                 throw new InvalidDataException("Skill archive exceeds its extracted-size limit.");
             }
 
+            SkillPathPolicy.ValidateRelativePath(entry.FullName, _catalogOptions.MaximumPathCharacters);
             var output = SkillPathPolicy.ResolveConfined(destination, entry.FullName);
             Directory.CreateDirectory(Path.GetDirectoryName(output)
                 ?? throw new InvalidDataException("Skill archive output has no parent directory."));

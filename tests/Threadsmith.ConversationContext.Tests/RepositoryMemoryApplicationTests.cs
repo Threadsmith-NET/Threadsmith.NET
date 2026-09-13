@@ -75,6 +75,8 @@ public static class RepositoryMemoryApplicationTests
 
     private sealed class TestOptionsProvider : IRepositoryMemoryOptionsProvider
     {
+        public RepositoryMemoryOptions CaptureCurrent() => new();
+
         public RepositoryMemoryOptions Capture(string repositoryIdentity) => new();
     }
 }

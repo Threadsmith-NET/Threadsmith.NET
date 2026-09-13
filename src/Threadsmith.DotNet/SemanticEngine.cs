@@ -17,12 +17,9 @@ using Threadsmith.Core;
 /// <summary>Provides confidence-aware Roslyn and MSBuild semantic discovery.</summary>
 public sealed class SemanticEngine : ISemanticEngine
 {
-    private const int _maximumFallbackFiles = 10_000;
-    private const int _maximumFallbackMatches = 500;
-    private const int _maximumFallbackEntries = 50_000;
-    private const long _maximumFallbackFileBytes = 1024 * 1024;
     private static readonly Lock _msBuildGate = new();
     private readonly TimeSpan _cancellationBackstop;
+    private readonly SemanticResourceLimits _resourceLimits;
     private readonly IDomainEventStream _events;
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<string> _invalidations = new();
@@ -39,7 +36,8 @@ public sealed class SemanticEngine : ISemanticEngine
     public SemanticEngine(
         IDomainEventStream events,
         ILogger<SemanticEngine> logger,
-        TimeSpan? cancellationBackstop = null)
+        TimeSpan? cancellationBackstop = null,
+        SemanticResourceLimits? resourceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(logger);
@@ -48,6 +46,8 @@ public sealed class SemanticEngine : ISemanticEngine
             throw new ArgumentOutOfRangeException(nameof(cancellationBackstop));
         }
 
+        _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
+        _resourceLimits.Validate();
         _events = events;
         _logger = logger;
         _cancellationBackstop = cancellationBackstop ?? TimeSpan.FromSeconds(2);
@@ -514,9 +514,9 @@ public sealed class SemanticEngine : ISemanticEngine
             var inspectedFiles = 0;
             var prohibitedPaths = request.ProhibitedPaths ?? [];
             while (pending.Count > 0
-                && inspectedEntries < _maximumFallbackEntries
-                && inspectedFiles < _maximumFallbackFiles
-                && fallback.Count < _maximumFallbackMatches)
+                && inspectedEntries < _resourceLimits.MaximumFallbackEntries
+                && inspectedFiles < _resourceLimits.MaximumFallbackFiles
+                && fallback.Count < _resourceLimits.MaximumFallbackMatches)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var directory = pending.Pop();
@@ -529,16 +529,20 @@ public sealed class SemanticEngine : ISemanticEngine
                     or UnauthorizedAccessException
                     or System.Security.SecurityException)
                 {
-                    _logger.LogDebug(
-                        "Skipping inaccessible semantic fallback directory {Directory}: {ErrorType}",
-                        directory,
-                        exception.GetType().Name);
+                    if (_logger.IsEnabled(LogLevel.Debug))
+                    {
+                        _logger.LogDebug(
+                            "Skipping inaccessible semantic fallback directory {Directory}: {ErrorType}",
+                            directory,
+                            exception.GetType().Name);
+                    }
+
                     continue;
                 }
 
                 foreach (var entry in entries)
                 {
-                    if (++inspectedEntries > _maximumFallbackEntries)
+                    if (++inspectedEntries > _resourceLimits.MaximumFallbackEntries)
                     {
                         break;
                     }
@@ -552,10 +556,14 @@ public sealed class SemanticEngine : ISemanticEngine
                         or UnauthorizedAccessException
                         or System.Security.SecurityException)
                     {
-                        _logger.LogDebug(
-                            "Skipping inaccessible semantic fallback entry {Path}: {ErrorType}",
-                            entry,
-                            exception.GetType().Name);
+                        if (_logger.IsEnabled(LogLevel.Debug))
+                        {
+                            _logger.LogDebug(
+                                "Skipping inaccessible semantic fallback entry {Path}: {ErrorType}",
+                                entry,
+                                exception.GetType().Name);
+                        }
+
                         continue;
                     }
 
@@ -582,15 +590,15 @@ public sealed class SemanticEngine : ISemanticEngine
                     }
 
                     if (!entry.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-                        || ++inspectedFiles > _maximumFallbackFiles
-                        || new FileInfo(entry).Length > _maximumFallbackFileBytes)
+                        || ++inspectedFiles > _resourceLimits.MaximumFallbackFiles
+                        || new FileInfo(entry).Length > _resourceLimits.MaximumFallbackFileBytes)
                     {
                         continue;
                     }
 
                     using var reader = new StreamReader(entry);
                     var lineNumber = 0;
-                    while (fallback.Count < _maximumFallbackMatches
+                    while (fallback.Count < _resourceLimits.MaximumFallbackMatches
                         && await reader.ReadLineAsync(cancellationToken) is { } line)
                     {
                         lineNumber++;
@@ -708,7 +716,7 @@ public sealed class SemanticEngine : ISemanticEngine
                 new SemanticConfidenceChanged(
                     request.SessionId,
                     DateTimeOffset.UtcNow,
-                    SemanticConfidenceLevel.ProjectGraphOnly.ToString()),
+                    nameof(SemanticConfidenceLevel.ProjectGraphOnly)),
                 cancellationToken);
         }
 

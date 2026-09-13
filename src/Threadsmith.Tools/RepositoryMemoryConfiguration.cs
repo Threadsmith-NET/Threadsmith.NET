@@ -23,6 +23,9 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
     }
 
     /// <inheritdoc />
+    public RepositoryMemoryOptions CaptureCurrent() => Volatile.Read(ref _current).Options;
+
+    /// <inheritdoc />
     public RepositoryMemoryOptions Capture(string repositoryIdentity)
     {
         var snapshot = Volatile.Read(ref _current);
@@ -63,6 +66,12 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
     {
         var options = new RepositoryMemoryOptions
         {
+            MaximumTextCharacters = configuration.GetValue($"{SectionName}:MaximumTextCharacters", fallback.MaximumTextCharacters),
+            MaximumQueryCharacters = configuration.GetValue($"{SectionName}:MaximumQueryCharacters", fallback.MaximumQueryCharacters),
+            MaximumQueryTerms = configuration.GetValue($"{SectionName}:MaximumQueryTerms", fallback.MaximumQueryTerms),
+            MaximumCacheEntries = configuration.GetValue($"{SectionName}:MaximumCacheEntries", fallback.MaximumCacheEntries),
+            MaximumDiagnostics = configuration.GetValue($"{SectionName}:MaximumDiagnostics", fallback.MaximumDiagnostics),
+            MaximumListBytes = configuration.GetValue($"{SectionName}:MaximumListBytes", fallback.MaximumListBytes),
             MaxNumberOfRepoMemories = configuration.GetValue($"{SectionName}:MaxNumberOfRepoMemories", fallback.MaxNumberOfRepoMemories),
             MaxRepoMemoriesInContext = configuration.GetValue($"{SectionName}:MaxRepoMemoriesInContext", fallback.MaxRepoMemoriesInContext),
             SemanticMinimum = configuration.GetValue($"{SectionName}:SemanticMinimum", fallback.SemanticMinimum),

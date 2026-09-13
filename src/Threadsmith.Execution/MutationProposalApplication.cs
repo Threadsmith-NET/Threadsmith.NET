@@ -175,6 +175,8 @@ public sealed class MutationProposalApplication :
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly ITransactionalWorkspaceResolver _workspaces;
+    private readonly WorkspaceResourceLimits _workspaceLimits;
+    private readonly string _argumentsSchema;
 
     /// <summary>Initializes a new instance of the <see cref="MutationProposalApplication"/> class.</summary>
     public MutationProposalApplication(
@@ -196,7 +198,8 @@ public sealed class MutationProposalApplication :
         IManagedRepositoryMemoryService? repositoryMemories = null,
         IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null,
         Func<SessionId, RunId, CancellationToken, Task<bool>>? repositoryMemoriesEnabled = null,
-        ILogger<MutationProposalApplication>? logger = null)
+        ILogger<MutationProposalApplication>? logger = null,
+        WorkspaceResourceLimits? workspaceLimits = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(contextAssembler);
@@ -206,6 +209,14 @@ public sealed class MutationProposalApplication :
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(correctiveMessages);
         ArgumentNullException.ThrowIfNull(prompts);
+        _workspaceLimits = workspaceLimits ?? new WorkspaceResourceLimits();
+        _workspaceLimits.Validate();
+        var schema = System.Text.Json.Nodes.JsonNode.Parse(ProposeMutationsArgumentsSchema)
+            ?? throw new InvalidOperationException("The mutation schema is unavailable.");
+        var mutations = schema["properties"]?["mutationSet"]?["properties"]?["mutations"]
+            ?? throw new InvalidOperationException("The mutation schema has no mutations property.");
+        mutations["maxItems"] = _workspaceLimits.MaximumMutations;
+        _argumentsSchema = schema.ToJsonString();
         _model = model;
         _repositoryMemories = repositoryMemories;
         _repositoryMemoryOptions = repositoryMemoryOptions;
@@ -367,7 +378,7 @@ public sealed class MutationProposalApplication :
 
         var operationBudget = _budgetFactory()
             ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
-        ModelOutputValidator.Validate(new PlanModelOutput(command.ApprovedPlan));
+        ModelOutputValidator.Validate(new PlanModelOutput(command.ApprovedPlan), planLimits: _limits.Plan);
         if (command.Phase is not RunPhase.MutationPreparation
             and not RunPhase.ImplementationModelTurn
             and not RunPhase.CorrectionModelTurn)
@@ -423,7 +434,7 @@ public sealed class MutationProposalApplication :
 
                     try
                     {
-                        ModelOutputValidator.Validate(mutationOutput);
+                        ModelOutputValidator.Validate(mutationOutput, mutationLimits: _workspaceLimits);
                     }
                     catch (MalformedModelOutputException exception)
                     {
@@ -552,7 +563,7 @@ public sealed class MutationProposalApplication :
                 // Older providers return the complete host-identity shape. Preserve its strict parser and identity checks.
                 try
                 {
-                    structured = ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim());
+                    structured = ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim(), _workspaceLimits);
                 }
                 catch (MalformedModelOutputException fallbackException)
                 {
@@ -593,7 +604,7 @@ public sealed class MutationProposalApplication :
         {
             try
             {
-                structured = ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim());
+                structured = ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim(), _workspaceLimits);
             }
             catch (MalformedModelOutputException exception)
             {
@@ -646,7 +657,7 @@ public sealed class MutationProposalApplication :
         };
         try
         {
-            ModelOutputValidator.Validate(new MutationSetModelOutput(proposed));
+            ModelOutputValidator.Validate(new MutationSetModelOutput(proposed), mutationLimits: _workspaceLimits);
         }
         catch (MalformedModelOutputException exception)
         {
@@ -748,6 +759,7 @@ public sealed class MutationProposalApplication :
                 context.ModelResolution?.ProfileId,
                 reasoningFallback) ?? reasoningFallback ?? ReasoningLevel.None,
             MaximumOutputTokens = context.ModelResolution?.EffectiveRequestOutputTokenReserve,
+            MutationLimits = _workspaceLimits,
             Tools = modelTools,
             AllowMultipleToolCalls = false,
             Messages = messages,
@@ -761,7 +773,7 @@ public sealed class MutationProposalApplication :
                 : new ModelResponseFormat
                 {
                     SchemaId = "threadsmith.mutation-proposal.v1",
-                    JsonSchema = ProposeMutationsArgumentsSchema,
+                    JsonSchema = _argumentsSchema,
                 },
         };
         var prepared = ModelRequestPreparation.Prepare(_model, modelRequest);
@@ -784,7 +796,7 @@ public sealed class MutationProposalApplication :
         return _prompts;
     }
 
-    private static ModelToolDefinition CreateProposeMutationsTool(IPromptLoader prompts)
+    private ModelToolDefinition CreateProposeMutationsTool(IPromptLoader prompts)
     {
         return ModelToolCanonicalizer.Canonicalize(
         [
@@ -792,7 +804,7 @@ public sealed class MutationProposalApplication :
             {
                 Name = ProposeMutationsToolName,
                 Description = prompts.Get(PromptFileNames.ToolProposeMutationsDescription),
-                ArgumentsJsonSchema = ProposeMutationsArgumentsSchema,
+                ArgumentsJsonSchema = _argumentsSchema,
                 PreferStrictArguments = true,
             },
         ])[0];
@@ -1713,17 +1725,17 @@ public sealed class MutationProposalApplication :
         return values ?? [];
     }
 
-    private static void ValidateEnvelope(MutationProposalEnvelope envelope)
+    private void ValidateEnvelope(MutationProposalEnvelope envelope)
     {
         if (envelope.MutationSet is null
             || envelope.MutationSet.Mutations is null
-            || envelope.MutationSet.Mutations.Count is < 1 or > 100
+            || (envelope.MutationSet.Mutations.Count < 1 || envelope.MutationSet.Mutations.Count > _workspaceLimits.MaximumMutations)
             || string.IsNullOrWhiteSpace(envelope.MutationSet.Rationale))
         {
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.MutationSchemaMismatch,
-                "The mutation proposal requires a rationale and 1..100 operation-specific mutations.");
+                $"The mutation proposal requires a rationale and 1..{_workspaceLimits.MaximumMutations} operation-specific mutations.");
         }
 
         var invalidChange = envelope.MutationSet.Mutations.FirstOrDefault(change => change switch

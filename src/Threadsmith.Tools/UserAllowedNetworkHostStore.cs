@@ -7,14 +7,16 @@ using Threadsmith.Core;
 /// <summary>Reads and atomically updates the ordinary user configuration's exact network-host list.</summary>
 public sealed class UserAllowedNetworkHostStore
 {
-    private const int MaximumConfigurationBytes = 1024 * 1024;
+    private readonly int _maximumConfigurationBytes;
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly string _configurationPath;
 
     /// <summary>Initializes a new instance of the <see cref="UserAllowedNetworkHostStore"/> class with a host-owned user path.</summary>
-    public UserAllowedNetworkHostStore(string configurationPath)
+    public UserAllowedNetworkHostStore(string configurationPath, int maximumConfigurationBytes = 1024 * 1024)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configurationPath);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumConfigurationBytes);
+        _maximumConfigurationBytes = maximumConfigurationBytes;
         _configurationPath = Path.GetFullPath(configurationPath);
     }
 
@@ -83,7 +85,7 @@ public sealed class UserAllowedNetworkHostStore
 
                 hosts.Add(normalized);
                 var bytes = JsonSerializer.SerializeToUtf8Bytes(root, JsonOptions);
-                if (bytes.Length > MaximumConfigurationBytes)
+                if (bytes.Length > _maximumConfigurationBytes)
                 {
                     throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
                 }
@@ -119,7 +121,7 @@ public sealed class UserAllowedNetworkHostStore
         }
 
         using var stream = new FileStream(_configurationPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
-        if (stream.Length > MaximumConfigurationBytes)
+        if (stream.Length > _maximumConfigurationBytes)
         {
             throw new InvalidOperationException("The user configuration exceeds the supported size.");
         }

@@ -4,6 +4,7 @@ using System.Collections.Frozen;
 using System.Globalization;
 using System.Text;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Contracts;
 
 /// <summary>Immutable, validated display names. Names never affect execution roles or prompts.</summary>
 public sealed class AgentNameCatalog
@@ -27,12 +28,12 @@ public sealed class AgentNameCatalog
     private readonly FrozenDictionary<AgentRole, IReadOnlyList<string>> _names;
 
     /// <summary>Initializes a new instance of the <see cref="AgentNameCatalog"/> class.</summary>
-    public AgentNameCatalog(IReadOnlyList<string>? defaultNames = null, IReadOnlyDictionary<AgentRole, IReadOnlyList<string>>? byRole = null)
+    public AgentNameCatalog(IReadOnlyList<string>? defaultNames = null, IReadOnlyDictionary<AgentRole, IReadOnlyList<string>>? byRole = null, TuiResourceLimits? limits = null)
     {
-        var shared = Validate(defaultNames);
+        var shared = Validate(defaultNames, limits);
         _names = Enum.GetValues<AgentRole>().ToFrozenDictionary(role => role, role =>
         {
-            var explicitNames = byRole is not null && byRole.TryGetValue(role, out var names) ? Validate(names) : [];
+            var explicitNames = byRole is not null && byRole.TryGetValue(role, out var names) ? Validate(names, limits) : [];
             return explicitNames.Count > 0 ? explicitNames : shared.Count > 0 ? shared : Defaults[role];
         });
     }
@@ -41,13 +42,15 @@ public sealed class AgentNameCatalog
     public IReadOnlyList<string> GetNames(AgentRole role) => _names[role];
 
     /// <summary>Normalizes printable names and rejects unusable entries without making configuration fatal.</summary>
-    public static IReadOnlyList<string> Validate(IReadOnlyList<string>? names)
+    public static IReadOnlyList<string> Validate(IReadOnlyList<string>? names, TuiResourceLimits? limits = null)
     {
+        limits ??= new();
+        limits.Validate();
         var accepted = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var raw in (names ?? []).Take(MaximumNames))
+        foreach (var raw in (names ?? []).Take(limits.MaximumAgentNames))
         {
-            if (string.IsNullOrWhiteSpace(raw) || raw.Length > MaximumNameLength * 2 || raw.Any(char.IsControl))
+            if (string.IsNullOrWhiteSpace(raw) || raw.Length > (long)limits.MaximumAgentNameCharacters * 2 || raw.Any(char.IsControl))
             {
                 continue;
             }
@@ -62,7 +65,7 @@ public sealed class AgentNameCatalog
                 continue;
             }
 
-            if (name.Length is 0 or > MaximumNameLength || name.EnumerateRunes().Any(rune =>
+            if ((name.Length == 0 || name.Length > limits.MaximumAgentNameCharacters) || name.EnumerateRunes().Any(rune =>
                 Rune.GetUnicodeCategory(rune) is UnicodeCategory.Control or UnicodeCategory.Format
                     or UnicodeCategory.LineSeparator or UnicodeCategory.ParagraphSeparator or UnicodeCategory.Surrogate
                     or UnicodeCategory.OtherNotAssigned))

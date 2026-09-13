@@ -50,6 +50,7 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
     };
 
     private readonly SkillTrustPolicySnapshot _basePolicy;
+    private readonly PolicyStoreResourceLimits _limits;
     private readonly Lock _gate = new();
     private readonly string _path;
     private UserSkillPolicy _userPolicy;
@@ -57,12 +58,15 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
     /// <summary>Initializes a new instance of the <see cref="FileSkillTrustPolicyProvider"/> class.</summary>
     public FileSkillTrustPolicyProvider(
         string path,
-        SkillTrustPolicySnapshot basePolicy)
+        SkillTrustPolicySnapshot basePolicy,
+        PolicyStoreResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(basePolicy);
         _path = Path.GetFullPath(path);
         _basePolicy = basePolicy;
+        _limits = limits ?? new();
+        _limits.Validate();
         _userPolicy = Load(_path);
     }
 
@@ -115,6 +119,13 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
             };
         }
 
+        ValidatePolicy(next);
+        var content = JsonSerializer.Serialize(next, JsonOptions) + Environment.NewLine;
+        if (System.Text.Encoding.UTF8.GetByteCount(content) > _limits.MaximumPolicyFileBytes)
+        {
+            throw new InvalidDataException("User skill policy exceeds its byte limit.");
+        }
+
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrEmpty(directory))
         {
@@ -126,7 +137,7 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
         {
             await File.WriteAllTextAsync(
                 temporary,
-                JsonSerializer.Serialize(next, JsonOptions) + Environment.NewLine,
+                content,
                 cancellationToken);
             File.Move(temporary, _path, overwrite: true);
             lock (_gate)
@@ -143,7 +154,7 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
         }
     }
 
-    private static UserSkillPolicy Load(string path)
+    private UserSkillPolicy Load(string path)
     {
         if (!File.Exists(path))
         {
@@ -151,26 +162,30 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
         }
 
         var info = new FileInfo(path);
-        if (info.Length > 1024 * 1024)
+        if (info.Length > _limits.MaximumPolicyFileBytes)
         {
             throw new InvalidDataException("User skill policy exceeds its byte limit.");
         }
 
         var policy = JsonSerializer.Deserialize<UserSkillPolicy>(File.ReadAllText(path))
             ?? throw new InvalidDataException("User skill policy is empty.");
+        ValidatePolicy(policy);
+        return policy;
+    }
+
+    private void ValidatePolicy(UserSkillPolicy policy)
+    {
         if (policy.SchemaVersion != 1
-            || policy.AllowlistedPackages.Count > 2048
-            || policy.EnabledSelectors.Count > 2048
-            || policy.DisabledSelectors.Count > 2048
+            || policy.AllowlistedPackages.Count > _limits.MaximumSkillPolicyEntries
+            || policy.EnabledSelectors.Count > _limits.MaximumSkillPolicyEntries
+            || policy.DisabledSelectors.Count > _limits.MaximumSkillPolicyEntries
             || policy.AllowlistedPackages
                 .Concat(policy.EnabledSelectors)
                 .Concat(policy.DisabledSelectors)
-                .Any(item => string.IsNullOrWhiteSpace(item) || item.Length > 1024))
+                .Any(item => string.IsNullOrWhiteSpace(item) || item.Length > _limits.MaximumSkillPolicyItemCharacters))
         {
             throw new InvalidDataException("User skill policy is invalid or exceeds its bounds.");
         }
-
-        return policy;
     }
 
     private static SkillTrustPolicySnapshot Merge(

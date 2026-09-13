@@ -17,7 +17,7 @@ public sealed record WriteFileOutput(string Path, int BytesWritten, Conversation
 /// <summary>Writes bounded UTF-8 artifacts directly inside configured folders.</summary>
 public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
 {
-    private const int MaximumContentBytes = 1024 * 1024;
+    private readonly ToolLimits _limits;
     private static readonly UTF8Encoding _encoding = new(false, true);
     private static readonly HashSet<string> _extensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -29,16 +29,22 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
     private readonly ToolDefinition _definition;
 
     /// <summary>Initializes a new instance of the <see cref="WriteFileTool"/> class.</summary>
-    public WriteFileTool(WriteFileConfiguration configuration, IConversationStore conversations, IPromptLoader promptLoader)
+    public WriteFileTool(WriteFileConfiguration configuration, IConversationStore conversations, IPromptLoader promptLoader, ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(conversations);
         ArgumentNullException.ThrowIfNull(promptLoader);
+        _limits = limits ?? ToolLimits.Default;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_limits.WriteFileMaximumContentBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_limits.WriteFileMaximumPathCharacters);
         _configuration = configuration;
         _conversations = conversations;
         _definition = ToolDefinitionFactory.Create<WriteFileInput, WriteFileOutput>(
             "write_file",
-            promptLoader.Get(PromptFileNames.ToolWriteFileDescription),
+            promptLoader.Render(PromptFileNames.ToolWriteFileDescription, new Dictionary<string, string>
+            {
+                ["MaximumContentBytes"] = _limits.WriteFileMaximumContentBytes.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }),
             ToolCategory.FileWrite,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -82,9 +88,9 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         }
 
         var bytes = _encoding.GetBytes(content ?? throw new InvalidOperationException("No file content was supplied."));
-        if (bytes.Length > MaximumContentBytes)
+        if (bytes.Length > _limits.WriteFileMaximumContentBytes)
         {
-            throw new ToolArgumentValidationException("write_file content exceeds the 1 MiB UTF-8 limit.");
+            throw new ToolArgumentValidationException($"write_file content exceeds the configured {_limits.WriteFileMaximumContentBytes} UTF-8 byte limit.");
         }
 
         var parent = Path.GetDirectoryName(destination) ?? throw new InvalidOperationException("The destination needs a parent folder.");
@@ -177,9 +183,9 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
     /// <inheritdoc />
     protected override void ValidateInput(WriteFileInput input)
     {
-        if (string.IsNullOrWhiteSpace(input.Path) || input.Path.Length > 4096 || input.Path.Any(char.IsControl))
+        if (string.IsNullOrWhiteSpace(input.Path) || input.Path.Length > _limits.WriteFileMaximumPathCharacters || input.Path.Any(char.IsControl))
         {
-            throw new ToolArgumentValidationException("path must be a nonblank file path of at most 4096 characters.");
+            throw new ToolArgumentValidationException($"path must be a nonblank file path of at most {_limits.WriteFileMaximumPathCharacters} characters.");
         }
 
         if (Path.IsPathRooted(input.Path) && !Path.IsPathFullyQualified(input.Path))
@@ -197,9 +203,9 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             throw new ToolArgumentValidationException("Supply exactly one of content or useLastResponse=true.");
         }
 
-        if (input.Content is { } content && (content.Length > MaximumContentBytes || _encoding.GetByteCount(content) > MaximumContentBytes))
+        if (input.Content is { } content && (content.Length > _limits.WriteFileMaximumContentBytes || _encoding.GetByteCount(content) > _limits.WriteFileMaximumContentBytes))
         {
-            throw new ToolArgumentValidationException("write_file content exceeds the 1 MiB UTF-8 limit.");
+            throw new ToolArgumentValidationException($"write_file content exceeds the configured {_limits.WriteFileMaximumContentBytes} UTF-8 byte limit.");
         }
     }
 

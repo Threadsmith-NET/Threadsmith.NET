@@ -13,6 +13,31 @@ using Xunit;
 /// <summary>Verifies bounded semantic Markdown parsing, layout, fallback, and display configuration.</summary>
 public static class TuiMarkdownRenderingTests
 {
+    /// <summary>Configuration cannot raise recursive traversal beyond its stack-safety ceiling.</summary>
+    [Theory]
+    [InlineData(33)]
+    [InlineData(int.MaxValue)]
+    public static void ConfiguredDepthRejectsStackOverflowRisk(int depth)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tui:limits:markdown:maximumDepth"] = depth.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        Assert.Throws<ArgumentOutOfRangeException>(() => TuiDisplayOptions.Load(configuration));
+    }
+
+    /// <summary>Deep valid Markdown falls back to source instead of unbounded recursive traversal.</summary>
+    [Theory]
+    [InlineData(4)]
+    [InlineData(32)]
+    public static void Parse_ExcessiveNesting_PreservesSource(int depth)
+    {
+        var source = string.Concat(Enumerable.Repeat("> ", 100)) + "deep";
+        var result = new MarkdownParser(new MarkdownRenderingLimits { MaximumDepth = depth }).Parse(source);
+        Assert.False(result.Succeeded);
+        Assert.Equal(source, result.SafeSource);
+    }
+
     /// <summary>Maps supported CommonMark and selected extensions into the closed host document model.</summary>
     [Fact]
     public static void Parse_SupportedMarkdown_ProducesSemanticDocument()
@@ -503,7 +528,7 @@ public static class TuiMarkdownRenderingTests
         Assert.Equal("**partial", cancellationOutput.SafeSource);
     }
 
-    /// <summary>Every compiled theme inherits semantic Markdown decoration and style suppression removes only style.</summary>
+    /// <summary>Compiled themes declare Markdown styles explicitly; custom themes never inherit those styles.</summary>
     [Fact]
     public static void MarkdownRoles_CompiledThemesAndNoColor_HaveSafeFallbacks()
     {
@@ -520,9 +545,12 @@ public static class TuiMarkdownRenderingTests
                 PresentationTextRole.Default,
                 new TuiTextStyle(Decorations: TuiTextDecoration.None))]);
         var customResolver = new TuiThemeResolver(customTheme);
-        Assert.True(customResolver
-            .Resolve(PresentationTextRole.MarkdownHeading)
-            .Decorations?.HasFlag(TuiTextDecoration.Bold));
+        var emptyResolver = new TuiThemeResolver(new TuiTheme("empty", []));
+        Assert.All(Enum.GetValues<PresentationTextRole>(), role =>
+        {
+            Assert.Equal(new TuiTextStyle(Decorations: TuiTextDecoration.None), customResolver.Resolve(role));
+            Assert.Equal(new TuiTextStyle(Decorations: TuiTextDecoration.None), emptyResolver.Resolve(role));
+        });
 
         var suppressed = new TuiThemeResolver(BuiltInThemes.Create()[1].Theme, suppressStyles: true);
         Assert.Equal(new TuiTextStyle(), suppressed.Resolve(PresentationTextRole.MarkdownHeading));

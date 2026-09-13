@@ -10,12 +10,16 @@ using Threadsmith.Tools;
 /// <summary>Discovers xUnit and Microsoft.Testing.Platform projects and test cases.</summary>
 public sealed class TestDiscoverer
 {
+    private readonly ValidationResourceLimits _limits;
+
     private readonly IProcessManager _processManager;
 
     /// <summary>Initializes a new instance of the <see cref="TestDiscoverer"/> class.</summary>
-    public TestDiscoverer(IProcessManager processManager)
+    public TestDiscoverer(IProcessManager processManager, ValidationResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
+        _limits = limits ?? new();
+        _limits.Validate();
         _processManager = processManager;
     }
 
@@ -97,7 +101,7 @@ public sealed class TestDiscoverer
                 .Where(element => element.Name.LocalName == "ProjectReference")
                 .Select(element => (string?)element.Attribute("Include"))
                 .Where(value => !string.IsNullOrWhiteSpace(value))
-                .Select(value => Path.GetFullPath((value ?? string.Empty).Replace('/', Path.DirectorySeparatorChar), projectDirectory))
+                .Select(value => Path.GetFullPath((value ?? string.Empty).Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar), projectDirectory))
                 .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
                 .OrderBy(path => path, OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)];
             discovered.Add(new TestProject
@@ -170,7 +174,7 @@ public sealed class TestDiscoverer
                     Arguments = CreateDiscoveryArguments(project, filter),
                     WorkingDirectory = repositoryPath,
                     Timeout = timeout,
-                    MaximumOutputCharacters = 1024 * 1024,
+                    MaximumOutputCharacters = _limits.MaximumBuildOutputCharacters,
                     Origin = ProcessRequestOrigin.Host,
                 },
                 cancellationToken);

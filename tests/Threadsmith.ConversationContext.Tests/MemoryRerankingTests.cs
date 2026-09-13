@@ -8,6 +8,23 @@ using Xunit;
 /// <summary>Optional cross-encoder ranking, qualification, cache identity and fallback over the real memory store.</summary>
 public static class MemoryRerankingTests
 {
+    /// <summary>Configured candidate pools can exceed a provider batch without dropping candidates.</summary>
+    [Fact]
+    public static async Task Candidate_pool_is_processed_in_provider_sized_batches()
+    {
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = await SeedAsync(fixture);
+        var encoder = new TestCrossEncoder { Model = new("small-batch", 256, 2) };
+        using var retriever = CreateRetriever(fixture, generator, encoder);
+        var result = await retriever.RetrieveAsync(Query() with
+        {
+            Options = new RepositoryMemoryOptions { RerankerEnabled = true, RerankerCandidateLimit = 65 },
+        });
+        Assert.Equal(2, encoder.Calls);
+        Assert.Equal(3, result.Selected.Count);
+        Assert.All(result.Selected, candidate => Assert.NotNull(candidate.CrossEncoderScore));
+    }
+
     /// <summary>Reranking sees qualified candidates before the final cap and never receives unrelated records.</summary>
     [Fact]
     public static async Task Enabled_reranking_recovers_a_candidate_beyond_the_final_hybrid_cap()

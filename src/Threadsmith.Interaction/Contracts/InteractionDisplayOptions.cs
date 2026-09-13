@@ -5,4 +5,8 @@ namespace Threadsmith.Interaction.Contracts;
 /// <param name="ShowOperationDurations">Whether operation durations are included in activity text.</param>
 public sealed record InteractionDisplayOptions(
     bool RenderMarkdown = true,
-    bool ShowOperationDurations = true);
+    bool ShowOperationDurations = true)
+{
+    /// <summary>Interactive retention and rendering limits.</summary>
+    public TuiResourceLimits Limits { get; init; } = new();
+}

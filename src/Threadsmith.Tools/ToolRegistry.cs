@@ -3,7 +3,11 @@ namespace Threadsmith.Tools;
 using Threadsmith.Core;
 
 /// <summary>One atomically resolved tool plus immutable host-owned source metadata.</summary>
-public sealed record ToolRegistration(ITool Tool, ToolActivitySource Source);
+public sealed record ToolRegistration(ITool Tool, ToolActivitySource Source)
+{
+    /// <summary>Underlying implementation for host capability identity checks; invocation uses <see cref="Tool"/>.</summary>
+    public ITool Implementation => ConfiguredTool.Unwrap(Tool);
+}
 
 /// <summary>Compares complete request-fenced tool registration identities.</summary>
 internal static class ToolRegistrationIdentity
@@ -46,6 +50,7 @@ public interface IToolRegistry
 /// <summary>Thread-safe registry for built-in and dynamically loaded extension tools.</summary>
 public sealed class ToolRegistry : IToolRegistry
 {
+    private readonly ToolRuntimePolicy _runtimePolicy;
     private readonly Lock _gate = new();
     private readonly HashSet<string> _builtInToolIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly IToolStateManager? _stateManager;
@@ -57,15 +62,17 @@ public sealed class ToolRegistry : IToolRegistry
     public ToolRegistry(
         IEnumerable<ITool> tools,
         IToolStateManager? stateManager = null,
-        IProgressiveToolActivationPolicy? activationPolicy = null)
+        IProgressiveToolActivationPolicy? activationPolicy = null,
+        ToolRuntimeOptions? runtimeOptions = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
+        _runtimePolicy = new(runtimeOptions ?? new());
         _stateManager = stateManager;
         _activationPolicy = activationPolicy;
         foreach (var tool in tools)
         {
             Validate(tool, nameof(tools));
-            if (!_tools.TryAdd(tool.Definition.Id, tool))
+            if (!_tools.TryAdd(tool.Definition.Id, _runtimePolicy.Apply(tool)))
             {
                 throw new ArgumentException(
                     $"Tool '{tool.Definition.Id}' is registered more than once.",
@@ -250,7 +257,7 @@ public sealed class ToolRegistry : IToolRegistry
 
                 if (_tools.TryGetValue(tool.Definition.Id, out var current)
                     && (!authorizedReplacements.TryGetValue(tool.Definition.Id, out var expected)
-                        || !ReferenceEquals(current, expected)))
+                        || !ReferenceEquals(ConfiguredTool.Unwrap(current), ConfiguredTool.Unwrap(expected))))
                 {
                     throw new ArgumentException(
                         $"Dynamic tool '{tool.Definition.Id}' conflicts with an active dynamic tool from another registration.",
@@ -260,7 +267,7 @@ public sealed class ToolRegistry : IToolRegistry
 
             foreach (var tool in registrations)
             {
-                _tools[tool.Definition.Id] = tool;
+                _tools[tool.Definition.Id] = _runtimePolicy.Apply(tool);
                 _sources[tool.Definition.Id] = source;
                 _stateManager?.Register(tool.Definition);
             }
@@ -276,7 +283,7 @@ public sealed class ToolRegistry : IToolRegistry
         lock (_gate)
         {
             if (!_tools.TryGetValue(toolId, out var current)
-                || !ReferenceEquals(current, expectedTool))
+                || !ReferenceEquals(ConfiguredTool.Unwrap(current), ConfiguredTool.Unwrap(expectedTool)))
             {
                 return false;
             }
@@ -316,7 +323,7 @@ public sealed class ToolRegistry : IToolRegistry
             || tool.Definition.MaximumOutputBytes <= 0
             || scheduling.SchemaVersion != ToolSchedulingDescriptor.CurrentSchemaVersion
             || string.IsNullOrWhiteSpace(scheduling.ClaimResolverId)
-            || scheduling.MaximumSourceConcurrency is < 1 or > 16)
+            || scheduling.MaximumSourceConcurrency < 1)
         {
             throw new ArgumentException(
                 $"Tool '{tool.Definition.Id}' has invalid runtime or scheduling bounds.",

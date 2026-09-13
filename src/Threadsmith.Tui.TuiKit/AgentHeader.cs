@@ -94,7 +94,7 @@ internal sealed class AgentHeader
             return full;
         }
 
-        var prefix = "Using model: ";
+        const string prefix = "Using model: ";
         var reasoning = width >= 45 ? " " + Clip(state.Reasoning.Value, 3) : string.Empty;
         var usage = width >= 55 ? " | " + UsageText(state, true) : string.Empty;
         var identityWidth = Math.Max(2, width - UnicodeWidth.GetWidth(prefix + reasoning + usage) - 3);

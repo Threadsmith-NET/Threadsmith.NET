@@ -5,7 +5,7 @@ using Threadsmith.Models;
 /// <summary>Enforces decompressed response and individual SSE-frame bounds before SDK parsing.</summary>
 internal sealed class AnthropicBoundedReadStream : Stream
 {
-    private const long MaximumSseFrameBytes = 1024 * 1024;
+    private readonly long _maximumSseFrameBytes;
     private readonly Stream _inner;
     private readonly HttpContent _owner;
     private readonly long _maximumBytes;
@@ -16,8 +16,10 @@ internal sealed class AnthropicBoundedReadStream : Stream
     private int _lineBytes;
 
     /// <summary>Initializes a new instance of the <see cref="AnthropicBoundedReadStream"/> class.</summary>
-    internal AnthropicBoundedReadStream(Stream inner, HttpContent owner, long maximumBytes, Action<long>? observed, bool sse)
+    internal AnthropicBoundedReadStream(Stream inner, HttpContent owner, long maximumBytes, Action<long>? observed, bool sse, long maximumSseFrameBytes = 1024 * 1024)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSseFrameBytes);
+        _maximumSseFrameBytes = maximumSseFrameBytes;
         _inner = inner;
         _owner = owner;
         _maximumBytes = maximumBytes;
@@ -102,7 +104,7 @@ internal sealed class AnthropicBoundedReadStream : Stream
 
         foreach (var value in bytes)
         {
-            if (++_frameBytes > MaximumSseFrameBytes)
+            if (++_frameBytes > _maximumSseFrameBytes)
             {
                 throw new ModelProviderException("Anthropic SSE frame exceeded its byte ceiling.");
             }

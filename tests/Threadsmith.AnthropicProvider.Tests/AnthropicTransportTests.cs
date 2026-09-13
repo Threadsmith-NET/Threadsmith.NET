@@ -45,7 +45,7 @@ public sealed class AnthropicTransportTests
     {
         var handler = new TestAnthropicHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.TooManyRequests)));
         using var client = new HttpClient(handler);
-        var profile = TestAnthropic.Profile() with { Timeout = TimeSpan.FromMilliseconds(150), RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.FromSeconds(2) } };
+        var profile = TestAnthropic.Profile() with { Timeout = TimeSpan.FromSeconds(2), RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.FromSeconds(10) } };
         await Assert.ThrowsAsync<ModelProviderTimeoutException>(() => TestAnthropic.CollectAsync(new AnthropicModelProvider(client, profile, "key", TestAnthropic.Compatibility()), TestAnthropic.Request()));
         Assert.Single(handler.Requests);
     }
@@ -296,6 +296,5 @@ public sealed class AnthropicAmbientEnvironmentTests
         }
     }
 }
-
 
 

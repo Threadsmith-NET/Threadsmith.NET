@@ -12,6 +12,38 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class ToolActivityRenderingTests
 {
+    /// <summary>Expanded tool text counts encoded controls and its truncation notice within the display budget.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(20)]
+    [InlineData(60)]
+    [InlineData(100)]
+    public static void InspectionOutputHonorsEncodedCharacterBudget(int maximum)
+    {
+        var started = new ToolInvocationStarted(SessionId.New(), DateTimeOffset.UtcNow, ToolInvocationId.New(), "code_explore");
+        var completed = new ToolInvocationCompleted(
+            started.SessionId,
+            started.OccurredAt,
+            started.ToolInvocationId,
+            true,
+            ModelResultContent: new string('\u001b', 200));
+        var text = InteractionPresentationFormatter.FormatToolCompletion(
+            started,
+            completed,
+            false,
+            inspectCodeExploreOutput: true,
+            maximumInspectionCharacters: maximum);
+        var output = string.Join("\n", text.ReplaceLineEndings("\n").Split('\n')
+            .SkipWhile(line => !line.EndsWith("Output:", StringComparison.Ordinal))
+            .Skip(1)
+            .Where(line => line.Length > 0)
+            .Select(line => line[(line.IndexOfAny(['│', '└']) + 1)..])
+            .Select(line => line.StartsWith(' ') ? line[1..] : line));
+
+        Assert.InRange(output.Length, 0, maximum);
+        Assert.DoesNotContain('\u001b', output);
+    }
+
     /// <summary>The native render loop paints running activity and updated elapsed time before any result.</summary>
     [Theory]
     [InlineData(ToolActivitySourceKind.Mcp, "MCP: Green Street/search_sectors")]

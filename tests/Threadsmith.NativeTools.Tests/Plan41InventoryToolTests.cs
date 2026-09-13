@@ -290,6 +290,28 @@ public sealed class Plan41InventoryToolTests
         Assert.DoesNotContain("main.txt", result.Patch, StringComparison.Ordinal);
     }
 
+    /// <summary>Byte capture ends before a partial UTF-8 scalar without misclassifying text as binary.</summary>
+    [Theory]
+    [InlineData("é")]
+    [InlineData("€")]
+    [InlineData("😀")]
+    public async Task GitShow_CaptureSplitsUtf8Scalar_ReturnsValidTruncatedPrefix(string scalar)
+    {
+        await using var repository = await TestRepository.CreateAsync();
+        var prefix = new string('x', 511);
+        await File.WriteAllTextAsync(Path.Combine(repository.Path, "unicode.txt"), prefix + scalar + "tail");
+        await repository.RunGitAsync("add", "unicode.txt");
+        await repository.RunGitAsync("commit", "-m", "add unicode");
+
+        var result = await new GitQueryService(new GitResourceLimits { MaximumCapturedCharacters = 512 }).ShowAsync(
+            repository.Path,
+            new GitShowRequest { Revision = "HEAD", Path = "unicode.txt" });
+
+        Assert.False(result.IsBinary);
+        Assert.True(result.IsTruncated);
+        Assert.Equal(prefix, result.Content);
+    }
+
     /// <summary>Verifies invalid UTF-8 blobs are classified before text decoding.</summary>
     [Fact]
     public async Task GitShow_InvalidUtf8Blob_ReturnsBinaryWithoutCorruptedText()
@@ -469,6 +491,17 @@ public sealed class Plan41InventoryToolTests
         Assert.NotNull(execution.ModelResultContent);
         Assert.Contains("Inventory.Tests.csproj", execution.ModelResultContent, StringComparison.Ordinal);
         Assert.Contains("Example.Package", execution.ModelResultContent, StringComparison.Ordinal);
+        foreach (var maximumCharacters in new[] { 1, 64, 256 })
+        {
+            var boundedTool = new DotNetInventoryTool(service, TestPromptLoader.Instance, new SemanticResourceLimits
+            {
+                MaximumModelResultCharacters = maximumCharacters,
+            });
+            var bounded = await boundedTool.ExecuteAsync(new DotNetInventoryInput(), CreateExecutionContext(repository.Path, workspaceId: workspaceId));
+            Assert.NotNull(bounded.ModelResultContent);
+            Assert.InRange(bounded.ModelResultContent.Length, 1, maximumCharacters);
+        }
+
         Assert.DoesNotContain("repositoryRevision", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("usedEvaluation", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("workspaceId", inventoryTool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);

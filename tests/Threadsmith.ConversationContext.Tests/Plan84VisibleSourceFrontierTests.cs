@@ -39,7 +39,7 @@ public static class Plan84VisibleSourceFrontierTests
             7);
 
         var entry = Assert.Single(frontier.Entries);
-        Assert.Equal("C:\\repo", frontier.RepositoryPath);
+        Assert.Equal(Path.GetFullPath("C:\\repo"), frontier.RepositoryPath);
         Assert.Equal(workspaceId, frontier.WorkspaceId);
         Assert.Equal(7, frontier.FrontierGeneration);
         Assert.Equal("tool-result", entry.HolderId);

@@ -2,6 +2,7 @@ namespace Threadsmith.CoreRuntime.Tests;
 
 using System.Text.Json;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Xunit;
 
@@ -101,12 +102,27 @@ public static class MemoryToolActivityPresentationTests
         Assert.DoesNotContain("external-memory-canary", external.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>Small accepted inspection limits still render a bounded failure without indexing before the text.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(25)]
+    [InlineData(49)]
+    [InlineData(50)]
+    [InlineData(51)]
+    public static void FailedMemoryInspectionHonorsSmallCharacterLimits(int maximum)
+    {
+        var transcript = Render(false, null, transientDetail: new string('x', 100), maximumInspectionCharacters: maximum);
+        Assert.Contains("write failed", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('x', 100), transcript.Text, StringComparison.Ordinal);
+    }
+
     private static ConversationTranscript Render(
         bool succeeded,
         string? resultJson,
         string activityDetail = "list",
         string? transientDetail = null,
-        ToolActivitySource? source = null)
+        ToolActivitySource? source = null,
+        int maximumInspectionCharacters = 98304)
     {
         var started = new ToolInvocationStarted(
             SessionId.New(),
@@ -124,7 +140,10 @@ public static class MemoryToolActivityPresentationTests
             ResultJson: resultJson,
             Source: source,
             Error: succeeded ? null : "write failed");
-        var transcript = new ConversationTranscript(string.Empty, showOperationDurations: false);
+        var transcript = new ConversationTranscript(
+            string.Empty,
+            showOperationDurations: false,
+            limits: new TuiResourceLimits { MaximumToolInspectionCharacters = maximumInspectionCharacters });
 
         transcript.Apply(started);
         transcript.Apply(completed);

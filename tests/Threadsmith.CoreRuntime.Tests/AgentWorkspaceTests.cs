@@ -4,6 +4,7 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Themes;
 using Threadsmith.Models;
@@ -115,7 +116,7 @@ public static class AgentWorkspaceTests
 
         await projection.RefreshAsync(timeout.Token);
 
-        var observed = sink.Agents.Last();
+        var observed = sink.Agents[^1];
         Assert.Equal("Remote inference", observed.ProviderName);
         Assert.Equal("Child model", observed.Model);
         Assert.Equal(2500, observed.ContextTokens);
@@ -146,6 +147,7 @@ public static class AgentWorkspaceTests
         strip.Render(new BufferSurface(cells));
         Assert.StartsWith(" MAIN", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
         Assert.Equal(selectedStyle, cells.Get(1, 0).Style);
+        Assert.Equal(CellStyle.Default, cells.Get(6, 0).Style);
         var gap = UnicodeWidth.GetWidth(AgentTabStrip.Label(views.Main, 25)) + 2;
         Assert.Equal(CellStyle.Default, cells.Get(gap, 0).Style);
         Assert.Equal(inactiveStyle, cells.Get(gap + 1, 0).Style);
@@ -172,6 +174,7 @@ public static class AgentWorkspaceTests
         strip.Render(new BufferSurface(cells));
         Assert.StartsWith(" MAIN", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
         Assert.Equal(selectedStyle, cells.Get(1, 0).Style);
+        Assert.Equal(CellStyle.Default, cells.Get(6, 0).Style);
     }
 
     /// <summary>Verifies every overflowed tab remains reachable.</summary>
@@ -240,7 +243,7 @@ public static class AgentWorkspaceTests
             async token =>
         {
             await surface.ShowStartupAsync("Splash logo", "Loading solution", Task.CompletedTask, token);
-            await surface.SetStartupDetailsAsync(["Loading remembered solution: Sample.sln", "  (Use --solution to change)"], token);
+            await surface.SetStartupDetailsAsync(["Loading remembered solution: Sample.sln"], token);
             var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var startup = surface.ShowStartupAsync("Splash logo", "Semantic loading", loaded.Task, token);
             await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new("Startup warning\n", PresentationTextRole.Warning)])]), token);
@@ -251,7 +254,7 @@ public static class AgentWorkspaceTests
             }
             else if (outcome == "Cancelled")
             {
-                loaded.SetCanceled();
+                loaded.SetCanceled(token);
                 await Assert.ThrowsAnyAsync<OperationCanceledException>(() => startup);
             }
             else
@@ -296,7 +299,7 @@ public static class AgentWorkspaceTests
             ["Loading solution: Completed"],
             () => { },
             _ => CellStyle.Default,
-            ["Loading remembered solution: Sample.sln", "  (Use --solution to change)"]);
+            ["Loading remembered solution: Sample.sln"]);
 
         modal.Render(new BufferSurface(cells));
 
@@ -307,7 +310,7 @@ public static class AgentWorkspaceTests
         Assert.Matches(@"^\s*│\s+│\s*$", lines[taglineRow + 1]);
         Assert.Contains("Loading remembered solution: Sample.sln", lines[taglineRow + 2], StringComparison.Ordinal);
         Assert.Contains("Loading remembered solution: Sample.sln", text, StringComparison.Ordinal);
-        Assert.Contains("(Use --solution to change)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use --solution to change", text, StringComparison.Ordinal);
         Assert.Contains("Loading solution: Completed", text, StringComparison.Ordinal);
         Assert.Contains("Semantic loading", text, StringComparison.Ordinal);
     }
@@ -438,6 +441,25 @@ public static class AgentWorkspaceTests
             timeout.Token);
     }
 
+    /// <summary>The progress omission marker is included in the configured character budget.</summary>
+    [Theory]
+    [InlineData(1, "…")]
+    [InlineData(3, "ab…")]
+    [InlineData(6, "abcdef")]
+    public static async Task ProgressSummaryIncludesMarkerWithinLimit(int limit, string expected)
+    {
+        var session = SessionId.New();
+        var target = Target(session);
+        var sink = new RecordingSurface();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await using var projection = new AgentWorkspaceProjection(sink, null, null, null, new AgentNameCatalog(["Avery"]), false, true, new TuiResourceLimits { MaximumAgentProgressCharacters = limit }, timeout.Token);
+        await projection.AttachAsync(session, timeout.Token);
+        await projection.ObserveAsync(new DelegationCheckpointWritten(session, DateTimeOffset.UtcNow, target.DelegationId, RunId.New(), DelegationCheckpointPhase.Accepted, 1, "run"), timeout.Token);
+        await projection.ObserveAsync(new AgentRunLifecycleObserved(session, DateTimeOffset.UtcNow, target.DelegationId, target.AssignmentId, target.RunId, AgentRole.Explorer, AgentRunStatus.Completed, 1, "abcdef"), timeout.Token);
+        var text = string.Concat(Assert.Single(sink.Output).Items.OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.EndsWith(" — " + expected + "\n", text, StringComparison.Ordinal);
+    }
+
     /// <summary>Child tool starts publish immediately and one completion leaves the other tool visible.</summary>
     [Fact]
     public static async Task ConcurrentChildToolsPublishIndependentActivityImmediately()
@@ -459,8 +481,25 @@ public static class AgentWorkspaceTests
         var activities = sink.Agents[^1].ToolActivities;
         Assert.Equal(2, activities.Count);
         Assert.All(activities, activity => Assert.False(activity.ShowDuration));
-        await projection.ObserveAsync(new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, first.ToolInvocationId, true), timeout.Token);
+        var firstCompleted = new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, first.ToolInvocationId, true);
+        await projection.ObserveAsync(firstCompleted, timeout.Token);
         Assert.Same(activities[1], Assert.Single(sink.Agents[^1].ToolActivities));
+        var secondCompleted = new ToolInvocationCompleted(session, DateTimeOffset.UtcNow, second.ToolInvocationId, true);
+        await projection.ObserveAsync(secondCompleted, timeout.Token);
+        Assert.Empty(sink.Agents[^1].ToolActivities);
+
+        var text = string.Concat(sink.Output.Where(batch => batch.Target == target)
+            .SelectMany(batch => batch.Items.OfType<PresentationTextItem>())
+            .SelectMany(item => item.Segments)
+            .Select(segment => segment.Text));
+        Assert.Contains("   └ mcp Server" + Environment.NewLine + Environment.NewLine + " MCP:", text, StringComparison.Ordinal);
+        var main = new ConversationTranscript(string.Empty, false);
+        main.Apply(first);
+        main.Apply(second);
+        main.Apply(firstCompleted);
+        main.Apply(secondCompleted);
+        Assert.Equal(main.Text, text);
+
         await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Cancelled, Revision = 2 }, timeout.Token);
         Assert.Empty(sink.Agents[^1].ToolActivities);
     }
@@ -519,7 +558,7 @@ public static class AgentWorkspaceTests
         await projection.ObserveAsync(lifecycle with { Revision = 100 }, timeout.Token);
         await projection.ObserveAsync(lifecycle with { Generation = 3, ChildRunId = RunId.New() }, timeout.Token);
         Assert.Equal(count, sink.Agents.Count);
-        Assert.Equal("Avery", sink.Agents.Last().Name);
+        Assert.Equal("Avery", sink.Agents[^1].Name);
     }
 
     /// <summary>Concurrent tool completions correlate by invocation and never enter MAIN.</summary>
@@ -657,7 +696,7 @@ public static class AgentWorkspaceTests
         Assert.Equal(200, samples.Count);
     }
 
-/// <summary>Modifier chords cannot change either locked or eligible checkbox state.</summary>
+    /// <summary>Modifier chords cannot change either locked or eligible checkbox state.</summary>
     [Theory]
     [InlineData(KeyModifiers.Shift, 0)]
     [InlineData(KeyModifiers.Ctrl, 1)]
@@ -890,11 +929,20 @@ public static class AgentWorkspaceTests
         Assert.Empty(await projection.GetToolProgressAsync(secondTool, false, timeout.Token));
     }
 
-    private static AgentPresentationTarget Target(SessionId session) => new(session, DelegationId.New(), AgentAssignmentId.New(), RunId.New(), 1);
+    private static AgentPresentationTarget Target(SessionId session)
+    {
+        return new(session, DelegationId.New(), AgentAssignmentId.New(), RunId.New(), 1);
+    }
 
-    private static AgentPresentationSnapshot Snapshot(AgentPresentationTarget target, string name) => new(target, name, AgentRole.Explorer, AgentRunStatus.Running, 1);
+    private static AgentPresentationSnapshot Snapshot(AgentPresentationTarget target, string name)
+    {
+        return new(target, name, AgentRole.Explorer, AgentRunStatus.Running, 1);
+    }
 
-    private static PresentationBatch Text(string text) => new([new PresentationTextItem([new(text, PresentationTextRole.Default)])]);
+    private static PresentationBatch Text(string text)
+    {
+        return new([new PresentationTextItem([new(text, PresentationTextRole.Default)])]);
+    }
 
     private sealed class RecordingSurface : IInteractionSurface, IAgentWorkspaceSurface
     {
@@ -906,7 +954,10 @@ public static class AgentWorkspaceTests
 
         internal List<string> Order { get; } = [];
 
-        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
         public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default)
         {
@@ -922,12 +973,24 @@ public static class AgentWorkspaceTests
             return Task.CompletedTask;
         }
 
-        public Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task PresentSessionStatusAsync(Threadsmith.Interaction.Sessions.SessionStatusSnapshot status, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task PresentSessionStatusAsync(Threadsmith.Interaction.Sessions.SessionStatusSnapshot status, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
     }
 }

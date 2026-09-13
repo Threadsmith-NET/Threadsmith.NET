@@ -132,6 +132,23 @@ public static class AgentDisplayStreamTests
         Assert.Contains("safe public reasoning", string.Concat(stream.Drain(out _).Select(item => item.Text)), StringComparison.Ordinal);
     }
 
+    /// <summary>The smallest supported fragment retains complete surrogate pairs and flush always advances.</summary>
+    [Fact]
+    public static void FragmentLimitPreservesUnicodeScalarsAndRejectsOneCodeUnit()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new AgentDisplayStream(
+            new ExecutionLimits { MaxAgentDisplayFragmentCharacters = 1 }));
+        var stream = new AgentDisplayStream(new ExecutionLimits { MaxAgentDisplayFragmentCharacters = 2 });
+        stream.Attach();
+        var writer = new AgentDisplayTextWriter(stream, new TestSanitizer(), SessionId.New(), RunId.New(), false);
+        writer.Append("a😀b😀c");
+        writer.Flush(true);
+        var fragments = stream.Drain(out var omitted);
+        Assert.Equal(0, omitted);
+        Assert.Equal("a😀b😀c", string.Concat(fragments.Select(item => item.Text)));
+        Assert.All(fragments, item => Assert.InRange(item.Text.Length, 0, 2));
+    }
+
     private sealed class TestSanitizer : IOutputSanitizer
     {
         public string Sanitize(string value) => value.Replace("secret-canary", "[redacted]", StringComparison.Ordinal);

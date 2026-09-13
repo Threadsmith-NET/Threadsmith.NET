@@ -72,3 +72,5 @@ Request several read-only subagents. Confirm named queued/running rows appear wi
 Edit a safe source file externally and confirm MAIN retains one refresh lifecycle sequence while matching toasts appear without losing the composer draft. During initial startup, successful loading text and remembered-solution hints must remain only in the splash.
 
 Check actual OS clipboard paste, bracketed paste, selected-copy Ctrl+C in both panes, Ctrl+C cancellation without selection, F12 native selection, F2 long labels, modal background clicks, and immediate denied/consent/group toggles. Enter and paste on children must never steer MAIN. Verify startup choices precede the splash, input is discarded, and success/cancellation/failure restore terminal modes. Check no footer scrolling, blank-row corruption, or escape leakage. Physical terminal results and measured render latency must be recorded separately from headless test results.
+
+Resource and retention numbers above are defaults. Configure the applicable `tui:limits` and `execution` settings as described in [Resource limits](resource-limits.md). Screen geometry and key bindings remain unchanged.

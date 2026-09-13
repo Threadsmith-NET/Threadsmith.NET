@@ -28,8 +28,35 @@ public sealed record SkillCatalogOptions
     /// <summary>Maximum assets declared by one package.</summary>
     public int MaximumAssetsPerPackage { get; init; } = 64;
 
+    /// <summary>Maximum bytes in one declared asset.</summary>
+    public long MaximumAssetBytes { get; init; } = 4 * 1024 * 1024;
+
     /// <summary>Maximum metadata text length.</summary>
     public int MaximumTextCharacters { get; init; } = 4_096;
+
+    /// <summary>Maximum required or optional tools.</summary>
+    public int MaximumRequiredTools { get; init; } = 64;
+
+    /// <summary>Maximum required tool contracts.</summary>
+    public int MaximumContractVersions { get; init; } = 128;
+
+    /// <summary>Maximum approval disclosures.</summary>
+    public int MaximumApprovalCategories { get; init; } = 32;
+
+    /// <summary>Maximum model workloads.</summary>
+    public int MaximumWorkloads { get; init; } = 16;
+
+    /// <summary>Maximum allowed or denied profiles.</summary>
+    public int MaximumModelProfiles { get; init; } = 128;
+
+    /// <summary>Maximum requirement identifiers.</summary>
+    public int MaximumIdentifierCharacters { get; init; } = 128;
+
+    /// <summary>Maximum contract version or workload-name characters.</summary>
+    public int MaximumVersionCharacters { get; init; } = 64;
+
+    /// <summary>Maximum package-relative asset path characters.</summary>
+    public int MaximumPathCharacters { get; init; } = 512;
 }
 
 /// <summary>Repository-excluding signer, digest, revocation, and enablement policy.</summary>
@@ -92,6 +119,14 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
         ArgumentNullException.ThrowIfNull(sources);
         _sources = sources.ToArray();
         _options = options ?? new SkillCatalogOptions();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumRequiredTools);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumContractVersions);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumApprovalCategories);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumWorkloads);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumModelProfiles);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumIdentifierCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumVersionCharacters);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumPathCharacters);
         ValidateOptions(_options);
         if (_sources.Count == 0)
         {
@@ -226,7 +261,7 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
     public IReadOnlyList<SkillCatalogCandidate> Search(SkillCatalogQuery query)
     {
         ArgumentNullException.ThrowIfNull(query);
-        if (query.MaximumResults is < 1 or > 500)
+        if (query.MaximumResults < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(query), "Skill search result limit must be 1-500.");
         }
@@ -340,8 +375,8 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
             throw new NotSupportedException($"Skill manifest schema {metadata.SchemaVersion} is unsupported.");
         }
 
-        ValidateId(metadata.SkillId.Value, "skill id");
-        ValidateId(metadata.PackageId, "package id");
+        ValidateId(metadata.SkillId.Value, "skill id", options.MaximumTextCharacters);
+        ValidateId(metadata.PackageId, "package id", options.MaximumTextCharacters);
         if (!SemanticVersionRegex().IsMatch(metadata.Version))
         {
             throw new InvalidDataException("Skill version must be bounded semantic version text.");
@@ -350,14 +385,13 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
         ValidateText(metadata.DisplayName, nameof(metadata.DisplayName), options.MaximumTextCharacters);
         ValidateText(metadata.Description, nameof(metadata.Description), options.MaximumTextCharacters);
         ValidateText(metadata.Publisher, nameof(metadata.Publisher), options.MaximumTextCharacters);
-        ValidateText(metadata.License, nameof(metadata.License), 256);
-        if (metadata.Tags.Count > 32
-            || metadata.Tags.Any(tag => string.IsNullOrWhiteSpace(tag) || tag.Length > 64))
+        ValidateText(metadata.License, nameof(metadata.License), options.MaximumTextCharacters);
+        if (metadata.Tags.Any(tag => string.IsNullOrWhiteSpace(tag) || tag.Length > options.MaximumTextCharacters))
         {
             throw new InvalidDataException("Skill tags exceed their bounds.");
         }
 
-        if (metadata.Assets.Count is < 3 || metadata.Assets.Count > 64
+        if (metadata.Assets.Count is < 3
             || metadata.Assets.Count > options.MaximumAssetsPerPackage)
         {
             throw new InvalidDataException("Skill asset count is outside the supported bound.");
@@ -366,10 +400,10 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var asset in metadata.Assets)
         {
-            SkillPathPolicy.ValidateRelativePath(asset.Path);
+            SkillPathPolicy.ValidateRelativePath(asset.Path, options.MaximumPathCharacters);
             if (!paths.Add(asset.Path)
                 || asset.Bytes < 0
-                || asset.Bytes > 4 * 1024 * 1024
+                || asset.Bytes > options.MaximumAssetBytes
                 || !Sha256Regex().IsMatch(asset.Sha256)
                 || string.IsNullOrWhiteSpace(asset.Kind))
             {
@@ -377,14 +411,14 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
             }
         }
 
-        SkillManifestValidator.ValidateRequirements(metadata.Requirements);
+        SkillManifestValidator.ValidateRequirements(metadata.Requirements, options);
         SkillManifestValidator.ValidateBudget(metadata.Budget);
         SkillManifestValidator.ValidateWorkflow(metadata.Workflow, metadata.Assets);
         SkillManifestValidator.ValidateWorkflowBudget(metadata.Workflow, metadata.Budget);
         SkillManifestValidator.ValidateAgents(metadata.Agents, metadata.Assets, metadata.Budget);
         if (metadata.Signature is not null)
         {
-            ValidateText(metadata.Signature.SignerId, "signer id", 256);
+            ValidateText(metadata.Signature.SignerId, "signer id", options.MaximumTextCharacters);
             if (!string.Equals(metadata.Signature.Algorithm, "ecdsa-p256-sha256", StringComparison.Ordinal)
                 || metadata.Signature.Signature.Length is < 32 or > 1024)
             {
@@ -425,10 +459,10 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
             && string.Equals(left.Identity.Digest.Value, right.Identity.Digest.Value, StringComparison.Ordinal);
     }
 
-    private static void ValidateId(string value, string name)
+    private static void ValidateId(string value, string name, int maximumCharacters)
     {
         if (string.IsNullOrWhiteSpace(value)
-            || value.Length > 128
+            || value.Length > maximumCharacters
             || !IdRegex().IsMatch(value))
         {
             throw new InvalidDataException($"Skill {name} is invalid.");
@@ -445,16 +479,17 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
 
     private static void ValidateOptions(SkillCatalogOptions options)
     {
-        if (options.MaximumManifestBytes is < 1024 or > 4 * 1024 * 1024
-            || options.MaximumPackages is < 1 or > 10_000
-            || options.MaximumAssetsPerPackage is < 3 or > 256
-            || options.MaximumTextCharacters is < 128 or > 32_768)
+        if (options.MaximumManifestBytes < 1
+            || options.MaximumPackages < 1
+            || options.MaximumAssetsPerPackage < 3
+            || options.MaximumTextCharacters < 1
+            || options.MaximumAssetBytes < 1)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Skill catalog limits are invalid.");
         }
     }
 
-    [GeneratedRegex("^[a-z0-9][a-z0-9._-]{0,127}$", RegexOptions.CultureInvariant)]
+    [GeneratedRegex("^[a-z0-9][a-z0-9._-]*$", RegexOptions.CultureInvariant)]
     private static partial Regex IdRegex();
 
     [GeneratedRegex("^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$", RegexOptions.CultureInvariant)]

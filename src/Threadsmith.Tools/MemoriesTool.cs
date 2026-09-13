@@ -24,10 +24,12 @@ public sealed record MemoriesOutput(string Action, string Outcome, string? Id, b
 /// <summary>Admits explicit memory changes through the shared repository memory service.</summary>
 public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransientToolActivityDetail
 {
-    private const int MaximumListBytes = 48 * 1024;
     private readonly IManagedRepositoryMemoryService _memories;
     private readonly IRepositoryMemoryOptionsProvider _options;
-    private readonly ToolDefinition _definition;
+    private readonly IPromptLoader _prompts;
+    private readonly Lock _definitionGate = new();
+    private ToolDefinition _definition;
+    private int _descriptionMaximumCharacters;
 
     /// <summary>Initializes a new instance of the <see cref="MemoriesTool"/> class.</summary>
     public MemoriesTool(IManagedRepositoryMemoryService memories, IRepositoryMemoryOptionsProvider options, IPromptLoader prompts)
@@ -37,9 +39,11 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         ArgumentNullException.ThrowIfNull(prompts);
         _memories = memories;
         _options = options;
+        _prompts = prompts;
+        _descriptionMaximumCharacters = options.CaptureCurrent().MaximumTextCharacters;
         var definition = ToolDefinitionFactory.Create<MemoriesInput, MemoriesOutput>(
             "memories",
-            prompts.Get(PromptFileNames.ToolMemoriesDescription),
+            RenderDescription(_descriptionMaximumCharacters),
             ToolCategory.Workflow,
             RepositoryTrustLevel.TrustedRead,
             ApprovalLevel.None,
@@ -65,7 +69,23 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     }
 
     /// <inheritdoc />
-    public override ToolDefinition Definition => _definition;
+    public override ToolDefinition Definition
+    {
+        get
+        {
+            lock (_definitionGate)
+            {
+                var maximumCharacters = _options.CaptureCurrent().MaximumTextCharacters;
+                if (maximumCharacters != _descriptionMaximumCharacters)
+                {
+                    _definition = _definition with { Description = RenderDescription(maximumCharacters) };
+                    _descriptionMaximumCharacters = maximumCharacters;
+                }
+
+                return _definition;
+            }
+        }
+    }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<MemoriesOutput>> ExecuteAsync(MemoriesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
@@ -95,7 +115,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         {
             var info = new MemoryInfo(item.Id.Value.ToString("D"), item.Text, item.Origin.ToString().ToLowerInvariant(), FormatMemoryType(item.MemoryType), item.CreatedAt, item.UpdatedAt, item.InclusionCount, item.LastIncludedAt, item.EmbeddingSpaceId);
             bytes += JsonSerializer.SerializeToUtf8Bytes(info).Length;
-            if (bytes > MaximumListBytes)
+            if (bytes > options.MaximumListBytes)
             {
                 break;
             }
@@ -143,6 +163,13 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
 
     /// <inheritdoc />
     protected override string? DescribeActivity(MemoriesInput input) => input.Id is null ? input.Action : $"{input.Action} {input.Id}";
+
+    private string RenderDescription(int maximumCharacters) => _prompts.Render(
+        PromptFileNames.ToolMemoriesDescription,
+        new Dictionary<string, string>
+        {
+            ["MaximumTextCharacters"] = maximumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        });
 
     private static bool IsId(string? id) => Guid.TryParse(id, out var value) && value != Guid.Empty;
 

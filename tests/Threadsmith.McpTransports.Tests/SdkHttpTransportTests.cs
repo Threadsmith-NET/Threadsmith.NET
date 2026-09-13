@@ -85,6 +85,49 @@ public sealed class SdkHttpTransportTests
         await transport.DisposeAsync();
     }
 
+    /// <summary>The configured header count reaches HTTP transport resolution.</summary>
+    [Fact]
+    public async Task HeaderCountUsesConfiguredLimit()
+    {
+        var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
+        {
+            Headers = Enumerable.Range(0, 65).ToDictionary(index => $"X-Test-{index}", _ => "value"),
+        };
+        await using var transport = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance, limits: new McpResourceLimits { MaximumHeaders = 65 });
+        Assert.Equal(65, (await transport.ResolveHeadersAsync(profile)).Count);
+        await using var defaults = new SdkHttpTransport(new DictionarySecretStore(), NullLoggerFactory.Instance);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => defaults.ResolveHeadersAsync(profile));
+    }
+
+    /// <summary>Resolved secrets cannot bypass environment count or value-length ceilings.</summary>
+    [Theory]
+    [InlineData(1, 100)]
+    [InlineData(10, 1)]
+    public async Task ResolvedEnvironmentUsesConfiguredLimits(int count, int characters)
+    {
+        var transportCreated = false;
+        var secrets = new DictionarySecretStore { Values = { ["secrets:FIRST"] = "value", ["secrets:SECOND"] = "value" } };
+        var adapter = new McpAdapter(
+            _ =>
+            {
+                transportCreated = true;
+                return new NoOpTransport();
+            },
+            secrets,
+            new SecretOutputSanitizer(),
+            NullLogger<McpAdapter>.Instance,
+            TestPromptLoader.Instance,
+            limits: new McpResourceLimits { MaximumEnvironmentVariables = count, MaximumEnvironmentValueCharacters = characters });
+        var profile = CreateProfile("https://mcp.example.test/mcp", McpTransport.Http) with
+        {
+            Transport = McpTransport.Stdio,
+            Command = "fixture",
+            SecretScope = ["secrets:FIRST", "secrets:SECOND"],
+        };
+        await Assert.ThrowsAsync<InvalidOperationException>(() => adapter.ConnectAsync(profile));
+        Assert.False(transportCreated);
+    }
+
     /// <summary>OAuth-enabled profiles now reach the transport boundary for Plan 23 handling.</summary>
     [Fact]
     public async Task OAuth_enabled_profile_routes_to_transport()

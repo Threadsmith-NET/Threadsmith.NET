@@ -67,11 +67,6 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 AddWarning(warnings, $"Memory {idText} has inconsistent content metadata; semantic retrieval is disabled.");
             }
 
-            if (text.Length > MaximumTextCharacters)
-            {
-                AddWarning(warnings, $"Imported memory {idText} exceeds current write bounds; inspect and correct it manually.");
-            }
-
             var memoryType = includesMemoryType ? (RepositoryMemoryType)reader.GetInt32(5) : RepositoryMemoryType.Situational;
             var sensitivity = (ConversationSensitivity)reader.GetInt32(5 + typeOffset);
             entries.Add(new RepositoryMemoryEntry
@@ -190,9 +185,9 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
     private static async Task<IReadOnlyList<RepositoryMemoryLexicalMatch>> ReadLexicalMatchesAsync(
         SqliteConnection connection, SqliteTransaction transaction, string repositoryIdentity, IReadOnlyList<string> lexicalTerms, CancellationToken cancellationToken)
     {
-        var terms = lexicalTerms.Where(term => !string.IsNullOrWhiteSpace(term) && term.Length <= 128
+        var terms = lexicalTerms.Where(term => !string.IsNullOrWhiteSpace(term)
                 && !term.Any(char.IsControl))
-            .Select(term => term.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Take(32).ToArray();
+            .Select(term => term.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         if (terms.Length == 0)
         {
             return [];
@@ -315,7 +310,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
 
     private static float[] DecodeVector(byte[] bytes, int dimensions)
     {
-        if (dimensions <= 0 || dimensions > 65_536 || bytes.Length != dimensions * sizeof(float))
+        if (dimensions <= 0 || bytes.Length != (long)dimensions * sizeof(float))
         {
             return [];
         }

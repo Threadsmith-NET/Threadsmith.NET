@@ -47,6 +47,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     ];
 
     private readonly ITerminalBackend _backend;
+    private readonly TuiResourceLimits _limits;
     private readonly Func<CancellationToken, Task<string?>> _readClipboard;
     private readonly TuiApplication _app;
     private readonly Channel<Update> _updates = Channel.CreateBounded<Update>(new BoundedChannelOptions(64)
@@ -57,9 +58,9 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private readonly CancellationTokenSource _stop = new();
     private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private readonly TuiKitComposer _ordinary = new();
-    private readonly TuiKitComposer _secondary = new();
-    private readonly TuiKitComposer _steering = new();
+    private readonly TuiKitComposer _ordinary;
+    private readonly TuiKitComposer _secondary;
+    private readonly TuiKitComposer _steering;
     private readonly AgentViews _agents;
     private readonly AgentTabStrip _tabs;
     private readonly OutputPane _outputPane;
@@ -101,12 +102,18 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private InteractionActivity? _formattedActivity;
 
     /// <summary>Initializes a new instance of the <see cref="TuiKitSurface"/> class.</summary>
-    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null, Func<CancellationToken, Task<string?>>? readClipboard = null)
+    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null, Func<CancellationToken, Task<string?>>? readClipboard = null, TuiResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(theme);
         ArgumentNullException.ThrowIfNull(interrupt);
-        _backend = backend ?? new ConsoleBackend();
-        _readClipboard = readClipboard ?? ClipboardReader.ReadAsync;
+        limits ??= new();
+        limits.Validate();
+        _limits = limits;
+        _ordinary = new TuiKitComposer(limits);
+        _secondary = new TuiKitComposer(limits);
+        _steering = new TuiKitComposer(limits);
+        _backend = backend ?? new TuiKitConsoleBackend();
+        _readClipboard = readClipboard ?? (token => ClipboardReader.ReadAsync(limits, token));
         if (backend is null && (!_backend.IsInteractive
             || string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)))
         {
@@ -119,12 +126,12 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         _suppressStyles = TuiThemeResolver.ShouldSuppressStyles(false, Environment.GetEnvironmentVariable("NO_COLOR"), Environment.GetEnvironmentVariable("TERM"));
         _styles = new TuiKitStyles(theme, _suppressStyles);
         _composer = _ordinary;
-        _agents = new AgentViews(ResolveOutputStyle);
+        _agents = new AgentViews(ResolveOutputStyle, limits);
         _tabs = new AgentTabStrip(_agents, SelectAgent, ResolveStyle);
         _outputPane = new OutputPane(this);
         _composerPane = new ComposerPane(this);
         _layoutSize = _backend.Size;
-        _discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand);
+        _discovery = new TuiKitCommandDiscovery(InteractiveCommandCatalog.All, CompleteCommand, _limits);
         _completion = new ComposerCommandCompletion(_discovery);
         _autocomplete = new ComposerAutocomplete(_discovery, _completion, CompleteCommand);
         _app = new TuiApplication(_backend)
@@ -285,7 +292,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             throw new ArgumentException("Selections require distinct, stable options.", nameof(request));
         }
 
-        var modal = new ChoiceModal(request.Title, request.Options.Select(option => new Choice(option.Id, option.Label)).ToArray())
+        var modal = new ChoiceModal(request.Title, request.Options.Select(option => new Choice(option.Id, option.Label)).ToArray(), _limits)
         {
             ResolveStyle = ResolveStyle,
             SelectionMarker = _theme.Ui.SelectionMarker,
@@ -478,6 +485,37 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         }
     }
 
+    /// <summary>Reports when the active terminal cannot reproduce configured theme colors.</summary>
+    internal IReadOnlyList<string> ThemeDiagnostics
+    {
+        get
+        {
+            if (_suppressStyles || _backend.Capabilities.ColorDepth == TerminalColorDepth.None)
+            {
+                return ["Theme styling is disabled by NO_COLOR or the terminal's reported color capability."];
+            }
+
+            if (_backend.Capabilities.ColorDepth == TerminalColorDepth.TrueColor)
+            {
+                return [];
+            }
+
+            var rgbRoles = _theme.Theme.Styles
+                .Where(pair => pair.Value.Foreground?.Value.StartsWith('#') == true
+                    || pair.Value.Background?.Value.StartsWith('#') == true)
+                .Select(pair => pair.Key.ToString())
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            if (rgbRoles.Length == 0)
+            {
+                return [];
+            }
+
+            var examples = string.Join(", ", rgbRoles.Take(3));
+            return [$"Theme '{_theme.Name}' configures RGB colors for {rgbRoles.Length} roles ({examples}), but the terminal reports {_backend.Capabilities.ColorDepth}; those colors will be approximated. Use a true-color terminal; if yours supports RGB, set COLORTERM=truecolor before launching Threadsmith."];
+        }
+    }
+
     /// <summary>Applies a theme on the UI owner, including retained transcript content.</summary>
     internal Task SetThemeAsync(ConfiguredTheme theme, CancellationToken cancellationToken)
     {
@@ -486,6 +524,10 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     {
         _theme = theme;
         _styles = new TuiKitStyles(theme, _suppressStyles);
+        foreach (var warning in ThemeDiagnostics)
+        {
+            _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(warning + "\n", PresentationTextRole.Warning)])]));
+        }
     },
         cancellationToken);
     }
@@ -623,7 +665,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         {
             if (_utilityModal.IsCompleted)
             {
-                var modal = new ChoiceModal("Agent details — F2 full text; Esc closes", [new Choice("details", AgentHeader.FormatDetails(GetAgentHeaderState()))])
+                var modal = new ChoiceModal("Agent details — F2 full text; Esc closes", [new Choice("details", AgentHeader.FormatDetails(GetAgentHeaderState()))], _limits)
                 {
                     ResolveStyle = ResolveStyle,
                     ToggleMouse = () => _app.ToggleMouseCapture(),
@@ -775,13 +817,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     {
         if (ReferenceEquals(_composer, _ordinary) && text.Length > 0)
         {
-            _agents.Main.Transcript.Present(new PresentationBatch([
-                new PresentationTextItem([
-                    new(_prompt, PresentationTextRole.ComposerPrompt),
-                    new(text, PresentationTextRole.UserPrompt),
-                    new("\n", PresentationTextRole.UserPrompt),
-                ]),
-            ]));
+            _agents.Main.Transcript.EchoInput(_prompt, text);
         }
 
         _composer.History.Add(text);
@@ -866,7 +902,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             return;
         }
 
-        var modal = new ChoiceModal("Links: Enter copies the target; F2 shows full details", links.Select(uri => new Choice(uri.AbsoluteUri, uri.AbsoluteUri)).ToArray())
+        var modal = new ChoiceModal("Links: Enter copies the target; F2 shows full details", links.Select(uri => new Choice(uri.AbsoluteUri, uri.AbsoluteUri)).ToArray(), _limits)
         {
             ResolveStyle = ResolveStyle,
             SelectionMarker = _theme.Ui.SelectionMarker,
@@ -993,9 +1029,9 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             return false;
         }
 
-        if (Encoding.UTF8.GetByteCount(text) > 64 * 1024)
+        if (Encoding.UTF8.GetByteCount(text) > _limits.MaximumClipboardCopyBytes)
         {
-            _notice = "Copy exceeds 64 KiB; select a smaller range";
+            _notice = $"Copy exceeds the configured {_limits.MaximumClipboardCopyBytes:N0}-byte limit; select a smaller range";
             return false;
         }
 

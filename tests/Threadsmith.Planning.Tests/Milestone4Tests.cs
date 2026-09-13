@@ -78,8 +78,10 @@ public static class Milestone4Tests
     }
 
     /// <summary>An ordinary message remains a conversational turn even when governed context is configured.</summary>
-    [Fact]
-    public static async Task SessionApplication_OrdinaryMessage_CompletesWithoutPlanning()
+    [Theory]
+    [InlineData(100)]
+    [InlineData(2)]
+    public static async Task SessionApplication_OrdinaryMessage_CompletesWithoutPlanning(int maximumSteps)
     {
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
@@ -97,6 +99,7 @@ public static class Milestone4Tests
             new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1))),
             sanitizer,
             NullLogger<SessionApplication>.Instance,
+            limits: ExecutionLimits.Default with { Plan = new PlanResourceLimits { MaximumSteps = maximumSteps } },
             contextAssembler: CreateAssembler(events, evidence),
             evidenceStore: evidence,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -145,6 +148,13 @@ public static class Milestone4Tests
             StringComparison.Ordinal);
         var tool = Assert.Single(request.Tools);
         Assert.Equal("propose_plan", tool.Name);
+        using var schema = JsonDocument.Parse(tool.ArgumentsJsonSchema);
+        var properties = schema.RootElement.GetProperty("properties");
+        Assert.Equal(maximumSteps, properties.GetProperty("steps").GetProperty("maxItems").GetInt32());
+        Assert.Equal(4096, properties.GetProperty("summary").GetProperty("maxLength").GetInt32());
+        var step = properties.GetProperty("steps").GetProperty("items").GetProperty("properties");
+        Assert.Equal(100, step.GetProperty("fileIntents").GetProperty("maxItems").GetInt32());
+        Assert.Equal(256, step.GetProperty("title").GetProperty("maxLength").GetInt32());
         Assert.Contains("only when the user requests actual repository changes", tool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not call for read-only exploration", tool.Description, StringComparison.Ordinal);
     }
@@ -2020,6 +2030,62 @@ public static class Milestone4Tests
         Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
     }
 
+    /// <summary>Both plan output transports retain configured bounds through sanitization.</summary>
+    [Theory]
+    [InlineData(true, 6000)]
+    [InlineData(false, 6000)]
+    [InlineData(true, 3000)]
+    [InlineData(false, 3000)]
+    public static async Task SessionApplication_PlanUsesConfiguredLimits(bool directOutput, int maximumSummaryCharacters)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var events = new DomainEventStream();
+        var observed = new System.Collections.Concurrent.ConcurrentQueue<IDomainEvent>();
+        var approvalRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var capture = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Enqueue(domainEvent);
+            if (domainEvent is ApprovalRequested)
+            {
+                approvalRequested.TrySetResult();
+            }
+
+            return Task.CompletedTask;
+        });
+        var plan = CreatePlan(new string('a', 5000), 1);
+        ModelOutput output = directOutput
+            ? new PlanModelOutput(plan)
+            : new ToolRequestModelOutput("propose_plan", SerializePlanProposal(plan));
+        var application = new SessionApplication(
+            events,
+            new ChunkModelProvider(new ModelChunk { Output = output }),
+            UnboundedBudget.Instance,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            limits: ExecutionLimits.Default with
+            {
+                MaxCorrectiveTurns = 0,
+                Plan = new PlanResourceLimits { MaximumSummaryCharacters = maximumSummaryCharacters },
+            },
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("configured plan"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "plan this"));
+        if (maximumSummaryCharacters > plan.Summary.Length)
+        {
+            await approvalRequested.Task.WaitAsync(timeout.Token);
+            Assert.Single(observed.OfType<PlanProposed>());
+            Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "test complete"), timeout.Token));
+            Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), timeout.Token));
+        }
+        else
+        {
+            await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() => dispatcher.DispatchAsync(new WaitForRunCommand(runId), timeout.Token));
+            Assert.Empty(observed.OfType<PlanProposed>());
+        }
+    }
+
     /// <summary>ReviewRisky auto-approves a low-risk valid plan without removing mutation gates.</summary>
     [Fact]
     public static async Task SessionApplication_ReviewRiskyAutoApprovesLowRiskPlan()
@@ -2687,9 +2753,9 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            const int inputBudget = 1800;
+            const int inputBudget = 3000;
             var registry = new ToolRegistry(
-                [new TestDeterministicOutputTool("oversized-result:" + new string('x', inputBudget * 4))]);
+                [new TestDeterministicOutputTool("oversized-result:" + new string('x', inputBudget * 4), maximumOutputBytes: 16384)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),

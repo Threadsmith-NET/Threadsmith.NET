@@ -16,7 +16,8 @@ internal static class AnthropicSdkClientFactory
         TimeSpan timeout,
         long maximumResponseBytes = 1048576,
         Action<long>? responseBytesObserved = null,
-        Action? submissionObserver = null)
+        Action? submissionObserver = null,
+        long maximumSseFrameBytes = 1024 * 1024)
     {
         ArgumentNullException.ThrowIfNull(sharedHttpClient);
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
@@ -25,7 +26,7 @@ internal static class AnthropicSdkClientFactory
             throw new ArgumentOutOfRangeException(nameof(timeout));
         }
 
-        var client = new HttpClient(new AnthropicBorrowedHttpHandler(sharedHttpClient, maximumResponseBytes, responseBytesObserved, submissionObserver), disposeHandler: true)
+        var client = new HttpClient(new AnthropicBorrowedHttpHandler(sharedHttpClient, maximumResponseBytes, responseBytesObserved, submissionObserver, maximumSseFrameBytes), disposeHandler: true)
         {
             Timeout = Timeout.InfiniteTimeSpan,
             BaseAddress = ApiBaseUri,

@@ -8,6 +8,7 @@ using TUIKit;
 internal sealed class TuiKitStyles
 {
     private readonly CellStyle[] _styles;
+    private readonly bool[] _explicitBackgrounds;
 
     /// <summary>Initializes a new instance of the <see cref="TuiKitStyles"/> class while respecting style suppression.</summary>
     internal TuiKitStyles(ConfiguredTheme theme, bool suppress)
@@ -21,9 +22,14 @@ internal sealed class TuiKitStyles
         }
 
         _styles = new CellStyle[maximum + 1];
+        _explicitBackgrounds = new bool[maximum + 1];
         foreach (var role in roles)
         {
             _styles[(int)role] = Convert(resolver.Resolve(role));
+            _explicitBackgrounds[(int)role] = !suppress
+                && role != PresentationTextRole.Default
+                && theme.Theme.Styles.TryGetValue(role, out var requested)
+                && requested.Background is not null;
         }
     }
 
@@ -32,6 +38,16 @@ internal sealed class TuiKitStyles
     {
         var index = (int)role;
         return index >= 0 && index < _styles.Length ? _styles[index] : CellStyle.Default;
+    }
+
+    /// <summary>Composes text over a pane, preserving explicitly configured text backgrounds.</summary>
+    internal CellStyle ResolveInPane(PresentationTextRole role, PresentationTextRole pane)
+    {
+        var style = Resolve(role);
+        var index = (int)role;
+        return index >= 0 && index < _explicitBackgrounds.Length && _explicitBackgrounds[index]
+            ? style
+            : style.WithBackground(Resolve(pane).Background);
     }
 
     private static CellStyle Convert(TuiTextStyle style)

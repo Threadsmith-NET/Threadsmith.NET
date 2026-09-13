@@ -21,16 +21,98 @@ using Threadsmith.Workspaces;
 /// <summary>Composes session, mutation, repository, and validation command applications.</summary>
 internal static class ApplicationComposition
 {
+    /// <summary>Prevents repository skill metadata from widening host discovery and activation ceilings.</summary>
+    internal static ClaudeSkillCompatibilityOptions LoadClaudeSkillLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:claudeLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<ClaudeSkillCompatibilityOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<ClaudeSkillCompatibilityOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumRoots = Math.Min(effective.MaximumRoots, trusted.MaximumRoots),
+            MaximumCandidates = Math.Min(effective.MaximumCandidates, trusted.MaximumCandidates),
+            MaximumFrontmatterBytes = Math.Min(effective.MaximumFrontmatterBytes, trusted.MaximumFrontmatterBytes),
+            MaximumInstructionBytes = Math.Min(effective.MaximumInstructionBytes, trusted.MaximumInstructionBytes),
+            MaximumFiles = Math.Min(effective.MaximumFiles, trusted.MaximumFiles),
+            MaximumAggregateBytes = Math.Min(effective.MaximumAggregateBytes, trusted.MaximumAggregateBytes),
+        };
+    }
+
+    /// <summary>Combines trusted catalogLimits ceilings with narrower repository-inclusive settings.</summary>
+    internal static SkillCatalogOptions LoadSkillCatalogLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:catalogLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<SkillCatalogOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<SkillCatalogOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumManifestBytes = Math.Min(effective.MaximumManifestBytes, trusted.MaximumManifestBytes),
+            MaximumPackages = Math.Min(effective.MaximumPackages, trusted.MaximumPackages),
+            MaximumAssetsPerPackage = Math.Min(effective.MaximumAssetsPerPackage, trusted.MaximumAssetsPerPackage),
+            MaximumAssetBytes = Math.Min(effective.MaximumAssetBytes, trusted.MaximumAssetBytes),
+            MaximumTextCharacters = Math.Min(effective.MaximumTextCharacters, trusted.MaximumTextCharacters),
+            MaximumRequiredTools = Math.Min(effective.MaximumRequiredTools, trusted.MaximumRequiredTools),
+            MaximumContractVersions = Math.Min(effective.MaximumContractVersions, trusted.MaximumContractVersions),
+            MaximumApprovalCategories = Math.Min(effective.MaximumApprovalCategories, trusted.MaximumApprovalCategories),
+            MaximumWorkloads = Math.Min(effective.MaximumWorkloads, trusted.MaximumWorkloads),
+            MaximumModelProfiles = Math.Min(effective.MaximumModelProfiles, trusted.MaximumModelProfiles),
+            MaximumIdentifierCharacters = Math.Min(effective.MaximumIdentifierCharacters, trusted.MaximumIdentifierCharacters),
+            MaximumVersionCharacters = Math.Min(effective.MaximumVersionCharacters, trusted.MaximumVersionCharacters),
+            MaximumPathCharacters = Math.Min(effective.MaximumPathCharacters, trusted.MaximumPathCharacters),
+        };
+    }
+
+    /// <summary>Combines trusted schemaLimits ceilings with narrower repository-inclusive settings.</summary>
+    internal static SkillSchemaOptions LoadSkillSchemaLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:schemaLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<SkillSchemaOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<SkillSchemaOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumSchemaBytes = Math.Min(effective.MaximumSchemaBytes, trusted.MaximumSchemaBytes),
+            MaximumValueBytes = Math.Min(effective.MaximumValueBytes, trusted.MaximumValueBytes),
+            MaximumDepth = Math.Min(effective.MaximumDepth, trusted.MaximumDepth),
+            MaximumProperties = Math.Min(effective.MaximumProperties, trusted.MaximumProperties),
+            MaximumArrayItems = Math.Min(effective.MaximumArrayItems, trusted.MaximumArrayItems),
+            MaximumPropertyNameCharacters = Math.Min(effective.MaximumPropertyNameCharacters, trusted.MaximumPropertyNameCharacters),
+            MaximumEnumValues = Math.Min(effective.MaximumEnumValues, trusted.MaximumEnumValues),
+            MaximumMetadataCharacters = Math.Min(effective.MaximumMetadataCharacters, trusted.MaximumMetadataCharacters),
+        };
+    }
+
+    /// <summary>Combines trusted installerLimits ceilings with narrower repository-inclusive settings.</summary>
+    internal static SkillInstallerOptions LoadSkillInstallerLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:installerLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<SkillInstallerOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<SkillInstallerOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumArchiveBytes = Math.Min(effective.MaximumArchiveBytes, trusted.MaximumArchiveBytes),
+            MaximumExtractedBytes = Math.Min(effective.MaximumExtractedBytes, trusted.MaximumExtractedBytes),
+            MaximumFiles = Math.Min(effective.MaximumFiles, trusted.MaximumFiles),
+        };
+    }
+
     /// <summary>Creates the shared context assembler, session state, governed mutation path, and dispatcher.</summary>
     internal static async Task<ApplicationServices> CreateAsync(ApplicationCompositionInputs inputs)
     {
         ArgumentNullException.ThrowIfNull(inputs);
-        var embeddings = new LocalTextEmbeddingGenerator();
+        var embeddings = new LocalTextEmbeddingGenerator(inputs.Host.Configuration.GetValue("embeddings:disposalTimeoutMilliseconds", 10000));
         LocalTextCrossEncoder? reranker = null;
         HybridRepositoryMemoryRetriever? memoryRetriever = null;
         try
         {
-            reranker = new LocalTextCrossEncoder(GetRerankerCpuThreads(inputs.Host.Configuration));
+            reranker = new LocalTextCrossEncoder(GetRerankerCpuThreads(inputs.Host.Configuration), inputs.Host.Configuration.GetValue("reranking:disposalTimeoutMilliseconds", 10000));
             memoryRetriever = new HybridRepositoryMemoryRetriever(inputs.Persistence.RepositoryMemoryStore, embeddings, reranker);
             return await CreateCoreAsync(inputs, embeddings, reranker, memoryRetriever);
         }
@@ -103,7 +185,6 @@ internal static class ApplicationComposition
         ArgumentNullException.ThrowIfNull(configuration);
         var cpuThreads = configuration.GetValue("reranking:cpuThreads", 8);
         ArgumentOutOfRangeException.ThrowIfLessThan(cpuThreads, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(cpuThreads, 32);
         return cpuThreads;
     }
 
@@ -151,7 +232,9 @@ internal static class ApplicationComposition
         var promptAppendFiles = host.Configuration
             .GetSection("prompt append files")
             .Get<string[]>() ?? [];
-        var repositoryInstructionResolver = new RepositoryInstructionResolver(host.Sanitizer);
+        var repositoryInstructionResolver = new RepositoryInstructionResolver(
+                host.Sanitizer,
+                host.Configuration.GetSection("context:instructions:limits").Get<RepositoryInstructionLimits>(options => options.ErrorOnUnknownConfiguration = true));
         var conversationToolSnapshots = new ConversationToolSnapshotStore();
         var contextOptions = new ContextAssemblerOptions
         {
@@ -194,7 +277,7 @@ internal static class ApplicationComposition
         // the same effective profile, reasoning level, and provider-neutral accounting.
         var preferences = integration.Models.SessionPreferences;
         var usage = new SessionUsageProjection();
-        var agentDisplay = new AgentDisplayStream();
+        var agentDisplay = new AgentDisplayStream(host.ExecutionLimits);
         var repositoryMemoryApplication = new RepositoryMemoryApplication(memoryService, memoryOptions);
         var activeTurnCompactionPolicy = CreateActiveTurnCompactionPolicy(
             host.TrustedConfiguration);
@@ -239,9 +322,9 @@ internal static class ApplicationComposition
             host.Configuration,
             host.Paths.RepositoryConfiguration,
             host.Events);
-        var planSanityChecker = new PlanSanityChecker(host.PromptLoader);
+        var planSanityChecker = new PlanSanityChecker(host.PromptLoader, host.ExecutionLimits);
         var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);
-        var runSteering = new RunSteeringCoordinator();
+        var runSteering = new RunSteeringCoordinator(host.ExecutionLimits);
         var validationStages = GetValidationStages(host.Configuration);
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? resolvedFallbackSelector = null;
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectResolvedFallback =
@@ -392,7 +475,8 @@ internal static class ApplicationComposition
             host.Events,
             mutationApprovalPolicy: approvalPolicy,
             hooks: tools.HookCoordinator,
-            semanticMutationAttribution: semantic.SemanticRefreshCoordinator);
+            semanticMutationAttribution: semantic.SemanticRefreshCoordinator,
+            resourceLimits: host.OperationalLimits.Workspace);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
         var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader);
@@ -430,7 +514,8 @@ internal static class ApplicationComposition
                         && (invocation.AllowedToolIds.Count == 0 || invocation.AllowedToolIds.Contains("memories", StringComparer.OrdinalIgnoreCase))
                         && !invocation.RequireApprovalToolIds.Contains("memories", StringComparer.OrdinalIgnoreCase));
                 },
-                logger: host.LoggerFactory.CreateLogger<MutationProposalApplication>());
+                logger: host.LoggerFactory.CreateLogger<MutationProposalApplication>(),
+                workspaceLimits: host.OperationalLimits.Workspace);
             var repositoryLifecycle = new RepositoryLifecycle(
                 host.Events,
                 persistence.RepositoryFacts,
@@ -438,16 +523,19 @@ internal static class ApplicationComposition
                 mutationCoordinator,
                 host.LoggerFactory.CreateLogger<RepositoryLifecycle>(),
                 mutationApprovalPolicy: null,
-                repositoryOpened: repositoryBindings.BindRepositoryAsync);
+                repositoryOpened: repositoryBindings.BindRepositoryAsync,
+                resourceLimits: host.OperationalLimits.Workspace,
+                maximumConfigurationBytes: host.TrustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024));
 
             // Validation reuses the tracked process manager and publishes normalized host-owned evidence.
             var buildExecutor = new BuildExecutor(
                 host.Events,
                 new DiagnosticNormalizer(),
-                host.LoggerFactory.CreateLogger<BuildExecutor>());
+                host.LoggerFactory.CreateLogger<BuildExecutor>(),
+                limits: host.OperationalLimits.Validation);
             var testPipeline = new TestValidationPipeline(
-                new TestDiscoverer(tools.ProcessManager),
-                new TestRunner(tools.ProcessManager, host.Events),
+                new TestDiscoverer(tools.ProcessManager, host.OperationalLimits.Validation),
+                new TestRunner(tools.ProcessManager, host.Events, host.OperationalLimits.Validation),
                 host.Events);
             var validationApplication = new ValidationApplication(
                 new BaselineBuildCapture(buildExecutor),
@@ -601,7 +689,9 @@ internal static class ApplicationComposition
                     "organization:trusted-configuration"));
             }
 
-            var skillCatalog = new SkillCatalog(skillSources);
+            var skillCatalogOptions = LoadSkillCatalogLimits(host.Configuration, host.TrustedConfiguration);
+            var skillSchemaOptions = LoadSkillSchemaLimits(host.Configuration, host.TrustedConfiguration);
+            var skillCatalog = new SkillCatalog(skillSources, skillCatalogOptions);
             await skillCatalog.RefreshAsync();
             var claudeSkillCatalog = new ClaudeSkillCompatibilityCatalog(
             [
@@ -614,7 +704,8 @@ internal static class ApplicationComposition
                     Path.Combine(host.Paths.RepositoryRoot, ".claude", "skills"),
                     "repository:.claude/skills",
                     IsRepositoryControlled: true),
-            ]);
+            ],
+            LoadClaudeSkillLimits(host.Configuration, host.TrustedConfiguration));
             await claudeSkillCatalog.RefreshAsync();
             var baseSkillPolicy = new SkillTrustPolicySnapshot
             {
@@ -640,10 +731,13 @@ internal static class ApplicationComposition
                     .GetSection("skills:revokedSigners")
                     .Get<string[]>()?.ToHashSet(StringComparer.Ordinal) ?? [],
             };
+            var skillRuntimeLimits = host.TrustedConfiguration.GetSection("skills:runtimeLimits").Get<SkillRuntimeLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+            skillRuntimeLimits.Validate();
             var skillPolicy = new FileSkillTrustPolicyProvider(
                 Path.Combine(userProfile, ".threadsmith", "skill-policy.json"),
-                baseSkillPolicy);
-            var nativeSkillVerifier = new SkillPackageVerifier(skillPolicy);
+                baseSkillPolicy,
+                host.OperationalLimits.PolicyStores);
+            var nativeSkillVerifier = new SkillPackageVerifier(skillPolicy, skillCatalogOptions);
             var compatibleSkillCatalog = new CompatibleSkillCatalog(skillCatalog, claudeSkillCatalog);
             await compatibleSkillCatalog.RefreshAsync();
             repositoryBindings.AttachSkillCatalogs(
@@ -666,7 +760,7 @@ internal static class ApplicationComposition
                     new SkillContentLoader(host.Sanitizer),
                     compatibleSkillCatalog,
                     host.Sanitizer),
-                new BoundedJsonSchemaValidator(),
+                new BoundedJsonSchemaValidator(skillSchemaOptions),
                 new ModelSkillProcedureRunner(
                     integration.Models.Provider,
                     tools.ToolRegistry,
@@ -682,7 +776,8 @@ internal static class ApplicationComposition
                     },
                     host.PromptLoader,
                     integration.Models.Catalog,
-                    providerInstructionResolver),
+                    providerInstructionResolver,
+                    skillRuntimeLimits),
                 host.PromptLoader,
                 persistence.SkillStateStore,
                 async (sessionId, cancellationToken) =>
@@ -710,8 +805,10 @@ internal static class ApplicationComposition
                 persistence.SkillStateStore,
                 new SkillPackageInstaller(
                     userSkillRoot,
-                    Path.Combine(userProfile, ".threadsmith", "skill-quarantine")));
-            var invokeSkillTool = new InvokeSkillTool(skillWorkflow, host.PromptLoader);
+                    Path.Combine(userProfile, ".threadsmith", "skill-quarantine"),
+                    LoadSkillInstallerLimits(host.Configuration, host.TrustedConfiguration),
+                    skillCatalogOptions));
+            var invokeSkillTool = new InvokeSkillTool(skillWorkflow, host.PromptLoader, skillRuntimeLimits);
             tools.ToolRegistry.RegisterOrReplace(
                 invokeSkillTool,
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "invoke-skill"));
@@ -960,6 +1057,9 @@ internal sealed record HostCompositionInputs
 
     /// <summary>Gets bounded model execution limits.</summary>
     internal required ExecutionLimits ExecutionLimits { get; init; }
+
+    /// <summary>Gets validated application resource limits.</summary>
+    internal OperationalLimits OperationalLimits { get; init; } = new();
 
     /// <summary>Gets the shared secret-output sanitizer.</summary>
     internal required SecretOutputSanitizer Sanitizer { get; init; }

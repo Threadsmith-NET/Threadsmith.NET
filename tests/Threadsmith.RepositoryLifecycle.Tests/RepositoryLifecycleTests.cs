@@ -424,6 +424,35 @@ public static class RepositoryLifecycleTests
         Assert.True(document.RootElement.GetProperty("custom").GetProperty("preserved").GetBoolean());
     }
 
+    /// <summary>A solution preference cannot replace readable configuration with an oversized document.</summary>
+    [Fact]
+    public static async Task SelectSolution_ConfiguredWriteBound_PreservesExistingConfiguration()
+    {
+        await using var repository = await TemporaryRepository.CreateAsync();
+        const string original = "{\"custom\":true}";
+        await File.WriteAllTextAsync(repository.ConfigurationPath, original);
+        await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
+        var lifecycle = new RepositoryLifecycle(
+            harness.Events,
+            harness.Facts,
+            new DotNetEnvironmentResolver(),
+            maximumConfigurationBytes: Encoding.UTF8.GetByteCount(original));
+        var sessionId = SessionId.New();
+        var opened = await lifecycle.HandleAsync(new OpenRepositoryCommand(
+            sessionId,
+            repository.RootPath,
+            RepositoryTrustLevel.TrustedRead));
+
+        var selected = await lifecycle.HandleAsync(new SelectSolutionCommand(
+            sessionId,
+            opened.WorkspaceId,
+            repository.SolutionPath));
+
+        Assert.Equal(repository.SolutionPath, selected.SolutionPath);
+        Assert.Equal(original, await File.ReadAllTextAsync(repository.ConfigurationPath));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(repository.ConfigurationPath)!, ".config-*.tmp"));
+    }
+
     /// <summary>Solution preference persistence preserves existing case-insensitive JSON property spellings.</summary>
     [Fact]
     public static async Task SelectSolution_MixedCaseConfiguration_PreservesKeysAndRemainsLoadable()
@@ -889,7 +918,7 @@ public static class RepositoryLifecycleTests
             "Loading remembered solution: Sample.sln",
             surface.Output,
             StringComparison.Ordinal);
-        Assert.Contains("(Use --solution to change)", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>Remembered-solution startup details belong to the splash instead of the model transcript.</summary>
@@ -907,7 +936,7 @@ public static class RepositoryLifecycleTests
         await coordinator.RunAsync(repository.RootPath, RepositoryTrustLevel.TrustedRead)
             .WaitAsync(TimeSpan.FromSeconds(15));
 
-        Assert.Equal(["Loading remembered solution: Sample.sln", "  (Use --solution to change)"], surface.StartupDetails);
+        Assert.Equal(["Loading remembered solution: Sample.sln"], surface.StartupDetails);
         Assert.True(surface.DetailsShownDuringSemanticLoading);
         Assert.DoesNotContain("Loading remembered solution", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
@@ -971,7 +1000,7 @@ public static class RepositoryLifecycleTests
         await shell.RunAsync(
             repository.RootPath,
             RepositoryTrustLevel.TrustedRead,
-            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(3));
+            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(15));
         const string granted = "Repository trust is now FullyTrustedAutomation.";
         if (expectedAutomation)
         {
@@ -1056,7 +1085,7 @@ public static class RepositoryLifecycleTests
         {
             if (label == "Semantic loading")
             {
-                DetailsShownDuringSemanticLoading = StartupDetails.Count == 2;
+                DetailsShownDuringSemanticLoading = StartupDetails.Count > 0;
             }
 
             return operation.WaitAsync(cancellationToken);

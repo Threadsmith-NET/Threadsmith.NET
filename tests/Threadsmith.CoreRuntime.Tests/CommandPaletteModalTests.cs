@@ -1,6 +1,7 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
 using Threadsmith.Interaction.Commands;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
@@ -128,6 +129,26 @@ public static class CommandPaletteModalTests
         Assert.False(char.IsSurrogate(selected.Title[^1]));
         Assert.True(discovery.TryGet(entry.Name, out var retained));
         Assert.Same(entry, retained);
+    }
+
+    /// <summary>An effectively unbounded title setting does not preallocate the configured ceiling.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static void LargeTitleLimitAllocatesOnlyRegisteredLabels(bool empty)
+    {
+        var entry = new InteractiveCommandDescriptor("/fixture", "/fixture", "Short title");
+        var discovery = new TuiKitCommandDiscovery(empty ? [] : [entry], _ => { }, new TuiResourceLimits
+        {
+            MaximumCommandTitleCharacters = int.MaxValue,
+        });
+        Assert.InRange(discovery.MaximumRenderedTitleLength, 1, 32);
+        var cells = new CellBuffer(80, 24);
+        Create(discovery).Render(new BufferSurface(cells));
+        if (!empty)
+        {
+            Assert.Contains(entry.Description, TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        }
     }
 
     private static CommandPaletteModal Create(TuiKitCommandDiscovery discovery)

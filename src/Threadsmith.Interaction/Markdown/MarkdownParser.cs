@@ -58,22 +58,31 @@ internal sealed class MarkdownParser : IMarkdownParser
         .UseEmphasisExtras(EmphasisExtraOptions.Strikethrough)
         .Build();
 
+    private readonly MarkdownRenderingLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="MarkdownParser"/> class.</summary>
+    internal MarkdownParser(MarkdownRenderingLimits? limits = null)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+    }
+
     /// <summary>Parses one complete answer or returns visibly escaped source on any failure.</summary>
     public MarkdownParseResult Parse(string source)
     {
         ArgumentNullException.ThrowIfNull(source);
         var safeSource = TerminalControlEncoder.Encode(source);
-        if (Encoding.UTF8.GetByteCount(source) > MaximumSourceBytes)
+        if (Encoding.UTF8.GetByteCount(source) > _limits.MaximumSourceBytes)
         {
             return new MarkdownParseResult(null, safeSource, "markdown source exceeded the rendering limit");
         }
 
         try
         {
-            var state = new ParseState();
+            var state = new ParseState(_limits);
             var markdown = Markdown.Parse(source, Pipeline);
             var blocks = ParseBlocks(markdown, state, 0);
-            var document = new MarkdownDocument(blocks);
+            var document = new MarkdownDocument(blocks) { Limits = _limits };
             MarkdownValidator.Validate(document);
             return new MarkdownParseResult(document, safeSource, null);
         }
@@ -85,7 +94,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         }
     }
 
-    private static ImmutableArray<MarkdownBlock> ParseBlocks(ContainerBlock container, ParseState state, int depth)
+    private ImmutableArray<MarkdownBlock> ParseBlocks(ContainerBlock container, ParseState state, int depth)
     {
         state.CheckDepth(depth);
         var blocks = ImmutableArray.CreateBuilder<MarkdownBlock>();
@@ -110,7 +119,7 @@ internal sealed class MarkdownParser : IMarkdownParser
                     break;
                 case CodeBlock code:
                     var codeText = code.Lines.ToString() ?? string.Empty;
-                    if (codeText.Length > MaximumCodeCharacters)
+                    if (codeText.Length > _limits.MaximumCodeCharacters)
                     {
                         throw new InvalidOperationException("Code block exceeded its limit.");
                     }
@@ -136,10 +145,10 @@ internal sealed class MarkdownParser : IMarkdownParser
         return blocks.ToImmutable();
     }
 
-    private static MarkdownList ParseList(ListBlock list, ParseState state, int depth)
+    private MarkdownList ParseList(ListBlock list, ParseState state, int depth)
     {
         state.CheckDepth(depth);
-        if (list.Count > MaximumListItems)
+        if (list.Count > _limits.MaximumListItems)
         {
             throw new InvalidOperationException("List exceeded its item limit.");
         }
@@ -169,10 +178,10 @@ internal sealed class MarkdownParser : IMarkdownParser
         return new MarkdownList(list.IsOrdered, start, items.ToImmutable());
     }
 
-    private static MarkdownTable ParseTable(Table table, ParseState state, int depth)
+    private MarkdownTable ParseTable(Table table, ParseState state, int depth)
     {
         state.CheckDepth(depth);
-        if (table.Count > MaximumTableRows)
+        if (table.Count > _limits.MaximumTableRows)
         {
             throw new InvalidOperationException("Table exceeded its row limit.");
         }
@@ -181,7 +190,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         foreach (var child in table)
         {
             state.AddNode();
-            if (child is not TableRow row || row.Count > MaximumTableColumns)
+            if (child is not TableRow row || row.Count > _limits.MaximumTableColumns)
             {
                 throw new InvalidOperationException("Table structure exceeded its limits.");
             }
@@ -196,7 +205,7 @@ internal sealed class MarkdownParser : IMarkdownParser
                 }
 
                 var spans = ParseCell(cell, state, depth + 1);
-                if (spans.Sum(span => span.Text.Length) > MaximumCellCharacters)
+                if (spans.Sum(span => span.Text.Length) > _limits.MaximumCellCharacters)
                 {
                     throw new InvalidOperationException("Table cell exceeded its character limit.");
                 }
@@ -210,7 +219,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         return new MarkdownTable(rows.ToImmutable());
     }
 
-    private static ImmutableArray<MarkdownSpan> ParseCell(TableCell cell, ParseState state, int depth)
+    private ImmutableArray<MarkdownSpan> ParseCell(TableCell cell, ParseState state, int depth)
     {
         state.CheckDepth(depth);
         var spans = ImmutableArray.CreateBuilder<MarkdownSpan>();
@@ -232,7 +241,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         return spans.ToImmutable();
     }
 
-    private static ImmutableArray<MarkdownSpan> ParseInlines(
+    private ImmutableArray<MarkdownSpan> ParseInlines(
         ContainerInline? container,
         ParseState state,
         int depth)
@@ -247,7 +256,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         return spans.ToImmutable();
     }
 
-    private static void ParseInlineChildren(
+    private void ParseInlineChildren(
         ContainerInline container,
         ParseState state,
         int depth,
@@ -314,7 +323,7 @@ internal sealed class MarkdownParser : IMarkdownParser
         }
     }
 
-    private static void ParseLink(
+    private void ParseLink(
         LinkInline link,
         ParseState state,
         int depth,
@@ -342,10 +351,10 @@ internal sealed class MarkdownParser : IMarkdownParser
         }
     }
 
-    private static Uri? TryCreateSafeLink(string? value)
+    private Uri? TryCreateSafeLink(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)
-            || value.Length > MaximumLinkCharacters
+            || value.Length > _limits.MaximumLinkCharacters
             || value.Any(char.IsControl)
             || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || uri.Scheme is not "http" and not "https"
@@ -359,12 +368,12 @@ internal sealed class MarkdownParser : IMarkdownParser
         return uri;
     }
 
-    private static string? BoundLanguage(string? language)
+    private string? BoundLanguage(string? language)
     {
         var trimmed = language?.Trim();
         return string.IsNullOrEmpty(trimmed)
             ? null
-            : trimmed.Length <= 64 && trimmed.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '+' or '#')
+            : trimmed.Length <= _limits.MaximumLanguageCharacters && trimmed.All(character => char.IsAsciiLetterOrDigit(character) || character is '-' or '_' or '+' or '#')
                 ? trimmed
                 : null;
     }
@@ -380,12 +389,18 @@ internal sealed class MarkdownParser : IMarkdownParser
 
     private sealed class ParseState
     {
+        private readonly MarkdownRenderingLimits _limits;
         private int _nodeCount;
+
+        internal ParseState(MarkdownRenderingLimits limits)
+        {
+            _limits = limits;
+        }
 
         internal void AddNode()
         {
             _nodeCount++;
-            if (_nodeCount > MaximumNodes)
+            if (_nodeCount > _limits.MaximumNodes)
             {
                 throw new InvalidOperationException("Markdown exceeded its semantic node limit.");
             }
@@ -393,7 +408,7 @@ internal sealed class MarkdownParser : IMarkdownParser
 
         internal void CheckDepth(int depth)
         {
-            if (_nodeCount > MaximumNodes || depth > MaximumDepth)
+            if (_nodeCount > _limits.MaximumNodes || depth > _limits.MaximumDepth)
             {
                 throw new InvalidOperationException("Markdown exceeded its nesting limit.");
             }

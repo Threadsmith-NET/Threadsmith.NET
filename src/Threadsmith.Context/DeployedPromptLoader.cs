@@ -19,10 +19,10 @@ public sealed record LoadedPromptAssetMetadata
 }
 
 /// <summary>Immutable host-owned bounds for loading deployed prompt assets.</summary>
-internal sealed record DeployedPromptLoadLimits
+public sealed record DeployedPromptLoadLimits
 {
     /// <summary>Initializes a new instance of the <see cref="DeployedPromptLoadLimits"/> class.</summary>
-    public DeployedPromptLoadLimits(int maximumFileBytes, int maximumCatalogBytes)
+    public DeployedPromptLoadLimits(int maximumFileBytes = 128 * 1024, int maximumCatalogBytes = 4 * 1024 * 1024)
     {
         if (maximumFileBytes <= 0)
         {
@@ -99,6 +99,20 @@ public sealed class DeployedPromptLoader : IPromptLoader
             PromptAssetCatalog.All,
             DeployedPromptLoadLimits.Production,
             cancellationToken);
+    }
+
+    /// <summary>Loads the required catalog with explicitly configured input limits.</summary>
+    /// <param name="applicationBaseDirectory">Trusted application base directory.</param>
+    /// <param name="limits">Validated resource limits.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The immutable complete prompt catalog.</returns>
+    public static Task<DeployedPromptLoader> LoadAsync(
+        string applicationBaseDirectory,
+        DeployedPromptLoadLimits limits,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(limits);
+        return LoadCoreAsync(applicationBaseDirectory, PromptAssetCatalog.All, limits, cancellationToken);
     }
 
     /// <inheritdoc />

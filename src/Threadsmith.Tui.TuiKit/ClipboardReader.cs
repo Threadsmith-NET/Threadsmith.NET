@@ -4,6 +4,7 @@ using System.Buffers;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using Threadsmith.Interaction.Contracts;
 
 // Explicit user paste only. Never query the clipboard during rendering/startup.
 
@@ -13,11 +14,14 @@ internal static class ClipboardReader
     private static readonly UTF8Encoding _strictUtf8 = new(false, true);
 
     /// <summary>Reads clipboard text, preserving newlines, or returns null when unavailable.</summary>
-    internal static async Task<string?> ReadAsync(CancellationToken cancellationToken)
+    internal static Task<string?> ReadAsync(CancellationToken cancellationToken) => ReadAsync(new TuiResourceLimits(), cancellationToken);
+
+    /// <summary>Reads clipboard data under configured platform-independent limits.</summary>
+    internal static async Task<string?> ReadAsync(TuiResourceLimits limits, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(2));
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(limits.ClipboardTimeoutMilliseconds));
         var commands = OperatingSystem.IsWindows()
             ? new[]
             {
@@ -35,7 +39,7 @@ internal static class ClipboardReader
             foreach (var (executable, arguments) in commands)
             {
                 timeout.Token.ThrowIfCancellationRequested();
-                var result = await ReadProcessAsync(executable, arguments, timeout.Token);
+                var result = await ReadProcessAsync(executable, arguments, limits, timeout.Token);
                 if (result is not null)
                 {
                     return result;
@@ -51,7 +55,10 @@ internal static class ClipboardReader
     }
 
     /// <summary>Decodes at most one MiB of strict UTF-8 clipboard data.</summary>
-    internal static async Task<string> ReadBoundedAsync(Stream stream, CancellationToken cancellationToken)
+    internal static Task<string> ReadBoundedAsync(Stream stream, CancellationToken cancellationToken) => ReadBoundedAsync(stream, new TuiResourceLimits(), cancellationToken);
+
+    /// <summary>Decodes clipboard text within the configured draft limit.</summary>
+    internal static async Task<string> ReadBoundedAsync(Stream stream, TuiResourceLimits limits, CancellationToken cancellationToken)
     {
         await using var content = new MemoryStream(4096);
         var bytes = ArrayPool<byte>.Shared.Rent(4096);
@@ -65,9 +72,9 @@ internal static class ClipboardReader
                     return _strictUtf8.GetString(content.GetBuffer(), 0, (int)content.Length);
                 }
 
-                if (content.Length + count > ComposerBuffer.MaximumDraftBytes)
+                if (content.Length + count > limits.MaximumDraftBytes)
                 {
-                    throw new InvalidDataException("Clipboard exceeds the 1 MiB input limit.");
+                    throw new InvalidDataException("Clipboard exceeds the configured input limit.");
                 }
 
                 await content.WriteAsync(bytes.AsMemory(0, count), cancellationToken);
@@ -101,7 +108,7 @@ internal static class ClipboardReader
             .Select(candidate => (candidate.Path ?? throw new InvalidOperationException("Resolved clipboard helper path was null."), candidate.Arguments))];
     }
 
-    private static async Task<string?> ReadProcessAsync(string executable, string[] arguments, CancellationToken cancellationToken)
+    private static async Task<string?> ReadProcessAsync(string executable, string[] arguments, TuiResourceLimits limits, CancellationToken cancellationToken)
     {
         var start = new ProcessStartInfo(executable)
         {
@@ -132,7 +139,7 @@ internal static class ClipboardReader
         var errors = process.StandardError.BaseStream.CopyToAsync(Stream.Null, cancellationToken);
         try
         {
-            var result = await ReadBoundedAsync(process.StandardOutput.BaseStream, cancellationToken);
+            var result = await ReadBoundedAsync(process.StandardOutput.BaseStream, limits, cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
             await errors;
             return process.ExitCode == 0 ? result : null;

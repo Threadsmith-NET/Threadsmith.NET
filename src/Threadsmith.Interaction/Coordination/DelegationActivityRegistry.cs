@@ -2,14 +2,21 @@ namespace Threadsmith.Interaction.Coordination;
 
 using System.Text;
 using Threadsmith.Core;
+using Threadsmith.Interaction.Contracts;
 
 /// <summary>Maintains a bounded, event-derived index of delegations observed by the interaction session.</summary>
 internal sealed class DelegationActivityRegistry
 {
-    private const int MaximumDisplayedDelegations = 12;
-    private const int MaximumTrackedDelegations = 64;
+    private readonly TuiResourceLimits _limits;
     private readonly Lock _gate = new();
     private readonly Dictionary<(SessionId SessionId, DelegationId DelegationId), DelegationState> _delegations = [];
+
+    /// <summary>Initializes a new instance of the <see cref="DelegationActivityRegistry"/> class.</summary>
+    internal DelegationActivityRegistry(TuiResourceLimits? limits = null)
+    {
+        _limits = limits ?? new();
+        _limits.Validate();
+    }
 
     /// <summary>Observes one durable delegation event.</summary>
     /// <param name="domainEvent">Event to index.</param>
@@ -47,7 +54,7 @@ internal sealed class DelegationActivityRegistry
                 .ToArray();
             total = matching.Length;
             delegations = [.. matching
-                .Take(MaximumDisplayedDelegations)
+                .Take(_limits.MaximumDisplayedDelegations)
                 .Select(CreateSnapshot)];
         }
 
@@ -171,7 +178,7 @@ internal sealed class DelegationActivityRegistry
 
     private void TrimToBound()
     {
-        while (_delegations.Count > MaximumTrackedDelegations)
+        while (_delegations.Count > _limits.MaximumTrackedDelegations)
         {
             var oldest = _delegations.Values
                 .Where(item => !IsActive(item.Phase))

@@ -36,7 +36,7 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
                 $"Anthropic provider '{configured.Id}' requires a secrets: key reference.");
         }
 
-        if (configured.ModelOverrides.Count > 128
+        if (configured.ModelOverrides.Count > configured.ResourceLimits.MaximumDiscoveredModels
             || configured.ModelOverrides.Any(overrideConfiguration => string.IsNullOrWhiteSpace(overrideConfiguration.ModelId)
                 || overrideConfiguration.ModelId.Length > 256
                 || overrideConfiguration.ModelId.Any(char.IsControl)))
@@ -143,7 +143,7 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
             throw new ArgumentException("The activation context does not match the Anthropic registration.", nameof(context));
         }
 
-        return new AnthropicModelProvider(context.HttpClient, context.Profile, context.ResolvedSecret, model.Compatibility, configured.Id);
+        return new AnthropicModelProvider(context.HttpClient, context.Profile, context.ResolvedSecret, model.Compatibility, configured.Id, configured.ResourceLimits);
     }
 
     /// <inheritdoc />

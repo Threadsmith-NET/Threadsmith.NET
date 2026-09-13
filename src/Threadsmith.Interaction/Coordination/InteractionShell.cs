@@ -895,7 +895,7 @@ public class InteractionPresenter
         var semanticStatus = state?.IsSemanticLoadComplete == true
             && state.SemanticConfidence == SemanticConfidenceLevel.None
             ? "Unavailable"
-            : state?.SemanticConfidence.ToString() ?? SemanticConfidenceLevel.None.ToString();
+            : state?.SemanticConfidence.ToString() ?? nameof(SemanticConfidenceLevel.None);
         var repositorySummary = state?.RepositoryPath is null
             ? string.Empty
             : $"Repository: {state.RepositoryPath}\n"
@@ -922,9 +922,7 @@ public class InteractionPresenter
             ? string.Empty
             : $"Plan revision {state.Plan.Plan.Revision} ({state.Plan.Status}): "
                 + $"{state.Plan.Plan.Summary}\n"
-                + string.Join(
-                    string.Empty,
-                    state.Plan.Plan.Steps.Select((step, index) =>
+                + string.Concat(state.Plan.Plan.Steps.Select((step, index) =>
                         $"  {index + 1}. {step.Title} — {step.ExpectedOutcome}\n"));
         var context = state?.ContextInspection is null
             ? string.Empty
@@ -933,29 +931,19 @@ public class InteractionPresenter
                 + $"{state.ContextInspection.TokenBudget} tokens; "
                 + $"evidence {state.ContextInspection.Evidence.Count(item => item.Included)}/"
                 + $"{state.ContextInspection.Evidence.Count}\n"
-                + string.Join(
-                    string.Empty,
-                    state.ContextInspection.Evidence.Select(item =>
+                + string.Concat(state.ContextInspection.Evidence.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} "
                         + $"{item.Kind}: {item.Rationale}\n"))
-                + string.Join(
-                    string.Empty,
-                    state.ContextInspection.RepositoryMemoryItems.Select(item =>
+                + string.Concat(state.ContextInspection.RepositoryMemoryItems.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} repository-memory "
                         + $"{item.Origin}: {item.Rationale}\n"))
-                + string.Join(
-                    string.Empty,
-                    state.ContextInspection.PromptAssets.Select(asset =>
+                + string.Concat(state.ContextInspection.PromptAssets.Select(asset =>
                         $"  prompt {asset.Position}: {asset.Id}@{asset.Version}\n"))
-                + string.Join(
-                    string.Empty,
-                    state.ContextInspection.ModelRationale.Select(reason =>
+                + string.Concat(state.ContextInspection.ModelRationale.Select(reason =>
                         $"  model: {reason}\n"));
         var diagnostics = state?.Diagnostics.Count > 0
             ? $"Diagnostics ({state.Diagnostics.Count}):\n"
-                + string.Join(
-                    string.Empty,
-                    state.Diagnostics.Select(diagnostic =>
+                + string.Concat(state.Diagnostics.Select(diagnostic =>
                         $"  {diagnostic.Severity} {diagnostic.Code} "
                         + $"[{diagnostic.Classification}; {diagnostic.Confidence}] "
                         + (diagnostic.File is null
@@ -971,13 +959,9 @@ public class InteractionPresenter
             ? string.Empty
             : $"Tests ({state.TestValidation.Passed} passed, "
                 + $"{state.TestValidation.Failed} failed, {state.TestValidation.Skipped} skipped):\n"
-                + string.Join(
-                    string.Empty,
-                    state.TestValidation.Selection.Rationale.Select(reason =>
+                + string.Concat(state.TestValidation.Selection.Rationale.Select(reason =>
                         $"  selection: {reason}\n"))
-                + string.Join(
-                    string.Empty,
-                    state.TestValidation.Results.Select(result =>
+                + string.Concat(state.TestValidation.Results.Select(result =>
                         $"  {result.Project.Name}: {result.Outcome} "
                         + $"({result.Passed} passed, {result.Failed} failed, "
                         + $"{result.Skipped} skipped; {result.Duration.TotalMilliseconds:F0} ms)\n"));
@@ -987,16 +971,12 @@ public class InteractionPresenter
                 + $"({state.Mutation.IsolationMode}; {state.Mutation.RequiredApproval}; "
                 + $"{state.Mutation.Preview.AddedLines} added, "
                 + $"{state.Mutation.Preview.RemovedLines} removed)\n"
-                + string.Join(
-                    string.Empty,
-                    state.Mutation.Preview.LifecycleChanges.Select(change =>
+                + string.Concat(state.Mutation.Preview.LifecycleChanges.Select(change =>
                         $"Lifecycle {change.Type}: {change.SourcePath}"
                         + (change.DestinationPath is null ? string.Empty : $" -> {change.DestinationPath}")
                         + $" [{change.Risk}{(change.IsCaseOnlyMove ? ", case-only" : string.Empty)}]\n"))
                 + InteractionPresentationFormatter.FormatUnifiedDiffForDisplay(state.Mutation.Preview.UnifiedDiff)
-                + string.Join(
-                    string.Empty,
-                    state.Mutation.Preview.Changes
+                + string.Concat(state.Mutation.Preview.Changes
                         .Where(change => change.PreviewEnabled)
                         .Select(change =>
                             $"Change {change.MutationId} ({change.RelativePath})\n"
@@ -1004,14 +984,14 @@ public class InteractionPresenter
         var workspace = state is null
             ? string.Empty
             : repositorySummary
-                + string.Join(string.Empty, state.Activity)
-                + string.Join(string.Empty, toolActivity)
+                + string.Concat(state.Activity)
+                + string.Concat(toolActivity)
                 + plan
                 + context
                 + diagnostics
                 + tests
                 + mutation
-                + string.Join(string.Empty, approvals);
+                + string.Concat(approvals);
         return state is null
             ? new InteractionShellSnapshot("Sessions", "No session", string.Empty, "Idle")
             : new InteractionShellSnapshot(

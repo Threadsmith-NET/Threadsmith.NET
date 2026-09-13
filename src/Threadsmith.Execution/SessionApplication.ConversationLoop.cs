@@ -27,7 +27,8 @@ public sealed partial class SessionApplication
         using var loopState = new ConversationLoopState(
             _limits.MaxStructuredOutputCharacters,
             _activeTurnCompactionPolicy.MaximumSourcesPerGroup,
-            RequirePrompts());
+            RequirePrompts(),
+            _limits.MaxRetainedToolCalls);
 
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
@@ -768,7 +769,7 @@ public sealed partial class SessionApplication
         if (chunk.Output is PlanModelOutput planOutput)
         {
             streamState.ObserveToolProducingOutput(isPlanProposal: true);
-            ModelOutputValidator.Validate(planOutput);
+            ModelOutputValidator.Validate(planOutput, planLimits: _limits.Plan);
             loopState.AddRetainedPlanOutputCharacters(planOutput.Plan);
             streamState.Plan = planOutput.Plan;
         }
@@ -950,7 +951,7 @@ public sealed partial class SessionApplication
                     ModelOutputValidator.ValidateInvocation(new ToolRequestModelOutput(call.ToolName, call.ArgumentsJson));
                     if (planCall is not null)
                     {
-                        streamState.Plan = ModelOutputValidator.ParsePlan(call.ArgumentsJson).Plan;
+                        streamState.Plan = ModelOutputValidator.ParsePlan(call.ArgumentsJson, _limits.Plan).Plan;
                     }
                 }
                 catch (MalformedInvocationException exception)
@@ -1038,7 +1039,7 @@ public sealed partial class SessionApplication
 
         try
         {
-            streamState.Plan = ModelOutputValidator.ParsePlan(tool.ArgumentsJson).Plan;
+            streamState.Plan = ModelOutputValidator.ParsePlan(tool.ArgumentsJson, _limits.Plan).Plan;
         }
         catch (MalformedInvocationException exception)
         {
@@ -1706,7 +1707,7 @@ public sealed partial class SessionApplication
             {
                 Name = ProposePlanToolName,
                 Description = RequirePrompts().Get(PromptFileNames.ToolProposePlanDescription),
-                ArgumentsJsonSchema = ProposePlanArgumentsSchema,
+                ArgumentsJsonSchema = _proposePlanArgumentsSchema,
                 PreferStrictArguments = true,
             });
         }
@@ -2185,7 +2186,7 @@ public sealed partial class SessionApplication
             emergencyReductionApplied);
     }
 
-    private static ToolInvocationContext? AttachVisibleSourceFrontierToInvocationContext(
+    private ToolInvocationContext? AttachVisibleSourceFrontierToInvocationContext(
         ToolInvocationContext? invocationContext,
         IReadOnlyList<ModelMessage> requestMessages,
         long historyRewriteGeneration)
@@ -2199,7 +2200,8 @@ public sealed partial class SessionApplication
             requestMessages,
             invocationContext.RepositoryPath,
             invocationContext.WorkspaceId,
-            historyRewriteGeneration);
+            historyRewriteGeneration,
+            _limits.MaxSourceFrontierEntries);
         return invocationContext with { VisibleSourceFrontier = frontier };
     }
 
@@ -2223,7 +2225,7 @@ public sealed partial class SessionApplication
         };
     }
 
-    private static ModelStreamRequest CreateModelStreamRequest(
+    private ModelStreamRequest CreateModelStreamRequest(
         RunId runId,
         RunRegistration registration,
         RunPhase phase,
@@ -2243,6 +2245,7 @@ public sealed partial class SessionApplication
         };
         return new ModelStreamRequest
         {
+            PlanLimits = _limits.Plan,
             RunId = runId,
             MemorySubmission = context?.RepositoryMemoryInclusions is { Count: > 0 } inclusions && registration.RepositoryIdentity is { } repositoryPath
                 ? new RepositoryMemorySubmission(registration.SessionId, RepositoryIdentity.Create(repositoryPath), inclusions)
@@ -2278,7 +2281,7 @@ public sealed partial class SessionApplication
         };
     }
 
-    private static ImplementationPlan? CompleteRoundPlan(
+    private ImplementationPlan? CompleteRoundPlan(
         ImplementationPlan? plan,
         string textOutput,
         ContextAssemblyResult? context,
@@ -2291,7 +2294,7 @@ public sealed partial class SessionApplication
             var candidate = textOutput.Trim();
             if (candidate.StartsWith('{'))
             {
-                plan = ModelOutputValidator.ParsePlan(candidate).Plan;
+                plan = ModelOutputValidator.ParsePlan(candidate, _limits.Plan).Plan;
             }
         }
 
@@ -2322,7 +2325,7 @@ public sealed partial class SessionApplication
                 .Select(sanitizer.Sanitize)
                 .ToArray(),
         };
-        ModelOutputValidator.Validate(new PlanModelOutput(plan));
+        ModelOutputValidator.Validate(new PlanModelOutput(plan), planLimits: _limits.Plan);
 
         if (previousPlan is { } pendingPlan)
         {
@@ -2638,7 +2641,7 @@ public sealed partial class SessionApplication
 
     private sealed class ConversationLoopState : IDisposable
     {
-        private const int MaximumRetainedToolCalls = 256;
+        private readonly int _maximumRetainedToolCalls;
         private readonly List<ModelMessage> _currentCalls = [];
         private readonly Dictionary<string, ModelMessage> _currentResults =
             new(StringComparer.Ordinal);
@@ -2656,8 +2659,11 @@ public sealed partial class SessionApplication
         public ConversationLoopState(
             int maximumOutputCharacters,
             int maximumSourcesPerGroup,
-            IPromptLoader prompts)
+            IPromptLoader prompts,
+            int maximumRetainedToolCalls)
         {
+            ArgumentOutOfRangeException.ThrowIfNegative(maximumRetainedToolCalls);
+            _maximumRetainedToolCalls = maximumRetainedToolCalls;
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumSourcesPerGroup);
             ArgumentNullException.ThrowIfNull(prompts);
             MaximumOutputCharacters = maximumOutputCharacters;
@@ -3066,7 +3072,7 @@ public sealed partial class SessionApplication
         public void IncrementRetainedToolCalls()
         {
             _retainedToolCalls++;
-            if (_retainedToolCalls > MaximumRetainedToolCalls)
+            if (_maximumRetainedToolCalls > 0 && _retainedToolCalls > _maximumRetainedToolCalls)
             {
                 throw new MalformedModelOutputException(
                     "The model exceeded the host's maximum retained tool-call count.");

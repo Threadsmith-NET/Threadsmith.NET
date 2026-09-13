@@ -9,7 +9,7 @@ using Threadsmith.Core;
 public sealed class CallHierarchyTool : AdvancedSemanticTool<CallHierarchyInput, CallHierarchyResult>
 {
     /// <summary>Initializes a new instance of the <see cref="CallHierarchyTool"/> class.</summary>
-    public CallHierarchyTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader)
+    public CallHierarchyTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader, SemanticResourceLimits? limits = null)
         : base(
             service,
             CreateDefinition<CallHierarchyInput, CallHierarchyResult>(
@@ -19,7 +19,8 @@ public sealed class CallHierarchyTool : AdvancedSemanticTool<CallHierarchyInput,
             {
                 PreferStrictArguments = true,
             },
-            promptLoader)
+            promptLoader,
+            limits)
     {
     }
 
@@ -29,9 +30,7 @@ public sealed class CallHierarchyTool : AdvancedSemanticTool<CallHierarchyInput,
         CallHierarchyInput input,
         CancellationToken cancellationToken)
     {
-        var limits = input.Depth is { } depth
-            ? new SemanticTraversalLimits { MaximumDepth = depth }
-            : new SemanticTraversalLimits();
+        var limits = CreateTraversalLimits(input.Depth);
         return Service.QueryCallHierarchyAsync(
             workspaceId,
             new CallHierarchyRequest
@@ -53,9 +52,9 @@ public sealed class CallHierarchyTool : AdvancedSemanticTool<CallHierarchyInput,
     protected override void ValidateInput(CallHierarchyInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.SymbolId);
-        if (input.Depth is < 0 or > 8)
+        if (input.Depth < 0 || input.Depth > Limits.MaximumTraversalDepth)
         {
-            throw new ToolArgumentValidationException("call_hierarchy depth must be between 0 and 8.");
+            throw new ToolArgumentValidationException($"call_hierarchy depth must be between 0 and {Limits.MaximumTraversalDepth}.");
         }
     }
 }
@@ -77,7 +76,7 @@ public sealed record CallHierarchyInput
 public sealed class SymbolImpactTool : AdvancedSemanticTool<SymbolImpactInput, SymbolImpactResult>
 {
     /// <summary>Initializes a new instance of the <see cref="SymbolImpactTool"/> class.</summary>
-    public SymbolImpactTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader)
+    public SymbolImpactTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader, SemanticResourceLimits? limits = null)
         : base(
             service,
             CreateDefinition<SymbolImpactInput, SymbolImpactResult>(
@@ -87,7 +86,8 @@ public sealed class SymbolImpactTool : AdvancedSemanticTool<SymbolImpactInput, S
             {
                 PreferStrictArguments = true,
             },
-            promptLoader)
+            promptLoader,
+            limits)
     {
     }
 
@@ -99,7 +99,7 @@ public sealed class SymbolImpactTool : AdvancedSemanticTool<SymbolImpactInput, S
     {
         return Service.QuerySymbolImpactAsync(
             workspaceId,
-            new SymbolImpactRequest { SymbolId = input.SymbolId },
+            new SymbolImpactRequest { SymbolId = input.SymbolId, Limits = CreateTraversalLimits() },
             cancellationToken);
     }
 
@@ -129,8 +129,8 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
     private readonly IPromptLoader _promptLoader;
 
     /// <summary>Initializes a new instance of the <see cref="CSharpPatternSearchTool"/> class.</summary>
-    public CSharpPatternSearchTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader)
-        : base(service, CreatePatternDefinition(promptLoader), promptLoader)
+    public CSharpPatternSearchTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader, SemanticResourceLimits? limits = null)
+        : base(service, CreatePatternDefinition(promptLoader), promptLoader, limits)
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
         _promptLoader = promptLoader;
@@ -170,8 +170,8 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
     /// <inheritdoc />
     protected override void ValidateInput(CSharpPatternSearchInput input)
     {
-        if (input.Modifiers is { Count: > CSharpPatternConstraints.MaximumPredicateValues }
-            || input.Attributes is { Count: > CSharpPatternConstraints.MaximumPredicateValues })
+        if (input.Modifiers?.Count > Limits.MaximumPatternPredicateValues
+            || input.Attributes?.Count > Limits.MaximumPatternPredicateValues)
         {
             throw new ToolArgumentValidationException("Pattern modifier or attribute counts exceed host limits.");
         }
@@ -186,7 +186,7 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
 
         foreach (var value in new[] { input.Name, input.ContainingType }.Concat(input.Attributes ?? []))
         {
-            if (value is { Length: > CSharpPatternConstraints.MaximumNameCharacters }
+            if (value?.Length > Limits.MaximumPatternNameCharacters
                 || (value is not null && !CSharpPatternConstraints.IsValidDottedIdentifierName(value)))
             {
                 throw new ToolArgumentValidationException("Pattern names must be bounded C# identifiers.");
@@ -271,14 +271,15 @@ public sealed record CSharpPatternSearchInput
 public sealed class GeneratedCodeTool : AdvancedSemanticTool<GeneratedCodeQuery, GeneratedCodeResult>
 {
     /// <summary>Initializes a new instance of the <see cref="GeneratedCodeTool"/> class.</summary>
-    public GeneratedCodeTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader)
+    public GeneratedCodeTool(IAdvancedSemanticQueryService service, IPromptLoader promptLoader, SemanticResourceLimits? limits = null)
         : base(
             service,
             CreateDefinition<GeneratedCodeQuery, GeneratedCodeResult>(
                 "generated_code_query",
                 promptLoader,
                 PromptFileNames.ToolGeneratedCodeQueryDescription),
-            promptLoader)
+            promptLoader,
+            limits)
     {
     }
 
@@ -317,6 +318,7 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
     where TInput : class
     where TOutput : class
 {
+    private readonly AdvancedSemanticMarkdownRenderer _renderer;
     private readonly ToolDefinition _definition;
     private readonly IPromptLoader _promptLoader;
 
@@ -324,11 +326,15 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
     protected AdvancedSemanticTool(
         IAdvancedSemanticQueryService service,
         ToolDefinition definition,
-        IPromptLoader promptLoader)
+        IPromptLoader promptLoader,
+        SemanticResourceLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(promptLoader);
+        Limits = limits ?? new();
+        Limits.Validate();
+        _renderer = new AdvancedSemanticMarkdownRenderer(Limits);
         Service = service;
         _definition = definition;
         _promptLoader = promptLoader;
@@ -339,6 +345,9 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
 
     /// <summary>Gets the compiler-aware query service.</summary>
     protected IAdvancedSemanticQueryService Service { get; }
+
+    /// <summary>Gets configured semantic query and projection limits.</summary>
+    protected SemanticResourceLimits Limits { get; }
 
     /// <inheritdoc />
     public override async Task<ToolExecution<TOutput>> ExecuteAsync(
@@ -388,12 +397,27 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
             1024 * 1024);
     }
 
+    /// <summary>Fits host-owned request defaults within the configured traversal ceilings.</summary>
+    protected SemanticTraversalLimits CreateTraversalLimits(int? depth = null)
+    {
+        var defaults = new SemanticTraversalLimits();
+        return defaults with
+        {
+            MaximumDepth = depth ?? Math.Min(defaults.MaximumDepth, Limits.MaximumTraversalDepth),
+            MaximumNodes = Math.Min(defaults.MaximumNodes, Limits.MaximumTraversalNodes),
+            MaximumEdges = Math.Min(defaults.MaximumEdges, Limits.MaximumTraversalEdges),
+            TimeoutMilliseconds = Math.Min(defaults.TimeoutMilliseconds, Limits.MaximumTraversalTimeoutMilliseconds),
+        };
+    }
+
     /// <summary>Validates common graph limits.</summary>
-    protected static void ValidateLimits(SemanticTraversalLimits limits)
+    protected void ValidateLimits(SemanticTraversalLimits limits)
     {
         ArgumentNullException.ThrowIfNull(limits);
-        if (limits.MaximumDepth is < 0 or > 8 || limits.MaximumNodes is < 1 or > 1000
-            || limits.MaximumEdges is < 1 or > 5000 || limits.TimeoutMilliseconds is < 1 or > 60_000)
+        if (limits.MaximumDepth < 0 || limits.MaximumDepth > Limits.MaximumTraversalDepth
+            || limits.MaximumNodes < 1 || limits.MaximumNodes > Limits.MaximumTraversalNodes
+            || limits.MaximumEdges < 1 || limits.MaximumEdges > Limits.MaximumTraversalEdges
+            || limits.TimeoutMilliseconds < 1 || limits.TimeoutMilliseconds > Limits.MaximumTraversalTimeoutMilliseconds)
         {
             throw new ToolArgumentValidationException("semantic traversal bounds are outside host limits.");
         }
@@ -530,7 +554,7 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
         }
     }
 
-    private static string? CreateModelResultContent(
+    private string? CreateModelResultContent(
         TInput input,
         TOutput result,
         IPromptLoader promptLoader)
@@ -538,13 +562,13 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
         return (input, result) switch
         {
             (CallHierarchyInput hierarchyInput, CallHierarchyResult hierarchyResult) =>
-                AdvancedSemanticMarkdownRenderer.Render(hierarchyInput, hierarchyResult, promptLoader),
+                _renderer.Render(hierarchyInput, hierarchyResult, promptLoader),
             (SymbolImpactInput impactInput, SymbolImpactResult impactResult) =>
-                AdvancedSemanticMarkdownRenderer.Render(impactInput, impactResult, promptLoader),
+                _renderer.Render(impactInput, impactResult, promptLoader),
             (CSharpPatternSearchInput patternInput, CSharpPatternSearchResult patternResult) =>
-                AdvancedSemanticMarkdownRenderer.Render(patternInput, patternResult, promptLoader),
+                _renderer.Render(patternInput, patternResult, promptLoader),
             (GeneratedCodeQuery generatedInput, GeneratedCodeResult generatedResult) =>
-                AdvancedSemanticMarkdownRenderer.Render(generatedInput, generatedResult, promptLoader),
+                _renderer.Render(generatedInput, generatedResult, promptLoader),
             _ => null,
         };
     }
@@ -568,18 +592,18 @@ public abstract class AdvancedSemanticTool<TInput, TOutput> : Tool<TInput, TOutp
 }
 
 /// <summary>Renders compact model-facing output for advanced semantic tools while preserving rich host DTOs.</summary>
-internal static class AdvancedSemanticMarkdownRenderer
+internal sealed class AdvancedSemanticMarkdownRenderer
 {
-    private const int MaximumCallEdges = 32;
-    private const int MaximumCallSymbols = 32;
-    private const int MaximumImpactItems = 32;
-    private const int MaximumPatternMatches = 40;
-    private const int MaximumGeneratedDocuments = 12;
-    private const int MaximumGeneratedContentCharacters = 4_096;
-    private const int MaximumOmissions = 8;
+    private readonly SemanticResourceLimits _limits;
+
+    /// <summary>Initializes a new instance of the <see cref="AdvancedSemanticMarkdownRenderer"/> class.</summary>
+    internal AdvancedSemanticMarkdownRenderer(SemanticResourceLimits limits)
+    {
+        _limits = limits;
+    }
 
     /// <summary>Renders one compact call-hierarchy result.</summary>
-    internal static string Render(
+    internal string Render(
         CallHierarchyInput input,
         CallHierarchyResult result,
         IPromptLoader promptLoader)
@@ -610,7 +634,7 @@ internal static class AdvancedSemanticMarkdownRenderer
         {
             builder.AppendLine();
             var items = result.Edges
-                .Take(MaximumCallEdges)
+                .Take(_limits.ModelMaximumCallEdges)
                 .Select(edge => FormatCallEdge(edge, nodes, promptLoader));
             AppendPromptBlock(
                 builder,
@@ -624,14 +648,14 @@ internal static class AdvancedSemanticMarkdownRenderer
                 builder,
                 promptLoader,
                 result.Edges.Count,
-                MaximumCallEdges,
+                _limits.ModelMaximumCallEdges,
                 PromptFileNames.ToolCallHierarchyHiddenCallRelationships);
         }
         else if (result.Nodes.Count > 0)
         {
             builder.AppendLine();
             var items = result.Nodes
-                .Take(MaximumCallSymbols)
+                .Take(_limits.ModelMaximumCallSymbols)
                 .Select(node =>
                 {
                     var location = node.Locations.Count == 0 ? null : node.Locations[0];
@@ -657,7 +681,7 @@ internal static class AdvancedSemanticMarkdownRenderer
                 builder,
                 promptLoader,
                 result.Nodes.Count,
-                MaximumCallSymbols,
+                _limits.ModelMaximumCallSymbols,
                 PromptFileNames.ToolCallHierarchyHiddenSymbols);
         }
 
@@ -666,7 +690,7 @@ internal static class AdvancedSemanticMarkdownRenderer
     }
 
     /// <summary>Renders one compact symbol-impact result.</summary>
-    internal static string Render(
+    internal string Render(
         SymbolImpactInput input,
         SymbolImpactResult result,
         IPromptLoader promptLoader)
@@ -693,7 +717,7 @@ internal static class AdvancedSemanticMarkdownRenderer
             builder.AppendLine();
             var rank = 1;
             var rows = new List<string>();
-            foreach (var item in items.Take(MaximumImpactItems))
+            foreach (var item in items.Take(_limits.ModelMaximumImpactItems))
             {
                 rows.Add(
                     $"{rank.ToString(System.Globalization.CultureInfo.InvariantCulture)}. **{item.Node.Kind}:** {FormatCodeSpan(item.Node.DisplayName)}{FormatImpactLocation(item.Node)}{FormatReason(item.Reason)}");
@@ -712,7 +736,7 @@ internal static class AdvancedSemanticMarkdownRenderer
                 builder,
                 promptLoader,
                 items.Length,
-                MaximumImpactItems,
+                _limits.ModelMaximumImpactItems,
                 PromptFileNames.ToolSymbolImpactHiddenItems);
         }
 
@@ -721,7 +745,7 @@ internal static class AdvancedSemanticMarkdownRenderer
     }
 
     /// <summary>Renders one compact C# pattern-search result.</summary>
-    internal static string Render(
+    internal string Render(
         CSharpPatternSearchInput input,
         CSharpPatternSearchResult result,
         IPromptLoader promptLoader)
@@ -745,7 +769,7 @@ internal static class AdvancedSemanticMarkdownRenderer
                     ["MatchPlural"] = Pluralize(result.Matches.Count),
                 }));
         builder.AppendLine();
-        foreach (var match in result.Matches.Take(MaximumPatternMatches))
+        foreach (var match in result.Matches.Take(_limits.ModelMaximumPatternMatches))
         {
             builder.Append("- ");
             builder.Append(FormatLocation(match.Location));
@@ -758,14 +782,14 @@ internal static class AdvancedSemanticMarkdownRenderer
             builder,
             promptLoader,
             result.Matches.Count,
-            MaximumPatternMatches,
+            _limits.ModelMaximumPatternMatches,
             PromptFileNames.ToolCsharpPatternSearchHiddenMatches);
         AppendOmissions(builder, result.Omissions, promptLoader);
         return builder.ToString().TrimEnd();
     }
 
     /// <summary>Renders one compact generated-code result.</summary>
-    internal static string Render(
+    internal string Render(
         GeneratedCodeQuery input,
         GeneratedCodeResult result,
         IPromptLoader promptLoader)
@@ -788,7 +812,7 @@ internal static class AdvancedSemanticMarkdownRenderer
         if (result.Documents.Count > 0)
         {
             builder.AppendLine();
-            foreach (var document in result.Documents.Take(MaximumGeneratedDocuments))
+            foreach (var document in result.Documents.Take(_limits.ModelMaximumGeneratedDocuments))
             {
                 builder.Append($"- {FormatCodeSpan(document.FilePath)} ({document.Origin}, {FormatCodeSpan(document.ProjectName)})");
                 if (!string.IsNullOrWhiteSpace(document.OriginName))
@@ -799,9 +823,9 @@ internal static class AdvancedSemanticMarkdownRenderer
                 builder.AppendLine();
                 if (input.IncludeContent && document.Content is not null)
                 {
-                    var projectedContent = document.Content.Length <= MaximumGeneratedContentCharacters
+                    var projectedContent = document.Content.Length <= _limits.ModelMaximumGeneratedContentCharacters
                         ? document.Content
-                        : document.Content[..MaximumGeneratedContentCharacters];
+                        : document.Content[.._limits.ModelMaximumGeneratedContentCharacters];
                     AppendCodeBlock(builder, projectedContent);
                     if (document.ContentTruncated)
                     {
@@ -823,7 +847,7 @@ internal static class AdvancedSemanticMarkdownRenderer
                 builder,
                 promptLoader,
                 result.Documents.Count,
-                MaximumGeneratedDocuments,
+                _limits.ModelMaximumGeneratedDocuments,
                 PromptFileNames.ToolGeneratedCodeQueryHiddenDocuments);
         }
 
@@ -956,7 +980,7 @@ internal static class AdvancedSemanticMarkdownRenderer
             : $" — {BoundInline(reason, 240)}";
     }
 
-    private static void AppendOmissions(
+    private void AppendOmissions(
         StringBuilder builder,
         IReadOnlyList<string> omissions,
         IPromptLoader promptLoader)
@@ -968,7 +992,7 @@ internal static class AdvancedSemanticMarkdownRenderer
 
         builder.AppendLine();
         var items = omissions
-            .Take(MaximumOmissions)
+            .Take(_limits.ModelMaximumOmissions)
             .Select(omission => $"- {BoundInline(omission, 240)}");
         AppendPromptBlock(
             builder,
@@ -982,7 +1006,7 @@ internal static class AdvancedSemanticMarkdownRenderer
             builder,
             promptLoader,
             omissions.Count,
-            MaximumOmissions,
+            _limits.ModelMaximumOmissions,
             PromptFileNames.ToolAdvancedSemanticHiddenOmissions);
     }
 

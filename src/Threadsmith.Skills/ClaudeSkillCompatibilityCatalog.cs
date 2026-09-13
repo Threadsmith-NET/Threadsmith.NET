@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Threadsmith.Core;
+using Threadsmith.Tools;
 
 /// <summary>One explicitly configured Claude-style skill root.</summary>
 public sealed record ClaudeSkillRoot(
@@ -81,6 +82,12 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         ArgumentNullException.ThrowIfNull(roots);
         _roots = roots.ToArray();
         _options = options ?? new ClaudeSkillCompatibilityOptions();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumRoots);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumCandidates);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumFrontmatterBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumInstructionBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumFiles);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_options.MaximumAggregateBytes);
         if (_roots.Count == 0 || _roots.Count > _options.MaximumRoots)
         {
             throw new ArgumentException("Claude skill root count is outside configured bounds.", nameof(roots));
@@ -495,6 +502,11 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
             openedPath = finalPath.ToString().StartsWith("\\\\?\\", StringComparison.Ordinal)
                 ? finalPath.ToString()[4..]
                 : finalPath.ToString();
+        }
+        else if (OperatingSystem.IsMacOS())
+        {
+            openedPath = MacFileHandlePath.GetPath(stream.SafeFileHandle)
+                ?? throw new InvalidDataException("The opened Claude skill resource could not be validated.");
         }
         else
         {

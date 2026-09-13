@@ -93,7 +93,8 @@ internal static partial class SkillManifestValidator
             || budget.ParallelChildren > budget.DelegatedChildren
             || budget.Worktrees < 0
             || budget.ReviewerFindings < 0
-            || budget.WallTime <= TimeSpan.Zero)
+            || budget.WallTime <= TimeSpan.Zero
+            || budget.WallTime.TotalMilliseconds > uint.MaxValue - 1d)
         {
             throw new InvalidDataException("Skill budget values or relationships are invalid.");
         }

@@ -1707,7 +1707,7 @@ public sealed partial class SessionApplication
             {
                 Name = ProposePlanToolName,
                 Description = RequirePrompts().Get(PromptFileNames.ToolProposePlanDescription),
-                ArgumentsJsonSchema = ProposePlanArgumentsSchema,
+                ArgumentsJsonSchema = _proposePlanArgumentsSchema,
                 PreferStrictArguments = true,
             });
         }

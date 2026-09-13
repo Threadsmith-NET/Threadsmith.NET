@@ -195,6 +195,11 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
         _limits = limits ?? ToolLimits.Default;
+
+        // Keep the historical envelope and add worst-case JSON escaping and line-array overhead.
+        var outputBytes = (384L * 1024)
+            + (6L * Math.Max(0, (long)_limits.ReadFileMaximumContentBytes - ToolLimits.DefaultReadFileContentByteLimit))
+            + (3L * Math.Max(0, (long)_limits.ReadFileMaxLines - ToolLimits.DefaultReadFileLineLimit));
         _definition = ToolDefinitionFactory.Create<ReadFileInput, ReadFileOutput>(
             "read_file",
             promptLoader.Render(PromptFileNames.ToolReadFileDescription, new Dictionary<string, string>
@@ -209,7 +214,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(10),
-            384 * 1024);
+            (int)Math.Min(int.MaxValue, outputBytes));
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaxLines, 1);
@@ -252,7 +257,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             cancellationToken.ThrowIfCancellationRequested();
             var lineBytes = Encoding.UTF8.GetByteCount(lines[index]);
             var separatorBytes = selected.Count == 0 ? 0 : 1;
-            if (selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
+            if ((long)selectedContentBytes + separatorBytes + lineBytes > _limits.ReadFileMaximumContentBytes)
             {
                 if (selected.Count == 0)
                 {

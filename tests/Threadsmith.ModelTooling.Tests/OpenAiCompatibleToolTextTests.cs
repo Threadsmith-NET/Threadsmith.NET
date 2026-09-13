@@ -13,6 +13,24 @@ public static class OpenAiCompatibleToolTextTests
 {
     private const string Orphan = "<parameter name=\"path\">src/Threadsmith.sln\n</parameter>\n</function>\n</tool_call>";
 
+    /// <summary>Deferred whitespace consumes linear storage and preserves the exact stream.</summary>
+    [Fact]
+    public static void LeadingWhitespace_DoesNotRepeatedlyCopyAccumulatedContent()
+    {
+        var guard = new NativeToolTextGuard();
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 100000; index++)
+        {
+            Assert.Empty(guard.Append(" "));
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Assert.InRange(allocated, 0, 4_000_000);
+        Assert.Equal(new string(' ', 100000) + "hello", guard.Append("hello"));
+        Assert.False(guard.Complete(true, out var remainder));
+        Assert.Empty(remainder);
+    }
+
     /// <summary>The captured chunk boundaries cannot leak text or release a valid sibling, and usage remains reported.</summary>
     [Theory]
     [InlineData(false)]

@@ -20,7 +20,13 @@ Shipped defaults preserve the previous fixed values. Lowering semantic traversal
 
 Web-search and web-fetch request timeouts must fit the .NET timer range: at most 4,294,967,294 milliseconds (4,294,967 whole seconds). Values above that range are rejected during configuration/provider construction, before a request starts. Their defaults remain 15 seconds.
 
+Skill workflow wall times must also fit the .NET timer range (at most 4,294,967,294 milliseconds). Unsupported durations are rejected before an invocation checkpoint is created.
+
+Model/reasoning preference saves check the final serialized UTF-8 size against `repository.configurationBytes`; an oversized update leaves the previous file intact and reports that the session selection was not persisted.
+
 ## Tool runtime overrides
+
+The `read_file` declared result-byte limit grows with `tools.readFile.maxContentBytes` and `maxLines`, reserving JSON-escaping overhead; default settings retain the original 384 KiB envelope. An explicit runtime override can still impose a smaller independent ceiling.
 
 Every registered tool has a deadline, serialized result-byte limit, and source concurrency declaration. `tools.runtime.defaults` overrides those declarations; `tools.runtime.byTool` overrides matching fields for an exact registered tool ID (case-insensitive). Omitted fields retain the declaration or global override. Dynamic MCP/extension registrations use the same policy and preserve replacement identity. IDs for unloaded dynamic tools can be configured before they register. Entries form an array with a `toolId` field so colon-qualified MCP IDs survive configuration binding; duplicate IDs are rejected.
 
@@ -174,7 +180,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 
 ### `limits:policyStores`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Trusted configuration only (user, environment, or CLI); repository values do not control these user-wide approval and skill-policy stores. Lowering a repository setting must not invalidate or replace approvals belonging to other repositories. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|

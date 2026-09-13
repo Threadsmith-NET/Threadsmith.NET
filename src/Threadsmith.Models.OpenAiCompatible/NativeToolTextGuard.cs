@@ -11,6 +11,7 @@ internal sealed class NativeToolTextGuard
     private readonly StringBuilder _pending = new();
     private bool _passThrough;
     private bool _parameterCandidate;
+    private int _matchedPrefixCharacters;
 
     /// <summary>Streams ordinary content immediately; only a leading parameter fragment is deferred.</summary>
     internal string Append(string content)
@@ -27,20 +28,35 @@ internal sealed class NativeToolTextGuard
             return string.Empty;
         }
 
-        var pending = _pending.ToString();
-        var trimmed = pending.AsSpan().TrimStart();
-        if (ParameterStart.AsSpan().StartsWith(trimmed, StringComparison.Ordinal)
-            || (trimmed.StartsWith(ParameterStart, StringComparison.Ordinal)
-                && trimmed.Length > ParameterStart.Length
-                && char.IsWhiteSpace(trimmed[ParameterStart.Length])))
+        // Examine only the new delta. Re-scanning the accumulated leading whitespace
+        // on every chunk makes an otherwise linear stream quadratic.
+        foreach (var character in content)
         {
-            _parameterCandidate = trimmed.Length > ParameterStart.Length;
-            return string.Empty;
+            if (_matchedPrefixCharacters == 0 && char.IsWhiteSpace(character))
+            {
+                continue;
+            }
+
+            if (_matchedPrefixCharacters < ParameterStart.Length
+                && character == ParameterStart[_matchedPrefixCharacters])
+            {
+                _matchedPrefixCharacters++;
+                continue;
+            }
+
+            if (_matchedPrefixCharacters == ParameterStart.Length && char.IsWhiteSpace(character))
+            {
+                _parameterCandidate = true;
+                return string.Empty;
+            }
+
+            var pending = _pending.ToString();
+            _pending.Clear();
+            _passThrough = true;
+            return pending;
         }
 
-        _pending.Clear();
-        _passThrough = true;
-        return pending;
+        return string.Empty;
     }
 
     /// <summary>Returns deferred content unchanged unless native calls accompany a confirmed orphaned tail.</summary>

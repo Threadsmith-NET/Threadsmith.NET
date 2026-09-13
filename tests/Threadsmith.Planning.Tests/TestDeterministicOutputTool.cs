@@ -6,7 +6,7 @@ using Threadsmith.Tools;
 /// <summary>Returns caller-configured structured output through the production tool pipeline.</summary>
 internal sealed class TestDeterministicOutputTool : Tool<TestDeterministicOutputInput, TestDeterministicOutput>
 {
-    private static readonly ToolDefinition _definition = new()
+    private readonly ToolDefinition _definition = new()
     {
         Id = "deterministic_output",
         Version = "1.0",
@@ -28,10 +28,12 @@ internal sealed class TestDeterministicOutputTool : Tool<TestDeterministicOutput
     private readonly string _content;
 
     /// <summary>Initializes a new instance of the <see cref="TestDeterministicOutputTool"/> class.</summary>
-    internal TestDeterministicOutputTool(string content)
+    internal TestDeterministicOutputTool(string content, int maximumOutputBytes = 8192)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputBytes);
         _content = content;
+        _definition = _definition with { MaximumOutputBytes = maximumOutputBytes };
     }
 
     /// <inheritdoc />

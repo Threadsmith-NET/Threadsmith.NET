@@ -256,6 +256,11 @@ internal sealed class HostFoundation : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(configuration);
         var limits = configuration.GetSection("limits").Get<OperationalLimits>(options => options.ErrorOnUnknownConfiguration = true)
             ?? new OperationalLimits();
+        limits = limits with
+        {
+            PolicyStores = (trustedConfiguration ?? configuration).GetSection("limits:policyStores")
+                .Get<PolicyStoreResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
+        };
         limits.Validate();
         var trustedDiffLines = (trustedConfiguration ?? configuration).GetValue(
             "limits:workspace:maximumDiffLinesForLcs", new WorkspaceResourceLimits().MaximumDiffLinesForLcs);

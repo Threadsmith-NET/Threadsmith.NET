@@ -16,6 +16,15 @@ using Xunit;
 /// <summary>Verifies governed skill discovery, trust, schemas, loading, workflow, restoration, and persistence.</summary>
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>Skill deadlines must fit the timer before a workflow can save its checkpoint.</summary>
+    [Fact]
+    public static void SkillBudget_RejectsUnrepresentableTimerDuration()
+    {
+        SkillManifestValidator.ValidateBudget(new SkillBudget { WallTime = TimeSpan.FromMilliseconds(uint.MaxValue - 1d) });
+        Assert.Throws<InvalidDataException>(() => SkillManifestValidator.ValidateBudget(
+            new SkillBudget { WallTime = TimeSpan.FromMilliseconds(uint.MaxValue) }));
+    }
+
     /// <summary>Long acyclic and cyclic dependency chains are validated without consuming recursive stack frames.</summary>
     [Theory]
     [InlineData(false)]

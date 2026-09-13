@@ -14,6 +14,30 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static class AppBootstrapTests
 {
+    /// <summary>Repository settings cannot change limits governing user-wide approval and skill stores.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(int.MaxValue)]
+    public static void PolicyStoreLimits_UseOnlyTrustedConfiguration(int requested)
+    {
+        var defaults = new PolicyStoreResourceLimits();
+        var empty = new ConfigurationBuilder().Build();
+        foreach (var property in typeof(PolicyStoreResourceLimits).GetProperties())
+        {
+            var key = $"limits:policyStores:{property.Name}";
+            var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [key] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }).Build();
+            var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [key] = "123",
+            }).Build();
+            Assert.Equal(defaults, HostFoundation.LoadOperationalLimits(effective, empty).PolicyStores);
+            Assert.Equal(123, property.GetValue(HostFoundation.LoadOperationalLimits(effective, host).PolicyStores));
+        }
+    }
+
     /// <summary>Repository options can narrow but cannot enlarge the trusted quadratic diff budget.</summary>
     [Theory]
     [InlineData(20000, null, 512)]

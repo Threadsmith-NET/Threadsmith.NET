@@ -23,6 +23,41 @@ public static class ToolRuntimeTests
 {
     private const string SanitizerExpansionMarker = "token=x";
 
+    /// <summary>Increasing read content admits the serialized result through the actual tool pipeline.</summary>
+    [Theory]
+    [InlineData('x')]
+    [InlineData('"')]
+    public static async Task ReadFile_LargerConfiguredContent_PassesRuntimeOutputBound(char character)
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var content = new string(character, 400 * 1024);
+            await File.WriteAllTextAsync(Path.Combine(repository, "large.txt"), content);
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new ToolLimits { ReadFileMaximumContentBytes = 512 * 1024 });
+            await using var events = new DomainEventStream();
+            var pipeline = CreatePipeline(events, [tool]);
+            var result = await pipeline.InvokeAsync(CreateBatchRequest(
+                0,
+                "large-read",
+                "read_file",
+                CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.TrustedRead },
+                "{\"path\":\"large.txt\"}").Invocation);
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.NotNull(result.ResultJson);
+            var output = JsonSerializer.Deserialize<ReadFileOutput>(result.ResultJson);
+            Assert.NotNull(output);
+            Assert.Equal(content, Assert.Single(output.Lines));
+            Assert.False(output.IsTruncated);
+            Assert.Equal(384 * 1024, new ReadFileTool(TestPromptLoader.Instance).Definition.MaximumOutputBytes);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>A model-requested tool produces attributable durable output and visible activity.</summary>
     [Fact]
     public static async Task ModelToolRequest_IsTypedPersistedAndVisible()

@@ -504,6 +504,12 @@ public sealed class ActiveModelSelectionService :
                     SetScalar(model, "reasoningLevel", reasoning.Value);
                     root[modelName] = model;
 
+                    var json = root.ToJsonString(JsonOptions) + Environment.NewLine;
+                    if (Encoding.UTF8.GetByteCount(json) > _maximumConfigurationBytes)
+                    {
+                        throw new InvalidOperationException("Repository model preferences exceed the configured file size limit.");
+                    }
+
                     var temporaryPath = Path.Combine(
                         directory,
                         $".{Path.GetFileName(configurationPath)}.{Guid.NewGuid():N}.tmp");
@@ -512,7 +518,7 @@ public sealed class ActiveModelSelectionService :
                         RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(configurationPath);
                         await File.WriteAllTextAsync(
                             temporaryPath,
-                            root.ToJsonString(JsonOptions) + Environment.NewLine,
+                            json,
                             new UTF8Encoding(false, true),
                             token);
                         token.ThrowIfCancellationRequested();

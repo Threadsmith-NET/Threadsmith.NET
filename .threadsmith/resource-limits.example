@@ -99,6 +99,7 @@
       "maximumEnvironmentValueCharacters": 16384,
       "drainTimeoutMilliseconds": 5000
     },
+    // User/environment/CLI only: these stores are user-wide; repository overrides do not apply.
     "policyStores": {
       "maximumApprovalEntries": 4096,
       // Validated on load and before persisting updates.

@@ -557,25 +557,26 @@ internal sealed class NativeValidationModelProjection
     /// <summary>Projects package health for model consumption.</summary>
     internal string Create(NuGetDependencyHealthResult result)
     {
+        var bounds = new TextBounds();
         var dependencies = result.Dependencies
             .Take(_limits.MaximumModelDependencies)
             .Select(dependency => new
             {
-                id = Bound(dependency.Id, _limits.MaximumModelNameCharacters),
-                version = Bound(dependency.ResolvedVersion, _limits.MaximumModelIdentifierCharacters),
+                id = bounds.Bound(dependency.Id, _limits.MaximumModelNameCharacters),
+                version = bounds.Bound(dependency.ResolvedVersion, _limits.MaximumModelIdentifierCharacters),
                 direct = dependency.IsDirect,
-                framework = Bound(dependency.TargetFramework, _limits.MaximumModelIdentifierCharacters),
+                framework = bounds.Bound(dependency.TargetFramework, _limits.MaximumModelIdentifierCharacters),
             })
             .ToArray();
         var advisories = result.Advisories
             .Take(_limits.MaximumModelAdvisories)
             .Select(advisory => new
             {
-                package = Bound(advisory.PackageId, _limits.MaximumModelNameCharacters),
-                version = Bound(advisory.ResolvedVersion, _limits.MaximumModelIdentifierCharacters),
+                package = bounds.Bound(advisory.PackageId, _limits.MaximumModelNameCharacters),
+                version = bounds.Bound(advisory.ResolvedVersion, _limits.MaximumModelIdentifierCharacters),
                 kind = advisory.Kind.ToString(),
-                severity = Bound(advisory.Severity, _limits.MaximumModelLabelCharacters),
-                url = BoundNullable(advisory.AdvisoryUrl, _limits.MaximumModelMessageCharacters),
+                severity = bounds.Bound(advisory.Severity, _limits.MaximumModelLabelCharacters),
+                url = bounds.BoundNullable(advisory.AdvisoryUrl, _limits.MaximumModelMessageCharacters),
             })
             .ToArray();
         return JsonSerializer.Serialize(
@@ -585,14 +586,14 @@ internal sealed class NativeValidationModelProjection
                 complete = result.IsComplete,
                 offline = result.IsOffline,
                 stale = result.IsStale,
-                truncated = result.IsTruncated || dependencies.Length != result.Dependencies.Count || advisories.Length != result.Advisories.Count
-                    || result.Omissions.Count > _limits.MaximumModelOmissions,
                 dependencies,
                 omittedDependencies = result.Dependencies.Count - dependencies.Length,
                 advisories,
                 omittedAdvisories = result.Advisories.Count - advisories.Length,
-                omissions = result.Omissions.Take(_limits.MaximumModelOmissions).Select(omission => Bound(omission, _limits.MaximumModelSummaryCharacters)).ToArray(),
+                omissions = result.Omissions.Take(_limits.MaximumModelOmissions).Select(omission => bounds.Bound(omission, _limits.MaximumModelSummaryCharacters)).ToArray(),
                 omittedOmissions = Math.Max(0, result.Omissions.Count - _limits.MaximumModelOmissions),
+                truncated = bounds.IsTruncated || result.IsTruncated || dependencies.Length != result.Dependencies.Count
+                    || advisories.Length != result.Advisories.Count || result.Omissions.Count > _limits.MaximumModelOmissions,
             },
             ModelJsonOptions);
     }
@@ -600,20 +601,20 @@ internal sealed class NativeValidationModelProjection
     /// <summary>Projects build, analyzer, or formatting evidence for model consumption.</summary>
     internal string Create(ValidationToolResult result)
     {
+        var bounds = new TextBounds();
         var diagnostics = result.Diagnostics
             .Take(_limits.MaximumModelDiagnostics)
-            .Select(CreateDiagnostic)
+            .Select(diagnostic => CreateDiagnostic(diagnostic, bounds))
             .ToArray();
         return JsonSerializer.Serialize(
             new
             {
                 success = result.Succeeded,
                 timedOut = result.TimedOut,
-                truncated = result.IsTruncated || diagnostics.Length != result.Diagnostics.Count
-                    || (!result.Succeeded && result.Output.Length > _limits.MaximumModelOutputCharacters),
                 diagnostics,
                 omittedDiagnostics = result.Diagnostics.Count - diagnostics.Length,
-                output = result.Succeeded ? null : Bound(result.Output, _limits.MaximumModelOutputCharacters),
+                output = result.Succeeded ? null : bounds.Bound(result.Output, _limits.MaximumModelOutputCharacters),
+                truncated = bounds.IsTruncated || result.IsTruncated || diagnostics.Length != result.Diagnostics.Count,
             },
             ModelJsonOptions);
     }
@@ -621,13 +622,14 @@ internal sealed class NativeValidationModelProjection
     /// <summary>Projects one diagnostic page without repeated run provenance.</summary>
     internal string Create(DiagnosticQueryResult result, bool isTruncated)
     {
+        var bounds = new TextBounds();
         return JsonSerializer.Serialize(
             new
             {
                 total = result.Total,
-                diagnostics = result.Items.Select(item => CreateDiagnostic(item.Diagnostic)).ToArray(),
+                diagnostics = result.Items.Select(item => CreateDiagnostic(item.Diagnostic, bounds)).ToArray(),
                 continuationToken = result.ContinuationToken,
-                truncated = isTruncated,
+                truncated = bounds.IsTruncated || isTruncated,
             },
             ModelJsonOptions);
     }
@@ -635,20 +637,21 @@ internal sealed class NativeValidationModelProjection
     /// <summary>Projects stable discovered test identities for model consumption.</summary>
     internal string Create(TestDiscoveryResult result)
     {
+        var bounds = new TextBounds();
         var tests = result.Tests
             .Take(_limits.MaximumModelTests)
             .Select(test => new
             {
-                id = Bound(test.Id.Value, _limits.MaximumModelIdentifierCharacters),
-                name = Bound(test.FullyQualifiedName, _limits.MaximumModelPathCharacters),
-                project = Bound(test.ProjectPath, _limits.MaximumModelPathCharacters),
+                id = bounds.Bound(test.Id.Value, _limits.MaximumModelIdentifierCharacters),
+                name = bounds.Bound(test.FullyQualifiedName, _limits.MaximumModelPathCharacters),
+                project = bounds.Bound(test.ProjectPath, _limits.MaximumModelPathCharacters),
             })
             .ToArray();
         return JsonSerializer.Serialize(
             new
             {
                 tests,
-                truncated = result.IsTruncated || tests.Length != result.Tests.Count,
+                truncated = bounds.IsTruncated || result.IsTruncated || tests.Length != result.Tests.Count,
                 omittedTests = result.Tests.Count - tests.Length,
             },
             ModelJsonOptions);
@@ -657,63 +660,69 @@ internal sealed class NativeValidationModelProjection
     /// <summary>Projects targeted test outcome while omitting successful raw output.</summary>
     internal string Create(TargetedTestResult result)
     {
+        var bounds = new TextBounds();
         return JsonSerializer.Serialize(
             new
             {
                 test = new
                 {
-                    id = Bound(result.Test.Id.Value, _limits.MaximumModelIdentifierCharacters),
-                    name = Bound(result.Test.FullyQualifiedName, _limits.MaximumModelPathCharacters),
-                    project = Bound(result.Test.ProjectPath, _limits.MaximumModelPathCharacters),
+                    id = bounds.Bound(result.Test.Id.Value, _limits.MaximumModelIdentifierCharacters),
+                    name = bounds.Bound(result.Test.FullyQualifiedName, _limits.MaximumModelPathCharacters),
+                    project = bounds.Bound(result.Test.ProjectPath, _limits.MaximumModelPathCharacters),
                 },
                 outcome = result.Outcome.ToString(),
                 passed = result.Passed,
                 failed = result.Failed,
                 skipped = result.Skipped,
                 timedOut = result.TimedOut,
-                truncated = result.IsTruncated
-                    || (result.Outcome != TestOutcome.Passed && result.Output.Length > _limits.MaximumModelOutputCharacters)
-                    || result.Attachments.Count > _limits.MaximumModelAttachments,
-                output = result.Outcome == TestOutcome.Passed ? null : Bound(result.Output, _limits.MaximumModelOutputCharacters),
-                attachments = result.Attachments.Take(_limits.MaximumModelAttachments).Select(attachment => Bound(attachment, _limits.MaximumModelPathCharacters)).ToArray(),
+                output = result.Outcome == TestOutcome.Passed ? null : bounds.Bound(result.Output, _limits.MaximumModelOutputCharacters),
+                attachments = result.Attachments.Take(_limits.MaximumModelAttachments).Select(attachment => bounds.Bound(attachment, _limits.MaximumModelPathCharacters)).ToArray(),
+                truncated = bounds.IsTruncated || result.IsTruncated || result.Attachments.Count > _limits.MaximumModelAttachments,
             },
             ModelJsonOptions);
     }
 
-    private object CreateDiagnostic(Diagnostic diagnostic)
+    private object CreateDiagnostic(Diagnostic diagnostic, TextBounds bounds)
     {
         return new
         {
-            code = Bound(diagnostic.Code, _limits.MaximumModelIdentifierCharacters),
+            code = bounds.Bound(diagnostic.Code, _limits.MaximumModelIdentifierCharacters),
             severity = diagnostic.Severity.ToString(),
-            project = Bound(diagnostic.Project, _limits.MaximumModelSummaryCharacters),
-            framework = Bound(diagnostic.TargetFramework, _limits.MaximumModelIdentifierCharacters),
-            file = BoundNullable(diagnostic.File, _limits.MaximumModelPathCharacters),
+            project = bounds.Bound(diagnostic.Project, _limits.MaximumModelSummaryCharacters),
+            framework = bounds.Bound(diagnostic.TargetFramework, _limits.MaximumModelIdentifierCharacters),
+            file = bounds.BoundNullable(diagnostic.File, _limits.MaximumModelPathCharacters),
             range = diagnostic.Range,
-            message = Bound(diagnostic.Message, _limits.MaximumModelMessageCharacters),
+            message = bounds.Bound(diagnostic.Message, _limits.MaximumModelMessageCharacters),
             classification = diagnostic.Classification.ToString(),
         };
     }
 
-    private static string Bound(string value, int maximumCharacters)
+    /// <summary>Tracks text clipping for one projection without sharing mutable state across calls.</summary>
+    private sealed class TextBounds
     {
-        ArgumentNullException.ThrowIfNull(value);
-        var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
-        foreach (var rune in value.EnumerateRunes())
+        internal bool IsTruncated { get; private set; }
+
+        internal string Bound(string value, int maximumCharacters)
         {
-            if (builder.Length + rune.Utf16SequenceLength > maximumCharacters)
+            ArgumentNullException.ThrowIfNull(value);
+            var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
+            foreach (var rune in value.EnumerateRunes())
             {
-                break;
+                if (rune.Utf16SequenceLength > maximumCharacters - builder.Length)
+                {
+                    IsTruncated = true;
+                    break;
+                }
+
+                builder.Append(rune.ToString());
             }
 
-            builder.Append(rune.ToString());
+            return builder.ToString();
         }
 
-        return builder.ToString();
-    }
-
-    private static string? BoundNullable(string? value, int maximumCharacters)
-    {
-        return value is null ? null : Bound(value, maximumCharacters);
+        internal string? BoundNullable(string? value, int maximumCharacters)
+        {
+            return value is null ? null : Bound(value, maximumCharacters);
+        }
     }
 }

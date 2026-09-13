@@ -441,6 +441,34 @@ public sealed class Milestone17CompatibilityTests
         Assert.Null(projection.ContextInspection);
     }
 
+    /// <summary>A preference update cannot replace readable settings with a file that startup rejects.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ActiveModels_OversizedSave_PreservesFileAndUpdatesSession(bool changeReasoning)
+    {
+        using var directory = new TemporaryDirectory();
+        var firstId = ModelProfileId.New();
+        var secondId = ModelProfileId.New();
+        var path = Path.Combine(directory.Path, "config.json");
+        const string original = "{\"keep\":\"é\"}";
+        await File.WriteAllTextAsync(path, original);
+        var service = new ActiveModelSelectionService(
+            CreateModelCatalog(firstId, secondId),
+            new SessionModelPreferences(firstId, ReasoningLevel.Low),
+            path,
+            maximumConfigurationBytes: 32);
+
+        var result = changeReasoning
+            ? await service.SetReasoningAsync(ReasoningLevel.Low)
+            : await service.SelectAsync(secondId);
+
+        Assert.False(result.Persisted);
+        Assert.Equal(changeReasoning ? firstId : secondId, result.Selection.Profile.Id);
+        Assert.Equal(original, await File.ReadAllTextAsync(path));
+        Assert.Empty(Directory.GetFiles(directory.Path, "*.tmp"));
+    }
+
     /// <summary>Repository model selection accepts the same trailing-comma syntax as normal configuration.</summary>
     [Fact]
     public async Task ActiveModels_RepositorySelection_AcceptsTrailingCommas()

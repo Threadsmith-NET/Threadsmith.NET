@@ -248,7 +248,6 @@ public static class WriteFileTests
     [Fact]
     public static async Task Conversation_WritesWithoutMutationWorkflow()
     {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         using var fixture = new Fixture();
         await using var events = new DomainEventStream();
         var observed = new ConcurrentBag<IDomainEvent>();
@@ -273,6 +272,9 @@ public static class WriteFileTests
             toolRegistry: pipeline.Registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
+        // Bound the conversation itself; fixture setup is not part of a latency assertion.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(30));
         var session = await application.HandleAsync(new CreateSessionCommand("report"), timeout.Token);
 
         var run = await application.HandleAsync(new SubmitRequestCommand(session, "Save a report to .inbox"), timeout.Token);

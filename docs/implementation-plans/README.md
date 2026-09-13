@@ -142,6 +142,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 103 | `plan-103-model-managed-repository-memories.md` | Model-managed repository memories with injectable local embeddings and hybrid retrieval |
 | 104 | `plan-104-anthropic-sdk-provider.md` | Native Anthropic SDK provider, API-key model discovery, thinking continuity and prompt caching |
 | 106 | `plan-106-shell-command-policy.md` | Configurable shell command allow/deny policy and governed web routing |
+| 107 | `plan-107-tui-mermaid-text-rendering.md` | Configurable Mermaid text diagrams in streaming TUIKit output |
+| 108 | `plan-108-focused-review-skills.md` | Public review workflow with private skill-bound specialist reviewers |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 | Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
 | Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |

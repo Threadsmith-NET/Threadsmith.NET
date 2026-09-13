@@ -3497,25 +3497,30 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_AnswerOnlyTurn_ShowsThinkingStatus()
     {
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
-        {
-            Turns =
-            [
-                new ScriptedTurn
-                {
-                    Text = "Hello!",
-                },
-            ],
-        });
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var provider = new GatedAnswerModelProvider(leadingWhitespace: false);
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"]);
         var shell = new ConversationalShell(
             new TuiPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
+        var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
+        try
+        {
+            await surface.StatusStarted.WaitAsync(timeout.Token);
+            Assert.True(surface.IsStatusActive);
+            Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
+        }
+        finally
+        {
+            provider.ReleaseAnswer();
+        }
 
-        Assert.Contains(surface.Statuses, status => status.StartsWith("THINKING · ", StringComparison.Ordinal));
+        await shellTask.WaitAsync(timeout.Token);
+        Assert.Contains("answer", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>MCP and built-in starts reach the live activity surface while completion is still withheld.</summary>
@@ -3525,14 +3530,14 @@ public static class Milestone1Tests
     public static async Task ConversationalShell_ToolStartIsVisibleBeforeCompletion(ToolActivitySourceKind kind, string label)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"], retainsActivity: true);
         var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
             var started = new ToolInvocationStarted(
                 harness.Events.OfType<SessionCreated>().Single().SessionId,
                 DateTimeOffset.UtcNow,
@@ -3570,14 +3575,14 @@ public static class Milestone1Tests
     public static async Task ConversationalShell_ConcurrentMcpCallsKeepTheirOwnActivityAndOutcome(bool reverse, OperationActivityOutcome outcome)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new ConcurrentToolConsoleSurface();
         var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
             var session = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var first = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "first", Source: new ToolActivitySource(ToolActivitySourceKind.Mcp, "Server"));
             var second = first with { ToolInvocationId = ToolInvocationId.New(), ToolName = "second" };
@@ -3625,14 +3630,14 @@ public static class Milestone1Tests
     public static async Task ConversationalShell_DelegationProgressUpdatesInsideItsTool()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new AgentToolConsoleSurface();
         var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted).WaitAsync(timeout.Token);
             var session = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var parent = RunId.New();
             var tool = new ToolInvocationStarted(session, DateTimeOffset.UtcNow, ToolInvocationId.New(), "delegate_agents", RunId: parent);
@@ -3685,7 +3690,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_OverlappingSemanticChecks_KeepsDisplayedRunningCheckActive()
     {
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
@@ -3697,7 +3702,7 @@ public static class Milestone1Tests
         var shellTask = shell.RunAsync(modelStatus: "Test model");
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted)
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
                 .WaitAsync(TimeSpan.FromSeconds(5));
             var sessionId = harness.Events.OfType<SessionCreated>().Single().SessionId;
             var firstRunId = RunId.New();
@@ -3771,7 +3776,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_LeadingWhitespace_KeepsThinkingActive()
     {
-        var provider = new LeadingWhitespaceModelProvider();
+        var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
@@ -3784,7 +3789,7 @@ public static class Milestone1Tests
         var shellTask = shell.RunAsync(modelStatus: "Test model");
         try
         {
-            await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted)
+            await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
                 .WaitAsync(TimeSpan.FromSeconds(5));
 
             Assert.True(surface.IsStatusActive);
@@ -3802,7 +3807,7 @@ public static class Milestone1Tests
     [Fact]
     public static async Task ConversationalShell_ActivityDisplayFailure_DuringVerboseRun_IsPropagated()
     {
-        var provider = new LeadingWhitespaceModelProvider(trailingChunkCount: 1024);
+        var provider = new GatedAnswerModelProvider(trailingChunkCount: 1024);
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
@@ -3814,7 +3819,7 @@ public static class Milestone1Tests
             surface);
 
         var shellTask = shell.RunAsync(modelStatus: "Test model");
-        await Task.WhenAll(provider.WhitespaceEmitted, surface.StatusStarted)
+        await Task.WhenAll(provider.InitialContentEmitted, surface.StatusStarted)
             .WaitAsync(TimeSpan.FromSeconds(5));
         provider.ReleaseAnswer();
 
@@ -4993,21 +4998,23 @@ public static class Milestone1Tests
         }
     }
 
-    private sealed class LeadingWhitespaceModelProvider : IModelProvider
+    private sealed class GatedAnswerModelProvider : IModelProvider
     {
         private readonly int _trailingChunkCount;
+        private readonly bool _leadingWhitespace;
 
         private readonly TaskCompletionSource _releaseAnswer = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        private readonly TaskCompletionSource _whitespaceEmitted = new(
+        private readonly TaskCompletionSource _initialContentEmitted = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task WhitespaceEmitted => _whitespaceEmitted.Task;
+        public Task InitialContentEmitted => _initialContentEmitted.Task;
 
-        public LeadingWhitespaceModelProvider(int trailingChunkCount = 0)
+        public GatedAnswerModelProvider(int trailingChunkCount = 0, bool leadingWhitespace = true)
         {
             _trailingChunkCount = trailingChunkCount;
+            _leadingWhitespace = leadingWhitespace;
         }
 
         public void ReleaseAnswer()
@@ -5025,8 +5032,12 @@ public static class Milestone1Tests
 
             async IAsyncEnumerable<ModelChunk> Stream2Async()
             {
-                yield return new ModelChunk { Text = "\n\n" };
-                _whitespaceEmitted.TrySetResult();
+                if (_leadingWhitespace)
+                {
+                    yield return new ModelChunk { Text = "\n\n" };
+                }
+
+                _initialContentEmitted.TrySetResult();
                 await _releaseAnswer.Task.WaitAsync(cancellationToken);
                 // Flush a complete paragraph before the verbose tail so rendering fails
                 // while the producer still has work, rather than after Markdown buffering.

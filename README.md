@@ -6,7 +6,7 @@ Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives mode
 
 ## Current state
 
-Threadsmith.NET is currently under active testing and feature refinement. I'd say it's transitioned from pre-Alpha to Alpha. 
+Threadsmith.NET is currently under active testing and feature refinement. I'd say it's transitioned from pre-Alpha to pre-Beta! 
 
 Some recent enhancements (most recent first): 
 - Significant TUI enhancements

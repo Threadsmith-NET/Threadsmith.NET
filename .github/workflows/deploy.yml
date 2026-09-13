@@ -25,10 +25,16 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      - name: Prepare website
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/threadsmith-pages"
+          cp -a docs/. "$RUNNER_TEMP/threadsmith-pages/"
+          cp index.html google*.html .nojekyll "$RUNNER_TEMP/threadsmith-pages/"
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: './docs' # This forces it to look only at your docs folder
+          path: ${{ runner.temp }}/threadsmith-pages
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4

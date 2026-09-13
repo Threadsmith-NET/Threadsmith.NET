@@ -8,7 +8,12 @@ Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives mode
 
 Threadsmith.NET is currently under active testing and feature refinement. I'd say it's transitioned from pre-Alpha to Alpha. 
 
-Some recent enhancements:
+Some recent enhancements (most recent first): 
+- Significant TUI enhancements
+- Configurable parameters expansion
+- Built out subagent roles and tabbed UI
+- Anthropic adapter
+- total re-work of repository memory with new memory tool and semantic/lexical hybrid retrieval with cross-encoder reranker. 
 - Optimization of tool calling
 - Integrated documentation native skill
 - New, re-designed alternate TUI (now the default, original is still available)

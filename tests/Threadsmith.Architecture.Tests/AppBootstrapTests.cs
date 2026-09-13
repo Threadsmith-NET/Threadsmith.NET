@@ -75,6 +75,54 @@ public static class AppBootstrapTests
         Assert.Equal(expected, ApplicationComposition.LoadClaudeSkillLimits(effective, host).MaximumInstructionBytes);
     }
 
+    /// <summary>Every skill ceiling preserves its default and permits only narrowing below trusted configuration.</summary>
+    [Theory]
+    [InlineData("catalogLimits")]
+    [InlineData("schemaLimits")]
+    [InlineData("claudeLimits")]
+    [InlineData("installerLimits")]
+    public static void AllSkillLimitFields_RespectTrustedCeilings(string group)
+    {
+        object defaults = group switch
+        {
+            "catalogLimits" => new Threadsmith.Skills.SkillCatalogOptions(),
+            "schemaLimits" => new Threadsmith.Skills.SkillSchemaOptions(),
+            "claudeLimits" => new Threadsmith.Skills.ClaudeSkillCompatibilityOptions(),
+            "installerLimits" => new Threadsmith.Skills.SkillInstallerOptions(),
+            _ => throw new ArgumentOutOfRangeException(nameof(group)),
+        };
+        var empty = new ConfigurationBuilder().Build();
+        Assert.Equal(defaults, Bind(empty, empty));
+
+        foreach (var property in defaults.GetType().GetProperties())
+        {
+            var original = Convert.ToInt64(property.GetValue(defaults), System.Globalization.CultureInfo.InvariantCulture);
+            var key = $"skills:{group}:{property.Name}";
+            var widened = Configure(key, property.PropertyType == typeof(long) ? long.MaxValue : int.MaxValue);
+            var trusted = Configure(key, original * 2);
+            var narrowed = Configure(key, Math.Max(1, original / 2));
+
+            Assert.Equal(original, Convert.ToInt64(property.GetValue(Bind(widened, empty)), System.Globalization.CultureInfo.InvariantCulture));
+            Assert.Equal(original * 2, Convert.ToInt64(property.GetValue(Bind(widened, trusted)), System.Globalization.CultureInfo.InvariantCulture));
+            Assert.Equal(Math.Max(1, original / 2), Convert.ToInt64(property.GetValue(Bind(narrowed, trusted)), System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        object Bind(IConfiguration effective, IConfiguration trusted) => group switch
+        {
+            "catalogLimits" => ApplicationComposition.LoadSkillCatalogLimits(effective, trusted),
+            "schemaLimits" => ApplicationComposition.LoadSkillSchemaLimits(effective, trusted),
+            "claudeLimits" => ApplicationComposition.LoadClaudeSkillLimits(effective, trusted),
+            "installerLimits" => ApplicationComposition.LoadSkillInstallerLimits(effective, trusted),
+            _ => throw new ArgumentOutOfRangeException(nameof(group)),
+        };
+
+        static IConfiguration Configure(string key, long value) => new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [key] = value.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            }).Build();
+    }
+
     /// <summary>Local reranker CPU concurrency is a bounded startup snapshot.</summary>
     [Fact]
     public static void RerankerCpuThreads_DefaultAndBoundsAreValidated()

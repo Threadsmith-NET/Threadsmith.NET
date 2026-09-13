@@ -6,7 +6,7 @@ The [complete defaults example](../../.threadsmith/resource-limits.example) is a
 
 ## Scope and validation
 
-Normal precedence is compiled defaults, machine, user, repository, session, CLI, then environment. For example, `--set:limits:workspace:maximumBaselineContentBytes=1073741824` configures a 1 GiB baseline. `THREADSMITH_limits__workspace__maximumBaselineContentBytes` is the equivalent environment key. **Trusted-only** groups below read machine/user/environment configuration; repository, session, and CLI values do not widen those policies. Web-fetch, prompt-append, and Claude skill discovery options may narrow their trusted ceilings. The LCS diff allocation threshold uses the trusted machine/user/environment ceiling; ordinary configuration can narrow it. Larger valid diffs use the existing linear fallback.
+Normal precedence is compiled defaults, machine, user, repository, session, CLI, then environment. For example, `--set:limits:workspace:maximumBaselineContentBytes=1073741824` configures a 1 GiB baseline. `THREADSMITH_limits__workspace__maximumBaselineContentBytes` is the equivalent environment key. **Trusted-only** groups below read machine/user/environment configuration; repository, session, and CLI values do not widen those policies. Web-fetch, prompt-append, and skill catalog, schema, discovery, and installer options may narrow their trusted ceilings. The LCS diff allocation threshold uses the trusted machine/user/environment ceiling; ordinary configuration can narrow it. Larger valid diffs use the existing linear fallback.
 
 New typed limit groups reject unknown members and invalid values. Most new bounds require positive values; there is no arbitrary upper ceiling beyond the storage/runtime type. Exceptions are stated in the tables. Existing settings that support zero as disabled retain that behavior. Byte counts are bytes (KiB = 1,024; MiB = 1,048,576); character counts are .NET UTF-16 code units unless a setting explicitly says otherwise. Counts, milliseconds, and seconds are named accordingly. Related settings must remain consistent: a default cannot exceed its maximum, aggregate prompt budgets cannot be smaller than one file, and extension stability timeout cannot be shorter than its quiet interval.
 
@@ -332,7 +332,7 @@ Trusted machine/user/environment configuration. [Implementation](../../src/Threa
 
 ### `skills:catalogLimits`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Skills/SkillCatalog.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. [Implementation](../../src/Threadsmith.Skills/SkillCatalog.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -352,7 +352,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Skills/SkillCatal
 
 ### `skills:schemaLimits`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Skills/BoundedJsonSchema.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. [Implementation](../../src/Threadsmith.Skills/BoundedJsonSchema.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -380,7 +380,7 @@ Trusted machine/user/environment ceilings; repository settings may narrow them. 
 
 ### `skills:installerLimits`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Skills/SkillPackageSecurity.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. [Implementation](../../src/Threadsmith.Skills/SkillPackageSecurity.cs).
 
 | Field | Default | Purpose |
 |---|---:|---|

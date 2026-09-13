@@ -40,6 +40,69 @@ internal static class ApplicationComposition
         };
     }
 
+    /// <summary>Combines trusted catalogLimits ceilings with narrower repository-inclusive settings.</summary>
+    internal static SkillCatalogOptions LoadSkillCatalogLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:catalogLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<SkillCatalogOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<SkillCatalogOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumManifestBytes = Math.Min(effective.MaximumManifestBytes, trusted.MaximumManifestBytes),
+            MaximumPackages = Math.Min(effective.MaximumPackages, trusted.MaximumPackages),
+            MaximumAssetsPerPackage = Math.Min(effective.MaximumAssetsPerPackage, trusted.MaximumAssetsPerPackage),
+            MaximumAssetBytes = Math.Min(effective.MaximumAssetBytes, trusted.MaximumAssetBytes),
+            MaximumTextCharacters = Math.Min(effective.MaximumTextCharacters, trusted.MaximumTextCharacters),
+            MaximumRequiredTools = Math.Min(effective.MaximumRequiredTools, trusted.MaximumRequiredTools),
+            MaximumContractVersions = Math.Min(effective.MaximumContractVersions, trusted.MaximumContractVersions),
+            MaximumApprovalCategories = Math.Min(effective.MaximumApprovalCategories, trusted.MaximumApprovalCategories),
+            MaximumWorkloads = Math.Min(effective.MaximumWorkloads, trusted.MaximumWorkloads),
+            MaximumModelProfiles = Math.Min(effective.MaximumModelProfiles, trusted.MaximumModelProfiles),
+            MaximumIdentifierCharacters = Math.Min(effective.MaximumIdentifierCharacters, trusted.MaximumIdentifierCharacters),
+            MaximumVersionCharacters = Math.Min(effective.MaximumVersionCharacters, trusted.MaximumVersionCharacters),
+            MaximumPathCharacters = Math.Min(effective.MaximumPathCharacters, trusted.MaximumPathCharacters),
+        };
+    }
+
+    /// <summary>Combines trusted schemaLimits ceilings with narrower repository-inclusive settings.</summary>
+    internal static SkillSchemaOptions LoadSkillSchemaLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:schemaLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<SkillSchemaOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<SkillSchemaOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumSchemaBytes = Math.Min(effective.MaximumSchemaBytes, trusted.MaximumSchemaBytes),
+            MaximumValueBytes = Math.Min(effective.MaximumValueBytes, trusted.MaximumValueBytes),
+            MaximumDepth = Math.Min(effective.MaximumDepth, trusted.MaximumDepth),
+            MaximumProperties = Math.Min(effective.MaximumProperties, trusted.MaximumProperties),
+            MaximumArrayItems = Math.Min(effective.MaximumArrayItems, trusted.MaximumArrayItems),
+            MaximumPropertyNameCharacters = Math.Min(effective.MaximumPropertyNameCharacters, trusted.MaximumPropertyNameCharacters),
+            MaximumEnumValues = Math.Min(effective.MaximumEnumValues, trusted.MaximumEnumValues),
+            MaximumMetadataCharacters = Math.Min(effective.MaximumMetadataCharacters, trusted.MaximumMetadataCharacters),
+        };
+    }
+
+    /// <summary>Combines trusted installerLimits ceilings with narrower repository-inclusive settings.</summary>
+    internal static SkillInstallerOptions LoadSkillInstallerLimits(IConfiguration configuration, IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string section = "skills:installerLimits";
+        var trusted = trustedConfiguration.GetSection(section).Get<SkillInstallerOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+        var effective = configuration.GetSection(section).Get<SkillInstallerOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? trusted;
+        return new()
+        {
+            MaximumArchiveBytes = Math.Min(effective.MaximumArchiveBytes, trusted.MaximumArchiveBytes),
+            MaximumExtractedBytes = Math.Min(effective.MaximumExtractedBytes, trusted.MaximumExtractedBytes),
+            MaximumFiles = Math.Min(effective.MaximumFiles, trusted.MaximumFiles),
+        };
+    }
+
     /// <summary>Creates the shared context assembler, session state, governed mutation path, and dispatcher.</summary>
     internal static async Task<ApplicationServices> CreateAsync(ApplicationCompositionInputs inputs)
     {
@@ -626,8 +689,8 @@ internal static class ApplicationComposition
                     "organization:trusted-configuration"));
             }
 
-            var skillCatalogOptions = host.Configuration.GetSection("skills:catalogLimits").Get<SkillCatalogOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
-            var skillSchemaOptions = host.Configuration.GetSection("skills:schemaLimits").Get<SkillSchemaOptions>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
+            var skillCatalogOptions = LoadSkillCatalogLimits(host.Configuration, host.TrustedConfiguration);
+            var skillSchemaOptions = LoadSkillSchemaLimits(host.Configuration, host.TrustedConfiguration);
             var skillCatalog = new SkillCatalog(skillSources, skillCatalogOptions);
             await skillCatalog.RefreshAsync();
             var claudeSkillCatalog = new ClaudeSkillCompatibilityCatalog(
@@ -743,7 +806,7 @@ internal static class ApplicationComposition
                 new SkillPackageInstaller(
                     userSkillRoot,
                     Path.Combine(userProfile, ".threadsmith", "skill-quarantine"),
-                    host.Configuration.GetSection("skills:installerLimits").Get<SkillInstallerOptions>(options => options.ErrorOnUnknownConfiguration = true),
+                    LoadSkillInstallerLimits(host.Configuration, host.TrustedConfiguration),
                     skillCatalogOptions));
             var invokeSkillTool = new InvokeSkillTool(skillWorkflow, host.PromptLoader, skillRuntimeLimits);
             tools.ToolRegistry.RegisterOrReplace(

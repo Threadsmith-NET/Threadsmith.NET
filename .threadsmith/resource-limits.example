@@ -228,6 +228,7 @@
     }
   },
   "model": {
+    // Trusted machine/user/environment settings only.
     "catalogLimits": {
       "maximumFileBytes": 1048576,
       "maximumDepth": 32,
@@ -239,6 +240,7 @@
     }
   },
   "skills": {
+    // Trusted host ceilings; repository settings may narrow these bounds.
     "catalogLimits": {
       "maximumManifestBytes": 262144,
       "maximumPackages": 512,
@@ -254,6 +256,7 @@
       "maximumVersionCharacters": 64,
       "maximumPathCharacters": 512
     },
+    // Trusted host ceilings; repository settings may narrow these bounds.
     "schemaLimits": {
       "maximumSchemaBytes": 131072,
       "maximumValueBytes": 1048576,
@@ -274,6 +277,7 @@
       "maximumFiles": 64,
       "maximumAggregateBytes": 1048576
     },
+    // Trusted host ceilings; repository settings may narrow these bounds.
     "installerLimits": {
       "maximumArchiveBytes": 16777216,
       "maximumExtractedBytes": 67108864,

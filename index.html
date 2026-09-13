@@ -1,3 +1,399 @@
-<p>Threadsmith.NET - a .NET native agentic coding tool that leverages compiler semantics to improve speed, accuracy, and token efficiency.</p>
-<a href="https://github.com/Threadsmith-NET/Threadsmith.NET">Threadsmith.NET Github Repository</a>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Threadsmith.NET — Forge better code, not slop.</title>
+  <meta name="description" content="A .NET-native, open-source coding harness with Roslyn-powered code understanding, host-governed changes, parallel agents, and your choice of local or cloud models.">
+  <meta name="theme-color" content="#0b192b">
+  <link rel="canonical" href="https://threadsmith-net.github.io/Threadsmith.NET/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Threadsmith.NET — Forge better code, not slop.">
+  <meta property="og:description" content="Your model brings the reasoning. Threadsmith brings the compiler, the workflow, and the receipts. A coding harness built for real .NET solutions.">
+  <meta property="og:url" content="https://threadsmith-net.github.io/Threadsmith.NET/">
+  <style>
+    :root { color-scheme: dark; --navy:#0b192b; --panel:#10233a; --orange:#ff8b2c; --ink:#14263a; --paper:#f5f4ef; --muted:#afbed0; --line:rgba(180,205,235,.16); --mono:Consolas,"Liberation Mono",monospace; }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; scroll-padding-top:90px; }
+    body { margin:0; background:var(--navy); color:#f4f7fb; font-family:Inter,"Segoe UI",Arial,sans-serif; -webkit-font-smoothing:antialiased; }
+    a { color:inherit; text-decoration:none; }
+    button { font:inherit; cursor:pointer; }
+    a:focus-visible,button:focus-visible,[tabindex]:focus-visible { outline:3px solid var(--orange); outline-offset:5px; }
+    ::selection { background:#ff8b2c; color:#0b192b; }
+    .wrap { width:min(1200px,calc(100% - 80px)); margin:auto; }
+    .skip { position:fixed; top:-80px; left:20px; padding:12px; z-index:10; background:var(--orange); color:var(--navy); }
+    .skip:focus { top:10px; }
+    header { border-bottom:1px solid var(--line); }
+    .nav { height:90px; display:flex; align-items:center; justify-content:space-between; gap:24px; }
+    .brand { display:flex; align-items:center; gap:12px; font-size:20px; font-weight:800; letter-spacing:-.5px; white-space:nowrap; }
+    .brand em { font-style:normal; color:var(--orange); }
+    /* Display one original logo from the supplied sheet without modifying the artwork. */
+    .brand-mark { display:block; flex:0 0 44px; width:44px; height:44px; border-radius:10px; background-image:url('website-assets/threadsmith-brand-sheet.png'); background-size:960% 640%; background-position:44.2% 83.33%; }
+    .nav-links { display:flex; align-items:center; gap:30px; color:#bdc9d7; font-size:13px; font-weight:600; }
+    .nav-links a:hover { color:#fff; }
+    .nav-links .repo-link { padding:11px 17px; border:1px solid #526073; border-radius:5px; color:#fff; }
+    .arrow { margin-left:9px; }
+    .hero { position:relative; overflow:hidden; padding:76px 0 65px; background:radial-gradient(ellipse at 86% 45%,#18385866,transparent 55%); }
+    .hero:before { content:""; position:absolute; inset:0; opacity:.24; pointer-events:none; background-image:linear-gradient(#58749022 1px,transparent 1px),linear-gradient(90deg,#58749022 1px,transparent 1px); background-size:48px 48px; mask-image:linear-gradient(90deg,transparent,#000); }
+    .hero-grid { position:relative; display:grid; grid-template-columns:1fr 1.05fr; align-items:center; gap:55px; }
+    .eyebrow { font:11px var(--mono); font-weight:700; letter-spacing:1.8px; text-transform:uppercase; display:flex; align-items:center; gap:10px; }
+    .eyebrow:before { content:""; display:inline-block; width:7px; height:7px; background:var(--orange); }
+    .hero .eyebrow { color:var(--orange); }
+    h1 { font-size:clamp(46px,4.6vw,68px); line-height:1.06; letter-spacing:-3.5px; margin:27px 0 24px; font-weight:800; }
+    h1 span { color:var(--orange); display:block; }
+    .lede { max-width:450px; font-size:17px; line-height:1.8; color:var(--muted); }
+    .lede strong { color:#f4f7fb; font-weight:500; }
+    .actions { display:flex; flex-wrap:wrap; gap:14px; margin-top:30px; }
+    .button { display:inline-flex; align-items:center; justify-content:center; gap:12px; padding:14px 20px; border-radius:5px; font-size:13px; font-weight:700; border:1px solid #516176; transition:background .18s,transform .18s; }
+    .button:hover { background:#20364f; transform:translateY(-2px); }
+    .button.primary { background:var(--orange); color:#101f31; border-color:var(--orange); }
+    .button.primary:hover { background:#ffab62; }
+    .github-icon { width:17px; height:17px; fill:currentColor; }
+    .hero-note { margin:22px 0 0; font:11px var(--mono); color:#9eafc2; display:flex; gap:12px; flex-wrap:wrap; }
+    .hero-note span + span:before { content:"/"; color:#55677d; margin-right:12px; }
+    .workbench { border:1px solid #3e526b; border-radius:10px; background:#0b1523; box-shadow:0 25px 65px #0005; overflow:hidden; }
+    .window-bar { display:flex; align-items:center; justify-content:space-between; padding:15px 18px; border-bottom:1px solid var(--line); font:10px var(--mono); color:#98adc5; }
+    .lights { display:flex; gap:5px; }
+    .lights i { width:6px; height:6px; border-radius:50%; background:#52647b; }
+    .lights i:first-child { background:var(--orange); }
+    .demo-tabs { display:flex; border-bottom:1px solid var(--line); padding:0 16px; }
+    .demo-tabs button { background:none; color:#a0b2c6; border:0; border-bottom:2px solid transparent; padding:16px 13px 13px; font:11px var(--mono); }
+    .demo-tabs button[aria-selected="true"] { color:var(--orange); border-bottom-color:var(--orange); }
+    .demo-body { min-height:307px; padding:25px 25px 23px; font:12px/1.8 var(--mono); }
+    .prompt { color:#e4ebf4; margin:0 0 24px; }
+    .prompt b { color:var(--orange); margin-right:8px; }
+    .tool-label { color:#73d7b2; font-size:11px; }
+    .tree { color:#aebed1; margin:12px 0 21px 8px; padding-left:15px; border-left:1px solid #3a526a; }
+    .tree span { display:block; }
+    .tree strong { color:#e0e8f0; font-weight:400; }
+    .result { color:#8fdbc0; background:#132c2b; border:1px solid #2e5149; border-radius:4px; padding:9px 12px; font-size:11px; }
+    .result.pending { color:#ffbc82; background:#30281f; border-color:#5a4936; }
+    .workbench-foot { display:flex; justify-content:space-between; padding:12px 18px; border-top:1px solid var(--line); color:#8094ad; font:10px var(--mono); }
+    .demo-caption { font:10px var(--mono); color:#879bb4; margin:13px 0 0; text-align:center; }
+    .stack { border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+    .stack-inner { min-height:88px; display:flex; align-items:center; justify-content:space-between; gap:25px; flex-wrap:wrap; padding-top:20px; padding-bottom:20px; }
+    .stack-label { font:10px/1.7 var(--mono); color:#8d9eb3; letter-spacing:1.2px; text-transform:uppercase; }
+    .stack-item { font-size:15px; font-weight:600; color:#d5deea; }
+    .stack-item span { color:var(--orange); margin-right:8px; font-family:var(--mono); }
+    .paper { background:var(--paper); color:var(--ink); color-scheme:light; padding:85px 0; }
+    .section-intro { display:flex; justify-content:space-between; align-items:flex-end; gap:40px; margin-bottom:40px; }
+    .paper .eyebrow { color:#6a655f; }
+    h2 { font-size:clamp(30px,3vw,43px); line-height:1.17; letter-spacing:-1.7px; margin:18px 0 0; }
+    .section-intro > p { max-width:360px; font-size:14px; line-height:1.8; color:#576372; margin:0; }
+    .feature-grid { display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid #d4d7d7; border-left:1px solid #d4d7d7; }
+    .feature { padding:30px; border-right:1px solid #d4d7d7; border-bottom:1px solid #d4d7d7; position:relative; }
+    .feature-number { font:11px var(--mono); color:#806d5e; }
+    .feature h3 { font-size:18px; letter-spacing:-.45px; margin:23px 0 12px; }
+    .feature p { font-size:13px; line-height:1.8; color:#576372; margin:0; }
+    .feature a { display:inline-block; margin-top:22px; color:#244e67; font-size:12px; font-weight:700; }
+    .feature a:hover { text-decoration:underline; }
+    .feature:first-child { background:#eaece7; }
+    .feature:first-child .feature-number { color:#b34f00; }
+    .process-section { padding:80px 0; }
+    .process-top { display:grid; grid-template-columns:1fr 1fr; gap:75px; align-items:start; }
+    .process-top .eyebrow { color:var(--orange); }
+    .process-top p { color:var(--muted); line-height:1.8; font-size:14px; margin:0; }
+    .process { display:grid; grid-template-columns:repeat(4,1fr); gap:25px; margin-top:45px; }
+    .step { border-top:1px solid #3b4e64; padding-top:22px; }
+    .step-num { font:11px var(--mono); color:var(--orange); }
+    .step h3 { font-size:17px; margin:18px 0 10px; }
+    .step p { font-size:13px; line-height:1.8; color:#a9b9cb; margin:0; }
+    .fine-print { font:11px/1.8 var(--mono); color:#95a8bf; margin:28px 0 0; }
+    .start { background:#13273f; border-top:1px solid #334962; padding:65px 0; }
+    .start-grid { display:grid; grid-template-columns:.95fr 1fr; gap:70px; align-items:center; }
+    .start h2 { margin-top:18px; }
+    .start p { font-size:14px; line-height:1.8; color:var(--muted); max-width:440px; }
+    .codebox { border:1px solid #48607a; border-radius:7px; overflow:hidden; background:#0b192b; min-width:0; }
+    .code-top { border-bottom:1px solid #334962; padding:12px 18px; display:flex; justify-content:space-between; align-items:center; gap:12px; }
+    .code-top span { font:10px var(--mono); color:#b8c8dc; letter-spacing:.5px; }
+    #copy { font:11px var(--mono); color:#e4edf7; background:#263f5b; border:1px solid #4d6680; border-radius:3px; padding:6px 10px; }
+    #copy:hover { background:#38536f; }
+    pre { padding:23px 20px; margin:0; font:11px/2.3 var(--mono); overflow-x:auto; color:#dce7f5; }
+    .code-note { padding:0 20px 17px; color:#899fb9; font:10px/1.6 var(--mono); }
+    .contribute { background:var(--orange); color:#142437; padding:42px 0; }
+    .contribute .wrap { display:flex; justify-content:space-between; align-items:center; gap:25px; }
+    .contribute h2 { font-size:28px; margin:0 0 8px; letter-spacing:-1px; }
+    .contribute p { font-size:13px; margin:0; line-height:1.7; }
+    .contribute .button { background:#10233a; color:white; border-color:#10233a; white-space:nowrap; }
+    footer { padding:27px 0; }
+    footer .wrap { display:flex; justify-content:space-between; align-items:center; gap:20px; font-size:11px; color:#a5b5c8; }
+    footer nav { display:flex; gap:24px; }
+    footer a:hover { color:var(--orange); }
+    [hidden] { display:none !important; }
+    @media (min-width:1450px) { .hero { padding-top:100px; padding-bottom:90px; } }
+    @media (max-width:1000px) {
+      .wrap { width:calc(100% - 48px); }
+      .hero-grid { gap:30px; grid-template-columns:1fr 1fr; }
+      h1 { font-size:49px; letter-spacing:-2.5px; }
+      .demo-body { padding:20px 16px; font-size:11px; min-height:320px; }
+      .feature { padding:25px; }
+      .start-grid { gap:35px; }
+      .stack-inner { justify-content:center; gap:24px; }
+    }
+    @media (max-width:760px) {
+      .wrap { width:calc(100% - 40px); }
+      .nav { height:76px; gap:15px; }
+      .brand { font-size:17px; gap:7px; }
+      .brand-mark { width:36px; height:36px; flex-basis:36px; }
+      .nav-links { gap:15px; }
+      .nav-links .desktop-link { display:none; }
+      .nav-links .repo-link { padding:9px 12px; font-size:11px; }
+      .hero { padding:48px 0 38px; }
+      .hero-grid,.process-top,.start-grid { grid-template-columns:1fr; gap:40px; }
+      h1 { font-size:clamp(45px,10vw,64px); }
+      .lede { font-size:16px; max-width:560px; }
+      .demo-body { min-height:285px; font-size:12px; padding:22px; }
+      .stack-inner { gap:18px 27px; }
+      .stack-label { width:100%; text-align:center; }
+      .stack-item { font-size:12px; }
+      .paper,.process-section { padding:55px 0; }
+      .section-intro { display:block; margin-bottom:30px; }
+      .section-intro > p { margin-top:22px; max-width:none; }
+      .feature-grid { grid-template-columns:repeat(2,1fr); }
+      .feature { padding:24px; }
+      .process { grid-template-columns:repeat(2,1fr); gap:28px; margin-top:30px; }
+      .process-top { gap:22px; }
+      .start { padding:50px 0; }
+      .contribute .wrap { align-items:flex-start; flex-direction:column; }
+      footer .wrap { align-items:flex-start; flex-direction:column; }
+    }
+    @media (max-width:420px) {
+      .feature-grid { grid-template-columns:1fr; }
+      .demo-tabs { padding:0 8px; }
+      .demo-tabs button { padding-left:10px; padding-right:10px; }
+      .demo-body { padding:20px 15px; font-size:11px; }
+      .workbench-foot { font-size:9px; padding:12px; }
+      .hero-note { font-size:10px; }
+      .brand { font-size:15px; }
+      .button { padding:13px 16px; }
+    }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } .button { transition:none; } }
+    .roadmap { border-top:1px solid #d4d7d7; }
+    .roadmap-grid { list-style:none; padding:0; margin:0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:55px; }
+    .roadmap-grid li { display:flex; align-items:baseline; gap:20px; padding:24px 0; border-top:1px solid #d4d7d7; }
+    .roadmap-grid .feature-number { color:#a04a08; }
+    .roadmap-grid h3 { font-size:17px; letter-spacing:-.35px; margin:0 0 10px; }
+    .roadmap-grid p { font-size:13px; line-height:1.8; color:#576372; margin:0; }
+    @media (max-width:760px) { .roadmap-grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header>
+  <nav class="wrap nav" aria-label="Main navigation">
+    <a class="brand" href="./" aria-label="Threadsmith.NET home"><span class="brand-mark" aria-hidden="true"></span><span>Threadsmith<em>.NET</em></span></a>
+    <div class="nav-links">
+      <a class="desktop-link" href="#difference">Why Threadsmith</a>
+      <a class="desktop-link" href="#development">In development</a>
+      <a class="desktop-link" href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/user-guide.md">Documentation</a>
+      <a class="repo-link" href="https://github.com/Threadsmith-NET/Threadsmith.NET">GitHub <span class="arrow" aria-hidden="true">↗</span></a>
+    </div>
+  </nav>
+</header>
+<main id="main">
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="wrap hero-grid">
+      <div>
+        <div class="eyebrow">The .NET-native coding harness</div>
+        <h1 id="hero-title">Forge better code.<span>Not slop.</span></h1>
+        <p class="lede">Your model brings the reasoning.<br><strong>Threadsmith brings the compiler.</strong></p>
+        <p class="lede">An open-source harness that understands your C# solution, governs changes, and validates the result. Built for the work beyond autocomplete.</p>
+        <div class="actions">
+          <a class="button primary" href="#start">Build your first session <span aria-hidden="true">→</span></a>
+          <a class="button" href="https://github.com/Threadsmith-NET/Threadsmith.NET">
+            <svg class="github-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .7a11.4 11.4 0 0 0-3.6 22.2c.6.1.8-.2.8-.5v-2.2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.6-1.3-1.6-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.5-.3-5.2-1.3-5.2-5.7 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.1 1.2a10.8 10.8 0 0 1 5.7 0c2.2-1.5 3.2-1.2 3.2-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.2 5.7.4.3.8 1 .8 2.1v3.2c0 .3.2.6.8.5A11.4 11.4 0 0 0 12 .7Z"/></svg>
+            Explore the source
+          </a>
+        </div>
+        <p class="hero-note"><span>Apache 2.0</span><span>Pre-Beta · actively evolving</span><span>.NET 10</span></p>
+      </div>
+      <div>
+        <div class="workbench">
+          <div class="window-bar"><span class="lights" aria-hidden="true"><i></i><i></i><i></i></span><span>THREADSMITH / WORKBENCH</span><span aria-hidden="true">⌘</span></div>
+          <div class="demo-tabs" role="tablist" aria-label="Illustrative workflow">
+            <button id="tab-explore" type="button" role="tab" aria-controls="demo-explore" aria-selected="true">01 Explore</button>
+            <button id="tab-plan" type="button" role="tab" aria-controls="demo-plan" aria-selected="false" tabindex="-1">02 Preflight</button>
+            <button id="tab-validate" type="button" role="tab" aria-controls="demo-validate" aria-selected="false" tabindex="-1">03 Validate</button>
+          </div>
+          <div class="demo-body" id="demo-explore" role="tabpanel" aria-labelledby="tab-explore" tabindex="0">
+            <p class="prompt"><b>❯</b>Trace checkout and its dependencies.</p>
+            <div class="tool-label">TOOLS: code_explore · completed</div>
+            <div class="tree"><span><strong>IOrderService</strong></span><span>├─ OrderController · caller</span><span>├─ OrderService · implementation</span><span>└─ CheckoutTests · affected tests</span></div>
+            <div class="result">✓ Compiler-backed relationships. Grounded context.</div>
+          </div>
+          <div class="demo-body" id="demo-plan" role="tabpanel" aria-labelledby="tab-plan" tabindex="0" hidden>
+            <p class="prompt"><b>❯</b>Rename Submit to SubmitAsync.</p>
+            <div class="tool-label">SEMANTIC CHECKS: proposed C# overlay</div>
+            <div class="tree"><span><strong>Before staging or approval</strong></span><span>├─ Parse proposed source with Roslyn</span><span>├─ Check overlay compilation diagnostics</span><span>└─ Keep repository files unchanged</span></div>
+            <div class="result pending">◇ Return blocking diagnostics for model repair.</div>
+          </div>
+          <div class="demo-body" id="demo-validate" role="tabpanel" aria-labelledby="tab-validate" tabindex="0" hidden>
+            <p class="prompt"><b>❯</b>Review the change. Check the result.</p>
+            <div class="tool-label">VALIDATION: affected solution scope</div>
+            <div class="tree"><span><strong>Host-managed workflow</strong></span><span>├─ Inspect the exact staged diff</span><span>├─ Apply authorized mutations</span><span>└─ Collect build and test evidence</span></div>
+            <div class="result">✓ A change backed by evidence, not a promise.</div>
+          </div>
+          <div class="workbench-foot"><span>C# / ROSLYN / MSBUILD</span><span>Model proposes. Host governs.</span></div>
+        </div>
+        <p class="demo-caption">Illustrative workflow · select a step to explore</p>
+      </div>
+    </div>
+  </section>
 
+  <div class="stack">
+    <div class="wrap stack-inner">
+      <div class="stack-label">Your stack.<br>Your choice.</div>
+      <div class="stack-item"><span>⟐</span> Roslyn + MSBuild</div>
+      <div class="stack-item"><span>↔</span> Local &amp; cloud models</div>
+      <div class="stack-item"><span>⌁</span> MCP + extensions</div>
+      <div class="stack-item"><span>❯</span> Terminal + headless</div>
+    </div>
+  </div>
+
+  <section class="paper" id="difference" aria-labelledby="difference-title">
+    <div class="wrap">
+      <div class="section-intro">
+        <div><div class="eyebrow">More than a prompt around a shell</div><h2 id="difference-title">Built around your solution.<br>All the way down.</h2></div>
+        <p>Threadsmith puts .NET's own tooling inside the agent workflow: better evidence before a change, explicit control during it, and meaningful validation after.</p>
+      </div>
+      <div class="feature-grid">
+        <article class="feature">
+          <div class="feature-number">01 / UNDERSTAND</div>
+          <h3>Meet <code>code_explore</code>.</h3>
+          <p>Ask how a feature works, follow a call flow, or investigate a change's impact. code_explore turns natural-language questions into ranked, compiler-backed evidence, line-numbered source, and related project artifacts.</p>
+          <a href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/user-guide.md#tools-and-tool-availability">Explore semantic tools <span aria-hidden="true">↗</span></a>
+        </article>
+        <article class="feature">
+          <div class="feature-number">02 / PREFLIGHT</div>
+          <h3>Catch problems before the build.</h3>
+          <p>Screen proposed C# changes in memory with Roslyn before staging or approval. Check syntax and, when workspace confidence permits, compilation diagnostics—without writing repository files or running a full build.</p>
+          <a href="#workflow">See how validation fits <span aria-hidden="true">→</span></a>
+        </article>
+        <article class="feature">
+          <div class="feature-number">03 / CHOOSE</div>
+          <h3>Model and provider agnostic.</h3>
+          <p>Use OpenAI Codex, Anthropic, or OpenAI-compatible endpoints such as vLLM and Ollama. Switch configured models in the terminal as your work changes.</p>
+          <a href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/operations/model-providers.md">Connect a provider <span aria-hidden="true">↗</span></a>
+        </article>
+        <article class="feature">
+          <div class="feature-number">04 / REMEMBER</div>
+          <h3>Context with staying power.</h3>
+          <p>Keep standing preferences across sessions. Retrieve situational memories with lexical and semantic search, plus an optional local cross-encoder reranker.</p>
+          <a href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/user-guide.md">Read the memory guide <span aria-hidden="true">↗</span></a>
+        </article>
+        <article class="feature">
+          <div class="feature-number">05 / DELEGATE</div>
+          <h3>Separate minds. Visible work.</h3>
+          <p>Delegate code exploration, implementation proposals, and specialist reviews in parallel. Give each role its own model and provider to match its strengths to the task. Follow named agents in dedicated tabs with live tool activity and context visibility.</p>
+          <a href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/user-guide.md#subagent-roles">Meet the agent roles <span aria-hidden="true">↗</span></a>
+        </article>
+        <article class="feature">
+          <div class="feature-number">06 / EXTEND</div>
+          <h3>Make the harness your own.</h3>
+          <p>Add MCP tools, extensions, declarative skills, and lifecycle hooks. Work in a themed full-screen TUI or use the same application commands headlessly.</p>
+          <a href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/user-guide.md">Find your workflow <span aria-hidden="true">↗</span></a>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section class="process-section" id="workflow" aria-labelledby="workflow-title">
+    <div class="wrap">
+      <div class="process-top">
+        <div><div class="eyebrow">Reasoning meets engineering</div><h2 id="workflow-title">A good answer is a start.<br>A validated change is the goal.</h2></div>
+        <p>The model proposes. The host owns the change lifecycle. Compiler-backed, pre-build semantic validation catches problems in proposed code before it touches your repository. Affected builds and tests provide the next layer of evidence.</p>
+      </div>
+      <div class="process">
+        <div class="step"><span class="step-num">01 — DISCOVER</span><h3>Ground the request.</h3><p>Inspect the solution and gather semantic evidence when build trust permits. Use text-based discovery when it doesn't.</p></div>
+        <div class="step"><span class="step-num">02 — PLAN &amp; SCREEN</span><h3>Check before you change.</h3><p>Review the plan, then screen proposed C# changes with in-memory syntax and semantic checks before staging or approval.</p></div>
+        <div class="step"><span class="step-num">03 — APPLY</span><h3>See what will change.</h3><p>Stage mutations, inspect the exact diff, check the baseline, and apply authorized changes transactionally.</p></div>
+        <div class="step"><span class="step-num">04 — VALIDATE</span><h3>Close the feedback loop.</h3><p>Use affected-project builds, targeted tests, and normalized diagnostics to verify results and guide corrections.</p></div>
+      </div>
+      <p class="fine-print">Semantic screening depends on workspace confidence and does not replace builds, tests, analyzers, or source generators. This lifecycle covers host-managed mutations. Approved external processes can have direct filesystem effects; trust and tool policies still matter.</p>
+    </div>
+  </section>
+
+  <section class="paper roadmap" id="development" aria-labelledby="development-title">
+    <div class="wrap">
+      <div class="section-intro">
+        <div><div class="eyebrow">In development</div><h2 id="development-title">Still on the anvil.</h2></div>
+        <p>More control. More ways to connect. More room to make Threadsmith your own. Here's what's taking shape next.</p>
+      </div>
+      <ul class="roadmap-grid">
+        <li><span class="feature-number" aria-hidden="true">01</span><div><h3>Process control, your way.</h3><p>Finer control over which processes the agent can run. Lock it down or leave it wide open—your call.</p></div></li>
+        <li><span class="feature-number" aria-hidden="true">02</span><div><h3>A public API for your workflows.</h3><p>Run headless Threadsmith from any .NET application or drive it through external automation.</p></div></li>
+        <li><span class="feature-number" aria-hidden="true">03</span><div><h3>More events. Richer extensions.</h3><p>Expand the Extension API with access to a broader set of domain events, so integrations can respond to more of the workflow.</p></div></li>
+        <li><span class="feature-number" aria-hidden="true">04</span><div><h3>Sharper agent roles.</h3><p>Further refine subagents and their roles, with clearer responsibilities and better coordination.</p></div></li>
+        <li><span class="feature-number" aria-hidden="true">05</span><div><h3>Keep pushing <code>code_explore</code>.</h3><p>Continue refining natural-language code exploration and the evidence it brings back to the model.</p></div></li>
+        <li><span class="feature-number" aria-hidden="true">06</span><div><h3>Diagrams in the terminal.</h3><p>Bring Mermaid diagram support directly into the TUI to make relationships and flows easier to follow.</p></div></li>
+        <li><span class="feature-number" aria-hidden="true">07</span><div><h3>Beyond text.</h3><p>Add multimodal input and output to bring more kinds of context and responses into the conversation.</p></div></li>
+        <li><span class="feature-number" aria-hidden="true">08</span><div><h3>Prompts that fit the model.</h3><p>Optional model-specific prompts and tool descriptions, tailored to the nuances of current and future models.</p></div></li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="start" id="start" aria-labelledby="start-title">
+    <div class="wrap start-grid">
+      <div>
+        <div class="eyebrow">Built in the open</div>
+        <h2 id="start-title">Bring a solution.<br>Start a conversation.</h2>
+        <p>Build from source with the .NET 10 SDK. Configure your model provider, choose your repository's trust level, and open the terminal.</p>
+        <div class="actions"><a class="button primary" href="https://github.com/Threadsmith-NET/Threadsmith.NET#quick-start">Read the quick start <span aria-hidden="true">↗</span></a></div>
+      </div>
+      <div class="codebox">
+        <div class="code-top"><span>FROM SOURCE / .NET 10 SDK</span><button id="copy" type="button" aria-label="Copy quick-start commands">Copy</button></div>
+        <pre tabindex="0" aria-label="Quick-start commands"><code id="commands">git clone https://github.com/Threadsmith-NET/Threadsmith.NET.git
+cd Threadsmith.NET
+dotnet build src/Threadsmith.sln
+dotnet run --project src/Threadsmith.App -- --tui</code></pre>
+        <div class="code-note" id="copy-status" role="status">Build and launch against Threadsmith's own repository.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="contribute" aria-labelledby="contribute-title">
+    <div class="wrap">
+      <div><h2 id="contribute-title">Early days. Real engineering.</h2><p>Pre-Beta and actively evolving. Bring your .NET experience, bug reports, and better ideas.</p></div>
+      <a class="button" href="https://github.com/Threadsmith-NET/Threadsmith.NET">Get involved on GitHub <span aria-hidden="true">↗</span></a>
+    </div>
+  </section>
+</main>
+<footer>
+  <div class="wrap"><span>Threadsmith.NET · Forge better code, not slop.</span><nav aria-label="Footer navigation"><a href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/LICENSE">Apache 2.0</a><a href="https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/CONTRIBUTING.md">Contribute</a><a href="https://github.com/Threadsmith-NET/Threadsmith.NET">Source ↗</a></nav></div>
+</footer>
+<script>
+  const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+  function selectTab(tab, focus) {
+    tabs.forEach(item => {
+      const selected = item === tab;
+      item.setAttribute('aria-selected', String(selected));
+      item.tabIndex = selected ? 0 : -1;
+      document.getElementById(item.getAttribute('aria-controls')).hidden = !selected;
+    });
+    if (focus) tab.focus();
+  }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectTab(tab, false));
+    tab.addEventListener('keydown', event => {
+      let next;
+      if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+      else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+      else if (event.key === 'Home') next = 0;
+      else if (event.key === 'End') next = tabs.length - 1;
+      else return;
+      event.preventDefault();
+      selectTab(tabs[next], true);
+    });
+  });
+  document.getElementById('copy').addEventListener('click', async () => {
+    const status = document.getElementById('copy-status');
+    try {
+      await navigator.clipboard.writeText(document.getElementById('commands').textContent);
+      status.textContent = 'Commands copied. Paste them into your terminal.';
+    } catch {
+      status.textContent = 'Clipboard unavailable. Select and copy the commands above.';
+    }
+  });
+</script>
+</body>
+</html>

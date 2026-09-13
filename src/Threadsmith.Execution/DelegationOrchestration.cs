@@ -881,6 +881,18 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 
         if (outcome.Status == AgentRunStatus.Completed)
         {
+            if (assignment.FocusedReview is { } binding)
+            {
+                if (!outcome.FocusedReviewValidated || outcome.Response is null || outcome.ChangeSet is not null
+                    || binding.Generation != outcome.Generation || binding.Role != assignment.Role || binding.ContractVersion != 1
+                    || assignment.Mode != AgentRunMode.ReadOnlyReview || assignment.OutputSchema != "focused-review/1")
+                {
+                    throw new InvalidDataException("Focused outcome does not match its validated assignment.");
+                }
+
+                return;
+            }
+
             if (DelegationOutcomeClassifier.HasNaturalResponse(assignment, outcome))
             {
                 return;

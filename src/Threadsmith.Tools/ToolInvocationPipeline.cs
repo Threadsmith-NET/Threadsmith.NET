@@ -662,6 +662,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             {
                 ToolInvocationId = invocationId,
                 ToolId = tool.Definition.Id,
+                ReviewDelivery = (execution.Value as IFocusedReviewToolResult)?.ReviewDelivery,
                 Succeeded = true,
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,

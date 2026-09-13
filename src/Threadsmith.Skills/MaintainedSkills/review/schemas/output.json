@@ -1,0 +1,45 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial"
+      ]
+    },
+    "deliveryMode": {
+      "type": "string",
+      "enum": [
+        "inbox",
+        "console",
+        "failed"
+      ]
+    },
+    "contentDigest": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "savedPath": {
+      "type": "string"
+    },
+    "markdown": {
+      "type": "string"
+    },
+    "deliveryError": {
+      "type": "string"
+    },
+    "reportFormatVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "status",
+    "deliveryMode",
+    "contentDigest",
+    "reportFormatVersion"
+  ]
+}

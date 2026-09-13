@@ -339,6 +339,9 @@ public sealed record AgentAssignment
     /// <summary>Ordinary instruction-and-response contract marker; the response content has no required structured shape.</summary>
     public const string ResponseSchema = "agent-response/1";
 
+    /// <summary>Host-created focused procedure binding; absent on ordinary and historical assignments.</summary>
+    public FocusedReviewBinding? FocusedReview { get; init; }
+
     /// <summary>Stable assignment identity.</summary>
     public required AgentAssignmentId AssignmentId { get; init; }
 
@@ -394,6 +397,9 @@ public sealed record AgentAssignment
 /// <summary>Immutable parent and repository provenance for one delegation.</summary>
 public sealed record DelegationProvenance
 {
+    /// <summary>Explicit verified skill launch provenance; never fabricated model-origin metadata.</summary>
+    public SkillInvocationId? ReviewInvocationId { get; init; }
+
     /// <summary>Originating tool invocation, when this delegation was requested through a tool.</summary>
     public ToolInvocationId? ToolInvocationId { get; init; }
 
@@ -687,6 +693,9 @@ public sealed record AssignmentPartitionDecision
 /// <summary>One child terminal result projected without raw transcript content.</summary>
 public sealed record AgentRunOutcome
 {
+    /// <summary>Host completion validator accepted a bound focused response; never authored by the model.</summary>
+    public bool FocusedReviewValidated { get; init; }
+
     /// <summary>Owning assignment.</summary>
     public required AgentAssignmentId AssignmentId { get; init; }
 

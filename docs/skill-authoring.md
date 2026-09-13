@@ -98,3 +98,11 @@ Before distribution:
 8. confirm events, logs, persistence, and diagnostic bundles contain no package body, secret, raw provider payload, or hidden reasoning.
 
 See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and the source-repository [skills implementation plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/plan-39-governed-skills-reusable-workflows.md).
+
+## Maintained focused-review dependencies
+
+The shipped `review` workflow has a host-owned recipe under `ReviewSkills`, separate from public native/Claude discovery. Its immutable manifest and recipe hashes are compiled into the host. Four exact native package dependencies specify private read-only procedures and schemas; parsing, verification, strict UTF-8 loading, confinement, revocation and enablement use the existing native services.
+
+This deployment is assignment-only. Third-party authors cannot opt into private binding by naming a package `review`, adding `RequestReviews`, choosing a reviewer role or guessing a selector. Other review/delegation workflow actions still produce waiting proposals. No manifest-version change, global visibility flag, generic nested-skill framework or child `invoke_skill` authority is introduced.
+
+Maintainers changing the public/private payload must update asset byte counts/digests, the recipe's manifest digests, compiled integrity pins, release verification and focused fixtures together. Do not expose the private catalog, selectors, schema text or raw child histories through public outputs. See [focused review operations](operations/skills.md#focused-code-review) and [ADR-61](architecture/adr-61-focused-review-skill-assignments.md).

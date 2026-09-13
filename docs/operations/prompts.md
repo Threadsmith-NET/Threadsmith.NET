@@ -344,3 +344,11 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-code_explore-SourceBudgetRelevanceSuffix.md` | `Threadsmith.Tools` | `prompts/Tool-code_explore-SourceBudgetRelevanceSuffix.md` | `code_explore` model-budget file-relevance guidance suffix. | None |
 
 `Tool-memories-Description.md` describes explicit add/update/remove/list operations and concise best-effort repository recall. Its argument combinations are enforced in code; editing the prose cannot grant a repository, SQL, vector, model, or authority selector. The legacy request envelope's required `ConversationSummary` and `RetrievedMemory` tokens now receive empty strings because automatic snapshot promotion/restoration is retired. `RepositoryMemory` receives only bounded stable-ID/text reference blocks; changing counters, scores, timestamps, and provenance remain diagnostics.
+
+
+| `Context-FocusedReview-Procedure.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-Procedure.md` | Private procedure and output-schema framing for the assigned focused reviewer. | `Instructions`, `Schema` |
+| `Correction-FocusedReview-Output.md` | `Threadsmith.Execution` | `prompts/Correction-FocusedReview-Output.md` | Focused-only output validation correction in the same child conversation. | None |
+| `Tool-read_review_file-Description.md` | `Threadsmith.Execution` | `prompts/Tool-read_review_file-Description.md` | Confined frozen review inventory and source-range reader. | None |
+| `Context-FocusedReview-Objective.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-Objective.md` | Focused reviewer assignment objective. | None |
+| `Context-FocusedReview-Task.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-Task.md` | Focused reviewer assignment task. | None |
+| `Context-FocusedReview-StoppingCondition.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-StoppingCondition.md` | Focused reviewer assignment stopping condition. | None |

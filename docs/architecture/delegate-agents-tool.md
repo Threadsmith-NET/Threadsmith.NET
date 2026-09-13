@@ -260,3 +260,11 @@ The conversation tool does not:
 - treat a worktree as a security sandbox.
 
 Operational usage and troubleshooting are documented in [Parallel-agent operations](../operations/parallel-agents.md).
+
+## Explicit focused review skill entry
+
+[ADR-61](adr-61-focused-review-skill-assignments.md) authorizes the exact verified maintained `review` workflow as one additional host entry. `FocusedReviewExecutor` freezes typed invocation provenance and deterministic batches under the existing assignment/concurrency limits. Each assignment has a host-created binding; the common child loop applies a completion validator only when that binding matches a runtime verified procedure. Ordinary `agent-response/1` roles retain natural text, JSON, whitespace and empty completions without format repair.
+
+Focused context bypasses parent evidence selection. The host supplies frozen target facts, applicable target instructions, explicit user guidance and optional criteria, plus exactly one private procedure/schema. A request-local snapshot reader inherits eligibility from the invoking `read_file` authority. It cannot reach live files or execute processes. Native validation checks delivered ranges and scope before accepting results. Private procedure bodies are absent from public skill checkpoints, discovery and report projections; ordinary role display is suppressed for these private procedure turns.
+
+The existing scheduler, role/model selection, cancellation and delegation checkpoint machinery remain shared. Private review records persist batch identities before dispatch and retain accepted outcomes and canonical report identity. Explicit recovery never restarts a started inference loop. The public report formatter joins accepted advisory data and shows missing coverage. It saves atomically in the invoking repository's existing inbox or streams canonical Markdown once. This does not add CI/publication or change ordinary delegation tool arguments.

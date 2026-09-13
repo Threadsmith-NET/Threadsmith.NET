@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "skillId": {
+    "value": "review-security-private"
+  },
+  "packageId": "threadsmith.review-security-private",
+  "version": "1.0.0",
+  "displayName": "review-security-private",
+  "description": "Assignment-only SecurityReviewer",
+  "tags": [
+    "review"
+  ],
+  "publisher": "Threadsmith.NET",
+  "license": "Apache-2.0",
+  "assets": [
+    {
+      "path": "instructions/review.md",
+      "bytes": 2083,
+      "sha256": "28c9bf489222958380e17e89cfc6da4e6dac75c38285eac270064dafb728e68c",
+      "required": true,
+      "kind": "instructions"
+    },
+    {
+      "path": "schemas/input.json",
+      "bytes": 94,
+      "sha256": "c230211d18fb5b12b85a3c89c57a57d31f781300659b7617f334d0973ff14256",
+      "required": true,
+      "kind": "schema"
+    },
+    {
+      "path": "schemas/output.json",
+      "bytes": 8249,
+      "sha256": "f059d4f54f43c43bb09f5f03ef101bb1ea0b1a868624ec7629b0c85151b2d320",
+      "required": true,
+      "kind": "schema"
+    }
+  ],
+  "requirements": {
+    "requiredTools": [
+      "read_file"
+    ],
+    "optionalTools": [],
+    "toolContractVersions": {},
+    "minimumTrust": "trustedRead",
+    "approvalCategories": [
+      "read-only review",
+      "existing inbox report"
+    ],
+    "model": {
+      "workloads": [
+        "Review"
+      ],
+      "requiresToolCalls": true,
+      "requiresStructuredOutput": false,
+      "minimumContextWindow": 8192,
+      "allowedProfiles": [],
+      "deniedProfiles": []
+    },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999"
+  },
+  "budget": {
+    "contentTokens": 8000,
+    "workflowSteps": 8,
+    "modelTurns": 8,
+    "toolCalls": 32,
+    "mutations": 0,
+    "validationAttempts": 0,
+    "delegatedChildren": 4,
+    "parallelChildren": 4,
+    "worktrees": 0,
+    "reviewerFindings": 128,
+    "wallTime": "00:20:00"
+  },
+  "agents": [],
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "review-security-private",
+    "steps": [
+      {
+        "stepId": "inspect",
+        "kind": "invokeProcedure",
+        "instructionAsset": "instructions/review.md",
+        "inputSchemaAsset": "schemas/input.json",
+        "outputSchemaAsset": "schemas/output.json",
+        "dependsOn": [],
+        "maximumIterations": 1
+      }
+    ]
+  }
+}

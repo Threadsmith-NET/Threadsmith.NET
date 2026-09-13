@@ -496,6 +496,12 @@ public sealed record SkillContextSegment
 /// <summary>Typed JSON invocation request encoded as bounded canonical JSON.</summary>
 public sealed record SkillInvocationRequest
 {
+    /// <summary>Uses the host's defaults for an exactly bound workflow; explicit callers otherwise retain their supplied budget.</summary>
+    public bool UseDefaultBudget { get; init; }
+
+    /// <summary>Host request-lifetime authority reference for explicit model invocation; never a model argument.</summary>
+    public Guid? ModelVisibleToolSnapshotId { get; init; }
+
     /// <summary>Stable invocation identity.</summary>
     public required SkillInvocationId InvocationId { get; init; }
 
@@ -621,6 +627,9 @@ public sealed record SkillWorkflowStepResult
 /// <summary>Durable workflow checkpoint pinned to one immutable package.</summary>
 public sealed record SkillWorkflowCheckpoint
 {
+    /// <summary>Canonical public review projection populated by the exact host-bound workflow.</summary>
+    public FocusedReviewDelivery? ReviewDelivery { get; init; }
+
     /// <summary>Supported checkpoint schema version.</summary>
     public int SchemaVersion { get; init; } = 1;
 
@@ -691,6 +700,9 @@ public sealed record SkillWorkflowCheckpoint
 /// <summary>Authoritative skill invocation result.</summary>
 public sealed record SkillInvocationResult
 {
+    /// <summary>Canonical focused-review projection, populated only by the exact host adapter.</summary>
+    public FocusedReviewDelivery? ReviewDelivery { get; init; }
+
     /// <summary>Invocation identity.</summary>
     public required SkillInvocationId InvocationId { get; init; }
 

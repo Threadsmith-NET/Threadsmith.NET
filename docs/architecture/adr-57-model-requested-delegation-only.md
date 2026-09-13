@@ -17,3 +17,7 @@ Plan and mutation approval, bounded proposal repair, scope/baseline validation, 
 ## Consequences
 
 An approved edit never causes a subagent launch on its own. Explicit model delegation retains the existing read-only roles, one-layer limit, authority checks, scheduling, and durable outcomes. This change removes automatic child orchestration; it does not by itself make the separate mutation request preserve the preceding conversation's cached prefix. Historical implementation plans remain unchanged.
+
+## Focused review exception
+
+[ADR-61](adr-61-focused-review-skill-assignments.md) adds one narrowly bound entry: explicit invocation of the verified shipped public review workflow. It uses typed skill provenance and does not fabricate a model `delegate_agents` call. All other launch restrictions in this ADR remain in force.

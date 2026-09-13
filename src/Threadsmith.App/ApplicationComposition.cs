@@ -199,6 +199,31 @@ internal static class ApplicationComposition
             : [];
     }
 
+    /// <summary>Captures current repository tool authority for explicit host operations.</summary>
+    internal static ToolInvocationContext CreateToolInvocationContext(
+        HostCompositionInputs host,
+        SessionProjection? state)
+    {
+        return new ToolInvocationContext
+        {
+            WorkspaceId = state?.WorkspaceId,
+            RepositoryPath = state?.RepositoryPath ?? host.Paths.RepositoryRoot,
+            TrustLevel = state?.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
+            ApprovedRoots = ["."],
+            ProhibitedPaths = host.Configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [],
+            AllowedExecutables = HostFoundation.ResolveAllowedExecutables(host.Configuration),
+            AllowedNetworkHosts = host.TrustedConfiguration
+                .GetSection("tools:allowedNetworkHosts")
+                .Get<string[]>() ?? [],
+            AllowedToolIds = host.Configuration.GetSection("tools:allow").Get<string[]>() ?? [],
+            DeniedToolIds = host.Configuration.GetSection("tools:deny").Get<string[]>() ?? [],
+            RequireApprovalToolIds = host.Configuration
+                .GetSection("tools:requireApproval")
+                .Get<string[]>() ?? [],
+            RequestedBy = "model",
+        };
+    }
+
     private static async Task<ApplicationServices> CreateCoreAsync(
         ApplicationCompositionInputs inputs,
         LocalTextEmbeddingGenerator embeddings,
@@ -598,6 +623,7 @@ internal static class ApplicationComposition
                 host.Sanitizer,
                 host.LoggerFactory.CreateLogger<ExecutionOrchestrator>(),
                 correctiveMessages);
+            ModelExplorerAssignmentRunnerFactory? focusedReviewRunners = null;
             if (integration.Models.Catalog.Profiles.Count > 0)
             {
                 if (Enum.GetValues<AgentRole>().Any(role => childModelSelection.CanSelectRole(
@@ -626,6 +652,7 @@ internal static class ApplicationComposition
                         integration.Models.TrustedProvider,
                         activeTurnCompactionProfile,
                         agentDisplay);
+                    focusedReviewRunners = explorerRunners;
                     delegateAgentsTool = new DelegateAgentsTool(
                         new DelegateAgentsPlanFactory(
                             mutationCoordinator,
@@ -752,6 +779,18 @@ internal static class ApplicationComposition
                 tools.ToolRegistry,
                 integration.Models.Catalog,
                 "1.0.0");
+            var reviewActions = FocusedReviewComposition.Create(
+                host,
+                tools,
+                focusedReviewRunners,
+                delegationCoordinator,
+                childModelSelection,
+                preferences,
+                delegateAgentsOptions,
+                conversationToolSnapshots,
+                nativeSkillVerifier,
+                skillSchemaOptions,
+                skillCatalogOptions);
             var skillWorkflow = new SkillWorkflowOrchestrator(
                 compatibleSkillCatalog,
                 skillVerifier,
@@ -795,7 +834,8 @@ internal static class ApplicationComposition
                         Phase = state.Phase,
                     };
                 },
-                host.Events);
+                host.Events,
+                reviewActions);
             var skillApplication = new SkillApplication(
                 compatibleSkillCatalog,
                 skillVerifier,
@@ -984,30 +1024,6 @@ internal static class ApplicationComposition
         return stages
             .Distinct()
             .ToArray();
-    }
-
-    private static ToolInvocationContext CreateToolInvocationContext(
-        HostCompositionInputs host,
-        SessionProjection? state)
-    {
-        return new ToolInvocationContext
-        {
-            WorkspaceId = state?.WorkspaceId,
-            RepositoryPath = state?.RepositoryPath ?? host.Paths.RepositoryRoot,
-            TrustLevel = state?.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
-            ApprovedRoots = ["."],
-            ProhibitedPaths = host.Configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [],
-            AllowedExecutables = HostFoundation.ResolveAllowedExecutables(host.Configuration),
-            AllowedNetworkHosts = host.TrustedConfiguration
-                .GetSection("tools:allowedNetworkHosts")
-                .Get<string[]>() ?? [],
-            AllowedToolIds = host.Configuration.GetSection("tools:allow").Get<string[]>() ?? [],
-            DeniedToolIds = host.Configuration.GetSection("tools:deny").Get<string[]>() ?? [],
-            RequireApprovalToolIds = host.Configuration
-                .GetSection("tools:requireApproval")
-                .Get<string[]>() ?? [],
-            RequestedBy = "model",
-        };
     }
 }
 

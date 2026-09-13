@@ -31,6 +31,12 @@ public enum ProcessStandardOutputFormat
 
     /// <summary>NUL-delimited text records parsed before sanitization and returned as a sanitized JSON string array.</summary>
     NullDelimitedJsonArray,
+
+    /// <summary>Review source and metadata that must remain textual and unchanged by sanitization.</summary>
+    ReviewText,
+
+    /// <summary>Review identity records that must survive decoding and sanitization unchanged.</summary>
+    ReviewRecords,
 }
 
 /// <summary>Bounded child-process execution request.</summary>
@@ -309,6 +315,10 @@ public sealed class ProcessManager : IProcessManager
             var sanitizedStandardOutput = request.StandardOutputFormat switch
             {
                 ProcessStandardOutputFormat.Text => _sanitizer.Sanitize(stdout.Text),
+                ProcessStandardOutputFormat.ReviewText => stdout.Text.Contains('\0') || stdout.Text.Contains('\uFFFD')
+                    || _sanitizer.Sanitize(stdout.Text) != stdout.Text
+                    ? throw new InvalidDataException("Review source is binary, invalid UTF-8 or changed by secret redaction.")
+                    : stdout.Text,
                 ProcessStandardOutputFormat.RipgrepJsonLines => JsonOutputSanitizer.SanitizeRipgrepLines(
                     stdout.Text,
                     stdout.IsTruncated,
@@ -317,6 +327,11 @@ public sealed class ProcessManager : IProcessManager
                     stdout.Text,
                     stdout.IsTruncated,
                     _sanitizer),
+                ProcessStandardOutputFormat.ReviewRecords => SanitizeNullDelimitedRecords(
+                    stdout.Text,
+                    stdout.IsTruncated,
+                    _sanitizer,
+                    rejectChanged: true),
                 _ => throw new ArgumentOutOfRangeException(
                     nameof(request),
                     request.StandardOutputFormat,
@@ -369,7 +384,8 @@ public sealed class ProcessManager : IProcessManager
     private static string SanitizeNullDelimitedRecords(
         string text,
         bool isTruncated,
-        IOutputSanitizer sanitizer)
+        IOutputSanitizer sanitizer,
+        bool rejectChanged = false)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(sanitizer);
@@ -389,7 +405,13 @@ public sealed class ProcessManager : IProcessManager
                 continue;
             }
 
-            sanitized.Add(sanitizer.Sanitize(record));
+            var value = sanitizer.Sanitize(record);
+            if (rejectChanged && (value != record || record.Contains('\uFFFD')))
+            {
+                throw new InvalidDataException("Review path identity could not be preserved through decoding and secret redaction.");
+            }
+
+            sanitized.Add(value);
         }
 
         return JsonSerializer.Serialize(sanitized);

@@ -33,6 +33,7 @@ internal sealed class ChildAgentModelLoop
     private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
     private readonly AgentDisplayStream? _display;
+    private readonly IFocusedReviewCompletionPolicy? _focused;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentModelLoop"/> class.</summary>
     public ChildAgentModelLoop(
@@ -48,7 +49,8 @@ internal sealed class ChildAgentModelLoop
         AgentModelSelector? selection = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
-        AgentDisplayStream? display = null)
+        AgentDisplayStream? display = null,
+        IFocusedReviewCompletionPolicy? focused = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -57,6 +59,7 @@ internal sealed class ChildAgentModelLoop
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(parentRegistrations);
         ArgumentNullException.ThrowIfNull(prompts);
+        _focused = focused;
         _models = models;
         _display = display;
         _tools = tools;
@@ -109,6 +112,29 @@ internal sealed class ChildAgentModelLoop
             StringComparer.OrdinalIgnoreCase);
         var prompt = new ChildAgentPrompt(_prompts, assignment.Role);
         var messages = prompt.CreateMessages(context, instructions);
+        if (_focused is not null)
+        {
+            messages.Insert(messages.Count - 1, new ModelMessage
+            {
+                Role = ModelMessageRole.User,
+                SectionId = "focused-review-procedure",
+                Content =
+                [
+                    new ModelContentPart
+                    {
+                        Content = _prompts.Render(
+                            PromptFileNames.ContextFocusedReviewProcedure,
+                            new Dictionary<string, string>
+                            {
+                                ["Instructions"] = System.Security.SecurityElement.Escape(_focused.Instructions),
+                                ["Schema"] = System.Security.SecurityElement.Escape(_focused.OutputSchema),
+                            }),
+                    },
+                ],
+            });
+        }
+
+        var formatCorrections = 0;
         var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
         history.RecordInitialEvidence(deliveredEvidenceIds.ToArray());
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
@@ -164,6 +190,7 @@ internal sealed class ChildAgentModelLoop
                     ModelEffectiveInputBudgetTokens = model.ContextWindowTokens - model.OutputReserveTokens,
                 };
 
+                _focused?.AdmitModelTurn();
                 var response = await StreamAsync(
                     plan.Provenance.SessionId,
                     assignment,
@@ -184,6 +211,7 @@ internal sealed class ChildAgentModelLoop
 
                 if (response.ToolRequests.Count > 0)
                 {
+                    _focused?.AdmitToolCalls(response.ToolRequests.Count);
                     if (_steering is not null)
                     {
                         var steering = await _steering.PauseChildAtBoundaryAsync(
@@ -264,9 +292,44 @@ internal sealed class ChildAgentModelLoop
                     continue;
                 }
 
+                var acceptedResponse = _sanitizer.Sanitize(response.Text);
+                if (_focused is not null)
+                {
+                    try
+                    {
+                        acceptedResponse = _focused.Validate(assignment, acceptedResponse);
+                    }
+                    catch (Exception exception) when (exception is InvalidDataException or JsonException or ArgumentException)
+                    {
+                        if (formatCorrections >= _focused.MaximumCorrections)
+                        {
+                            throw new InvalidDataException("Focused review output failed schema or provenance validation.");
+                        }
+
+                        formatCorrections++;
+                        ledger.Charge(new AgentResourceUsage { Corrections = 1 });
+                        var exchangeStart = messages.Count;
+                        messages.Add(new ModelMessage
+                        {
+                            Role = ModelMessageRole.Assistant,
+                            SectionId = "focused-review-invalid-output",
+                            Content = [new ModelContentPart { Content = acceptedResponse }],
+                        });
+                        messages.Add(new ModelMessage
+                        {
+                            Role = ModelMessageRole.Developer,
+                            SectionId = "focused-review-correction",
+                            Content = [new ModelContentPart { Content = _prompts.Get(PromptFileNames.CorrectionFocusedReviewOutput) }],
+                        });
+                        transientState.Clear();
+                        history.RecordExchange(exchangeStart, round, []);
+                        continue;
+                    }
+                }
+
                 stopwatch.Stop();
                 return new ChildAgentModelResult(
-                    _sanitizer.Sanitize(response.Text),
+                    acceptedResponse,
                     ledger.Snapshot with { WallTime = stopwatch.Elapsed },
                     deliveredEvidenceIds.OrderBy(item => item.Value).ToArray(),
                     model);
@@ -609,10 +672,11 @@ internal sealed class ChildAgentModelLoop
                     });
             }),
         ];
-        var reads = batch.Where(item => item.Invocation.ExpectedRegistration?.Implementation is ChildAgentEvidenceTool).ToArray();
+        var reads = batch.Where(item => item.Invocation.ExpectedRegistration?.Implementation is ChildAgentEvidenceTool
+            || (_focused is not null && item.Invocation.ExpectedRegistration?.Implementation is FocusedReviewReadTool)).ToArray();
         foreach (var read in reads)
         {
-            registrations[ChildAgentEvidenceTool.ToolId].Tool.DeserializeInput(read.Invocation.ArgumentsJson);
+            registrations[read.Invocation.ToolId].Tool.DeserializeInput(read.Invocation.ArgumentsJson);
         }
 
         var ordinary = batch.Except(reads).ToArray();

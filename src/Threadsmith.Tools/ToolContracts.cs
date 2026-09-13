@@ -399,6 +399,10 @@ public sealed record ToolResult<TOutput>
 /// <summary>Provider-neutral dynamic result returned to the model execution layer.</summary>
 public sealed record ToolInvocationResult
 {
+    /// <summary>Host-only canonical review handoff; never inferred from model-authored JSON.</summary>
+    [JsonIgnore]
+    public FocusedReviewDelivery? ReviewDelivery { get; init; }
+
     /// <summary>Invocation identity.</summary>
     public required ToolInvocationId ToolInvocationId { get; init; }
 

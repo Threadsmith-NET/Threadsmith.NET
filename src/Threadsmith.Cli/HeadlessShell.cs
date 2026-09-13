@@ -525,6 +525,42 @@ public sealed class HeadlessShell
         return _dispatcher.DispatchAsync(new InvokeSkillCommand(request), cancellationToken);
     }
 
+    /// <summary>Invokes an explicit skill with repository authority, without requiring a solution or a parent model turn.</summary>
+    public async Task<int> RunSkillAsync(
+        string repositoryPath,
+        RepositoryTrustLevel trustLevel,
+        string selector,
+        string inputJson,
+        CancellationToken cancellationToken = default)
+    {
+        var sessionId = await _dispatcher.DispatchAsync(new CreateSessionCommand("Headless skill"), cancellationToken);
+        await _dispatcher.DispatchAsync(new OpenRepositoryCommand(sessionId, repositoryPath, trustLevel), cancellationToken);
+        var result = await InvokeSkillAsync(
+            new SkillInvocationRequest
+            {
+                InvocationId = SkillInvocationId.New(),
+                UseDefaultBudget = true,
+                SessionId = sessionId,
+                RunId = RunId.New(),
+                Selector = selector,
+                InputJson = inputJson,
+                Trust = trustLevel,
+                Phase = RunPhase.EvidenceCollection,
+                HostBudget = new SkillBudget(),
+            },
+            cancellationToken);
+        var text = result.ReviewDelivery is { } delivery
+            ? delivery.Markdown ?? $"Review {delivery.Status}: [{Path.GetFileName(delivery.SavedPath)}]({delivery.SavedPath})."
+            : JsonSerializer.Serialize(result);
+        for (var offset = 0; offset < text.Length; offset += 2048)
+        {
+            await _output.WriteAsync(text.AsMemory(offset, Math.Min(2048, text.Length - offset)), cancellationToken);
+        }
+
+        await _output.WriteLineAsync(ReadOnlyMemory<char>.Empty, cancellationToken);
+        return result.Status == SkillInvocationStatus.Completed ? 0 : 2;
+    }
+
     /// <summary>Continues one waiting skill invocation with a host-owned result.</summary>
     public Task<SkillInvocationResult> ContinueSkillAsync(
         SkillInvocationId invocationId,

@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "skillId": {
+    "value": "review"
+  },
+  "packageId": "threadsmith.review",
+  "version": "1.0.0",
+  "displayName": "review",
+  "description": "Review current branch changes, a remote branch or special instructions; optionally assess a requirements document. Save canonical Markdown to an existing repository .inbox, otherwise stream it to the console.",
+  "tags": [
+    "review"
+  ],
+  "publisher": "Threadsmith.NET",
+  "license": "Apache-2.0",
+  "assets": [
+    {
+      "path": "instructions/review.md",
+      "bytes": 426,
+      "sha256": "d689ecce27b943ad21f2e24ce5e80f3b140405bb0ff7be0162b7f225bd9ea715",
+      "required": true,
+      "kind": "instructions"
+    },
+    {
+      "path": "schemas/input.json",
+      "bytes": 908,
+      "sha256": "fb69f9883facd75e2be6c66517456e465b90c3853e976d06e06bad5a9a4245d0",
+      "required": true,
+      "kind": "schema"
+    },
+    {
+      "path": "schemas/output.json",
+      "bytes": 790,
+      "sha256": "ad239db36f28e25d4763ebc4f43d899ee219327b3955800bf614b44ac7e7586e",
+      "required": true,
+      "kind": "schema"
+    }
+  ],
+  "requirements": {
+    "requiredTools": [
+      "read_file"
+    ],
+    "optionalTools": [],
+    "toolContractVersions": {},
+    "minimumTrust": "trustedRead",
+    "approvalCategories": [
+      "read-only review",
+      "existing inbox report"
+    ],
+    "model": {
+      "workloads": [
+        "Review"
+      ],
+      "requiresToolCalls": true,
+      "requiresStructuredOutput": false,
+      "minimumContextWindow": 8192,
+      "allowedProfiles": [],
+      "deniedProfiles": []
+    },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999"
+  },
+  "budget": {
+    "contentTokens": 8000,
+    "workflowSteps": 8,
+    "modelTurns": 64,
+    "toolCalls": 128,
+    "mutations": 0,
+    "validationAttempts": 0,
+    "delegatedChildren": 4,
+    "parallelChildren": 4,
+    "worktrees": 0,
+    "reviewerFindings": 128,
+    "wallTime": "00:20:00"
+  },
+  "agents": [],
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "review",
+    "steps": [
+      {
+        "stepId": "request-review",
+        "kind": "requestReviews",
+        "instructionAsset": "instructions/review.md",
+        "inputSchemaAsset": "schemas/input.json",
+        "outputSchemaAsset": "schemas/output.json",
+        "dependsOn": [],
+        "maximumIterations": 1
+      }
+    ]
+  }
+}

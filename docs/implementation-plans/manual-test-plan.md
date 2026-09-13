@@ -2181,3 +2181,29 @@ Prerequisites: a live selected model for a small repeated-prefix experiment and 
 4. Simulate transient HTTP failure before output, failure after partial output, a blocked read, and caller cancellation. Confirm one bounded host retry loop and one total deadline; then make another request through the shared transport to verify it remains usable.
 
 Expected: observed costs distinguish ordinary/cache input and output without double-counting. Conservative estimates may reduce usable context; no signed content is compacted to force admission, missing usage is not invented, and retries never repeat observed output or tools.
+
+## MTP-266 — Focused review invocation and compatibility
+
+**Prerequisites:** Trusted disposable Git repository, eligible configured reviewer models, explicit comparison branch, application with verified review assets.
+
+**Steps:** List/inspect skills; confirm only the public `review` addition. Invoke `/skills use Maintained:review {"baseBranch":"main"}` after creating committed, staged, unstaged and untracked fixture changes. Exercise ordinary reviewer roles through `delegate_agents`, existing `review-pr` and a Claude-compatible package. Repeat with child-count/concurrency limits one, two and four, and operational-limit enforcement disabled.
+
+**Expected:** All four focused roles are accounted for in admissible batches with existing model routing. Ordinary outputs/permissions remain unchanged. No private package details enter MAIN. Reviewers inspect one frozen target and never claim process/test execution. The report uses fixed headings and explicit exclusions/partial coverage.
+
+## MTP-267 — Remote and requirements review provenance
+
+**Prerequisites:** Disposable invoking repository and authorized remote test branches, one with an explicit base; Markdown requirements with static and runtime criteria.
+
+**Steps:** Review the remote branch with/without a base; repeat with requirements sourced from workspace and target. Move a remote branch during a running review, test a missing ref/authentication failure, cancel acquisition, and supply unsupported/missing requirements. Exercise special instructions with valid and nonexistent paths.
+
+**Expected:** Captured commits and snapshot/change policy are explicit. No fallback target, local checkout/index/ref/config changes, downloaded-code execution or implicit submodule/LFS/skill activation occurs. Requirements identity is frozen and every explicit criterion appears with evidence/gaps. Runtime-only acceptance stays qualified. Input/acquisition failures precede reviewer launch.
+
+**Limitations:** Real authenticated remote access and remote-host network policy require the operator's configured environment; deterministic fixtures do not substitute for credential integration.
+
+## MTP-268 — Focused report publication and recovery
+
+**Prerequisites:** Disposable repository; repeat with absent inbox, existing inbox, conflicting file, linked destination and a nonwritable inbox.
+
+**Steps:** Invoke review interactively and headlessly with redirected output. Verify canonical report headings, escaped source text and optional criterion table. Interrupt before/after child completion and around report publication; explicitly resume. Retry a report whose destination was repaired.
+
+**Expected:** An absent inbox yields canonical Markdown once and no directory creation. Existing authorized inbox yields one complete UTF-8 file and a concise receipt. Conflicts/links/unwritable destinations fail without silent fallback. Remote reviews use the invoking inbox. Started inference is never silently repeated; completed siblings survive and missing coverage stays explicit. Delivery retry needs no model calls and does not overwrite a different report or leave an apparently complete partial file.

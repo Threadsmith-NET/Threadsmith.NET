@@ -36,13 +36,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System and phase prompts | 26 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
-| Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Context prompts | 21 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
+| Correction prompts | 52 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
+| Tool prompts | 195 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **304** | Complete deployed catalog. |
+| **Total** | **310** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -126,6 +126,10 @@ Active-turn, summary, steering, and delegated-child context framing.
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
+| `Context-FocusedReview-StoppingCondition.md` | Focused reviewer assignment stopping condition. | `None` |
+| `Context-FocusedReview-Task.md` | Focused reviewer assignment task. | `None` |
+| `Context-FocusedReview-Objective.md` | Focused reviewer assignment objective. | `None` |
+| `Context-FocusedReview-Procedure.md` | Private procedure and output-schema framing for the assigned focused reviewer. | [`Instructions`](#placeholder-instructions), [`Schema`](#placeholder-schema) |
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
 
@@ -172,6 +176,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
+| `Correction-FocusedReview-Output.md` | Focused-only output validation correction in the same child conversation. | `None` |
 | `Correction-ChildAgent-InvalidOutput.md` | Legacy Explorer-format correction retained in the catalog; unused for ordinary child responses. | [`Reason`](#placeholder-reason) |
 
 #### `csharp_pattern_search` family
@@ -322,6 +327,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
+| `Tool-read_review_file-Description.md` | Confined frozen review inventory and source-range reader. | `None` |
 | `Tool-AdvancedSemantic-HiddenOmissions.md` | Hidden-omission notice in advanced semantic results. | [`HiddenCount`](#placeholder-hiddencount), [`Plural`](#placeholder-plural) |
 | `Tool-AdvancedSemantic-OmissionsSection.md` | Omissions section in advanced semantic results. | [`Items`](#placeholder-items) |
 | `Tool-AdvancedSemantic-PathPolicyOmission.md` | Path-policy omission text shared by advanced semantic results. | `None` |
@@ -756,6 +762,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 
 | Placeholder | Meaning and use |
 |---|---|
+| <a id="placeholder-instructions"></a>`Instructions` | XML-escaped verified procedure text supplied only to its assigned focused reviewer. |
 | <a id="placeholder-additionalmessages"></a>`AdditionalMessages` | Supplemental model messages inserted into the request outside the current task and retained history. |
 | <a id="placeholder-assignmentid"></a>`AssignmentId` | Stable delegated-child assignment identifier used to correlate task, status, finding, omission, child-detail, and review-detail blocks. |
 | <a id="placeholder-attemptnumber"></a>`AttemptNumber` | Current host-controlled correction or retry attempt number. |
@@ -879,7 +886,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-returnedprojects"></a>`ReturnedProjects` | Number of project entries actually returned after bounds. |
 | <a id="placeholder-returnedtests"></a>`ReturnedTests` | Number of test entries actually returned after bounds. |
 | <a id="placeholder-role"></a>`Role` | Host-assigned child-agent or message role. |
-| <a id="placeholder-schema"></a>`Schema` | Tool input JSON schema shown to the model; it may come from a built-in definition or an imported MCP server and is escaped before insertion. |
+| <a id="placeholder-schema"></a>`Schema` | Tool input or focused specialist output JSON schema shown to its assigned model; it may come from a built-in definition or an imported MCP server and is escaped before insertion. |
 | <a id="placeholder-scope"></a>`Scope` | Host-approved repository or task scope. |
 | <a id="placeholder-sequence"></a>`Sequence` | Monotonic sequence number used to order steering or context items. |
 | <a id="placeholder-servername"></a>`ServerName` | Configured MCP server display name. |

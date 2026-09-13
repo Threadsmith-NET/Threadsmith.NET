@@ -25,7 +25,12 @@ public sealed record InvokeSkillOutput(
     [property: JsonPropertyName("reason")] string Reason,
     [property: JsonPropertyName("nextAction")] string NextAction,
     [property: JsonPropertyName("hostActions")] IReadOnlyList<InvokeSkillHostActionOutput> HostActions,
-    [property: JsonPropertyName("outputJson")] string? OutputJson);
+    [property: JsonPropertyName("outputJson")] string? OutputJson) : IFocusedReviewToolResult
+{
+    /// <inheritdoc />
+    [JsonIgnore]
+    public FocusedReviewDelivery? ReviewDelivery { get; init; }
+}
 
 /// <summary>One bounded host action in the full skill invocation result.</summary>
 public sealed record InvokeSkillHostActionOutput(
@@ -70,16 +75,22 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             new SkillInvocationRequest
             {
                 InvocationId = SkillInvocationId.New(),
+                UseDefaultBudget = true,
+                ModelVisibleToolSnapshotId = context.Invocation.ModelVisibleToolSnapshotId,
                 SessionId = context.SessionId,
                 RunId = context.RunId,
                 WorkspaceId = context.Invocation.WorkspaceId,
                 Selector = input.Selector,
                 InputJson = inputJson,
                 Trust = context.Invocation.TrustLevel,
+                Sensitivity = context.Invocation.Sensitivity,
                 Phase = context.Phase,
                 HostBudget = new SkillBudget(),
             },
             cancellationToken);
+        var publicOutput = result.ReviewDelivery is { } canonical
+            ? JsonSerializer.Serialize(canonical with { Markdown = null }, ModelJsonOptions)
+            : result.OutputJson;
         var output = new InvokeSkillOutput(
             result.InvocationId.Value.ToString("D"),
             result.Package.SkillId.Value,
@@ -92,7 +103,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 action.Kind.ToString(),
                 action.StepId,
                 action.PayloadJson)).ToArray(),
-            result.OutputJson);
+            publicOutput) { ReviewDelivery = result.ReviewDelivery };
         var modelOutput = new InvokeSkillModelOutput(
             result.Package.SkillId.Value,
             result.Package.Version,
@@ -103,7 +114,9 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 action.Kind.ToString(),
                 action.StepId,
                 ParsePayload(action.PayloadJson))).ToArray(),
-            ParseOptionalPayload(result.OutputJson));
+            ParseOptionalPayload(result.ReviewDelivery is { } delivery
+                ? JsonSerializer.Serialize(delivery with { Markdown = null }, ModelJsonOptions)
+                : result.OutputJson));
         return new ToolExecution<InvokeSkillOutput>(
             output,
             [new ToolProvenanceSource(

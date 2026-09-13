@@ -11,6 +11,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="MaintainedSkills\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="ReviewSkills\**\*" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <InternalsVisibleTo Include="Threadsmith.Skills.Tests" />
   </ItemGroup>
 </Project>

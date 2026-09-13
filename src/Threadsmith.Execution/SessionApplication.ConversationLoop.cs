@@ -72,6 +72,27 @@ public sealed partial class SessionApplication
                 }
             }
 
+            if (loopState.ReviewDeliveries.Count > 0)
+            {
+                foreach (var delivery in loopState.ReviewDeliveries)
+                {
+                    var body = delivery.Markdown ?? $"Review saved: [{Path.GetFileName(delivery.SavedPath)}](<{delivery.SavedPath}>) ({delivery.Status}).\n";
+                    for (var offset = 0; offset < body.Length; offset += 2048)
+                    {
+                        await _events.PublishAsync(
+                            new ModelOutputObserved(
+                                registration.SessionId,
+                                DateTimeOffset.UtcNow,
+                                body.Substring(offset, Math.Min(2048, body.Length - offset))),
+                            cancellationToken);
+                    }
+
+                    await ArchiveVisibleMessageAsync(registration.SessionId, runId, ConversationRole.Assistant, body, cancellationToken);
+                }
+
+                return null;
+            }
+
             var submittedSteering = outcome.PreToolSteering.Count > 0
                 ? outcome.PreToolSteering
                 : await _steering.PauseParentAtBoundaryAsync(
@@ -1208,6 +1229,11 @@ public sealed partial class SessionApplication
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
             var result = batchResult.Result;
+            if (result.ReviewDelivery is { } reviewDelivery)
+            {
+                loopState.ReviewDeliveries.Add(reviewDelivery);
+            }
+
             var structuredContent = result.ResultJson;
             var content = result.ModelResultContent
                 ?? structuredContent
@@ -2670,6 +2696,8 @@ public sealed partial class SessionApplication
             _maximumSourcesPerGroup = maximumSourcesPerGroup;
             _prompts = prompts;
         }
+
+        public List<FocusedReviewDelivery> ReviewDeliveries { get; } = [];
 
         public int AssessmentSequence { get; private set; }
 

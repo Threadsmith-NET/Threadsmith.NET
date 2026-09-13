@@ -13,6 +13,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private readonly IDomainEventStream _events;
     private readonly IPromptLoader _prompts;
     private readonly ISkillPackageVerifier _verifier;
+    private readonly ISkillReviewActionHandler? _reviewActions;
     private readonly ISkillProcedureRunner _runner;
     private readonly BoundedJsonSchemaValidator _schemas;
     private readonly ISkillStateStore _state;
@@ -29,7 +30,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         IPromptLoader prompts,
         ISkillStateStore state,
         Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> hostContext,
-        IDomainEventStream events)
+        IDomainEventStream events,
+        ISkillReviewActionHandler? reviewActions = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -41,6 +43,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(hostContext);
         ArgumentNullException.ThrowIfNull(events);
+        _reviewActions = reviewActions;
         _catalog = catalog;
         _verifier = verifier;
         _compatibility = compatibility;
@@ -63,6 +66,23 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             request.Selector,
             request.SessionId,
             cancellationToken);
+        if (candidate.Metadata.Workflow.Steps.Any(step => _reviewActions?.Handles(candidate, step) == true))
+        {
+            var host = await _hostContext(request.SessionId, cancellationToken);
+            if (request.WorkspaceId is { } workspace && workspace != host.WorkspaceId)
+            {
+                throw new UnauthorizedAccessException("Focused review workspace does not match the current session.");
+            }
+
+            request = request with
+            {
+                WorkspaceId = host.WorkspaceId,
+                Trust = host.Trust,
+                Phase = host.Phase,
+                HostBudget = request.UseDefaultBudget ? _reviewActions?.DefaultBudget ?? request.HostBudget : request.HostBudget,
+            };
+        }
+
         var compatibility = _compatibility.Evaluate(candidate, request);
         if (!compatibility.IsCompatible)
         {
@@ -119,19 +139,26 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         CancellationToken cancellationToken = default)
     {
         var checkpoint = await GetRequiredCheckpointAsync(invocationId, cancellationToken);
-        if (checkpoint.Status is SkillInvocationStatus.Completed or SkillInvocationStatus.Running)
+        if (checkpoint.Status == SkillInvocationStatus.Completed
+            || (checkpoint.Status == SkillInvocationStatus.Running && (_active.ContainsKey(invocationId) || _reviewActions is null)))
         {
             throw new InvalidOperationException("Completed or already-running skill invocations cannot resume.");
-        }
-
-        if (checkpoint.Status == SkillInvocationStatus.AwaitingHost)
-        {
-            throw new InvalidOperationException("A waiting invocation requires ContinueSkillCommand with host result JSON.");
         }
 
         (var candidate, var plan) = await RestorePlanAsync(
             checkpoint,
             cancellationToken);
+        if (checkpoint.Status == SkillInvocationStatus.AwaitingHost
+            && !candidate.Metadata.Workflow.Steps.Any(step => _reviewActions?.Handles(candidate, step) == true))
+        {
+            throw new InvalidOperationException("A waiting invocation requires ContinueSkillCommand with host result JSON.");
+        }
+
+        if (checkpoint.Status == SkillInvocationStatus.Running && !candidate.Metadata.Workflow.Steps.Any(step => _reviewActions?.Handles(candidate, step) == true))
+        {
+            throw new InvalidOperationException("Already-running ordinary skill invocations cannot resume.");
+        }
+
         var resumed = checkpoint with
         {
             Attempt = checked(checkpoint.Attempt + 1),
@@ -166,6 +193,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             ?? throw new InvalidDataException("Waiting skill checkpoint has no pending host action.");
         var definition = candidate.Metadata.Workflow.Steps.Single(item =>
             string.Equals(item.StepId, waiting.StepId, StringComparison.Ordinal));
+        if (_reviewActions?.Handles(candidate, definition) == true)
+        {
+            throw new UnauthorizedAccessException("Focused review accepts only its host-owned durable join, not caller-supplied host results.");
+        }
+
         var validated = await ValidateAgainstAssetAsync(
             candidate,
             definition.OutputSchemaAsset,
@@ -263,6 +295,16 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             await SaveAsync(running, VersionOf(checkpoint), source.Token);
             latest = running;
             var current = running;
+            if (current.Steps.LastOrDefault() is { HostAction: not null } pending)
+            {
+                var pendingDefinition = candidate.Metadata.Workflow.Steps.Single(step => step.StepId == pending.StepId);
+                if (_reviewActions?.Handles(candidate, pendingDefinition) == true)
+                {
+                    current = await CompleteReviewActionAsync(candidate, plan, current, pendingDefinition, source.Token);
+                    latest = current;
+                }
+            }
+
             var totalDeclaredIterations = candidate.Metadata.Workflow.Steps.Sum(item => item.MaximumIterations);
             while (current.Steps.Count < totalDeclaredIterations)
             {
@@ -312,6 +354,13 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 };
                 await SaveAsync(current, VersionOf(latest), source.Token);
                 latest = current;
+                if (result.HostAction is not null && _reviewActions?.Handles(candidate, step) == true)
+                {
+                    current = await CompleteReviewActionAsync(candidate, plan, current, step, source.Token);
+                    latest = current;
+                    continue;
+                }
+
                 if (result.HostAction is not null)
                 {
                     return CreateResult(current, "workflow is waiting for a governed host action");
@@ -364,6 +413,30 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             _active.TryRemove(checkpoint.InvocationId, out _);
         }
+    }
+
+    private async Task<SkillWorkflowCheckpoint> CompleteReviewActionAsync(
+        SkillCatalogCandidate candidate,
+        SkillInvocationPlan plan,
+        SkillWorkflowCheckpoint checkpoint,
+        SkillWorkflowStep step,
+        CancellationToken cancellationToken)
+    {
+        var handler = _reviewActions ?? throw new InvalidOperationException("Focused review is unavailable.");
+        var output = await handler.ExecuteAsync(candidate, plan, checkpoint, cancellationToken);
+        var validated = await ValidateAgainstAssetAsync(candidate, step.OutputSchemaAsset, output, cancellationToken);
+        var delivery = System.Text.Json.JsonSerializer.Deserialize<FocusedReviewDelivery>(validated, FocusedReviewInput.JsonOptions)
+            ?? throw new InvalidDataException("Focused review projection is missing.");
+        var completed = checkpoint with
+        {
+            Steps = checkpoint.Steps.Select(item => item.StepId == step.StepId
+                ? item with { HostAction = null, OutputJson = validated, RecordedAt = DateTimeOffset.UtcNow } : item).ToArray(),
+            ReviewDelivery = delivery,
+            Status = SkillInvocationStatus.Running,
+            RecordedAt = DateTimeOffset.UtcNow,
+        };
+        await SaveAsync(completed, VersionOf(checkpoint), cancellationToken);
+        return completed;
     }
 
     private string GetPromptValue(string promptFileName)
@@ -811,6 +884,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 .ToArray(),
             Reason = reason,
             Checkpoint = checkpoint,
+            ReviewDelivery = checkpoint.ReviewDelivery,
         };
     }
 

@@ -3615,6 +3615,7 @@ public sealed partial class InteractionCoordinator
                         new SkillInvocationRequest
                         {
                             InvocationId = SkillInvocationId.New(),
+                            UseDefaultBudget = true,
                             SessionId = sessionId,
                             RunId = RunId.New(),
                             Selector = selector,
@@ -3845,6 +3846,11 @@ public sealed partial class InteractionCoordinator
 
     private static string FormatSkillInvocation(SkillInvocationResult result)
     {
+        if (result.ReviewDelivery is { } review)
+        {
+            return review.Markdown ?? $"Review saved: [{Path.GetFileName(review.SavedPath)}](<{review.SavedPath}>) ({review.Status}).\n";
+        }
+
         var output = string.IsNullOrWhiteSpace(result.OutputJson)
             ? string.Empty
             : $"\n{result.OutputJson}";

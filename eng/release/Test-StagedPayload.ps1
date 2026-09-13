@@ -24,3 +24,5 @@ if ($RuntimeIdentifier -eq "$hostRid$hostArch") {
         throw 'Native staged ripgrep smoke check failed.'
     }
 }
+
+& (Join-Path $PSScriptRoot 'Test-FocusedReviewPayload.ps1') -StageDirectory $stage | Out-Null

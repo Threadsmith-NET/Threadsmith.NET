@@ -125,6 +125,24 @@ public sealed record PromptAssetDefinition
 /// <summary>Stable filenames for every required Threadsmith-owned model-facing prompt asset.</summary>
 public static class PromptFileNames
 {
+    /// <summary>Focused reviewer assignment wording.</summary>
+    public const string ContextFocusedReviewObjective = "Context-FocusedReview-Objective.md";
+
+    /// <summary>Focused reviewer assignment wording.</summary>
+    public const string ContextFocusedReviewTask = "Context-FocusedReview-Task.md";
+
+    /// <summary>Focused reviewer assignment wording.</summary>
+    public const string ContextFocusedReviewStoppingCondition = "Context-FocusedReview-StoppingCondition.md";
+
+    /// <summary>Focused private procedure wrapper under existing host authority.</summary>
+    public const string ContextFocusedReviewProcedure = "Context-FocusedReview-Procedure.md";
+
+    /// <summary>Focused-only same-conversation schema correction.</summary>
+    public const string CorrectionFocusedReviewOutput = "Correction-FocusedReview-Output.md";
+
+    /// <summary>Confined immutable review source reader.</summary>
+    public const string ToolReadReviewFileDescription = "Tool-read_review_file-Description.md";
+
     /// <summary>Gets the stable filename for the SystemSystemPrompt prompt asset.</summary>
     public const string SystemSystemPrompt = "System-SystemPrompt.md";
 
@@ -1040,6 +1058,12 @@ public static class PromptFileNames
     /// <summary>Gets all required filenames in deterministic ordinal order.</summary>
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly<string>(
     [
+        ContextFocusedReviewObjective,
+        ContextFocusedReviewTask,
+        ContextFocusedReviewStoppingCondition,
+        ContextFocusedReviewProcedure,
+        CorrectionFocusedReviewOutput,
+        ToolReadReviewFileDescription,
         SystemSystemPrompt,
         SystemPhaseEvidenceCollection,
         SystemPhaseChangePlanning,
@@ -1444,6 +1468,12 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionMutationRenameSymbolSemanticUnavailable,
             PromptFileNames.CorrectionMutationRenameSymbolOverlap,
             PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
+            PromptFileNames.ContextFocusedReviewObjective,
+            PromptFileNames.ContextFocusedReviewTask,
+            PromptFileNames.ContextFocusedReviewStoppingCondition,
+            PromptFileNames.ContextFocusedReviewProcedure,
+            PromptFileNames.CorrectionFocusedReviewOutput,
+            PromptFileNames.ToolReadReviewFileDescription,
             PromptFileNames.SystemChildAgentHostPolicy,
             PromptFileNames.SystemChildAgentExplorer,
             PromptFileNames.SystemChildAgentOutputPolicy,
@@ -1777,6 +1807,7 @@ public static class PromptAssetCatalog
                         "TotalFiles",
                         "TotalSources",
                         "TotalEvidenceItems"),
+                    [PromptFileNames.ContextFocusedReviewProcedure] = Set("Instructions", "Schema"),
                     [PromptFileNames.ContextChildAgentSteering] = Set("Sequence", "SubmittedAt", "Text"),
                     [PromptFileNames.CorrectionChildAgentInvalidOutput] = Set("Reason"),
                     [PromptFileNames.ToolDelegateAgentsChildDetails] = Set("AssignmentId", "DetailsJson"),

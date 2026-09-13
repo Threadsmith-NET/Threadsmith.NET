@@ -1960,4 +1960,4 @@ The tool remains subject to repository trust, `/tools` availability, `tools.allo
 
 ## Resource limits
 
-Operational budgets, output truncation, transport limits, and TUI buffers can be configured. See the [resource-limit reference](operations/resource-limits.md) for every new key, defaults, units, trusted-only sections, and interactions between service limits and outer tool limits. The [complete defaults sample](../.threadsmith/resource-limits.example) is a merge reference. Restart after editing startup-scoped settings.
+Operational budgets, output truncation, transport limits, and TUI buffers can be configured. See the [resource-limit reference](operations/resource-limits.md) for every new key, defaults, units, trusted-only sections, and interactions between service limits and outer tool limits. Restart after editing startup-scoped settings.

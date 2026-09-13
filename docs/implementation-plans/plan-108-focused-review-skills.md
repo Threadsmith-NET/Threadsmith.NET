@@ -1,6 +1,6 @@
 # Plan 108 — Focused review skills with private reviewer assignments
 
-**Status:** Planned. Source inspection and design completed on 2026-09-13; no product implementation is included in this planning change.
+**Status:** Implemented and adversarially reviewed. Automated closeout evidence and environment-dependent verification limits are recorded in section 18.
 **Delivery track:** M24 — focused review foundation for the planned first-class review capability.
 **Prerequisites:** Implemented native skill verification/workflows (Plan 39 / ADR-34), Claude compatibility (Plan 47 / ADR-39), ordinary delegation and role/model contracts (Plans 91 and 95.1), current model-requested delegation admission (ADR-57), governed repository context, immutable workspace/Git comparison facilities, and deployed prompt assets.
 **Relationship to other work:** Plan 60 remains the owner of the broader review-session, CI, SARIF, finding-lifecycle, and publication design. Its implementation is not a prerequisite. This plan supplies an opt-in skill-bound review path, including explicit remote-branch retrieval, without changing ordinary child responses. Plan 60's remote PR-provider/publication and CI contracts remain separate. Plans 106 and 107 are independent.
@@ -523,7 +523,7 @@ During implementation:
 - Keep Plan 60/Scenario Z's CI/publication work deferred; add a factual cross-reference where necessary to distinguish the optional structured path.
 - Perform the applicable DOX pass. Do not reopen completed milestone details or mark M24 complete.
 
-For this planning-only change, add this document and one README navigation row. No product source, historical acceptance contract, milestone lifecycle, or existing plan is changed.
+Implementation closeout belongs in this document. Milestone lifecycle and unrelated historical plans remain unchanged.
 
 ## 17 Open Decisions
 
@@ -537,3 +537,66 @@ Implementation may resolve names and narrow mechanics after code inspection, but
 - Exact placement of the review-specific Markdown projection and host artifact writer within existing skill result surfaces; sections 6.9 and 6.10 fix format, conditional sections, and inbox/console delivery.
 
 None authorizes a general nested-skill facility, public specialist discovery, a new provider loop, automatic role binding, or weaker backwards compatibility. Deviations from those boundaries require explicit user agreement.
+
+
+## 18 Implementation closeout
+
+Implemented in the active `C:/source/repos/Threadsmith` checkout on `feature/plan-108-focused-review-skills`. [ADR-61](../architecture/adr-61-focused-review-skill-assignments.md) records the exact verified entry, private native packages, existing child-loop integration and host-owned report delivery. The public catalog gains only `review`; shipped pre-existing packages and ordinary role response contracts retain their existing behavior. Plan 107 and milestone lifecycle documents were not changed.
+
+The adapter freezes bounded local/remote source and optional requirements, plans all four existing reviewer roles through the existing scheduler, validates private native outputs against actual delivered source ranges, and deterministically renders the canonical report. Focused-only defaults allow source discovery, reads and assessment without increasing ordinary delegated operational limits. Narrow path selections avoid unrelated source capture while preserving ancestor instructions and requested target requirements. Requirements use a separate bounded reader with source identity and paged criterion labels. Git capture treats file identities literally, denies empty remote-network grants, rejects configured URL rewrites and disables HTTP redirects.
+
+Adversarial review was iterated until no actionable findings remained. Corrections and regressions cover budget exhaustion, excessive out-of-scope capture, unavailable/oversized requirements context, multiline definitions and incidental criterion references, private instruction/schema echoes including minified JSON, remote grant/rewrite/redirect handling, Git metacharacter filenames and restored child/checkpoint identity. Live validation additionally exposed source redaction altering code. The fix rejects changed Git identities, excludes altered source/baselines, rejects altered requirements/ranges before citation admission, blocks unavailable governing instructions, and fences obsolete captures with review record version 2. Re-review of these fixes returned clean. The reviewer made no source changes.
+
+### Verification evidence
+
+- `dotnet build src/Threadsmith.sln --no-restore --verbosity quiet`: passed with zero warnings and zero errors.
+- `dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4`: **3115 passed, 19 skipped, zero failed** (3134 total). Skips require live providers/MCP, staged embedding/reranking assets, or unavailable symbolic-link creation.
+- Focused/legacy skill suite: 89 passed; delegation suite: 255 passed. The real focused scheduler fixture uses the actual pinned native procedures, source inventory/read/requirements requests, four role conversations and restore checks.
+- Local Debug publish, [focused payload verification](../../eng/release/Test-FocusedReviewPayload.ps1), and published application `--version` smoke test passed. Public/private manifest and asset hashes were verified separately. `git diff --check` passed.
+- The initial broader documentation check exposed pre-existing links to configuration samples and source files absent from the packaged help. At the user's request, unavailable sample hyperlinks were removed and implementation links became explicit source-checkout references. Republish and `Test-PackagedDocumentation.ps1` now pass for all 108 documentation files (1,037,110 bytes).
+
+### Acceptance evidence map
+
+| Criteria | Evidence |
+|---|---|
+| AC-01, AC-03, AC-08, AC-21 | [Focused catalog/binding and real native workflow tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs), with the existing verifier tamper/revocation tests in [SkillSubsystemTests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.cs). |
+| AC-02, AC-11, AC-12, AC-20 | [Fresh context and same-conversation correction tests](../../tests/Threadsmith.ParallelAgents.Tests/ModelExplorerAssignmentRunnerTests.FocusedReview.cs), [private-definition echo rejection and safe public result assertions](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs); adversarial tracing of discovery, archive, join and console delivery projections. |
+| AC-04, AC-05 | Existing [native skill workflow/model request tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.ModelRequests.cs) and [Claude compatibility tests](../../tests/Threadsmith.Skills.Tests/Milestone17CompatibilityTests.cs), plus [native waiting/resume tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.cs). |
+| AC-06, AC-07, AC-09 | Existing [role contract tests](../../tests/Threadsmith.ParallelAgents.Tests/DelegateAgentRoleContractTests.cs), [ordinary role output tests](../../tests/Threadsmith.ParallelAgents.Tests/AgentRoleOutputTests.cs) and [model-origin delegation admission tests](../../tests/Threadsmith.ParallelAgents.Tests/Plan91DelegationToolTests.cs). |
+| AC-10, AC-13, AC-14, AC-15, AC-18 | [Actual scheduler/private native validator/source reader fixture](../../tests/Threadsmith.ParallelAgents.Tests/ModelExplorerAssignmentRunnerTests.FocusedExecution.cs), [focused opt-in/correction tests](../../tests/Threadsmith.ParallelAgents.Tests/ModelExplorerAssignmentRunnerTests.FocusedReview.cs), [role model configuration tests](../../tests/Threadsmith.Architecture.Tests/AgentRoleModelConfigurationTests.cs) and explicit/default budget assertions in [workflow tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs). |
+| AC-16, AC-27, AC-34, AC-37 | [Real Git committed/staged/unstaged/untracked capture, missing scope/baseline, literal filename and bounded selected-source tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs). |
+| AC-17, AC-19, AC-28, AC-29, AC-30 | [Pinned schema/citation/runtime checks and deterministic report section/escaping/partial-coverage tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs). |
+| AC-22, AC-23 | [Delivery repair without repeated inference](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedRecovery.cs), [restored child/checkpoint provenance checks](../../tests/Threadsmith.ParallelAgents.Tests/ModelExplorerAssignmentRunnerTests.FocusedExecution.cs), existing scheduler cancellation/stale-write tests and native persistence/resume tests. |
+| AC-24, AC-38 | [Canonical console/inbox workflow tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs), shared delivery marker integration in [interactive coordination](../../src/Threadsmith.Interaction/Coordination/InteractionCoordinator.cs), [headless shell](../../src/Threadsmith.Cli/HeadlessShell.cs), and [conversation loop](../../src/Threadsmith.Execution/SessionApplication.ConversationLoop.cs), reviewed for identical canonical content and receipt-only saved delivery. Physical/provider-backed frontend rehearsal is described below. |
+| AC-25 | [Published public/private recipe and asset verification](../../eng/release/Test-FocusedReviewPayload.ps1), [catalog exclusion test](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs), and passing [prompt deployment architecture checks](../../tests/Threadsmith.Architecture.Tests/PromptAssetArchitectureTests.cs). |
+| AC-26 | [ADR-61](../architecture/adr-61-focused-review-skill-assignments.md), [skills operations](../operations/skills.md), [authoring contract](../skill-authoring.md), [delegation architecture](../architecture/delegate-agents-tool.md), [Scenario AV](acceptance-scenarios.md#scenario-av--focused-review-skills) and MTP-266 through MTP-268 in the [manual test catalog](manual-test-plan.md). |
+| AC-31, AC-32, AC-33 | [Criteria extraction, ignored workspace requirements, runtime qualification and optional report section tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs), [700-criterion paged requirements reader fixture](../../tests/Threadsmith.ParallelAgents.Tests/ModelExplorerAssignmentRunnerTests.FocusedExecution.cs). |
+| AC-35, AC-36, AC-41 | [Exact remote refs, snapshot/base distinction, unchanged invoking Git state and network policy fixtures](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedRecovery.cs); captured invoking-repository delivery identity and revision-qualified report citations. |
+| AC-39, AC-40, AC-42 | [Atomic/idempotent/cancelled inbox publication and console/inbox workflow tests](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedReview.cs), [invalid-destination repair and model-free resume](../../tests/Threadsmith.Skills.Tests/SkillSubsystemTests.FocusedRecovery.cs). |
+
+### Verification limits
+
+Deterministic fixtures do not attest model assessment quality, authenticated remote credential integration, live branch movement over a real transport, physical terminal rendering or every operating system's filesystem permissions. Those operator rehearsals are specified in MTP-266, MTP-267 and MTP-268; authenticated remote and physical-terminal rehearsals remain unexecuted; the explicit headless Terra checks below cover live local review and delivery. Live Terra checks are recorded separately below. The focused workflow itself is static review and never claims to have executed target tests, benchmarks or manual acceptance. This closeout does not mark M24 complete or implement Plan 60's publication/CI scope.
+
+
+### User-authorized live Terra checks
+
+Live checks used only the configured `gpt-5.6-terra` profile (`e7fc8c85-d362-445e-b235-709da2cf17f8`, provider `openai-codex`) at medium reasoning, pinned for every reviewer through process-scoped trusted settings. One same-conversation format correction was allowed. The published application reviewed a disposable synthetic Git repository; no provider/role defaults were persisted or changed.
+
+The first launch exposed an incorrect example selector. Documentation now uses the native scope-qualified `Maintained:review`, covered by an explicit catalog assertion. The initial live review also exposed the source-redaction problem described above; its findings are not accepted as closeout evidence. After the fix, the synthetic credential-logging source that required redaction was visibly omitted rather than delivered as truncated code, and no false syntax/compilation finding recurred.
+
+| Post-fix live check | Observed result |
+|---|---|
+| Current-branch review, absent inbox | Canonical Markdown streamed once with all required headings and all five frozen workspace criteria. Three reviewer outputs validated; the performance output was rejected after one correction and remained an explicit failed role. The report correctly stayed partial and retained valid sibling results. |
+| Special-instructions snapshot, existing inbox | All four reviewer outputs validated. One complete UTF-8 report was saved in the existing invoking inbox and console output contained only its receipt. The report correctly stayed partial because the redacted source was omitted. |
+| Acceptance and authority | Runtime/benchmark criterion AC-5 remained `Not assessed`; no reviewer recorded a mutation, process, build or test execution. Every recorded child used the pinned Terra profile. |
+| Source and delivery integrity | Pre/post source hashes and Git status matched in both runs. Required headings appeared once, all five criteria were present, private package/schema text was absent, and the inbox contained exactly one report. |
+
+These results establish live provider/tool continuation, validation/failure handling, static requirements assessment and both headless delivery modes. They do not establish that every model response will validate, correctness of all substantive findings, authenticated remote Git behavior, or physical terminal rendering. Recovery, obsolete-record rejection and idempotent publication were exercised by the deterministic regression suite.
+
+
+### Maintained verification status follow-up
+
+The user reported that verifying `Maintained:review@1.0.0` and `Maintained:review-pr@1.0.0` still left `/skills` showing `Unverified disabled`. The native verifier correctly returned maintained/enabled, but the compatible catalog left its list/inspect snapshot unchanged. Native updates now synchronize the exact scope/source/skill/digest entry in that snapshot. Refresh reads the latest native snapshot after Claude discovery, preserving verification completed during that wait. Explicit disables remain authoritative; verification does not write enablement policy. Rediscovery remains metadata-only.
+
+Seven regression cases exercise both maintained review packages, explicit disables, unchanged policy files, unrelated native/Claude candidates, list/inspect consistency, disable/re-enable, tamper/revocation, and overlapping refresh. The solution build passed with zero warnings/errors; the follow-up skills suite passed all 96 tests, and architecture checks passed 265 tests with one skipped. Adversarial review of the follow-up returned clean. These targeted results supplement the original full-suite evidence above.

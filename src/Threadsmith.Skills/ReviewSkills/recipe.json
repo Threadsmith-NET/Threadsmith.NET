@@ -1,29 +1,29 @@
 {
   "version": 1,
-  "publicManifestSha256": "0e7710c709f41b336195ec58b877f1f14a0ddee624947d2514d7449ed148b24a",
+  "publicManifestSha256": "4e2e707e5ca1a6be29c299c77a4267878817bb71b16db5c2e9780e83e575ac01",
   "dependencies": [
     {
       "directory": "security",
       "role": "SecurityReviewer",
-      "manifestSha256": "845a1a81187742320dd59792daeaf7e8eecb25a9caf5fe9bb09a87650ed1fd57",
+      "manifestSha256": "0ea1cfb29904adb64705a04c08b192c1e7f016491d1ab1d585bc335ab0c3f405",
       "procedureId": "inspect"
     },
     {
       "directory": "tests",
       "role": "TestReviewer",
-      "manifestSha256": "c841841ebe1fad4a848602091ec6f88bb391f2577ebd5215d2c131583de26469",
+      "manifestSha256": "e7f8e4c861b675cff023890d133c8481b89936d642abbf19ab0ed497200f7e17",
       "procedureId": "inspect"
     },
     {
       "directory": "performance",
       "role": "PerformanceReviewer",
-      "manifestSha256": "1eee17a830b33c92da7379113c33894ebd6b9fc35d178cf9727216439eaa8926",
+      "manifestSha256": "4329ed0b2a3ea2a7ba7f579ac845006cbf3436fe25a87ff79792fc455246c6d4",
       "procedureId": "inspect"
     },
     {
       "directory": "architecture",
       "role": "ArchitectureReviewer",
-      "manifestSha256": "9ebe948ff4a4ee7d9463065b82f7e1abef1bac3c9301aab523c6c034c64c389c",
+      "manifestSha256": "f7e043945bb0e5bbf826819d3839a5579a1baeb81b4ef45d622f41873b519037",
       "procedureId": "inspect"
     }
   ]

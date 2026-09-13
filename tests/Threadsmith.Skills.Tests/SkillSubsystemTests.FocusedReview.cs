@@ -16,6 +16,20 @@ public sealed partial class SkillSubsystemTests
     private const string EmptyFocusedReview = "{\"strengths\":[],\"architecture\":[],\"issues\":[],\"observations\":[],\"criteria\":[],\"coverage\":[]}";
     private static readonly string[] ExpectedCriteria = ["criterion-001", "AC-02"];
 
+    /// <summary>Git text normalization must not change any hash-pinned review payload bytes.</summary>
+    [Fact]
+    public static void FocusedReview_PinnedAssetsUseRepositoryLineEndings()
+    {
+        var source = Path.GetDirectoryName(MaintainedRoot())
+            ?? throw new InvalidOperationException("Maintained catalog has no parent.");
+        var files = Directory.EnumerateFiles(Path.Combine(MaintainedRoot(), "review"), "*", SearchOption.AllDirectories)
+            .Concat(Directory.EnumerateFiles(Path.Combine(source, "ReviewSkills"), "*", SearchOption.AllDirectories));
+        foreach (var file in files)
+        {
+            Assert.DoesNotContain((byte)'\r', File.ReadAllBytes(file));
+        }
+    }
+
     /// <summary>Verifies the focused review boundary and its observable result.</summary>
     [Theory]
     [InlineData("{\"mode\":\"unknown\"}")]

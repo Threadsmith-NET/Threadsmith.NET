@@ -175,3 +175,7 @@ The behavior above describes the current shipped prompts. The lead's instruction
 | Architecture | `src/Threadsmith.Execution/Prompts/System-ChildAgent-ArchitectureReviewer.md` |
 
 In a deployed application, these files live together under `prompts/` beside the app. Restart Threadsmith after editing deployed prompts because they are loaded at startup. See [customizing deployed prompts](user-guide.md#customizing-deployed-prompts) and the [prompt file reference](prompt-file-reference.md). Editing prose changes the requested review behavior; model, tool, trust, and delegation configuration still apply.
+
+## Notice
+
+AI code reviews can be a use code-quality tool, but should be considered advisory and not authoritative. They are best used in conjunction with human reviews. 

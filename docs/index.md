@@ -8,6 +8,7 @@ Start with the [user guide](user-guide.md) for installation, startup, commands, 
 
 More focused references are grouped by audience:
 
+- [Code review](code-review.md) — JSON and conversational invocation, the five specialists, and the review report.
 - [Operations](operations/README.md) — day-to-day commands, configuration, lifecycle, providers, tools, skills, hooks, prompts, and release installation.
 - [Full-screen agent workspace](operations/agent-workspace.md) — tabs, live tool progress, management dialogs, authentication actions, and per-agent usage.
 - [Cache reporting](operations/cache-optimized-context.md) — request layout, cache reuse, and per-request counters.

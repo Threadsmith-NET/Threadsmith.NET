@@ -80,7 +80,7 @@
     <None Include="..\..\CONTRIBUTING.md" Link="ThreadsmithDocs/CONTRIBUTING.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\CODE_OF_CONDUCT.md" Link="ThreadsmithDocs/CODE_OF_CONDUCT.md" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\LICENSE" Link="ThreadsmithDocs/LICENSE" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="..\..\docs\index.md;..\..\docs\user-guide.md;..\..\docs\prompt-file-reference.md;..\..\docs\skill-authoring.md;..\..\docs\skill-compatibility-spec-v1.md;..\..\docs\hook-authoring.md"
+    <None Include="..\..\docs\index.md;..\..\docs\user-guide.md;..\..\docs\code-review.md;..\..\docs\prompt-file-reference.md;..\..\docs\skill-authoring.md;..\..\docs\skill-compatibility-spec-v1.md;..\..\docs\hook-authoring.md"
           Link="ThreadsmithDocs/docs/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\operations\**\*.md" Link="ThreadsmithDocs/docs/operations/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <None Include="..\..\docs\extension-authoring\**\*.md" Link="ThreadsmithDocs/docs/extension-authoring/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />

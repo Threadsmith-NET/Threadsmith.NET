@@ -113,6 +113,8 @@ Events and persisted records contain immutable identity/digest, scope/source, ve
 
 ## Focused code review
 
+For a walkthrough with Threadsmith examples, specialist responsibilities, and report sections, see the [code review user guide](../code-review.md).
+
 `/skills use Maintained:review@1.0.0 {"mode":"remoteBranch","repository":"https://example.org/team/repo.git","branch":"feature","baseBranch":"main"}` invokes the selected TUI model. Current-branch and special-instruction inputs remain supported, as do optional paths and requirements documents. `review-pr` keeps its changeSummary/paths/focus input and uses the same lead prompt.
 
 Edit `prompts/Skill-Review.md` to change acquisition, delegation, structured response guidance, synthesis and delivery. Edit `prompts/System-ChildAgent-{SecurityReviewer,TestReviewer,PerformanceReviewer,ArchitectureReviewer,BugReviewer}.md` to change role focus. Restart after editing: the normal prompt cache loads at startup.

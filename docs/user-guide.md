@@ -21,6 +21,7 @@ This guide documents the currently implemented user-facing behavior. Features de
 10. [Themes and session status](#themes-and-session-status)
 11. [Extensions](#extensions)
 12. [Governed skills and reusable workflows](#governed-skills-and-reusable-workflows)
+   - [Code reviews with five specialists](code-review.md)
 13. [Headless and automated use](#headless-and-automated-use)
 14. [Persistence, retention, and diagnostics](#persistence-retention-and-diagnostics)
 15. [MCP connection profiles](#mcp-connection-profiles)
@@ -1458,7 +1459,7 @@ Extension authors should read [extension-authoring/authoring-guide.md](extension
 
 Skills provide reusable declarative procedures without making package content executable or authoritative. Threadsmith searches organization, machine, user, repository, and maintained catalogs by bounded metadata. Startup does not open instruction/schema/reference bodies. A candidate reports scope, id, semantic version, SHA-256 digest, publisher/source, declared requirements, verification state, and enablement state.
 
-Skills are data packages, not extensions. They cannot ship assemblies or scripts, add tools, grant trust, approve work, create agents, schedule tasks, mutate a repository, access the network/processes directly, or claim build/test success. Extension packages remain the executable capability mechanism. Skill workflows can only use existing host tools and return closed typed host-action proposals.
+Skills are data packages, not extensions. They cannot add executable capabilities, grant trust, or approve their own work. Model procedures use existing enabled tools under normal host policy, including delegation, processes, and file writes when available. Workflows can also return typed host-action proposals. The [code review guide](code-review.md) explains how the maintained review skill uses these shared tools to gather evidence, launch specialists, and produce a report.
 
 ### Claude-style compatibility
 
@@ -1511,7 +1512,8 @@ Maintained packages are enabled after their shipped integrity verifies:
 
 - `fix-analyzer-warnings` — investigates supplied analyzer diagnostics and proposes a governed remediation plan;
 - `upgrade-package` — assesses one Central Package Management upgrade and proposes compatibility/rollback/validation steps;
-- `review-pr` — returns bounded security, test, performance, and architecture findings without publishing or mutating;
+- `review` — reviews branch changes or a focused request with security, test, performance, bug, and architecture specialists, then synthesizes a Markdown report;
+- `review-pr` — uses the same review prompt with an explicit change summary, paths, and focus areas;
 - `threadsmith-docs-help` — answers Threadsmith product and authoring questions from the installed local documentation bundle with exact path, heading, line, and snippet citations.
 
 For a natural question such as “How do I compact context?”, the model prefers `threadsmith-docs-help` when `invoke_skill`, the maintained package, current trust, and a compatible model are available. The skill can use only existing `search` and `read_file` capabilities rebound to `ThreadsmithDocs`; it cannot inspect the opened repository, access the network or secrets, execute processes, or mutate anything. If the shipped docs are missing or do not answer the question, it returns `partial` or `unavailable` and states the gap instead of guessing. Shipped documentation is evidence, not policy, and cannot override current host behavior, user instructions, approvals, or repository instructions.
@@ -1535,7 +1537,7 @@ A successful analyzer procedure returns schema-versioned `propose_plan` argument
 
 Accepting the proposed plan still does not apply edits. The normal approval, implementation, exact-diff policy, transaction, build/test validation, and correction flow follows.
 
-The conversational equivalent is to ask the model to use an exact selector and provide the typed input, for example: `Use Maintained:fix-analyzer-warnings@1.0.0 with diagnostics [...] and scope [...]`. During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. The tool is not available as a way to invoke nested skills or during an ineligible phase.
+The conversational equivalent is to ask the model to use an exact selector and provide the typed input, for example: `Use Maintained:fix-analyzer-warnings@1.0.0 with diagnostics [...] and scope [...]`. During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. Tool availability and caller context continue to apply to nested skill invocations; an invocation cannot grant tools unavailable to its caller.
 
 Assess a Central Package Management upgrade without implicitly restoring packages or accessing the network:
 
@@ -1544,14 +1546,13 @@ Assess a Central Package Management upgrade without implicitly restoring package
 /skills use Maintained:upgrade-package@1.0.0 {"packageId":"Microsoft.Extensions.Logging","targetVersion":"10.0.1","constraints":["Keep versions in Directory.Packages.props","Do not change target frameworks","Include rollback and focused tests"]}
 ```
 
-Run a bounded review over explicit paths and focuses:
+Review the current Threadsmith branch against `main`:
 
 ```text
-/skills inspect Maintained:review-pr@1.0.0
-/skills use Maintained:review-pr@1.0.0 {"changeSummary":"Add repository-scoped API-key rotation and audit events","paths":["src/Example/Auth","tests/Example.Auth.Tests"],"focus":["security","tests","performance","architecture"]}
+/skills use Maintained:review@1.0.0 {"mode":"currentBranchChanges","baseBranch":"main","instructions":"Review committed changes only; exclude uncommitted changes."}
 ```
 
-`review-pr` produces evidence-backed structured findings; it does not publish, approve, merge, create reviewers, or mutate. Use ordinary conversation or a custom delegation-capable workflow when independent Plan-38 reviewers are required.
+The lead uses the selected TUI model, calls `delegate_agents` for five specialists, and synthesizes their results into Markdown. See [Code reviews with the maintained review skill](code-review.md) for setup, remote-branch and focused JSON examples, natural-language invocation, reviewer responsibilities, prompt locations, and report delivery.
 
 ### Model selection for skills
 
@@ -1576,7 +1577,7 @@ Skills do not name arbitrary provider endpoints and cannot download or activate 
 
 `allowedProfiles` is a strict allowlist of configured model-profile GUIDs; the first compatible entry is also the package preference. `deniedProfiles` removes profiles even when their capabilities otherwise match. Leaving `allowedProfiles` empty lets host selection choose among compatible configured profiles. The host then applies workload compatibility, tool-call/structured-output capabilities, minimum context, provider sensitivity policy, configured default/preference, and cost policy. The selected profile ID is frozen in the workflow checkpoint, so resume does not silently switch models.
 
-Use `/skills inspect <selector>` before invocation to see declared workloads and compatibility denials such as `no-compatible-model`. Configure provider/model capabilities and intended workloads in user/repository `.threadsmith/providers.json`; see [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning). `/reasoning` controls supported ordinary session-turn reasoning. Skill procedure requests do not expose a manifest reasoning selector and currently use the host's fixed request policy; neither skill text nor a package manifest can elevate reasoning, switch the selected profile after admission, expose a sensitive request to a prohibited provider, or borrow another workflow's budget.
+Use `/skills inspect <selector>` before invocation to see declared workloads and compatibility denials such as `no-compatible-model`. Configure provider/model capabilities and intended workloads in user/repository `.threadsmith/providers.json`; see [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning). `/reasoning` controls supported session-turn reasoning, which skill procedures inherit from their calling context (falling back to the profile default when unspecified). Skill procedure requests do not expose a manifest reasoning selector; neither skill text nor a package manifest can elevate reasoning, switch the selected profile after admission, expose a sensitive request to a prohibited provider, or borrow another workflow's budget.
 
 Examples:
 

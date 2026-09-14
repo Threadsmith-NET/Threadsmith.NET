@@ -6801,7 +6801,8 @@ public static partial class Milestone1Tests
             TimeSpan? delay = null,
             IBudget? budget = null,
             IEnumerable<object>? additionalHandlers = null,
-            IModelProvider? modelProvider = null)
+            IModelProvider? modelProvider = null,
+            Func<IDomainEventStream, IProjectionStore, IEnumerable<object>>? additionalHandlerFactory = null)
         {
             var stream = new DomainEventStream();
             var projections = new InMemoryProjectionStore();
@@ -6828,6 +6829,11 @@ public static partial class Milestone1Tests
             if (additionalHandlers is not null)
             {
                 handlers.AddRange(additionalHandlers);
+            }
+
+            if (additionalHandlerFactory is not null)
+            {
+                handlers.AddRange(additionalHandlerFactory(stream, projections));
             }
 
             ICommandDispatcher dispatcher = new CommandDispatcher(handlers);

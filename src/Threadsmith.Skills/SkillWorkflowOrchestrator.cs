@@ -64,7 +64,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     {
         ValidateRequest(request);
         var host = await _hostContext(request.SessionId, cancellationToken);
-        if (request.WorkspaceId != host.WorkspaceId)
+        if (request.WorkspaceId is { } requestedWorkspace && requestedWorkspace != host.WorkspaceId)
         {
             throw new InvalidOperationException("Skill invocation workspace does not match the current session.");
         }
@@ -82,6 +82,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         };
         request = request with
         {
+            WorkspaceId = host.WorkspaceId,
             Trust = callerContext is not null && callerContext.TrustLevel < host.Trust
                 ? callerContext.TrustLevel : host.Trust,
             Sensitivity = callerContext?.Sensitivity ?? request.Sensitivity,

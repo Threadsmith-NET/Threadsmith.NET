@@ -532,7 +532,7 @@ public sealed record SkillInvocationRequest
     /// <summary>Owning run.</summary>
     public required RunId RunId { get; init; }
 
-    /// <summary>Owning workspace when repository work is possible.</summary>
+    /// <summary>Owning workspace; when omitted, initial invocation binds it to the active session.</summary>
     public WorkspaceId? WorkspaceId { get; init; }
 
     /// <summary>Explicit immutable selection or scope-qualified id/version selector.</summary>

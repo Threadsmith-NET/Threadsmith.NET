@@ -4,7 +4,7 @@ This document explains the model-visible `delegate_agents` tool. Children can in
 
 ## Mental model
 
-`delegate_agents` is a synchronous tool call backed by asynchronous child work. Children in one `agents` array can run concurrently within configured scheduler concurrency. Separate calls in the same model-response batch execute sequentially; an inherited child call can delegate further without waiting on a source lease held by its ancestor:
+`delegate_agents` is a synchronous tool call backed by asynchronous child work. Children in one `agents` array can run concurrently within configured scheduler concurrency. Separate calls in the same model-response batch execute sequentially; the delegation tool itself is not advertised to children:
 
 ```text
 parent model
@@ -85,7 +85,7 @@ Conversation delegation creates:
 - configured ordinary child operational budgets;
 - one frozen generation.
 
-`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution, writes, skills, and further delegation when available. It preserves the caller's trust, path, executable, network, approval, and tool restrictions. `readOnly` is the explicit narrower option: approval-free, non-network read tools, excluding workflow, process/code execution, and writes. Retained inspection tools can still use their declared executable dependencies under the caller's allowlist. Shared-workspace children do not receive isolated worktrees; overlapping edits and builds need coordinated ownership.
+`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution, writes, and skills when available. Tools whose `ToolDefinition.SubagentAvailable` is `false` are removed before constructing the child policy. This property defaults to `true`; `delegate_agents` sets it to `false`. The child runner also filters the captured registrations, including for directly constructed or older assignments. A child-invoked native skill uses that filtered caller snapshot and cannot reintroduce excluded tools. It preserves the caller's trust, path, executable, network, approval, and tool restrictions. `readOnly` is the explicit narrower option: approval-free, non-network read tools, excluding workflow, process/code execution, and writes. Retained inspection tools can still use their declared executable dependencies under the caller's allowlist. Shared-workspace children do not receive isolated worktrees; overlapping edits and builds need coordinated ownership.
 
 Primary implementation:
 
@@ -106,7 +106,7 @@ Primary implementation:
 
 Every child is a normal asynchronous .NET task. There is no child agent process. Queue saturation returns a failed terminal checkpoint with terminal child outcomes, allowing `DelegateAgentsTool` to return a structured failure rather than leak a scheduler exception.
 
-When a running child awaits nested delegation, the scheduler uses execution ancestry to release its active permits while descendants run and reacquires them before it resumes. This permits nested fork/join with a one-child active limit. The ancestor's original deadline and cancellation remain effective. Orchestration tools retain batch scheduling but do not hold a single source slot across descendant work.
+The generic scheduler retains support for host-owned nested work; `delegate_agents` is unavailable to child models. For nested work, the scheduler uses execution ancestry to release its active permits while descendants run and reacquires them before it resumes. This permits nested fork/join with a one-child active limit. The ancestor's original deadline and cancellation remain effective. Orchestration tools retain batch scheduling but do not hold a single source slot across descendant work.
 
 Progress writes carry monotonically increasing revisions. A stale progress write cannot replace a newer terminal checkpoint.
 

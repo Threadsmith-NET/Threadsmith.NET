@@ -20,6 +20,7 @@ appropriate, but should at least be an observation.
 - Examine the use of nuget packages to ensure they are being used optimally. Use local copies of package repos, web searches and/or online exploration of repositories.
 to identify gaps in how packages are being leveraged.
 - Look for departures from established .NET/C# best practices. For example, typiclaly an httpClient should not be created/disposed every request.
+- Include (if appropriate) a mermaid diagram with a high level overview of the change. If there is an architectural change, include a comparison. 
 
 ## Guidelines
 - Ignore trivial style unless it obscures meaning or violates documented standards.

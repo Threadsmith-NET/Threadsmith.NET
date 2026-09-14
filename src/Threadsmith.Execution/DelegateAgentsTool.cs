@@ -251,6 +251,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             Timeout = Timeout.InfiniteTimeSpan,
             MaximumOutputBytes = options.EffectiveToolOutputBytes(),
             ConversationAvailable = true,
+            SubagentAvailable = false,
             RequiresWorkspace = true,
             PreferStrictArguments = true,
             Scheduling = new ToolSchedulingDescriptor

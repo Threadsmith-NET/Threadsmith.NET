@@ -928,6 +928,41 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Null(outcome.Findings);
     }
 
+    /// <summary>Direct runner assignments cannot advertise or invoke a parent-only tool even if their captured policy includes it.</summary>
+    [Theory]
+    [InlineData(AgentRunMode.ReadOnlyBaseline)]
+    [InlineData(AgentRunMode.SharedWorkspace)]
+    public async Task RunAsync_ParentOnlyTool_IsExcludedFromCapturedChildSurface(AgentRunMode mode)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var tool = new InspectMetadataTool(subagentAvailable: false);
+        var registry = new ToolRegistry([tool]);
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]) with { Mode = mode };
+        var plan = CreatePlan(assignment);
+        var provider = new ToolAttemptThenResponseProvider(new ToolRequestModelOutput(tool.Definition.Id, "{}"));
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, [tool.Definition.Id]),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        var outcome = await runner.RunAsync(plan, assignment);
+
+        Assert.Equal("The requested tool could not be used.", outcome.Response);
+        Assert.Equal(1, outcome.Usage.Corrections);
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.All(provider.Requests, request => Assert.DoesNotContain(request.Tools, definition => definition.Name == tool.Definition.Id));
+        AssertRejectedToolHistory(provider.Requests[1], []);
+        Assert.Null(tool.LastInvocationContext);
+        Assert.Empty(evidence.Snapshot(plan.Provenance.SessionId));
+    }
+
     /// <summary>One invalid sibling rejects the full batch while retaining every known attempted call and error.</summary>
     [Theory]
     [InlineData(false)]
@@ -1466,11 +1501,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         private readonly IReadOnlyList<ToolProvenanceSource> _sources;
 
         /// <summary>Initializes a new instance of the <see cref="InspectMetadataTool"/> class.</summary>
-        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null)
+        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null, bool subagentAvailable = true, string toolId = "inspect_metadata")
         {
             _modelResultContent = modelResultContent;
             _sources = sources ?? [new ToolProvenanceSource("file", "src/Test.cs")];
-            Definition = Definition with { MaximumOutputBytes = maximumOutputBytes };
+            Definition = Definition with { Id = toolId, MaximumOutputBytes = maximumOutputBytes, SubagentAvailable = subagentAvailable };
         }
 
         public ToolInvocationContext? LastInvocationContext { get; private set; }

@@ -2,6 +2,14 @@
 
 Threadsmith.NET loads an optional user base from `~/.threadsmith/providers.json` and optional overrides from `<repository>/.threadsmith/providers.json`. If neither the new catalogs nor legacy profiles contain selectable models, the application retains the deterministic fake-model flow. Host policy selects a compatible projected profile and the provider-neutral dispatcher activates its compiled registration.
 
+## Raw model logs
+
+`--raw-model-log PATH` records model exchanges at the requested path. If that file exists at startup, Threadsmith renames it before logging begins. Each `/new` also rotates the current file at the existing session transition boundary; `/resume` and `/clone` do not rotate it.
+
+For `raw.jsonl`, archives are `raw_0.jsonl`, `raw_1.jsonl`, and so on. The next suffix is one greater than the highest numeric suffix for that same root name and extension in the same directory; unrelated files and nonnumeric suffixes do not affect it. Gaps are not reused, existing archives are not overwritten, and no scan-count or suffix-count cap is imposed. Subsequent log entries create a fresh `raw.jsonl`. A missing current file needs no rotation.
+
+Startup and session transitions call the same `JsonlModelExchangeLog.RotateAsync` method, synchronized with appends. The existing raw-log path validation also applies to archive paths. For logs inside a Git repository, ignore the directory or the entire rotated filename family (for example, `raw*.jsonl`), rather than only the active filename.
+
 ## Repository selection and runtime switching
 
 `/models` lists enabled bindings from the immutable effective catalog and changes the host-owned active selection used by the next request. It does not edit provider catalogs. The repository stores only `model.providerId`, `model.profileId`, and `model.reasoningLevel` in `.threadsmith/config.json` through an atomic same-directory replacement.

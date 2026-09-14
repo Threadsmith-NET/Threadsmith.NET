@@ -805,7 +805,7 @@ internal sealed class ChildAgentModelLoop
             }
 
             return registration;
-        }).ToArray();
+        }).Where(registration => registration.Tool.Definition.SubagentAvailable).ToArray();
     }
 
     private static ToolRegistration ResolveRegistration(

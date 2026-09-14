@@ -859,7 +859,8 @@ internal static class ApplicationComposition
                 persistence.EvidenceStore,
                 contextAssembler,
                 usage,
-                integration.Models.ActiveModels);
+                integration.Models.ActiveModels,
+                modelExchangeLog: integration.Models.RawModelLog);
             repositoryBindings.AttachSessionLifecycle(sessionLifecycle);
             sessionCheckpointSubscription = host.Events.Subscribe(
                 async (domainEvent, _) =>

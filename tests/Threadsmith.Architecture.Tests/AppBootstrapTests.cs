@@ -12,7 +12,7 @@ using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
-public static class AppBootstrapTests
+public static partial class AppBootstrapTests
 {
     /// <summary>Repository settings cannot change limits governing user-wide approval and skill stores.</summary>
     [Theory]

@@ -17,9 +17,9 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>Inherited children execute normal tools and nested skills/delegation without widening their model or tool surface.</summary>
+    /// <summary>Inherited children execute processes, writes and native skills while parent-only tools stay unavailable throughout.</summary>
     [Fact]
-    public async Task InheritedTools_ProcessesWritesSkillsAndNestedDelegationUseSharedPipeline()
+    public async Task InheritedTools_ProcessesWritesAndSkillsUseSharedPipelineWithoutParentOnlyTools()
     {
         var repository = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"threadsmith-inherited-tools-{Guid.NewGuid():N}")).FullName;
         try
@@ -41,6 +41,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 new RunProcessTool(processes, TestPromptLoader.Instance, allowedExecutables: ["bash"], requireApproval: false, shellExecutable: "bash"),
                 new WriteFileTool(new WriteFileConfiguration(configuration, configuration, repository), new UnusedInheritedConversationStore(), TestPromptLoader.Instance),
                 new InspectMetadataTool(),
+                new InspectMetadataTool(subagentAvailable: false, toolId: "parent_only_metadata"),
             ]);
             var pipeline = CreatePipeline(registry, events, sanitizer);
             var frozen = CreateProfile() with
@@ -64,7 +65,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 RepositoryPath = repository,
                 TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation,
                 ApprovedRoots = ["."],
-                AllowedToolIds = ["run_process", "write_file", "invoke_skill", DelegateAgentsContract.ToolId],
+                AllowedToolIds = ["run_process", "write_file", "invoke_skill", "parent_only_metadata", DelegateAgentsContract.ToolId],
                 AllowedExecutables = ["bash"],
                 AllowedNetworkHosts = ["example.test"],
                 RequestedBy = "model",
@@ -143,11 +144,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             registry.RegisterOrReplace(
                 new InvokeSkillTool(workflows, TestPromptLoader.Instance),
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "invoke-skill"));
+            var parentTools = registry.GetRegistrations(sessionId, rootRunId)
+                .Where(item => authority.AllowedToolIds.Contains(item.Tool.Definition.Id, StringComparer.Ordinal)).ToArray();
+            Assert.Contains(parentTools, item => item.Tool.Definition.Id == DelegateAgentsContract.ToolId);
+            Assert.Contains(parentTools, item => item.Tool.Definition.Id == "parent_only_metadata");
             var snapshotId = snapshots.Capture(
                 sessionId,
                 rootRunId,
-                registry.GetRegistrations(sessionId, rootRunId)
-                    .Where(item => authority.AllowedToolIds.Contains(item.Tool.Definition.Id, StringComparer.Ordinal)).ToArray(),
+                parentTools,
                 authority);
 
             ToolInvocationResult result;
@@ -177,28 +181,31 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.Equal("bash", process.FileName);
             Assert.Contains("dotnet test", process.Arguments);
             var requests = provider.Requests.ToArray();
-            Assert.Equal(8, requests.Length);
+            Assert.Equal(6, requests.Length);
             Assert.Equal(0, usage.GetOwnerSnapshot(sessionId).InputTokens);
-            Assert.Equal(70, usage.GetOwnerSnapshot(sessionId, process.RunId).InputTokens);
-            Assert.Equal(80, usage.GetSnapshot(sessionId).InputTokens);
-            Assert.Equal(16, usage.GetSnapshot(sessionId).OutputTokens);
+            Assert.Equal(60, usage.GetOwnerSnapshot(sessionId, process.RunId).InputTokens);
+            Assert.Equal(60, usage.GetSnapshot(sessionId).InputTokens);
+            Assert.Equal(12, usage.GetSnapshot(sessionId).OutputTokens);
             Assert.All(requests, request =>
             {
                 Assert.Equal(frozen.Id, request.ResolvedProfileId);
                 Assert.Equal(ReasoningLevel.Medium, request.ReasoningLevel);
                 Assert.DoesNotContain(request.Tools, tool => tool.Name == "inspect_metadata");
+                Assert.DoesNotContain(request.Tools, tool => tool.Name == "parent_only_metadata");
+                Assert.DoesNotContain(request.Tools, tool => tool.Name == DelegateAgentsContract.ToolId);
             });
             var nativeRequests = requests.Where(request => request.Messages.Any(message => message.SectionId == "skill-procedure")).ToArray();
-            Assert.Equal(3, nativeRequests.Length);
+            Assert.Equal(2, nativeRequests.Length);
             Assert.All(nativeRequests, request => Assert.Contains(request.Tools, tool => tool.Name == ChildAgentEvidenceTool.ToolId));
             Assert.All(nativeRequests, request => Assert.Equal(process.RunId, request.RunId));
             var invocations = observed.OfType<ToolInvocationStarted>().ToArray();
             Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == "run_process");
             Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == "invoke_skill");
-            Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == DelegateAgentsContract.ToolId
+            Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == "write_file"
                 && item.ActivityOrigin?.StartsWith("skill:Maintained:review@1.0.0:", StringComparison.Ordinal) == true);
+            Assert.Equal(rootRunId, Assert.Single(invocations, item => item.ToolName == DelegateAgentsContract.ToolId).RunId);
             var delegations = observed.OfType<DelegationCheckpointWritten>().Select(item => item.DelegationId).Distinct().ToArray();
-            Assert.Equal(2, delegations.Length);
+            Assert.Single(delegations);
             foreach (var delegationId in delegations)
             {
                 var checkpoint = await checkpoints.GetAsync(delegationId);
@@ -222,7 +229,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         private readonly SessionId _sessionId;
         private readonly NativeSkillSnapshotProbe _snapshots;
         private readonly ToolInvocationContext _parentAuthority;
-        private RunId? _parentChildRunId;
 
         public InheritedToolsProvider(SessionId sessionId, NativeSkillSnapshotProbe snapshots, ToolInvocationContext parentAuthority)
         {
@@ -262,16 +268,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 Assert.False(toolResult.IsError, toolResult.GetModelVisibleContent());
             }
 
-            _parentChildRunId ??= request.RunId;
             var native = request.Messages.Any(message => message.SectionId == "skill-procedure");
             var call = native
                 ? request.ToolContinuationRound switch
                 {
-                    0 => new ToolRequestModelOutput(DelegateAgentsContract.ToolId, DelegateInput("Return the nested leaf response.")),
-                    1 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/native.md\",\"content\":\"native artifact\"}"),
+                    0 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/native.md\",\"content\":\"native artifact\"}"),
                     _ => null,
                 }
-                : request.RunId != _parentChildRunId ? null : request.ToolContinuationRound switch
+                : request.ToolContinuationRound switch
                 {
                     0 => new ToolRequestModelOutput("run_process", "{\"command\":\"dotnet test\"}"),
                     1 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/child.md\",\"content\":\"child artifact\"}"),

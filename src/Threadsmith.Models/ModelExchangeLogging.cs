@@ -1,5 +1,7 @@
 namespace Threadsmith.Models;
 
+using System.Globalization;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -12,17 +14,82 @@ public sealed class JsonlModelExchangeLog
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
     private readonly SemaphoreSlim _appendGate = new(1, 1);
     private readonly string _path;
+    private readonly Func<string, CancellationToken, Task>? _validateArchivePath;
 
     /// <summary>Initializes a new instance of the <see cref="JsonlModelExchangeLog"/> class.</summary>
     /// <param name="path">The JSONL file path that receives one diagnostic event per line.</param>
-    public JsonlModelExchangeLog(string path)
+    /// <param name="validateArchivePath">Optional host-owned validation of an archive destination before moving the log.</param>
+    public JsonlModelExchangeLog(string path, Func<string, CancellationToken, Task>? validateArchivePath = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         _path = Path.GetFullPath(path);
+        _validateArchivePath = validateArchivePath;
         var directory = Path.GetDirectoryName(_path);
         if (!string.IsNullOrWhiteSpace(directory))
         {
             Directory.CreateDirectory(directory);
+        }
+    }
+
+    /// <summary>Archives the current file using its next numeric suffix, leaving subsequent writes at the original path.</summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    public async Task RotateAsync(CancellationToken cancellationToken = default)
+    {
+        await _appendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!File.Exists(_path))
+            {
+                return;
+            }
+
+            var directory = Path.GetDirectoryName(_path) ?? Directory.GetCurrentDirectory();
+            var prefix = Path.GetFileNameWithoutExtension(_path) + "_";
+            var extension = Path.GetExtension(_path);
+            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            var next = BigInteger.Zero;
+            foreach (var archive in Directory.EnumerateFiles(directory))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var name = Path.GetFileName(archive);
+                if (!name.StartsWith(prefix, comparison) || !name.EndsWith(extension, comparison)
+                    || name.Length <= prefix.Length + extension.Length)
+                {
+                    continue;
+                }
+
+                var suffix = name.AsSpan(prefix.Length, name.Length - prefix.Length - extension.Length);
+                if (BigInteger.TryParse(suffix, NumberStyles.None, CultureInfo.InvariantCulture, out var count)
+                    && count >= next)
+                {
+                    next = count + BigInteger.One;
+                }
+            }
+
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var archive = Path.Combine(directory, prefix + next.ToString(CultureInfo.InvariantCulture) + extension);
+                if (_validateArchivePath is not null)
+                {
+                    await _validateArchivePath(archive, cancellationToken).ConfigureAwait(false);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    File.Move(_path, archive, overwrite: false);
+                    return;
+                }
+                catch (IOException) when (File.Exists(archive) || Directory.Exists(archive))
+                {
+                    next += BigInteger.One;
+                }
+            }
+        }
+        finally
+        {
+            _appendGate.Release();
         }
     }
 

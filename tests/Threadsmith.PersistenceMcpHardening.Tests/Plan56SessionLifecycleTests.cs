@@ -11,7 +11,7 @@ using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Plan 56 durable catalog and independent clone verification.</summary>
-public static class Plan56SessionLifecycleTests
+public static partial class Plan56SessionLifecycleTests
 {
     /// <summary>Migration 8 makes pre-catalog durable sessions selectable without losing conversation metadata.</summary>
     [Fact]
@@ -633,6 +633,8 @@ public static class Plan56SessionLifecycleTests
             Conversations = conversations;
         }
 
+        internal string DirectoryPath => _directory;
+
         internal string ConnectionString { get; }
 
         internal SqliteConversationStore Conversations { get; }
@@ -701,7 +703,8 @@ public static class Plan56SessionLifecycleTests
             ISessionLifecycleStore store,
             IConversationStore conversations,
             ActiveModelSelectionService? activeModels = null,
-            IModelProvider? modelProvider = null)
+            IModelProvider? modelProvider = null,
+            JsonlModelExchangeLog? modelExchangeLog = null)
         {
             var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
@@ -729,7 +732,8 @@ public static class Plan56SessionLifecycleTests
                 evidence,
                 new UnusedContextAssembler(),
                 usage,
-                activeModels);
+                activeModels,
+                modelExchangeLog: modelExchangeLog);
             return new LifecycleHarness(events, evidence, usage, lifecycle, sessions);
         }
     }

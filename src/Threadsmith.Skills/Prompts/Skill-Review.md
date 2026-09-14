@@ -25,9 +25,7 @@ with depth 1, no tags and no history. Compare the two trees directly; do not dee
 a merge base. Reuse suitable existing local refs when available. Avoid whole-repository preloads,
 unchanged-file loops and repeated reads. 
 - Use targeted batches and inspect tool results for omissions. Read relevant configuration, including YAML, as code. Sanitized credential markers are evidence of a possible committed credential: flag its file and source line for investigation without reproducing the value. A marker is not proof that the value is a usable secret. Do not discard a readable file because credentials were redacted. Respect the repository's applicable instructions.
-3. **Call delegate_agents** for five (5) specialists: SecurityReviewer, TestReviewer, PerformanceReviewer, BugReviewer and
-ArchitectureReviewer. Put their objectives in the task arguments and the review target, relevant diff,
-source locations, requirements and supporting evidence in context. The role prompts provide each
+3. **Call delegate_agents** for five (5) specialists: SecurityReviewer, TestReviewer, PerformanceReviewer, BugReviewer and ArchitectureReviewer. Put their objectives in the task arguments and the review target, relevant diff, source locations, requirements and supporting evidence in context. The role prompts provide each
 specialist's focus. Ask them to challenge concrete behavior and not to assume current codified behavior or test implementations are necessarily correct, even if they build/pass. IMPORTANT: Do not ask for findings to fill a quota. An empty findings array is a valid successful review if nothing is found.
 4. **Include these common response instructions** in each delegated task: 
 ```text
@@ -39,12 +37,17 @@ conflicting claims against evidence and remove unsupported claims. Prefer useful
 Produce readable Markdown with a short verdict and change summary, prioritized actionable findings
 with source references, requirements coverage when supplied, and concise validation/coverage limits.
 Do not present an incomplete review as clean. Explain any failed specialist and what remains unassessed.
-If all specialists fail, report that the review failed; do not report successful completion. Each report should have these sections:
-- Summary: Summarize the scope of the changes. If a requirements document was provided (local file, Jira ticket, etc.) use that to help form the summary in addition to the actual changes.
-- Changes: List changed files (added, removed, edited) organized by .NET project
-- Issues: List each valid issue cited by a reviewer, organized by P1 (Critical), P2 (Significant), P3 (Minor) in order
-- Observations: Any notable observations from any of the reviewers. These may be items worth looking at but, depending on intent, may not be an actual issue.
-- Final recommendation: Ship|Ship with Observations|Changes Needed
+If all specialists fail, report that the review failed; do not report successful completion. 
+
+    **Each report should have these sections:**
+- **Summary**: Summarize the scope of the changes. If a requirements document was provided (local file, Jira ticket, etc.) use that to help form the summary in addition to the actual changes.
+Note that the the ArchitectureReviewer may include one or more mermaid architecural diagrams in its response, and the BugReviewer may return one or more call-trace digrams in mermaid or ASCII art. All of these digrams should ALWAYS be included in the summary section, under appropriate sub-headings.
+- **Changes**: List changed files (added, removed, edited) organized by .NET project
+- **Issues**: List each valid issue cited by a reviewer, organized by P1 (Critical), P2 (Significant), P3 (Minor) in order
+- **Observations**: Any notable observations from any of the reviewers. These may be items worth looking at but, depending on intent, may not be an actual issue.
+- **Requirements coverage**: Call out any specific gaps between the requirements (if provided). If no specific requirements document was provided by the user when the skill was launched, just include the text "No specific requirements documentation provided."
+- **Validation and coverage limits** Note the results of any tests that were run, note if all the review agents specialists completed or not, and any other information that is noteworthy and related to the validity and comprehensiveness of the review.
+- **Final recommendation**: Ship|Ship with Observations|Changes Needed. If changes are needed, briefly summarize.
 6. **Persist or Stream report**  Inspect whether the invoking repository already has an .inbox directory. When it exists and write_file
 is available, save the full Markdown there with a unique review-<timestamp>.md name using write_file
 with explicit content. Do not use useLastResponse: it refers to a previous archived response. Otherwise

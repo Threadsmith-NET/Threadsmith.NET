@@ -7,7 +7,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 ## Safety boundary
 
 - Child agents are in-process asynchronous .NET runs. No process hosts an agent.
-- Children can delegate further when `delegate_agents` is inherited from their parent's advertised tools. Each descendant receives its own validated assignment and caller scope.
+- Tools can opt out of subagent visibility with `ToolDefinition.SubagentAvailable = false`. `delegate_agents` opts out, so child agents cannot launch further agents.
 - Ordinary conversation delegation supports all seven roles. `inherit` uses `SharedWorkspace` mode with the parent's enabled, permitted tools; explicit `readOnly` selects a narrower inspection surface.
 - Approved implementation and correction use the parent run through `MutationProposalApplication`, retaining exact-diff approval, transactions, validation, and corrections.
 - Existing isolated-worker APIs require approved ownership and managed detached Git worktrees. Selecting `implementer` in conversation does not start a worktree worker or automatic parallel application.
@@ -17,7 +17,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 
 ## Start from ordinary conversation
 
-Ask Threadsmith for parallel work in a trusted repository with a selected semantic workspace. When useful, the parent model can invoke the built-in `delegate_agents` tool with one to three children by default. Independent assignments belong in the same `agents` array to run concurrently, subject to configured concurrency. Separate calls in one model-response batch run sequentially. Nested delegation can run while its parent waits:
+Ask Threadsmith for parallel work in a trusted repository with a selected semantic workspace. When useful, the parent model can invoke the built-in `delegate_agents` tool with one to three children by default. Independent assignments belong in the same `agents` array to run concurrently, subject to configured concurrency. Separate calls in one model-response batch run sequentially. The parent can request several assignments in one call:
 
 ```json
 {
@@ -55,9 +55,9 @@ Each role is a system-prompt amendment combined with its selected model and elig
 
 Give each child a distinct task and include the relevant files, symbols, evidence, and constraints in `context`. Role prompts encourage focused inspection and batching independent reads when useful. Tool progress reports distinguish new source coverage from repeated or different payloads; they do not grade the answer. Rejected tool calls remain in the conversation with their error results, so the child can see what failed and decide how to proceed.
 
-`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution, file writes, skills, and delegation. Trust, approved roots, prohibited paths, executable/network allowlists, approval requirements, and tool policy remain effective. `readOnly` explicitly selects only approval-free, non-network read tools and excludes workflow, process/code execution, and writes. Retained inspection tools can use their declared executable dependencies under the caller's allowlist. Inheritance never grants authority the parent did not have.
+`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution, file writes, and skills. Tools marked `SubagentAvailable = false` are excluded from both inherited and explicitly read-only child inventories; the default is `true`. Trust, approved roots, prohibited paths, executable/network allowlists, approval requirements, and tool policy remain effective. `readOnly` explicitly selects only approval-free, non-network read tools and excludes workflow, process/code execution, and writes. Retained inspection tools can use their declared executable dependencies under the caller's allowlist. Inheritance never grants authority the parent did not have.
 
-Inherited children share the invoking workspace. Give overlapping file edits to one owner and coordinate builds/tests that write the same output directories. A waiting parent yields its scheduler permits during nested fork/join and reacquires them before resuming, so an active-child limit of one does not prevent nested work. Caller cancellation, assignment deadlines, and configured resource limits still apply.
+Inherited children share the invoking workspace. Give overlapping file edits to one owner and coordinate builds/tests that write the same output directories. Caller cancellation, assignment deadlines, and configured resource limits still apply.
 
 Each actual model request owns the snapshot used to inherit tools and scope. It stays available through that request's tool calls and child joins, then is released. A skill invoked by a child uses that caller scope and model through the normal skill runner. After the request ends, explicit host resume or continuation revalidates current session authority and the durable workflow instead of reusing its transient caller snapshot. Model calls, usage, and tool activity use the same shared paths as ordinary conversation and native skills.
 

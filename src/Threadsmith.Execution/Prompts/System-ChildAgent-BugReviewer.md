@@ -24,6 +24,8 @@ are met. Identify the requirement or expected behavior, a concrete triggering sc
 behavior, and its consequence. Ground findings in inspected code and cite source locations and the
 relevant requirement or ticket where available. Suggest a useful fix or focused validation case.
 
+- Include one or more mermaid or ASCII Art diagrams outlining the call trace(s) if possible.
+
 - Distinguish explicit requirements from assumptions and ambiguous or conflicting ticket information.
 If requirements are unavailable, review for demonstrable bugs and state what could not be checked;
 do not invent acceptance criteria. Do not claim to have retrieved a ticket or run tests unless you

@@ -114,7 +114,6 @@ public sealed class DelegateAgentsPlanFactory
             Policy = new AgentPolicySnapshot
             {
                 AllowedToolIds = definitions.Select(definition => definition.Id).ToArray(),
-                DeniedToolIds = inherit ? [] : [DelegateAgentsContract.ToolId],
                 TrustCeiling = !inherit && context.Invocation.TrustLevel > RepositoryTrustLevel.TrustedBuild
                     ? RepositoryTrustLevel.TrustedBuild
                     : context.Invocation.TrustLevel,
@@ -157,7 +156,8 @@ public sealed class DelegateAgentsPlanFactory
                 // Each child gets its own evidence reader bound to its evidence ownership.
                 .Where(registration => registration.Implementation is not ChildAgentEvidenceTool)
                 .Select(registration => registration.Tool.Definition)
-                .Where(definition => ConversationToolAvailability.IsAdvertised(definition, context.Invocation)
+                .Where(definition => definition.SubagentAvailable
+                    && ConversationToolAvailability.IsAdvertised(definition, context.Invocation)
                     && (access == DelegateAgentToolAccess.Inherit
                     || (definition.Category is not ToolCategory.Workflow
                         and not ToolCategory.ProcessExecution

@@ -53,7 +53,12 @@ internal static class ModelComposition
             CancellationToken.None).ConfigureAwait(false);
         var modelExchangeLog = string.IsNullOrWhiteSpace(validatedRawModelLogPath)
             ? null
-            : new JsonlModelExchangeLog(validatedRawModelLogPath);
+            : new JsonlModelExchangeLog(validatedRawModelLogPath, async (archivePath, token) =>
+                _ = await ValidateRawModelLogPathAsync(paths.RepositoryRoot, archivePath, token).ConfigureAwait(false));
+        if (modelExchangeLog is not null)
+        {
+            await modelExchangeLog.RotateAsync(CancellationToken.None).ConfigureAwait(false);
+        }
 
         // One application-lifetime pool follows Microsoft's HttpClient guidance. Profile cancellation owns
         // request deadlines, while bounded handler settings refresh DNS and constrain connection resources.
@@ -207,6 +212,7 @@ internal static class ModelComposition
                     trustedProvider,
                     roleModels)
                 {
+                    RawModelLog = modelExchangeLog,
                     CatalogMaintenance = effectiveCatalog is null ? null : new AnthropicCatalogMaintenance(
                         trustedCatalog?.Configuration.Providers.OfType<AnthropicProviderConfiguration>() ?? [],
                         (reference, token) => ResolveModelSecretAsync(secretResolver, reference, SecretProviderTrust.UserOwned, token),
@@ -245,6 +251,7 @@ internal static class ModelComposition
                 activeModels: null,
                 roleModels: roleModels)
             {
+                RawModelLog = modelExchangeLog,
                 CatalogMaintenance = new AnthropicCatalogMaintenance(
                     trustedCatalog?.Configuration.Providers.OfType<AnthropicProviderConfiguration>() ?? [],
                     (reference, token) => ResolveModelSecretAsync(secretResolver, reference, SecretProviderTrust.UserOwned, token),
@@ -858,6 +865,9 @@ internal sealed class ModelServices : IDisposable
 
     /// <summary>Gets runtime model selection, when configured models are available.</summary>
     internal ActiveModelSelectionService? ActiveModels { get; }
+
+    /// <summary>Gets the shared explicitly enabled raw log for session-boundary rotation.</summary>
+    internal JsonlModelExchangeLog? RawModelLog { get; init; }
 
     /// <summary>Gets optional provider metadata maintenance for shared command composition.</summary>
     internal IModelCatalogMaintenance? CatalogMaintenance { get; init; }

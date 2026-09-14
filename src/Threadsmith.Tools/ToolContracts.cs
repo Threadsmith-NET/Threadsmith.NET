@@ -263,6 +263,9 @@ public sealed record ToolDefinition
     /// </summary>
     public bool ConversationAvailable { get; init; }
 
+    /// <summary>Whether this tool may be included in a subagent's inherited tool surface.</summary>
+    public bool SubagentAvailable { get; init; } = true;
+
     /// <summary>Whether invocation requires a currently loaded semantic workspace identity.</summary>
     public bool RequiresWorkspace { get; init; }
 

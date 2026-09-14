@@ -21,7 +21,8 @@ public static class FocusedReviewReportFormatter
                 outcome => new AcceptedResult(
                 outcome.Role,
                 JsonSerializer.Deserialize<JsonElement>(outcome.Response ?? "{}"))).ToArray();
-        var complete = accepted.Length == 4 && target.Exclusions.Count == 0;
+        var reviewStatus = FocusedReviewCompletionPolicy.GetReviewStatus(target, outcomes);
+        var complete = reviewStatus == "complete";
         var builder = new StringBuilder();
         builder.Append("# Code review\n\nScope: ").Append(Escape(target.Mode)).Append("; ").Append(
             Escape(target.Repository))
@@ -30,7 +31,7 @@ public static class FocusedReviewReportFormatter
             .Append((target.ComparisonRevision ?? target.MergeBase) is null ? "snapshot audit" : "change review").Append("; revision ").Append(
                 Escape(target.Revision))
             .Append("; comparison ").Append(Escape(target.ComparisonRevision ?? target.MergeBase ?? "none")).Append("; snapshot ").Append(Escape(target.Identity)).Append('\n');
-        builder.Append("Review status: ").Append(complete ? "complete" : "partial").Append("; static advisory inspection; no tests or benchmarks executed.\n");
+        builder.Append("Review status: ").Append(reviewStatus).Append("; static advisory inspection; no tests or benchmarks executed.\n");
         if (target.Instructions.Length > 0)
         {
             builder.Append("Review objective: ").Append(Escape(target.Instructions)).Append('\n');
@@ -114,7 +115,13 @@ public static class FocusedReviewReportFormatter
                         Escape(Text(issue, "consequence")))
                     .Append("\n  Suggested action: ").Append(
                         Escape(Text(issue, "recommendation")))
+                    .Append("\n  Confidence: ").Append(issue.GetProperty("confidence").GetRawText())
                     .Append("\n  Uncertainty: ").Append(Escape(Text(issue, "uncertainty"))).Append('\n');
+                foreach (var detail in issue.GetProperty("details").EnumerateObject())
+                {
+                    builder.Append("  ").Append(Escape(detail.Name)).Append(": ")
+                        .Append(Escape(detail.Value.GetString() ?? string.Empty)).Append('\n');
+                }
             }
         }
 
@@ -188,15 +195,20 @@ public static class FocusedReviewReportFormatter
         return builder.ToString();
     }
 
-    private static string IssueKey(JsonElement item) => string.Join(
-        '|',
-        Text(item, "title"),
-        Text(item.GetProperty("location"), "path"),
-        item.GetProperty("location").GetProperty("startLine").ToString(),
-        Text(item, "trigger"),
-        Text(item, "consequence"),
-        Text(item, "recommendation"),
-        Text(item, "priority"));
+    private static string IssueKey(JsonElement item) => JsonSerializer.Serialize(new
+    {
+        title = Text(item, "title"),
+        location = item.GetProperty("location"),
+        trigger = Text(item, "trigger"),
+        consequence = Text(item, "consequence"),
+        recommendation = Text(item, "recommendation"),
+        priority = Text(item, "priority"),
+        confidence = item.GetProperty("confidence").GetDecimal(),
+        uncertainty = Text(item, "uncertainty"),
+        evidence = item.GetProperty("evidence").EnumerateArray().Select(value => value.GetRawText()).Order(StringComparer.Ordinal),
+        details = item.GetProperty("details").EnumerateObject().OrderBy(value => value.Name, StringComparer.Ordinal)
+            .ToDictionary(value => value.Name, value => value.Value.GetString()),
+    });
 
     private static void AppendNotes(
         string section,

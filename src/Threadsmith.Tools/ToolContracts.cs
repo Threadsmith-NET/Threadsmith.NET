@@ -221,6 +221,9 @@ public sealed record ToolDefinition
     /// <summary>Whether availability also requires user-owned outbound consent.</summary>
     public bool RequiresOutboundConsent { get; init; }
 
+    /// <summary>Requires non-serialized host admission; excluded from model tool discovery.</summary>
+    public bool RequiresHostBinding { get; init; }
+
     /// <summary>Contract version.</summary>
     public required string Version { get; init; }
 
@@ -332,6 +335,16 @@ public sealed record ToolInvocationContext
     public required string RequestedBy { get; init; }
 }
 
+/// <summary>Non-serialized host admission bound to exactly one tool call; never inherited by child invocations.</summary>
+internal interface IToolHostBinding
+{
+    /// <summary>The exact tool this admission addresses.</summary>
+    string ToolId { get; }
+
+    /// <summary>The durable invocation identity reserved before dispatch.</summary>
+    ToolInvocationId ToolInvocationId { get; }
+}
+
 /// <summary>A model or host request entering the dynamic invocation pipeline.</summary>
 public sealed record ToolInvocationRequest
 {
@@ -355,6 +368,10 @@ public sealed record ToolInvocationRequest
 
     /// <summary>Policy context.</summary>
     public required ToolInvocationContext Context { get; init; }
+
+    /// <summary>Trusted host admission, unavailable to JSON callers.</summary>
+    [JsonIgnore]
+    internal IToolHostBinding? HostBinding { get; init; }
 }
 
 /// <summary>One source used to produce a tool result.</summary>
@@ -363,13 +380,17 @@ public sealed record ToolProvenanceSource(
     string Identifier,
     string? Range = null);
 
+/// <summary>A terminal failure that retains the tool's bounded diagnostic output.</summary>
+public sealed record ToolExecutionFailure(ToolErrorClassification Classification, string Message);
+
 /// <summary>Typed execution output before dynamic serialization.</summary>
 public sealed record ToolExecution<TOutput>(
     TOutput Value,
     IReadOnlyList<ToolProvenanceSource> Sources,
     bool IsTruncated = false,
     string? ModelResultContent = null,
-    [property: JsonIgnore] string? TransientActivityDetail = null);
+    [property: JsonIgnore] string? TransientActivityDetail = null,
+    ToolExecutionFailure? Failure = null);
 
 /// <summary>Typed attributable result for direct host invocation.</summary>
 public sealed record ToolResult<TOutput>
@@ -500,6 +521,10 @@ public sealed record ToolExecutionContext(
 {
     /// <summary>Authoritative run phase for this invocation.</summary>
     public RunPhase Phase { get; init; } = RunPhase.Intake;
+
+    /// <summary>Trusted host admission for this call only.</summary>
+    [JsonIgnore]
+    internal IToolHostBinding? HostBinding { get; init; }
 }
 
 /// <summary>Non-generic execution envelope retained inside the tool runtime.</summary>
@@ -509,7 +534,8 @@ public sealed record ToolExecutionEnvelope(
     bool IsTruncated,
     long? AuthoritativeElapsedMilliseconds = null,
     string? ModelResultContent = null,
-    [property: JsonIgnore] string? TransientActivityDetail = null);
+    [property: JsonIgnore] string? TransientActivityDetail = null,
+    ToolExecutionFailure? Failure = null);
 
 /// <summary>Supplies live-only display detail that must not enter serialized events or model output.</summary>
 internal interface ITransientToolActivityDetail
@@ -685,7 +711,8 @@ public abstract class Tool<TInput, TOutput> : ITool
             result.Sources,
             result.IsTruncated,
             ModelResultContent: result.ModelResultContent,
-            TransientActivityDetail: result.TransientActivityDetail);
+            TransientActivityDetail: result.TransientActivityDetail,
+            Failure: result.Failure);
     }
 
     /// <summary>Executes validated typed input.</summary>
@@ -1030,3 +1057,6 @@ public sealed class ToolArgumentValidationException : Exception
     {
     }
 }
+
+/// <summary>Host admission for one ordinary internal tool invocation.</summary>
+internal sealed record HostToolInvocationBinding(string ToolId, ToolInvocationId ToolInvocationId) : IToolHostBinding;

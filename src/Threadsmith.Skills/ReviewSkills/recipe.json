@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "publicManifestSha256": "4e2e707e5ca1a6be29c299c77a4267878817bb71b16db5c2e9780e83e575ac01",
+  "publicManifestSha256": "e2fe202988a8aeafdfadaac4905781a8e859be34e5ee20f094c8903c327c6efe",
   "dependencies": [
     {
       "directory": "security",

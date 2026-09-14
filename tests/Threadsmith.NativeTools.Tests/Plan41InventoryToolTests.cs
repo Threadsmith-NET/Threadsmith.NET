@@ -372,8 +372,10 @@ public sealed class Plan41InventoryToolTests
     }
 
     /// <summary>Verifies recursive Git output cannot return prohibited descendants.</summary>
-    [Fact]
-    public async Task GitTools_ProhibitedDescendants_AreFilteredBeforeReturn()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task GitTools_ProhibitedDescendants_AreFilteredBeforeReturn(bool includePatch)
     {
         await using var repository = await TestRepository.CreateAsync();
         Directory.CreateDirectory(Path.Combine(repository.Path, "secret"));
@@ -388,18 +390,19 @@ public sealed class Plan41InventoryToolTests
         var tool = new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance);
 
         var execution = await tool.ExecuteAsync(
-            new GitDiffRequest(),
+            new GitDiffRequest { IncludePatch = includePatch },
             context);
 
         Assert.Contains(execution.Value.Entries, entry => entry.Path == "tracked.txt");
         Assert.DoesNotContain(execution.Value.Entries, entry => entry.Path.StartsWith("secret/", StringComparison.Ordinal));
         Assert.Empty(execution.Value.Patch);
-        Assert.True(execution.IsTruncated);
+        Assert.Equal(includePatch, execution.IsTruncated);
         Assert.NotNull(execution.ModelResultContent);
         Assert.Contains("tracked.txt", execution.ModelResultContent, StringComparison.Ordinal);
         Assert.DoesNotContain("secret", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         using var projection = JsonDocument.Parse(execution.ModelResultContent);
         Assert.NotEmpty(projection.RootElement.GetProperty("changedPaths").EnumerateArray());
+        Assert.Equal(1, projection.RootElement.GetProperty("omittedPaths").GetInt32());
     }
 
     /// <summary>Verifies commit-show patches and branch paths honor descendant policy.</summary>

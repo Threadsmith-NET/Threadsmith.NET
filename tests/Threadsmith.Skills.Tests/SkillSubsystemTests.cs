@@ -1138,6 +1138,10 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class CapturingWorkflowOrchestrator : ISkillWorkflowOrchestrator
     {
+        public SkillInvocationStatus ResultStatus { get; init; } = SkillInvocationStatus.Completed;
+
+        public FocusedReviewDelivery? Delivery { get; init; }
+
         internal SkillInvocationRequest? Request { get; private set; }
 
         public Task<SkillInvocationResult> InvokeAsync(
@@ -1159,7 +1163,7 @@ public sealed partial class SkillSubsystemTests
                 Trust = request.Trust,
                 Phase = request.Phase,
                 EffectiveBudget = request.HostBudget,
-                Status = SkillInvocationStatus.Completed,
+                Status = ResultStatus,
                 NextAction = "test complete",
                 RecordedAt = DateTimeOffset.UtcNow,
             };
@@ -1167,7 +1171,8 @@ public sealed partial class SkillSubsystemTests
             {
                 InvocationId = request.InvocationId,
                 Package = package,
-                Status = SkillInvocationStatus.Completed,
+                Status = ResultStatus,
+                ReviewDelivery = Delivery,
                 OutputJson = "{\"summary\":\"done\"}",
                 HostActions =
                 [

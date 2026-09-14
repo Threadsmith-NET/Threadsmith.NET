@@ -22,6 +22,12 @@ public enum GitComparisonMode
 /// <summary>A bounded Git diff request.</summary>
 public sealed record GitDiffRequest
 {
+    /// <summary>Optional batch of up to 64 literal path filters; mutually exclusive with Path.</summary>
+    public IReadOnlyList<string> Paths { get; init; } = [];
+
+    /// <summary>Includes patch text; false returns only changed-path metadata and freezes range endpoints.</summary>
+    public bool IncludePatch { get; init; } = true;
+
     /// <summary>Context lines per hunk, from zero through fifty; defaults to three.</summary>
     public int ContextLines { get; init; } = 3;
 
@@ -52,7 +58,14 @@ public sealed record GitDiffResult(
     IReadOnlyList<GitDiffEntry> Entries,
     GitHunkSummary Summary,
     string Patch,
-    bool IsTruncated);
+    bool IsTruncated)
+{
+    /// <summary>Paths withheld by current read policy, distinct from output truncation in metadata-only queries.</summary>
+    public int OmittedPaths { get; init; }
+
+    /// <summary>SHA256 of serialized entry metadata before central output sanitization.</summary>
+    public string? EntriesDigest { get; init; }
+}
 
 /// <summary>A bounded local Git history request.</summary>
 public sealed record GitLogRequest
@@ -110,7 +123,10 @@ public sealed record GitShowRequest
     /// <summary>Includes current Git-tracked/untracked paths and a status digest in inventory mode.</summary>
     public bool IncludeWorkingTree { get; init; }
 
-    /// <summary>Optional batch of up to 64 literal file paths at the same immutable revision; mutually exclusive with Path.</summary>
+    /// <summary>Includes tracked tree entries and tracked working paths in inventory; false reads only revision metadata and untracked paths.</summary>
+    public bool IncludeTrackedFiles { get; init; } = true;
+
+    /// <summary>Optional batch of up to 64 literal paths at the same revision, filtering files or inventory; mutually exclusive with Path.</summary>
     public IReadOnlyList<string> Paths { get; init; } = [];
 
     /// <summary>Validated revision or object identity.</summary>

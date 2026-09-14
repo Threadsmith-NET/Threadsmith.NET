@@ -381,7 +381,7 @@ internal sealed class DelegateAgentsResultProjector
 
     private SummaryProjection ResolveSummary(AgentRunOutcome outcome)
     {
-        if (outcome.Response is { } response)
+        if (!outcome.FocusedReviewValidated && outcome.Response is { } response)
         {
             return new SummaryProjection(response, false);
         }

@@ -6,7 +6,8 @@
       "type": "string",
       "enum": [
         "complete",
-        "partial"
+        "partial",
+        "failed"
       ]
     },
     "deliveryMode": {

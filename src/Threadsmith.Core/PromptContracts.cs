@@ -338,6 +338,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolGitDiffDescription prompt asset.</summary>
     public const string ToolGitDiffDescription = "Tool-git_diff-Description.md";
 
+    /// <summary>Gets the stable filename for shallow remote branch acquisition.</summary>
+    public const string ToolGitFetchDescription = "Tool-git_fetch-Description.md";
+
     /// <summary>Gets the stable filename for the ToolGitLogDescription prompt asset.</summary>
     public const string ToolGitLogDescription = "Tool-git_log-Description.md";
 
@@ -1129,6 +1132,7 @@ public static class PromptFileNames
         ToolGeneratedCodeQueryContentHostTruncation,
         ToolGeneratedCodeQueryContentProjectionTruncation,
         ToolGitDiffDescription,
+        ToolGitFetchDescription,
         ToolGitLogDescription,
         ToolGitShowDescription,
         ToolGitBlameDescription,

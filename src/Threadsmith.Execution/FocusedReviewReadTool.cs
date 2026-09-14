@@ -38,7 +38,11 @@ internal sealed record FocusedReviewReadOutput(
     IReadOnlyList<string> Files,
     int? NextOffset,
     bool IsTruncated,
-    string Source = "reviewTarget");
+    string Source = "reviewTarget")
+{
+    /// <summary>Captured mode transition, available alongside the unchanged source.</summary>
+    public string? ModeChange { get; init; }
+}
 
 /// <summary>Reads only captured text, with no repository, process, network or mutation authority.</summary>
 internal sealed class FocusedReviewReadTool : Tool<FocusedReviewReadInput, FocusedReviewReadOutput>
@@ -93,7 +97,7 @@ internal sealed class FocusedReviewReadTool : Tool<FocusedReviewReadInput, Focus
             var inventory = _target.Files.OrderByDescending(file => file.InScope).ThenBy(file => file.Path, StringComparer.Ordinal).ToArray();
             var entries = inventory.Skip(input.Offset).Take(100).Select(
                 file =>
-                $"{file.Path} | {(file.InScope ? "review scope" : "supporting context")} | {(file.Deleted ? "deleted; old lines" : "current")} | {file.Digest}").ToArray();
+                $"{file.Path} | {(file.InScope ? "review scope" : "supporting context")} | {(file.Deleted ? "deleted; old lines" : "current")} | {file.Digest}{(file.ModeChange is null ? string.Empty : " | " + file.ModeChange)}").ToArray();
             int? next = input.Offset + entries.Length < inventory.Length ? input.Offset + entries.Length : null;
             return Task.FromResult(
                 new ToolExecution<FocusedReviewReadOutput>(
@@ -142,12 +146,25 @@ internal sealed class FocusedReviewReadTool : Tool<FocusedReviewReadInput, Focus
             criterionLabels,
             null,
             end < lines.Length,
-            requirements is null ? "reviewTarget" : "requirements:" + requirements.Source);
+            requirements is null ? "reviewTarget" : "requirements:" + requirements.Source) { ModeChange = file.ModeChange };
         return Task.FromResult(
             new ToolExecution<FocusedReviewReadOutput>(
             output,
             [new ToolProvenanceSource("review-snapshot", file.Path, $"L{input.StartLine}-L{end}")],
             output.IsTruncated));
+    }
+
+    /// <inheritdoc />
+    protected override string DescribeActivity(FocusedReviewReadInput input)
+    {
+        if (input.Path is null && !input.Requirements)
+        {
+            return $"source inventory from {input.Offset}, up to 100 entries";
+        }
+
+        var source = input.Requirements ? "requirements" : input.Path;
+        var endLine = (long)input.StartLine + input.MaximumLines - 1;
+        return $"lines {input.StartLine}-{endLine}, {(input.Baseline ? "baseline " : string.Empty)}{source}";
     }
 
     /// <inheritdoc />

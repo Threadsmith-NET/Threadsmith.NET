@@ -25,13 +25,15 @@ public sealed partial class SkillSubsystemTests
         await fixture.GitAsync("add", "--all");
         await fixture.GitAsync("commit", "-m", "many sources");
         var processes = new CaptureProcessCounter(fixture.Processes);
-        var capture = new FocusedReviewTargetCapture(processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
+        var capture = new FocusedReviewTargetCapture(new SecretOutputSanitizer(), fixture.Tools, fixture.Pipeline);
         var target = await capture.CaptureAsync(new FocusedReviewInput { BaseBranch = "HEAD" }, ReviewRequest(), fixture.Authority);
-        Assert.Equal(131, target.Files.Count);
+        Assert.Empty(target.Files);
         Assert.All(target.Files, file => Assert.False(file.InScope));
         var reads = fixture.ToolEvents.OfType<ToolInvocationStarted>().Where(item => item.ToolName == "git_show").ToArray();
-        Assert.Equal(6, reads.Length);
-        Assert.DoesNotContain(fixture.ToolEvents.OfType<ToolInvocationStarted>(), item => item.ToolName == "git_diff");
+        Assert.Equal(4, reads.Length);
+        Assert.All(fixture.ToolEvents.OfType<ToolInvocationStarted>(), item => Assert.False(string.IsNullOrWhiteSpace(item.ActivityDetail), item.ToolName));
+        Assert.Single(fixture.ToolEvents.OfType<ToolInvocationStarted>(), item => item.ToolName == "git_diff");
+        Assert.DoesNotContain(fixture.ToolEvents.OfType<ToolInvocationStarted>(), item => item.ToolName == "read_file");
         Assert.DoesNotContain(processes.Requests, request => request.Arguments.Contains("diff"));
         Assert.True(processes.Requests.Count < 20);
     }
@@ -116,7 +118,7 @@ public sealed partial class SkillSubsystemTests
         await fixture.InitializeAsync();
         var content = new string('x', (50 * 1024) - 1) + "😀\r\n" + new string('<', 60 * 1024);
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "large.txt"), content);
-        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
+        var capture = new FocusedReviewTargetCapture(new SecretOutputSanitizer(), fixture.Tools, fixture.Pipeline);
         var target = await capture.CaptureAsync(new FocusedReviewInput { BaseBranch = "HEAD", RequirementsDocumentPath = "large.txt", RequirementsSource = "workspace" }, ReviewRequest(), fixture.Authority);
         Assert.Equal(content, target.Files.Single(file => file.Path == "large.txt").Content);
         Assert.Equal(content, target.Requirements!.Content);
@@ -132,10 +134,10 @@ public sealed partial class SkillSubsystemTests
         await fixture.GitAsync("update-ref", "refs/remotes/origin/main", "HEAD");
         await fixture.GitAsync("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
         await fixture.GitAsync("checkout", "--detach", "HEAD");
-        var capture = new FocusedReviewTargetCapture(fixture.Processes, new SecretOutputSanitizer(), fixture.Cache, fixture.Tools, fixture.Pipeline);
+        var capture = new FocusedReviewTargetCapture(new SecretOutputSanitizer(), fixture.Tools, fixture.Pipeline);
         var error = await Assert.ThrowsAsync<InvalidDataException>(() => capture.CaptureAsync(new FocusedReviewInput(), ReviewRequest(), fixture.Authority));
         Assert.Contains("Detached HEAD", error.Message, StringComparison.Ordinal);
-        Assert.NotEmpty((await capture.CaptureAsync(new FocusedReviewInput { BaseBranch = "main" }, ReviewRequest(), fixture.Authority)).Files);
+        Assert.Empty((await capture.CaptureAsync(new FocusedReviewInput { BaseBranch = "main" }, ReviewRequest(), fixture.Authority)).Files);
     }
 
     private static async Task<T> InvokeFixtureToolAsync<T>(ReviewRepositoryFixture fixture, string tool, object input)

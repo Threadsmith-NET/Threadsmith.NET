@@ -32,6 +32,7 @@ The host owns control flow; the model is a pluggable reasoning engine, not an au
 
 - **Use the active Git checkout.** Confirm that `git rev-parse --show-toplevel` matches the user's active checkout before edits, builds, tests, or publishing. Work directly there; do not substitute copied source trees, snapshots, or another checkout found by name.
 - **Read before writing.** Inspect existing code before proposing new abstractions.
+- **Different is difficult.** Reuse the established execution path and extend it when needed. An alternate path requires a concrete technical reason; special authorization or context alone does not justify separate lifecycle, tool, delegation, or presentation machinery.
 - **Propagate `CancellationToken`** through every async boundary. Roslyn/MSBuild APIs that are non-cooperatively cancellable use the abandon-and-discard pattern with a bounded-wait backstop.
 - **Return host-owned DTOs across subsystem boundaries.** No model-provider SDK, Roslyn, extension, or terminal-library types leak into domain events, persistent state, or public projections.
 - **Keep extension types out of durable host state** and out of public projections.

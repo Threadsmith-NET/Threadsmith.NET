@@ -91,6 +91,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             cancellationToken.ThrowIfCancellationRequested();
             var modelContext = await CreateToolContextAsync(plan, cancellationToken);
             var registrations = _tools.GetRegistrations(plan.Request.SessionId, plan.Request.RunId)
+                .Where(registration => !registration.Tool.Definition.RequiresHostBinding)
                 .ToDictionary(item => item.Tool.Definition.Id, StringComparer.OrdinalIgnoreCase);
             var modelTools = BuildToolDefinitions(registrations.Values.Where(item => modelContext.AllowedToolIds.Contains(item.Tool.Definition.Id, StringComparer.OrdinalIgnoreCase)));
             var text = new StringBuilder();

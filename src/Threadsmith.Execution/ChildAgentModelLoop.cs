@@ -362,10 +362,12 @@ internal sealed class ChildAgentModelLoop
         }
     }
 
-    private static string ResolveSafeFailureReason(Exception exception)
+    private string ResolveSafeFailureReason(Exception exception)
     {
         return exception switch
         {
+            TransientModelException or ModelProviderException or ModelProviderTimeoutException =>
+                BoundedText.Truncate(_sanitizer.Sanitize(exception.Message), _options.MaximumCorrectionReasonCharacters, out _),
             InvalidDataException => exception.Message,
             ToolArgumentValidationException => exception.Message,
             UnauthorizedAccessException => exception.Message,

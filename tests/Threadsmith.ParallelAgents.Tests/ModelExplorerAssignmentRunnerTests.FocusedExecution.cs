@@ -16,11 +16,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 {
     /// <summary>Verifies the focused review boundary and its observable result.</summary>
     [Theory]
-    [InlineData("", false)]
-    [InlineData("", true)]
-    [InlineData("source", false)]
-    [InlineData("requirements", false)]
-    public async Task FocusedExecutorUsesExistingSchedulerAndSnapshotReaderForAllFourRoles(string redactedRange, bool redactOutput)
+    [InlineData("", false, false)]
+    [InlineData("", false, true)]
+    [InlineData("", true, false)]
+    [InlineData("source", false, false)]
+    [InlineData("requirements", false, false)]
+    public async Task FocusedExecutorUsesExistingSchedulerAndSnapshotReaderForAllFourRoles(string redactedRange, bool redactOutput, bool failProvider)
     {
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
@@ -34,7 +35,13 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var snapshots = new ConversationToolSnapshotStore();
         var registry = new ToolRegistry([new ReadFileTool(TestPromptLoader.Instance)]);
         var pipeline = CreatePipeline(registry, events, sanitizer);
-        var provider = new FocusedReadProvider { RedactedRange = redactedRange, RedactOutput = redactOutput };
+        var provider = new FocusedReadProvider { RedactedRange = redactedRange, RedactOutput = redactOutput, FailProvider = failProvider };
+        var observed = new ConcurrentBag<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
         var factory = new ModelExplorerAssignmentRunnerFactory(
             new AgentContextAssembler(evidence),
             new AgentFindingAdmission(evidence),
@@ -47,6 +54,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             sanitizer,
             options,
             TestPromptLoader.Instance);
+        var preferences = new SessionModelPreferences(profile.Id, ReasoningLevel.None);
+        registry.RegisterOrReplace(
+            [new DelegateAgentsTool(new DelegateAgentsPlanFactory(new NoReviewWorkspaceResolver(), preferences, snapshots, TestPromptLoader.Instance, options, selection), factory, coordinator, options, TestPromptLoader.Instance)],
+            new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "delegate-agents"));
         var authority = new ToolInvocationContext
         {
             RepositoryPath = Path.GetTempPath(),
@@ -99,7 +110,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 "requirements-digest",
                 string.Join('\n', Enumerable.Range(1, 700).Select(index => $"AC-{index}: FROZEN_REQUIREMENTS_CANARY")) + "\nM(\n    token: authToken);",
                 Enumerable.Range(1, 700).Select(index => new FocusedReviewCriterion($"AC-{index}", "FROZEN_REQUIREMENTS_CANARY", index, false)).ToArray()),
-            Files = [new FocusedReviewFile("review-fixture.cs", "digest", "FROZEN_SOURCE_CANARY", true, []),
+            Files = [new FocusedReviewFile("review-fixture.cs", "digest", "FROZEN_SOURCE_CANARY", true, []) { ModeChange = "old mode 100644; new mode 100755" },
                 new FocusedReviewFile("named.cs", "named-digest", "M(\n    token: authToken);", true, [])],
         };
         var resolver = new FocusedReviewPrivateResolver(AppContext.BaseDirectory, verifier, new SkillContentLoader(sanitizer), new BoundedJsonSchemaValidator());
@@ -125,7 +136,33 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             outcomes.AddRange(await executor.ExecuteAsync(invocation, plan, target, policies, false));
         }
 
+        Assert.All(observed.OfType<ToolInvocationStarted>(), item => Assert.False(string.IsNullOrWhiteSpace(item.ActivityDetail), item.ToolName));
+        var delegated = observed.OfType<ToolInvocationStarted>().Where(item => item.ToolName == "delegate_agents").ToArray();
+        Assert.Equal(4, delegated.Length);
+        Assert.All(plans, plan => Assert.Contains(delegated, item => item.ToolInvocationId == plan.Provenance.ToolInvocationId));
+        Assert.All(delegated, item => Assert.Contains("assignment(s)", item.ActivityDetail, StringComparison.Ordinal));
+        Assert.All(observed.OfType<ToolInvocationCompleted>().Where(item => delegated.Any(start => start.ToolInvocationId == item.ToolInvocationId)), item =>
+        {
+            Assert.DoesNotContain("FROZEN_REQUIREMENTS_CANARY", item.ResultJson ?? string.Empty, StringComparison.Ordinal);
+            Assert.DoesNotContain("strengths", item.ResultJson ?? string.Empty, StringComparison.Ordinal);
+        });
+        if (failProvider)
+        {
+            Assert.Equal(4, outcomes.Count);
+            Assert.All(outcomes, outcome =>
+            {
+                Assert.Equal(AgentRunStatus.Failed, outcome.Status);
+                Assert.False(outcome.FocusedReviewValidated);
+                Assert.Contains("HTTP 503", outcome.Reason, StringComparison.Ordinal);
+                Assert.DoesNotContain("raw-provider-secret", outcome.Reason, StringComparison.Ordinal);
+                Assert.True(outcome.Reason.Length <= options.MaximumCorrectionReasonCharacters);
+                Assert.Equal(0, outcome.Usage.ToolCalls);
+            });
+            return;
+        }
+
         Assert.Contains(provider.Requests.SelectMany(request => request.Messages), message => message.Role == ModelMessageRole.Tool && message.GetModelVisibleContent().Contains("FROZEN_SOURCE_CANARY", StringComparison.Ordinal));
+        Assert.Contains(provider.Requests.SelectMany(request => request.Messages), message => message.Role == ModelMessageRole.Tool && message.GetModelVisibleContent().Contains("old mode 100644; new mode 100755", StringComparison.Ordinal));
         Assert.Equal(4, outcomes.Count);
         Assert.All(outcomes, outcome =>
         {
@@ -145,8 +182,19 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(redactedRange.Length > 0 ? 20 : 16, provider.Requests.Count);
     }
 
+    private sealed class NoReviewWorkspaceResolver : ITransactionalWorkspaceResolver
+    {
+        public ITransactionalWorkspace GetWorkspace(WorkspaceId workspaceId) => throw new InvalidOperationException("Host-prepared review must not replan model assignments.");
+
+        public Task<StagedMutationSet> StageAsync(MutationSet mutationSet, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+
+        public Task<WorkspaceBaseline> PromoteBaselineAsync(WorkspaceId workspaceId, IReadOnlyList<string> changedFiles, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
     private sealed class FocusedReadProvider : IModelProvider
     {
+        public bool FailProvider { get; init; }
+
         public string RedactedRange { get; init; } = string.Empty;
 
         public bool RedactOutput { get; init; }
@@ -160,6 +208,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
             await Task.Yield();
+            if (FailProvider)
+            {
+                throw new TransientModelException("HTTP 503 provider unavailable; api_key=raw-provider-secret " + new string('x', 1024));
+            }
+
             var result = request.Messages.LastOrDefault(item => item.ToolName == "read_review_file" && item.Role == ModelMessageRole.Tool);
             if (result is null)
             {

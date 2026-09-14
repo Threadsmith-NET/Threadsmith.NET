@@ -183,7 +183,15 @@ internal sealed class FocusedReviewCompletionPolicy : IFocusedReviewCompletionPo
         return canonical;
     }
 
-    private static string NormalizeDefinition(string value) => Regex.Replace(value, @"\s+", string.Empty).ToLowerInvariant();
+    /// <summary>Classifies actual validated coverage for both workflow status and report presentation.</summary>
+    internal static string GetReviewStatus(FocusedReviewTarget target, IReadOnlyList<AgentRunOutcome> outcomes)
+    {
+        var completed = outcomes.Count(outcome => outcome.Status == AgentRunStatus.Completed
+            && outcome.FocusedReviewValidated && outcome.Response is not null);
+        return completed == 0 ? "failed" : completed == 4 && target.Exclusions.Count == 0 ? "complete" : "partial";
+    }
+
+    private static string NormalizeDefinition(string value) => Regex.Replace(System.Net.WebUtility.HtmlDecode(value), @"\s+", string.Empty).ToLowerInvariant();
 
     private static IEnumerable<string> StringValues(JsonElement value)
     {

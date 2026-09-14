@@ -38,11 +38,11 @@ Common editing rules:
 | System and phase prompts | 26 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 21 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
 | Correction prompts | 52 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 195 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 196 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **310** | Complete deployed catalog. |
+| **Total** | **311** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -327,7 +327,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-read_review_file-Description.md` | Confined frozen review inventory and source-range reader. | `None` |
+| `Tool-read_review_file-Description.md` | Confined frozen review inventory and source-range reader, including captured file-mode transitions. | `None` |
 | `Tool-AdvancedSemantic-HiddenOmissions.md` | Hidden-omission notice in advanced semantic results. | [`HiddenCount`](#placeholder-hiddencount), [`Plural`](#placeholder-plural) |
 | `Tool-AdvancedSemantic-OmissionsSection.md` | Omissions section in advanced semantic results. | [`Items`](#placeholder-items) |
 | `Tool-AdvancedSemantic-PathPolicyOmission.md` | Path-policy omission text shared by advanced semantic results. | `None` |
@@ -590,7 +590,13 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_diff-Description.md` | Bounded Git comparisons, optional working-tree base, and patch context lines. | `None` |
+| `Tool-git_diff-Description.md` | Bounded Git comparisons, literal path filters, metadata-only frozen ranges, optional working-tree base, and patch context lines. | `None` |
+
+#### `git_fetch` family
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Tool-git_fetch-Description.md` | Host-admitted shallow branch acquisition into a host-owned cache; excluded from model discovery. | `None` |
 
 #### `git_log` family
 
@@ -602,7 +608,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and normalized inventory pages. | `None` |
+| `Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | `None` |
 
 #### `git_status` family
 

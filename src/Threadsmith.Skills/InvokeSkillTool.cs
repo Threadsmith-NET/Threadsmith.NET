@@ -118,13 +118,20 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             ParseOptionalPayload(result.ReviewDelivery is { } delivery
                 ? JsonSerializer.Serialize(delivery with { Markdown = null }, ModelJsonOptions)
                 : result.OutputJson));
+        var failure = result.Status switch
+        {
+            SkillInvocationStatus.Failed => new ToolExecutionFailure(ToolErrorClassification.ExecutionFailure, result.Reason),
+            SkillInvocationStatus.Cancelled => new ToolExecutionFailure(ToolErrorClassification.Cancelled, result.Reason),
+            _ => null,
+        };
         return new ToolExecution<InvokeSkillOutput>(
             output,
             [new ToolProvenanceSource(
                 "skill-package",
                 result.Package.SkillId.Value,
                 result.Package.Digest.Value)],
-            ModelResultContent: JsonSerializer.Serialize(modelOutput, ModelJsonOptions));
+            ModelResultContent: JsonSerializer.Serialize(modelOutput, ModelJsonOptions),
+            Failure: failure);
     }
 
     /// <inheritdoc />

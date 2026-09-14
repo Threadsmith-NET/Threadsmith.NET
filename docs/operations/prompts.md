@@ -105,9 +105,10 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-generated_code_query-HiddenDocuments.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-HiddenDocuments.md` | Hidden-document notice in `generated_code_query` results. | `HiddenCount`, `Plural` |
 | `Tool-generated_code_query-ContentHostTruncation.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-ContentHostTruncation.md` | Host content-truncation notice in `generated_code_query` results. | None |
 | `Tool-generated_code_query-ContentProjectionTruncation.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-ContentProjectionTruncation.md` | Model-projection content-shortening notice in `generated_code_query` results. | None |
-| `Tool-git_diff-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_diff-Description.md` | Bounded Git comparisons, optional working-tree base, and patch context lines. | None |
+| `Tool-git_fetch-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_fetch-Description.md` | Host-admitted shallow branch acquisition into a host-owned cache; excluded from model discovery. | None |
+| `Tool-git_diff-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_diff-Description.md` | Bounded Git comparisons, literal path filters, metadata-only frozen ranges, optional working-tree base, and patch context lines. | None |
 | `Tool-git_log-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_log-Description.md` | Advertised description for `git_log`. | None |
-| `Tool-git_show-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and normalized inventory pages. | None |
+| `Tool-git_show-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | None |
 | `Tool-git_blame-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_blame-Description.md` | Advertised description for `git_blame`. | None |
 | `Tool-git_compare_branches-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_compare_branches-Description.md` | Advertised description for `git_compare_branches`. | None |
 | `Tool-dotnet_inventory-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_inventory-Description.md` | Advertised description for `dotnet_inventory`. | None |
@@ -348,7 +349,7 @@ For a category-organized explanation of every file and a glossary defining what 
 
 | `Context-FocusedReview-Procedure.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-Procedure.md` | Private procedure and output-schema framing for the assigned focused reviewer. | `Instructions`, `Schema` |
 | `Correction-FocusedReview-Output.md` | `Threadsmith.Execution` | `prompts/Correction-FocusedReview-Output.md` | Focused-only output validation correction in the same child conversation. | None |
-| `Tool-read_review_file-Description.md` | `Threadsmith.Execution` | `prompts/Tool-read_review_file-Description.md` | Confined frozen review inventory and source-range reader. | None |
+| `Tool-read_review_file-Description.md` | `Threadsmith.Execution` | `prompts/Tool-read_review_file-Description.md` | Confined frozen review inventory and source-range reader, including captured file-mode transitions. | None |
 | `Context-FocusedReview-Objective.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-Objective.md` | Focused reviewer assignment objective. | None |
 | `Context-FocusedReview-Task.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-Task.md` | Focused reviewer assignment task. | None |
 | `Context-FocusedReview-StoppingCondition.md` | `Threadsmith.Execution` | `prompts/Context-FocusedReview-StoppingCondition.md` | Focused reviewer assignment stopping condition. | None |

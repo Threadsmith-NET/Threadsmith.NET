@@ -157,8 +157,9 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var plan = _plans.Create(input, context);
-        var runner = _runners.Create(context);
+        var (plan, runner) = context.HostBinding is PreparedDelegationToolBinding binding
+            ? binding.Resolve(input, context)
+            : (_plans.Create(input, context), _runners.Create(context));
         _steering?.RegisterDelegation(
             context.SessionId,
             context.RunId,

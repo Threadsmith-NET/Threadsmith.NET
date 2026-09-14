@@ -136,7 +136,12 @@ internal static class InteractionEventSegments
                     GetToolCompletionRole(completed));
                 return;
             case SkillWorkflowCheckpointWritten skill:
-                var skillRole = skill.Status == SkillInvocationStatus.Completed ? PresentationTextRole.Success : PresentationTextRole.Warning;
+                var skillRole = skill.Status switch
+                {
+                    SkillInvocationStatus.Completed => PresentationTextRole.Success,
+                    SkillInvocationStatus.Failed => PresentationTextRole.Error,
+                    _ => PresentationTextRole.Warning,
+                };
                 AppendLifecycleBlock(segments, text, skillRole);
                 return;
             case SemanticCheckCompleted completed:

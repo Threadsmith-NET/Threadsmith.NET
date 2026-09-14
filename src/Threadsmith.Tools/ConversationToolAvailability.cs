@@ -1,7 +1,6 @@
-namespace Threadsmith.Execution;
+namespace Threadsmith.Tools;
 
 using Threadsmith.Core;
-using Threadsmith.Tools;
 
 /// <summary>Resolves the ordinary model-visible tool surface under current host policy.</summary>
 internal static class ConversationToolAvailability
@@ -33,7 +32,11 @@ internal static class ConversationToolAvailability
     }
 
     /// <summary>Returns whether one enabled definition remains visible after current request policy.</summary>
-    public static bool IsAdvertised(ToolDefinition definition, ToolInvocationContext? context)
+    public static bool IsAdvertised(ToolDefinition definition, ToolInvocationContext? context) =>
+        !definition.RequiresHostBinding && IsAllowed(definition, context);
+
+    /// <summary>Checks shared enabled-tool policy eligibility, including host-owned capabilities.</summary>
+    internal static bool IsAllowed(ToolDefinition definition, ToolInvocationContext? context)
     {
         ArgumentNullException.ThrowIfNull(definition);
         if (context is null)

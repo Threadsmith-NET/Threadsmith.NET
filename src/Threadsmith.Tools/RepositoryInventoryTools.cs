@@ -39,6 +39,11 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
             input,
             cancellationToken);
         result = RepositoryInventoryToolPolicy.Confine(result, input, context.Invocation);
+        result = result with
+        {
+            EntriesDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                Encoding.UTF8.GetBytes(JsonSerializer.Serialize(result.Entries)))).ToLowerInvariant(),
+        };
         return new(
             result,
             [new ToolProvenanceSource("git", context.Invocation.RepositoryPath, $"diff:{mode}")],
@@ -47,9 +52,21 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
     }
 
     /// <inheritdoc />
+    protected override string DescribeActivity(GitDiffRequest input)
+    {
+        var comparison = input.BaseRevision is null ? (input.Mode ?? GitComparisonMode.WorkingTree).ToString()
+            : input.TargetRevision is null ? input.BaseRevision + " -> working tree" : input.BaseRevision + " -> " + input.TargetRevision;
+        return comparison + (input.Paths.Count > 0 ? " · " + input.Paths.Count + " path filter(s)" : input.Path is null ? " · all paths" : " · " + input.Path);
+    }
+
+    /// <inheritdoc />
     protected override void ValidateInput(GitDiffRequest input)
     {
         ValidateDiffRequest(input);
+        if (input.Paths.Count > 64 || (input.Path is not null && input.Paths.Count > 0) || input.Paths.Any(string.IsNullOrWhiteSpace))
+        {
+            throw new ToolArgumentValidationException("Git diff accepts one path or up to 64 literal path filters.");
+        }
     }
 
     /// <inheritdoc />
@@ -57,7 +74,7 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
         GitDiffRequest input,
         ToolInvocationContext context)
     {
-        return input.Path is null ? [context.RepositoryPath] : [input.Path];
+        return input.Paths.Count > 0 ? input.Paths : input.Path is null ? [context.RepositoryPath] : [input.Path];
     }
 
     /// <inheritdoc />
@@ -240,6 +257,19 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
     }
 
     /// <inheritdoc />
+    protected override string DescribeActivity(GitShowRequest input)
+    {
+        if (input.Inventory)
+        {
+            return $"{input.Revision} · inventory{(input.Paths.Count == 0 ? string.Empty : " for " + input.Paths.Count + " path(s)")} from {input.InventoryOffset}, up to {input.InventoryMaximumEntries} entries";
+        }
+
+        return input.Paths.Count > 0
+            ? $"{input.Revision} · {input.Paths.Count} file(s): {string.Join(", ", input.Paths.Take(3))}{(input.Paths.Count > 3 ? ", …" : string.Empty)}"
+            : input.Path is null ? input.Revision : input.Revision + " · " + input.Path;
+    }
+
+    /// <inheritdoc />
     protected override void ValidateInput(GitShowRequest input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Revision);
@@ -254,7 +284,7 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
         GitShowRequest input,
         ToolInvocationContext context)
     {
-        return input.Paths.Count > 0 ? input.Paths : input.Path is null ? [context.RepositoryPath] : [input.Path];
+        return input.Inventory ? [context.RepositoryPath] : input.Paths.Count > 0 ? input.Paths : input.Path is null ? [context.RepositoryPath] : [input.Path];
     }
 
     /// <inheritdoc />
@@ -390,6 +420,9 @@ public sealed class GitBranchComparisonTool : Tool<GitBranchComparisonRequest, G
             [new ToolProvenanceSource("git-comparison", input.BaseRevision, input.TargetRevision)],
             result.IsTruncated);
     }
+
+    /// <inheritdoc />
+    protected override string DescribeActivity(GitBranchComparisonRequest input) => $"{input.BaseRevision} -> {input.TargetRevision}";
 
     /// <inheritdoc />
     protected override void ValidateInput(GitBranchComparisonRequest input)
@@ -626,6 +659,7 @@ internal static class GitModelProjection
                         entry.IsBinary,
                     }),
                 patch = result.Patch,
+                omittedPaths = result.OmittedPaths,
                 truncated = result.IsTruncated,
             },
             ModelJsonOptions);
@@ -728,7 +762,8 @@ internal static class RepositoryInventoryToolPolicy
             Entries = entries,
             Summary = withheldPatch ? new GitHunkSummary(0, 0, 0, 0) : result.Summary,
             Patch = withheldPatch ? string.Empty : result.Patch,
-            IsTruncated = result.IsTruncated || withheldPatch || omittedEntries,
+            OmittedPaths = result.OmittedPaths + result.Entries.Count - entries.Length,
+            IsTruncated = result.IsTruncated || withheldPatch || (request.IncludePatch && omittedEntries),
         };
     }
 

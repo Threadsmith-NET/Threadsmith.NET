@@ -21,7 +21,11 @@ public sealed record FocusedReviewFile(
     bool InScope,
     IReadOnlyList<FocusedReviewRange> ChangedRanges,
     string? BaselineContent = null,
-    bool Deleted = false);
+    bool Deleted = false)
+{
+    /// <summary>Captured Git mode transition, retained independently of source text.</summary>
+    public string? ModeChange { get; init; }
+}
 
 /// <summary>Inclusive one-based source interval.</summary>
 public sealed record FocusedReviewRange(int Start, int End);
@@ -112,6 +116,9 @@ public interface IFocusedReviewCompletionPolicy
 /// <summary>Execution boundary for the exact verified public review workflow.</summary>
 public interface IFocusedReviewExecutor
 {
+    /// <summary>Checks reviewer tool authority before acquiring source or starting inference.</summary>
+    Task PreflightAsync(SkillInvocationRequest request, CancellationToken cancellationToken = default);
+
     /// <summary>Freezes host launch provenance and role assignments under existing authority and budgets.</summary>
     Task<IReadOnlyList<DelegationPlan>> PrepareAsync(
         SkillInvocationPlan invocation,

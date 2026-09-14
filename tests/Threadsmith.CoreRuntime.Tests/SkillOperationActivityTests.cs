@@ -83,6 +83,17 @@ public sealed class SkillOperationActivityTests
         }
     }
 
+    /// <summary>Failed skills have the same error presentation as failed tools.</summary>
+    [Fact]
+    public void FailedSkillCompletionRendersAsError()
+    {
+        var failed = Start() with { Status = SkillInvocationStatus.Failed };
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(segments, failed, "SKILLS: review@1.0.0 - failed");
+        Assert.Contains(segments, segment => segment.Role == PresentationTextRole.Error);
+        Assert.DoesNotContain(segments, segment => segment.Role == PresentationTextRole.Success);
+    }
+
     private static SkillWorkflowCheckpointWritten Start() => new(
         SessionId.New(), DateTimeOffset.UtcNow, SkillInvocationId.New(), SkillWorkflowId.New(), new SkillId("review"), "1.0.0", new string('a', 64), SkillInvocationStatus.Running, 0, "Execute") { RunId = RunId.New() };
 }

@@ -1003,6 +1003,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             new SearchTextTool(promptLoader, limits, processManager, ripgrepExecutable),
             new GitStatusTool(processManager, promptLoader),
             new GitDiffTool(gitQueries, promptLoader),
+            new GitFetchTool(processManager, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Threadsmith", "reviews", "objects"), promptLoader),
             new GitLogTool(gitQueries, promptLoader),
             new GitShowTool(gitQueries, promptLoader),
             new GitBlameTool(gitQueries, promptLoader),

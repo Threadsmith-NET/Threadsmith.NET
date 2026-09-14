@@ -11,21 +11,20 @@ public sealed partial class GitQueryService
 {
     private async Task<GitShowResult> ShowInventoryAsync(string root, GitShowRequest request, CancellationToken cancellationToken)
     {
-        if (request.Path is not null || request.Paths.Count > 0)
+        if (request.Path is not null || request.Paths.Count > 64)
         {
-            throw new ArgumentException("Inventory mode cannot be combined with file content paths.");
+            throw new ArgumentException("Inventory accepts up to 64 literal paths, without Path.");
         }
 
-        var revision = (await RequiredAsync(["rev-parse", "--verify", "--end-of-options", request.Revision + "^{commit}"])).Trim();
-        if (revision.Length is not (40 or 64) || !revision.All(Uri.IsHexDigit))
-        {
-            throw new InvalidDataException("Git returned an invalid immutable revision.");
-        }
+        var revision = await ResolveCommitAsync(root, request.Revision, cancellationToken);
+        var selectedPaths = request.Paths.Select(path => ValidatePath(root, path) ?? throw new ArgumentException("Inventory paths must be literal non-empty paths.")).ToArray();
 
         ArgumentOutOfRangeException.ThrowIfNegative(request.InventoryOffset);
         ArgumentOutOfRangeException.ThrowIfLessThan(request.InventoryMaximumEntries, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(request.InventoryMaximumEntries, 500);
-        var treePage = await ReadPageAsync(["ls-tree", "-r", "-l", "-z", revision]);
+        var treePage = request.IncludeTrackedFiles
+            ? await ReadPageAsync(["ls-tree", "-r", "-l", "-z", revision, "--", .. selectedPaths.Select(LiteralPathspec)])
+            : (Text: string.Empty, Count: 0);
         var rawTree = treePage.Text;
         var files = new List<GitTreeFile>();
         foreach (var record in rawTree.Split('\0', StringSplitOptions.RemoveEmptyEntries))
@@ -70,7 +69,8 @@ public sealed partial class GitQueryService
                 return new BoundedText(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), total > 16 * 1024 * 1024);
             });
             statusDigest = status.IsTruncated ? throw new InvalidDataException("Git status exceeds its metadata bound.") : status.Text;
-            var pathPage = await ReadPageAsync(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+            string[] trackedOptions = request.IncludeTrackedFiles ? ["--cached"] : [];
+            var pathPage = await ReadPageAsync(["ls-files", "-z", .. trackedOptions, "--others", "--exclude-standard", "--", .. selectedPaths.Select(LiteralPathspec)]);
             paths = pathPage.Text.Split('\0', StringSplitOptions.RemoveEmptyEntries);
             pathCount = pathPage.Count;
         }
@@ -141,6 +141,18 @@ public sealed partial class GitQueryService
             var output = await RunAsync(root, arguments, cancellationToken);
             return output.IsTruncated ? throw new InvalidDataException("Git inventory exceeds the configured capture bound.") : output.Text;
         }
+    }
+
+    private async Task<string> ResolveCommitAsync(string root, string reference, CancellationToken cancellationToken)
+    {
+        var output = await RunAsync(root, ["rev-parse", "--verify", "--end-of-options", reference + "^{commit}"], cancellationToken);
+        var revision = output.Text.Trim();
+        if (output.IsTruncated || revision.Length is not (40 or 64) || !revision.All(Uri.IsHexDigit))
+        {
+            throw new InvalidDataException("Git returned an invalid immutable revision.");
+        }
+
+        return revision;
     }
 
     private static string HashMetadata(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();

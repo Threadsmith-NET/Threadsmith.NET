@@ -370,15 +370,19 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 }
             }
 
+            var failed = current.ReviewDelivery?.Status == "failed";
+            var reason = failed ? "All reviewers failed; no validated review was produced." : "workflow completed";
             var completed = current with
             {
-                Status = SkillInvocationStatus.Completed,
-                NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionInspectAuthoritativeOutcome),
+                Status = failed ? SkillInvocationStatus.Failed : SkillInvocationStatus.Completed,
+                NextAction = GetPromptValue(failed
+                    ? PromptFileNames.SkillWorkflowNextActionInspectFailureThenRevalidate
+                    : PromptFileNames.SkillWorkflowNextActionInspectAuthoritativeOutcome),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
             await SaveAsync(completed, VersionOf(current), CancellationToken.None);
-            await PublishCompletionAsync(completed, "workflow completed", CancellationToken.None);
-            return CreateResult(completed, "workflow completed");
+            await PublishCompletionAsync(completed, reason, CancellationToken.None);
+            return CreateResult(completed, reason);
         }
         catch (OperationCanceledException) when (source.IsCancellationRequested)
         {

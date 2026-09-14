@@ -45,6 +45,12 @@ public sealed class FocusedReviewExecutor : IFocusedReviewExecutor
     }
 
     /// <inheritdoc />
+    public async Task PreflightAsync(SkillInvocationRequest request, CancellationToken cancellationToken = default)
+    {
+        _ = await ResolveAuthorityAsync(request, null, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<DelegationPlan>> PrepareAsync(
         SkillInvocationPlan invocation,
         FocusedReviewTarget target,
@@ -136,6 +142,7 @@ public sealed class FocusedReviewExecutor : IFocusedReviewExecutor
                 ParentBudget = AgentResourceBudget.Aggregate(batch.Select(item => item.Budget).ToArray()),
                 Provenance = new DelegationProvenance
                 {
+                    ToolInvocationId = ToolInvocationId.New(),
                     ReviewInvocationId = invocation.Request.InvocationId,
                     SessionId = invocation.Request.SessionId,
                     ParentRunId = invocation.Request.RunId,
@@ -190,30 +197,53 @@ public sealed class FocusedReviewExecutor : IFocusedReviewExecutor
                 }).ToArray();
         }
 
-        var context = new ToolExecutionContext(
-            ToolInvocationId.New(),
-            invocation.Request.SessionId,
-            invocation.Request.RunId,
-            authority with
+        var registration = _tools.GetRegistrations(invocation.Request.SessionId, invocation.Request.RunId)
+            .SingleOrDefault(item => item.Tool.Definition.Id == DelegateAgentsContract.ToolId)
+            ?? throw new UnauthorizedAccessException("Focused review requires the enabled delegate_agents tool.");
+        var binding = new PreparedDelegationToolBinding(plan, authority.WorkspaceId, context =>
+            _runners.CreateFocused(
+                context with
+                {
+                    Invocation = context.Invocation with
+                    {
+                        AllowedToolIds = [FocusedReviewReadTool.ToolId],
+                        AllowedNetworkHosts = [],
+                        AllowedExecutables = [],
+                    },
+                },
+                target,
+                procedures));
+        var result = await _pipeline.InvokeAsync(
+            new ToolInvocationRequest
             {
-                AllowedToolIds = [FocusedReviewReadTool.ToolId],
-                AllowedNetworkHosts = [],
-                AllowedExecutables = [],
-                RequestedBy = "verified-review-skill",
-            })
-        { Phase = invocation.Request.Phase };
-        var result = await _coordinator.StartAsync(plan, _runners.CreateFocused(context, target, procedures), cancellationToken);
-        return result.ChildOutcomes;
+                SessionId = invocation.Request.SessionId,
+                RunId = invocation.Request.RunId,
+                Phase = invocation.Request.Phase,
+                ToolId = DelegateAgentsContract.ToolId,
+                ArgumentsJson = JsonSerializer.Serialize(binding.Input),
+                ExpectedRegistration = registration,
+                HostBinding = binding,
+                Context = authority with { RequestedBy = $"skill-host:{invocation.Request.InvocationId.Value:D}" },
+            },
+            cancellationToken);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"Review delegation failed: {result.Error}");
+        }
+
+        var checkpoint = await _coordinator.GetAsync(plan.DelegationId, cancellationToken)
+            ?? throw new InvalidDataException("Review delegation returned without a durable checkpoint.");
+        return checkpoint.ChildOutcomes;
     }
 
     private async Task<ToolInvocationContext> ResolveAuthorityAsync(
         SkillInvocationRequest request,
-        FocusedReviewTarget target,
+        FocusedReviewTarget? target,
         CancellationToken cancellationToken)
     {
         var authority = await _authority(request, cancellationToken);
         if (authority.WorkspaceId != request.WorkspaceId || authority.TrustLevel < RepositoryTrustLevel.TrustedRead
-            || (target.InvokingRepository is not null && !Path.GetFullPath(authority.RepositoryPath).Equals(
+            || (target?.InvokingRepository is not null && !Path.GetFullPath(authority.RepositoryPath).Equals(
                 target.InvokingRepository,
                 OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)))
         {
@@ -226,17 +256,20 @@ public sealed class FocusedReviewExecutor : IFocusedReviewExecutor
                 request.SessionId,
                 request.RunId)
             : ConversationToolAvailability.CreateSnapshot(_pipeline, _tools, request.SessionId, request.RunId, authority, false).Registrations;
-        if (!registrations.Any(
-            registration => registration.Tool.Definition.Id == "read_file"
-            && registration.Tool.Definition.SideEffect == ToolSideEffect.ReadOnly && registration.Tool.Definition.RequiredApproval == ApprovalLevel.None
-            && ConversationToolAvailability.IsAdvertised(registration.Tool.Definition, authority)))
+        foreach (var toolId in new[] { "read_file", DelegateAgentsContract.ToolId })
         {
-            throw new UnauthorizedAccessException("Focused review requires eligible read_file authority in the invoking request.");
+            if (!registrations.Any(registration => registration.Tool.Definition.Id == toolId
+                && registration.Tool.Definition.SideEffect == ToolSideEffect.ReadOnly
+                && registration.Tool.Definition.RequiredApproval == ApprovalLevel.None
+                && ConversationToolAvailability.IsAdvertised(registration.Tool.Definition, authority)))
+            {
+                throw new UnauthorizedAccessException($"Focused review requires eligible {toolId} authority in the invoking request.");
+            }
         }
 
-        foreach (var file in target.Files)
+        if (target is not null)
         {
-            _ = ReviewPathAccess.Resolve(file.Path, authority);
+            ReviewPathAccess.ValidateTarget(target, authority);
         }
 
         return authority;

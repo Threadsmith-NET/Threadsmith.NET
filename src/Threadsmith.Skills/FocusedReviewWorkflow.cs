@@ -78,11 +78,13 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
             }
         }
 
-        var target = record?.Target ?? await _capture.CaptureAsync(input, plan.Request, authority, cancellationToken, ReportAsync);
-        foreach (var file in target.Files)
+        if (record is null)
         {
-            _ = ReviewPathAccess.Resolve(file.Path, authority);
+            await _executor.PreflightAsync(plan.Request, cancellationToken);
         }
+
+        var target = record?.Target ?? await _capture.CaptureAsync(input, plan.Request, authority, cancellationToken, ReportAsync);
+        ReviewPathAccess.ValidateTarget(target, authority);
 
         if (target.Requirements is { Source: "workspace" } requirements)
         {
@@ -169,9 +171,7 @@ public sealed class FocusedReviewWorkflow : ISkillReviewActionHandler
             await SaveAsync(recordPath, record, cancellationToken);
         }
 
-        var status = record.Outcomes.Count == 4 && record.Outcomes.All(
-            outcome => outcome.Status == AgentRunStatus.Completed && outcome.FocusedReviewValidated)
-            && target.Exclusions.Count == 0 ? "complete" : "partial";
+        var status = FocusedReviewCompletionPolicy.GetReviewStatus(target, record.Outcomes);
         var contentDigest = record.ContentDigest ?? throw new InvalidDataException("Missing report identity.");
         var report = record.Markdown ?? throw new InvalidDataException("Missing canonical report.");
         if (FocusedReviewTargetCapture.Hash(Encoding.UTF8.GetBytes(report)) != contentDigest)

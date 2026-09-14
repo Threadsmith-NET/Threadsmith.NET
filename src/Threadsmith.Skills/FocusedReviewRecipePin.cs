@@ -4,8 +4,8 @@ namespace Threadsmith.Skills;
 internal static class FocusedReviewRecipePin
 {
     /// <summary>Compiled digest that pins the complete shipped recipe.</summary>
-    internal const string Sha256 = "233d0bf3c2da4dc1a61f080b7c89f589390995d560823e489d5cc5350e3b679c";
+    internal const string Sha256 = "6dacff39ac45d5f6d70441ee0962b092a84718eef0c89bc55d28d133dbff7998";
 
     /// <summary>Compiled digest of the exact public review manifest.</summary>
-    internal const string PublicManifestSha256 = "4e2e707e5ca1a6be29c299c77a4267878817bb71b16db5c2e9780e83e575ac01";
+    internal const string PublicManifestSha256 = "e2fe202988a8aeafdfadaac4905781a8e859be34e5ee20f094c8903c327c6efe";
 }

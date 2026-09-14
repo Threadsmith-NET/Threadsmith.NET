@@ -53,7 +53,7 @@ internal static class FocusedReviewComposition
             new SkillContentLoader(host.Sanitizer),
             schemas,
             catalogOptions);
-        var capture = new FocusedReviewTargetCapture(tools.ProcessManager, host.Sanitizer, Path.Combine(stateRoot, "objects"), tools.ToolRegistry, tools.ToolPipeline);
+        var capture = new FocusedReviewTargetCapture(host.Sanitizer, tools.ToolRegistry, tools.ToolPipeline);
         var executor = new FocusedReviewExecutor(
             runners,
             coordinator,

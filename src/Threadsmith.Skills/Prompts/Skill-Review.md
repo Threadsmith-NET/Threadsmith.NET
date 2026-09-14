@@ -48,6 +48,8 @@ Note that the the ArchitectureReviewer may include one or more mermaid architecu
 - **Requirements coverage**: Call out any specific gaps between the requirements (if provided). If no specific requirements document was provided by the user when the skill was launched, just include the text "No specific requirements documentation provided."
 - **Validation and coverage limits** Note the results of any tests that were run, note if all the review agents specialists completed or not, and any other information that is noteworthy and related to the validity and comprehensiveness of the review.
 - **Final recommendation**: Ship|Ship with Observations|Changes Needed. If changes are needed, briefly summarize.
+- **Disclaimer** Include a disclaimer with exactly this text: 
+"AI code reviews can be a useful code-quality tool, but should be considered advisory and not authoritative. They are best used in conjunction with human reviews." 
 6. **Persist or Stream report**  Inspect whether the invoking repository already has an .inbox directory. When it exists and write_file
 is available, save the full Markdown there with a unique review-<timestamp>.md name using write_file
 with explicit content. Do not use useLastResponse: it refers to a previous archived response. Otherwise

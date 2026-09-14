@@ -18,6 +18,7 @@ public sealed partial class AgentRoleOutputTests
     [InlineData(AgentRole.TestReviewer, PromptFileNames.SystemChildAgentTestReviewer)]
     [InlineData(AgentRole.PerformanceReviewer, PromptFileNames.SystemChildAgentPerformanceReviewer)]
     [InlineData(AgentRole.ArchitectureReviewer, PromptFileNames.SystemChildAgentArchitectureReviewer)]
+    [InlineData(AgentRole.BugReviewer, PromptFileNames.SystemChildAgentBugReviewer)]
     public static void Prompt_SelectsCommonPolicyAndRoleAmendment(AgentRole role, string amendmentFile)
     {
         var prompts = TestPromptLoader.Instance;
@@ -120,7 +121,7 @@ public sealed partial class AgentRoleOutputTests
     public static void Tools_PreserveRegisteredDefinitions()
     {
         var prompts = TestPromptLoader.Instance;
-        var registry = new ToolRegistry([new ReadFileTool(prompts), new ListFilesTool(prompts)]);
+        var registry = new ToolRegistry([new ReadFileTool(prompts, new Threadsmith.Telemetry.SecretOutputSanitizer()), new ListFilesTool(prompts)]);
         var registrations = registry.GetRegistrations(SessionId.New(), RunId.New());
         var definitions = ChildAgentPrompt.CreateToolDefinitions(registrations);
 

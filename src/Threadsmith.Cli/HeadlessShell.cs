@@ -549,9 +549,7 @@ public sealed class HeadlessShell
                 HostBudget = new SkillBudget(),
             },
             cancellationToken);
-        var text = result.ReviewDelivery is { } delivery
-            ? delivery.Markdown ?? $"Review {delivery.Status}: [{Path.GetFileName(delivery.SavedPath)}]({delivery.SavedPath})."
-            : JsonSerializer.Serialize(result);
+        var text = result.Response ?? JsonSerializer.Serialize(result);
         for (var offset = 0; offset < text.Length; offset += 2048)
         {
             await _output.WriteAsync(text.AsMemory(offset, Math.Min(2048, text.Length - offset)), cancellationToken);

@@ -20,6 +20,7 @@ public static class AgentModelSelectorTests
     [InlineData(AgentRole.TestReviewer)]
     [InlineData(AgentRole.PerformanceReviewer)]
     [InlineData(AgentRole.ArchitectureReviewer)]
+    [InlineData(AgentRole.BugReviewer)]
     public static void FreezePolicy_RoleConfigurationOverridesInheritance(AgentRole role)
     {
         var selector = CreateSelector(role);
@@ -165,6 +166,7 @@ public static class AgentModelSelectorTests
     [InlineData(AgentRole.TestReviewer)]
     [InlineData(AgentRole.PerformanceReviewer)]
     [InlineData(AgentRole.ArchitectureReviewer)]
+    [InlineData(AgentRole.BugReviewer)]
     public static void FreezePolicy_OrdinaryRolesDoNotRequireStructuredOutput(AgentRole role)
     {
         var selector = CreateSelector(role, structuredOutput: false, toolCalls: true);

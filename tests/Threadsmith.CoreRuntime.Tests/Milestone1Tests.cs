@@ -798,14 +798,18 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task FakeModel_MissingUsage_DoesNotCrashBudgetLayer()
     {
+        var budget = new ExecutionBudget(new BudgetDimensions(0, 1, TimeSpan.FromMinutes(1)));
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession { Turns = [new ScriptedTurn { Text = "no usage" }] },
-            budget: new ExecutionBudget(new BudgetDimensions(0, 0, TimeSpan.FromMinutes(1))));
+            budget: budget);
         var sessionId = await harness.Dispatcher.DispatchAsync(new CreateSessionCommand("test"));
         var runId = await harness.Dispatcher.DispatchAsync(
             new SubmitRequestCommand(sessionId, "request"));
 
         Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        var charged = budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
+        Assert.Equal(1, charged.Calls);
+        Assert.Equal(0, charged.Tokens);
     }
 
     /// <summary>The TUI controller maps open, submit, wait, and cancel gestures to commands.</summary>

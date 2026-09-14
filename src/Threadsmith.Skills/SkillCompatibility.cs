@@ -69,7 +69,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
             denials.Add("host-version-incompatible");
         }
 
-        IReadOnlyDictionary<string, ToolDefinition> definitions = _tools.Definitions
+        IReadOnlyDictionary<string, ToolDefinition> definitions = _tools.GetDefinitions(request.SessionId, request.RunId)
             .ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
         var availableRequired = new List<string>();
         foreach (var toolId in requirements.RequiredTools)
@@ -105,10 +105,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
                     request.Sensitivity))
                 .OrderBy(profile => profile.Name, StringComparer.Ordinal),
         ];
-        var requiresModel = candidate.Metadata.Workflow.Steps.Any(step =>
-            step.Kind is SkillWorkflowStepKind.InvokeProcedure
-                or SkillWorkflowStepKind.CollectEvidence
-                or SkillWorkflowStepKind.Summarize);
+        var requiresModel = RequiresModel(candidate);
         if (requiresModel && compatibleModels.Length == 0)
         {
             denials.Add("no-compatible-model");
@@ -126,6 +123,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
             IsCompatible = denials.Count == 0,
             DenialReasons = denials,
             AvailableRequiredTools = availableRequired,
+            InheritedTools = requirements.InheritAvailableTools ? definitions.Keys.ToArray() : [],
             UnavailableOptionalTools = unavailableOptional,
             CompatibleModels = compatibleModels.Select(item => item.Id).ToArray(),
         };
@@ -151,6 +149,11 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
             WallTime = package.WallTime < host.WallTime ? package.WallTime : host.WallTime,
         };
     }
+
+    /// <summary>Whether the workflow contains a model-backed procedure.</summary>
+    internal static bool RequiresModel(SkillCatalogCandidate candidate) =>
+        candidate.Metadata.Workflow.Steps.Any(step => step.Kind is SkillWorkflowStepKind.InvokeProcedure
+            or SkillWorkflowStepKind.CollectEvidence or SkillWorkflowStepKind.Summarize);
 
     private ModelProfile[] OrderByHostSelection(
         IReadOnlyList<ModelProfile> compatible,

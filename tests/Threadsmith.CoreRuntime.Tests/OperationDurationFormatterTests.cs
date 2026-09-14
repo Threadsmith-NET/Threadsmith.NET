@@ -210,6 +210,38 @@ public static class OperationDurationFormatterTests
             StringComparison.Ordinal);
     }
 
+    /// <summary>Skill origin survives event persistence and remains visible on shared live and completed tool blocks.</summary>
+    [Theory]
+    [InlineData(ToolActivitySourceKind.BuiltIn, "model", "TOOLS: ", "read_file")]
+    [InlineData(ToolActivitySourceKind.Mcp, "model", "MCP: ", "fixture/read_file")]
+    [InlineData(ToolActivitySourceKind.BuiltIn, "agent:delegation:assignment", "TOOLS: ", "read_file")]
+    public static void SkillOriginIsRenderedForLiveAndCompletedTools(ToolActivitySourceKind kind, string requester, string label, string toolIdentity)
+    {
+        const string origin = "skill:Maintained:review@1.0.0:59e7e757-5c4d-4f16-a372-b13a87c2f1ef";
+        var started = new ToolInvocationStarted(
+            SessionId.New(),
+            DateTimeOffset.UtcNow,
+            ToolInvocationId.New(),
+            "read_file",
+            RequestedBy: requester,
+            Source: new ToolActivitySource(kind, "fixture"),
+            ActivityDetail: "lines 1-40, config.yml",
+            ActivityOrigin: origin);
+        var persisted = System.Text.Json.JsonSerializer.Deserialize<ToolInvocationStarted>(System.Text.Json.JsonSerializer.Serialize(started));
+        Assert.NotNull(persisted);
+        var expected = $"{label}({origin}) " + (requester == "model" ? string.Empty : $"({requester}) ") + toolIdentity;
+        var activity = InteractionPresentationFormatter.CreateToolActivity(persisted, TimeProvider.System, false);
+        Assert.Equal(expected + " - running", activity.Label);
+        Assert.Contains("lines 1-40, config.yml", activity.ToolDetail, StringComparison.Ordinal);
+
+        var transcript = new ConversationTranscript(string.Empty, showOperationDurations: false);
+        Assert.False(transcript.Apply(persisted));
+        Assert.True(transcript.Apply(new ToolInvocationCompleted(
+            started.SessionId, started.OccurredAt, started.ToolInvocationId, Succeeded: true)));
+        Assert.Contains(expected + " - completed", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("lines 1-40, config.yml", transcript.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>Transcript omits the requestor for the main model agent.</summary>
     [Fact]
     public static void ConversationTranscript_ToolCompletion_OmitsMainModelRequestor()

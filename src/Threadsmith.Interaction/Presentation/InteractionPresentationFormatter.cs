@@ -48,7 +48,7 @@ internal static class InteractionPresentationFormatter
         ArgumentNullException.ThrowIfNull(started);
         ArgumentNullException.ThrowIfNull(timeProvider);
         var label = started.Source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS";
-        var identity = GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, started.Source);
+        var identity = GetToolRequestorPrefix(started.ActivityOrigin) + GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, started.Source);
         return CreateOperationActivity(label, identity, GetToolDetail(started, null, started.Source), timeProvider, showOperationDurations);
     }
 
@@ -129,7 +129,7 @@ internal static class InteractionPresentationFormatter
         var block = new TuiBlockPresentation(
             new TuiBlockHeader(
                 source?.Kind == ToolActivitySourceKind.Mcp ? "MCP" : "TOOLS",
-                GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, source),
+                GetToolRequestorPrefix(started.ActivityOrigin) + GetToolRequestorPrefix(started.RequestedBy) + GetToolIdentity(started.ToolName, source),
                 GetOutcomeText(completed),
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
                 PresentationTextRole.ToolSuccess,

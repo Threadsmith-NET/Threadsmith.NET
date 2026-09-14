@@ -25,6 +25,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(AgentRole.TestReviewer, WorkloadClass.Review, 12_000, false, true)]
     [InlineData(AgentRole.PerformanceReviewer, WorkloadClass.Review, 12_000, false, true)]
     [InlineData(AgentRole.ArchitectureReviewer, WorkloadClass.Review, 12_000, false, true)]
+    [InlineData(AgentRole.BugReviewer, WorkloadClass.Review, 12_000, false, true)]
     public async Task RunAsync_CompactionAndEvidenceRead_PreservesTaskAndAccountsForSummary(
         AgentRole role, WorkloadClass workload, int contentCharacters, bool inheritEvidence, bool useCompactionProfile)
     {

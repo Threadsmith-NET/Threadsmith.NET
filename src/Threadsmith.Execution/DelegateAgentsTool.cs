@@ -23,7 +23,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                 "required": ["assignmentId", "role", "toolAccess", "status", "summary", "findings", "omissions", "usage"],
                 "properties": {
                   "assignmentId": { "type": "string", "format": "uuid" },
-                  "role": { "type": "string", "enum": ["Explorer", "Implementer", "SecurityReviewer", "TestReviewer", "PerformanceReviewer", "ArchitectureReviewer"] },
+                  "role": { "type": "string", "enum": ["Explorer", "Implementer", "SecurityReviewer", "TestReviewer", "PerformanceReviewer", "ArchitectureReviewer", "BugReviewer"] },
                   "toolAccess": { "type": "string", "enum": ["readOnly", "inherit"] },
                   "status": { "type": "string", "enum": ["Completed", "Failed", "Cancelled", "Discarded"] },
                   "summary": { "type": "string" },
@@ -157,9 +157,8 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var (plan, runner) = context.HostBinding is PreparedDelegationToolBinding binding
-            ? binding.Resolve(input, context)
-            : (_plans.Create(input, context), _runners.Create(context));
+        var plan = _plans.Create(input, context);
+        var runner = _runners.Create(context);
         _steering?.RegisterDelegation(
             context.SessionId,
             context.RunId,
@@ -293,13 +292,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                     ["role"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["enum"] = CreateStringArray(
-                            "explorer",
-                            "implementer",
-                            "securityReviewer",
-                            "testReviewer",
-                            "performanceReviewer",
-                            "architectureReviewer"),
+                        ["enum"] = CreateStringArray([.. Enum.GetValues<AgentRole>().Select(AgentRoleNames.GetName)]),
                         ["default"] = "explorer",
                     },
                     ["task"] = task,

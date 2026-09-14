@@ -158,7 +158,8 @@ public static class DelegationPlanValidator
         var reviewer = assignment.Role is AgentRole.SecurityReviewer
             or AgentRole.TestReviewer
             or AgentRole.PerformanceReviewer
-            or AgentRole.ArchitectureReviewer;
+            or AgentRole.ArchitectureReviewer
+            or AgentRole.BugReviewer;
         if (reviewer != (assignment.Mode == AgentRunMode.ReadOnlyReview))
         {
             throw new InvalidDataException("Reviewer roles require read-only review mode.");
@@ -730,8 +731,8 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             return CreateTerminal(
                 plan,
                 assignment,
-                AgentRunStatus.Cancelled,
-                "assignment deadline elapsed");
+                AgentRunStatus.Failed,
+                "child timed out: assignment deadline elapsed");
         }
 
         var timeout = assignment.Deadline == DateTimeOffset.MaxValue ? TimeSpan.Zero : remaining;
@@ -770,13 +771,25 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             return deadline.Token.IsCancellationRequested
                 ? outcome with
                 {
-                    Status = AgentRunStatus.Cancelled,
-                    Reason = "child cancellation observed",
+                    Status = deadline.TimedOut ? AgentRunStatus.Failed : AgentRunStatus.Cancelled,
+                    Reason = deadline.TimedOut ? "child timed out: assignment deadline elapsed" : "child cancellation observed",
                     Response = null,
                     Findings = null,
                     ChangeSet = null,
                     Review = null,
                     Implementation = null,
+                }
+                : outcome;
+        }
+        catch (OperationCanceledException exception) when (deadline.TimedOut)
+        {
+            var outcome = CreateTerminal(plan, assignment, AgentRunStatus.Failed, "child timed out: assignment deadline elapsed");
+            return ChildAgentFailureDetails.TryGet(exception, out var failure)
+                ? outcome with
+                {
+                    Usage = failure.Usage,
+                    ModelProfileId = failure.ModelProfileId,
+                    ModelSelection = failure.ModelSelection,
                 }
                 : outcome;
         }
@@ -881,18 +894,6 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 
         if (outcome.Status == AgentRunStatus.Completed)
         {
-            if (assignment.FocusedReview is { } binding)
-            {
-                if (!outcome.FocusedReviewValidated || outcome.Response is null || outcome.ChangeSet is not null
-                    || binding.Generation != outcome.Generation || binding.Role != assignment.Role || binding.ContractVersion != 1
-                    || assignment.Mode != AgentRunMode.ReadOnlyReview || assignment.OutputSchema != "focused-review/1")
-                {
-                    throw new InvalidDataException("Focused outcome does not match its validated assignment.");
-                }
-
-                return;
-            }
-
             if (DelegationOutcomeClassifier.HasNaturalResponse(assignment, outcome))
             {
                 return;
@@ -908,7 +909,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                 AgentRole.Implementer => outcome.Implementation is not null && outcome.Findings is not null
                     && outcome.ChangeSet is null && outcome.Review is null,
                 AgentRole.SecurityReviewer or AgentRole.TestReviewer
-                    or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer =>
+                    or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer or AgentRole.BugReviewer =>
                     outcome.Review is not null && outcome.ChangeSet is null && outcome.Implementation is null,
                 _ => false,
             };

@@ -73,7 +73,7 @@ public static class WriteFileTests
 
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal("{\"value\":42}", await File.ReadAllTextAsync(destination));
-        Assert.False(new DefaultPolicyEngine().Evaluate(new ReadFileTool(TestPromptLoader.Instance), new ReadFileInput { Path = destination }, fixture.Context.Invocation).IsAllowed);
+        Assert.False(new DefaultPolicyEngine().Evaluate(new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer()), new ReadFileInput { Path = destination }, fixture.Context.Invocation).IsAllowed);
     }
 
     /// <summary>Missing settings default to .inbox; each higher-priority array replaces the entire earlier list.</summary>

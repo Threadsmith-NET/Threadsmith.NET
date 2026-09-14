@@ -1,1 +1,0 @@
-Inspect the captured review target for concrete issues within your assigned specialty.

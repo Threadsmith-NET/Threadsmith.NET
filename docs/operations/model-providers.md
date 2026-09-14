@@ -148,7 +148,7 @@ OpenAI-compatible responses that combine native tool calls with a standalone orp
 
 ## Models for delegated roles
 
-Set `agents:roleModels` in trusted user configuration at `~/.threadsmith/config.json` or machine configuration at `%ProgramData%/Threadsmith/config.json`. Each entry selects an existing enabled profile from the provider catalog built without repository configuration. The exact role keys are `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, and `architectureReviewer`.
+Set `agents:roleModels` in trusted user configuration at `~/.threadsmith/config.json` or machine configuration at `%ProgramData%/Threadsmith/config.json`. Each entry selects an existing enabled profile from the provider catalog built without repository configuration. The exact role keys are `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, `architectureReviewer`, and `bugReviewer`.
 
 For the `primary` provider and profile shown above in the user provider catalog, this is a complete user configuration example:
 

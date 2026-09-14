@@ -125,24 +125,6 @@ public sealed record PromptAssetDefinition
 /// <summary>Stable filenames for every required Threadsmith-owned model-facing prompt asset.</summary>
 public static class PromptFileNames
 {
-    /// <summary>Focused reviewer assignment wording.</summary>
-    public const string ContextFocusedReviewObjective = "Context-FocusedReview-Objective.md";
-
-    /// <summary>Focused reviewer assignment wording.</summary>
-    public const string ContextFocusedReviewTask = "Context-FocusedReview-Task.md";
-
-    /// <summary>Focused reviewer assignment wording.</summary>
-    public const string ContextFocusedReviewStoppingCondition = "Context-FocusedReview-StoppingCondition.md";
-
-    /// <summary>Focused private procedure wrapper under existing host authority.</summary>
-    public const string ContextFocusedReviewProcedure = "Context-FocusedReview-Procedure.md";
-
-    /// <summary>Focused-only same-conversation schema correction.</summary>
-    public const string CorrectionFocusedReviewOutput = "Correction-FocusedReview-Output.md";
-
-    /// <summary>Confined immutable review source reader.</summary>
-    public const string ToolReadReviewFileDescription = "Tool-read_review_file-Description.md";
-
     /// <summary>Gets the stable filename for the SystemSystemPrompt prompt asset.</summary>
     public const string SystemSystemPrompt = "System-SystemPrompt.md";
 
@@ -337,9 +319,6 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the ToolGitDiffDescription prompt asset.</summary>
     public const string ToolGitDiffDescription = "Tool-git_diff-Description.md";
-
-    /// <summary>Gets the stable filename for shallow remote branch acquisition.</summary>
-    public const string ToolGitFetchDescription = "Tool-git_fetch-Description.md";
 
     /// <summary>Gets the stable filename for the ToolGitLogDescription prompt asset.</summary>
     public const string ToolGitLogDescription = "Tool-git_log-Description.md";
@@ -563,6 +542,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the CorrectionSemanticFirstSearchRejected prompt asset.</summary>
     public const string CorrectionSemanticFirstSearchRejected = "Correction-SemanticFirstSearch-Rejected.md";
 
+    /// <summary>Model-driven review acquisition, delegation, synthesis and delivery instructions.</summary>
+    public const string SkillReview = "Skill-Review.md";
+
     /// <summary>Gets the stable filename for the SkillProcedureSystem prompt asset.</summary>
     public const string SkillProcedureSystem = "Skill-Procedure-System.md";
 
@@ -628,6 +610,9 @@ public static class PromptFileNames
 
     /// <summary>System guidance for architecture review backed by code and document citations.</summary>
     public const string SystemChildAgentArchitectureReviewer = "System-ChildAgent-ArchitectureReviewer.md";
+
+    /// <summary>System guidance for functional correctness and requirements review.</summary>
+    public const string SystemChildAgentBugReviewer = "System-ChildAgent-BugReviewer.md";
 
     /// <summary>Joined child model-selection and implementation proposal details.</summary>
     public const string ToolDelegateAgentsChildDetails = "Tool-delegate_agents-ChildDetails.md";
@@ -1061,12 +1046,6 @@ public static class PromptFileNames
     /// <summary>Gets all required filenames in deterministic ordinal order.</summary>
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly<string>(
     [
-        ContextFocusedReviewObjective,
-        ContextFocusedReviewTask,
-        ContextFocusedReviewStoppingCondition,
-        ContextFocusedReviewProcedure,
-        CorrectionFocusedReviewOutput,
-        ToolReadReviewFileDescription,
         SystemSystemPrompt,
         SystemPhaseEvidenceCollection,
         SystemPhaseChangePlanning,
@@ -1132,7 +1111,6 @@ public static class PromptFileNames
         ToolGeneratedCodeQueryContentHostTruncation,
         ToolGeneratedCodeQueryContentProjectionTruncation,
         ToolGitDiffDescription,
-        ToolGitFetchDescription,
         ToolGitLogDescription,
         ToolGitShowDescription,
         ToolGitBlameDescription,
@@ -1207,6 +1185,7 @@ public static class PromptFileNames
         CorrectionMutationRenameSymbolSemanticUnavailable,
         CorrectionMutationRenameSymbolOverlap,
         CorrectionMutationReplaceTextAmbiguousExpectedText,
+        SkillReview,
         SkillProcedureSystem,
         SkillProcedureRequest,
         SkillProcedureContinuation,
@@ -1229,6 +1208,7 @@ public static class PromptFileNames
         SystemChildAgentTestReviewer,
         SystemChildAgentPerformanceReviewer,
         SystemChildAgentArchitectureReviewer,
+        SystemChildAgentBugReviewer,
         ToolDelegateAgentsChildDetails,
         ToolDelegateAgentsReviewDetails,
         ToolDelegateAgentsImplementationOmitted,
@@ -1472,12 +1452,6 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionMutationRenameSymbolSemanticUnavailable,
             PromptFileNames.CorrectionMutationRenameSymbolOverlap,
             PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
-            PromptFileNames.ContextFocusedReviewObjective,
-            PromptFileNames.ContextFocusedReviewTask,
-            PromptFileNames.ContextFocusedReviewStoppingCondition,
-            PromptFileNames.ContextFocusedReviewProcedure,
-            PromptFileNames.CorrectionFocusedReviewOutput,
-            PromptFileNames.ToolReadReviewFileDescription,
             PromptFileNames.SystemChildAgentHostPolicy,
             PromptFileNames.SystemChildAgentExplorer,
             PromptFileNames.SystemChildAgentOutputPolicy,
@@ -1486,6 +1460,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemChildAgentTestReviewer,
             PromptFileNames.SystemChildAgentPerformanceReviewer,
             PromptFileNames.SystemChildAgentArchitectureReviewer,
+            PromptFileNames.SystemChildAgentBugReviewer,
             PromptFileNames.ToolDelegateAgentsChildDetails,
             PromptFileNames.ToolDelegateAgentsReviewDetails,
             PromptFileNames.ToolDelegateAgentsImplementationOmitted,
@@ -1529,6 +1504,7 @@ public static class PromptAssetCatalog
         var skillAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.ToolInvokeSkillDescription,
+            PromptFileNames.SkillReview,
             PromptFileNames.SkillProcedureSystem,
             PromptFileNames.SkillProcedureRequest,
             PromptFileNames.SkillProcedureContinuation,
@@ -1811,7 +1787,6 @@ public static class PromptAssetCatalog
                         "TotalFiles",
                         "TotalSources",
                         "TotalEvidenceItems"),
-                    [PromptFileNames.ContextFocusedReviewProcedure] = Set("Instructions", "Schema"),
                     [PromptFileNames.ContextChildAgentSteering] = Set("Sequence", "SubmittedAt", "Text"),
                     [PromptFileNames.CorrectionChildAgentInvalidOutput] = Set("Reason"),
                     [PromptFileNames.ToolDelegateAgentsChildDetails] = Set("AssignmentId", "DetailsJson"),

@@ -8,6 +8,7 @@ internal sealed class AgentTimeoutScope : IAsyncDisposable
     private static readonly TimeSpan _maximumTimerDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1d);
     private readonly CancellationTokenSource _timerStop = new();
     private readonly Task _timerTask;
+    private int _timedOut;
 
     /// <summary>Initializes a new instance of the <see cref="AgentTimeoutScope"/> class.</summary>
     public AgentTimeoutScope(TimeSpan timeout, CancellationToken cancellationToken)
@@ -15,13 +16,9 @@ internal sealed class AgentTimeoutScope : IAsyncDisposable
         ArgumentOutOfRangeException.ThrowIfLessThan(timeout, TimeSpan.Zero);
         Source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _timerTask = Task.CompletedTask;
-        if (timeout > TimeSpan.Zero && timeout <= _maximumTimerDelay)
+        if (timeout > TimeSpan.Zero)
         {
-            Source.CancelAfter(timeout);
-        }
-        else if (timeout > _maximumTimerDelay)
-        {
-            _timerTask = CancelAfterLongTimeoutAsync(timeout, _timerStop.Token);
+            _timerTask = CancelAfterTimeoutAsync(timeout, _timerStop.Token);
         }
     }
 
@@ -30,6 +27,9 @@ internal sealed class AgentTimeoutScope : IAsyncDisposable
 
     /// <summary>Gets cancellation shared by the caller and the optional timeout.</summary>
     public CancellationToken Token => Source.Token;
+
+    /// <summary>Whether the deadline triggered cancellation before the caller or scheduler cancelled the child.</summary>
+    public bool TimedOut => Volatile.Read(ref _timedOut) != 0;
 
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
@@ -48,7 +48,7 @@ internal sealed class AgentTimeoutScope : IAsyncDisposable
         }
     }
 
-    private async Task CancelAfterLongTimeoutAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    private async Task CancelAfterTimeoutAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         var started = Stopwatch.GetTimestamp();
         try
@@ -65,7 +65,11 @@ internal sealed class AgentTimeoutScope : IAsyncDisposable
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            await Source.CancelAsync().ConfigureAwait(false);
+            if (!Source.IsCancellationRequested)
+            {
+                Volatile.Write(ref _timedOut, 1);
+                await Source.CancelAsync().ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

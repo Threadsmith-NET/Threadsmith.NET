@@ -1028,6 +1028,8 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class CompatibleEvaluator : ISkillCompatibilityEvaluator
     {
+        public IReadOnlyList<ModelProfileId> Profiles { get; init; } = [];
+
         private readonly ModelProfileId _profileId = ModelProfileId.New();
 
         public SkillCompatibilityResult Evaluate(
@@ -1037,7 +1039,7 @@ public sealed partial class SkillSubsystemTests
             return new SkillCompatibilityResult
             {
                 IsCompatible = true,
-                CompatibleModels = [_profileId],
+                CompatibleModels = Profiles.Count > 0 ? Profiles : [_profileId],
             };
         }
     }
@@ -1140,8 +1142,6 @@ public sealed partial class SkillSubsystemTests
     {
         public SkillInvocationStatus ResultStatus { get; init; } = SkillInvocationStatus.Completed;
 
-        public FocusedReviewDelivery? Delivery { get; init; }
-
         internal SkillInvocationRequest? Request { get; private set; }
 
         public Task<SkillInvocationResult> InvokeAsync(
@@ -1172,7 +1172,6 @@ public sealed partial class SkillSubsystemTests
                 InvocationId = request.InvocationId,
                 Package = package,
                 Status = ResultStatus,
-                ReviewDelivery = Delivery,
                 OutputJson = "{\"summary\":\"done\"}",
                 HostActions =
                 [

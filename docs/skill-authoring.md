@@ -99,10 +99,12 @@ Before distribution:
 
 See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and the source-repository [skills implementation plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/plan-39-governed-skills-reusable-workflows.md).
 
-## Maintained focused-review dependencies
+## Editable native procedures
 
-The shipped `review` workflow has a host-owned recipe under `ReviewSkills`, separate from public native/Claude discovery. Its immutable manifest and recipe hashes are compiled into the host. Four exact native package dependencies specify private read-only procedures and schemas; parsing, verification, strict UTF-8 loading, confinement, revocation and enablement use the existing native services.
+A model step may reference a code-declared deployed `promptFile` instead of a package `instructionAsset`. Prompt text comes from the normal startup cache; package schemas remain integrity-checked assets. `requirements.inheritAvailableTools` includes enabled session tools under normal policy, without requiring a separate hard-coded tool list.
 
-This deployment is assignment-only. Third-party authors cannot opt into private binding by naming a package `review`, adding `RequestReviews`, choosing a reviewer role or guessing a selector. Other review/delegation workflow actions still produce waiting proposals. No manifest-version change, global visibility flag, generic nested-skill framework or child `invoke_skill` authority is introduced.
+Optional step `successProperty` and `responseProperty` name top-level output fields. The former must be a boolean and determines execution success; the latter must be a string and supplies readable output. Include them in the output schema. A false success value preserves the response and fails the workflow; explicit resume reruns that failed procedure. Findings do not themselves mean execution failed.
 
-Maintainers changing the public/private payload must update asset byte counts/digests, the recipe's manifest digests, compiled integrity pins, release verification and focused fixtures together. Do not expose the private catalog, selectors, schema text or raw child histories through public outputs. See [focused review operations](operations/skills.md#focused-code-review) and [ADR-61](architecture/adr-61-focused-review-skill-assignments.md).
+The maintained review packages use these generic contracts with `prompts/Skill-Review.md` and ordinary `delegate_agents`. There is no private reviewer package format or special host entry.
+
+Native procedures do not advertise recursive `invoke_skill` calls: the invoking tool owns its source lease until the procedure returns. Use the ordinary `delegate_agents` tool for child work.

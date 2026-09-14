@@ -35,14 +35,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 26 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 21 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
-| Correction prompts | 52 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 196 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
-| Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
+| System and phase prompts | 27 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
+| Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
+| Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Skill prompts | 14 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **311** | Complete deployed catalog. |
+| **Total** | **306** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -64,6 +64,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for useful coverage observations and improvements. | `None` |
 | `System-ChildAgent-PerformanceReviewer.md` | PerformanceReviewer role amendment distinguishing measured behavior from plausible risks. | `None` |
 | `System-ChildAgent-ArchitectureReviewer.md` | ArchitectureReviewer role amendment informed by repository design and applicable documents. | `None` |
+| `System-ChildAgent-BugReviewer.md` | BugReviewer role amendment for functional correctness against supplied requirements and acceptance criteria. | `None` |
 
 #### `GovernedRequestState` family
 
@@ -126,10 +127,6 @@ Active-turn, summary, steering, and delegated-child context framing.
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Context-FocusedReview-StoppingCondition.md` | Focused reviewer assignment stopping condition. | `None` |
-| `Context-FocusedReview-Task.md` | Focused reviewer assignment task. | `None` |
-| `Context-FocusedReview-Objective.md` | Focused reviewer assignment objective. | `None` |
-| `Context-FocusedReview-Procedure.md` | Private procedure and output-schema framing for the assigned focused reviewer. | [`Instructions`](#placeholder-instructions), [`Schema`](#placeholder-schema) |
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
 
@@ -176,7 +173,6 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-FocusedReview-Output.md` | Focused-only output validation correction in the same child conversation. | `None` |
 | `Correction-ChildAgent-InvalidOutput.md` | Legacy Explorer-format correction retained in the catalog; unused for ordinary child responses. | [`Reason`](#placeholder-reason) |
 
 #### `csharp_pattern_search` family
@@ -327,7 +323,6 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-read_review_file-Description.md` | Confined frozen review inventory and source-range reader, including captured file-mode transitions. | `None` |
 | `Tool-AdvancedSemantic-HiddenOmissions.md` | Hidden-omission notice in advanced semantic results. | [`HiddenCount`](#placeholder-hiddencount), [`Plural`](#placeholder-plural) |
 | `Tool-AdvancedSemantic-OmissionsSection.md` | Omissions section in advanced semantic results. | [`Items`](#placeholder-items) |
 | `Tool-AdvancedSemantic-PathPolicyOmission.md` | Path-policy omission text shared by advanced semantic results. | `None` |
@@ -592,12 +587,6 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 |---|---|---|
 | `Tool-git_diff-Description.md` | Bounded Git comparisons, literal path filters, metadata-only frozen ranges, optional working-tree base, and patch context lines. | `None` |
 
-#### `git_fetch` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Tool-git_fetch-Description.md` | Host-admitted shallow branch acquisition into a host-owned cache; excluded from model discovery. | `None` |
-
 #### `git_log` family
 
 | File | What Threadsmith uses it for | Placeholders |
@@ -713,6 +702,14 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages.
 
+#### `Review` family
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Skill-Review.md` | Lead review acquisition, delegation, synthesis and delivery through enabled tools. | `None` |
+
+Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
+
 #### `Procedure` family
 
 | File | What Threadsmith uses it for | Placeholders |
@@ -768,7 +765,6 @@ A placeholder's exact value is computed by the host at the call site. The descri
 
 | Placeholder | Meaning and use |
 |---|---|
-| <a id="placeholder-instructions"></a>`Instructions` | XML-escaped verified procedure text supplied only to its assigned focused reviewer. |
 | <a id="placeholder-additionalmessages"></a>`AdditionalMessages` | Supplemental model messages inserted into the request outside the current task and retained history. |
 | <a id="placeholder-assignmentid"></a>`AssignmentId` | Stable delegated-child assignment identifier used to correlate task, status, finding, omission, child-detail, and review-detail blocks. |
 | <a id="placeholder-attemptnumber"></a>`AttemptNumber` | Current host-controlled correction or retry attempt number. |

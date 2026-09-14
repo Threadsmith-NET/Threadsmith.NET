@@ -227,7 +227,7 @@ public sealed class AgentModelSelector
             AgentRole.Explorer => WorkloadClass.General,
             AgentRole.Implementer => WorkloadClass.CodeEdit,
             AgentRole.SecurityReviewer or AgentRole.TestReviewer
-                or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer => WorkloadClass.Review,
+                or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer or AgentRole.BugReviewer => WorkloadClass.Review,
             _ => throw new ArgumentOutOfRangeException(nameof(role)),
         };
     }

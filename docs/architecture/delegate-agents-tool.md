@@ -66,7 +66,7 @@ The model supplies only an array of child requests:
 }
 ```
 
-`agents[].role` is optional and defaults to `explorer`. The exact accepted values are `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, and `architectureReviewer`. Unknown roles, different capitalization, and unknown fields fail validation before scheduling. The model cannot choose child IDs, provider/profile/reasoning, budgets, deadlines, trust, sensitivity, workspace roots, individual tool IDs, approval, or concurrency. Host policy owns those values.
+`agents[].role` is optional and defaults to `explorer`. The exact accepted values are `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, `architectureReviewer`, and `bugReviewer`. Unknown roles, different capitalization, and unknown fields fail validation before scheduling. The model cannot choose child IDs, provider/profile/reasoning, budgets, deadlines, trust, sensitivity, workspace roots, individual tool IDs, approval, or concurrency. Host policy owns those values.
 
 Primary implementation:
 
@@ -117,7 +117,7 @@ Primary implementation:
 
 ### 5. Each child gets governed context, not parent history
 
-`AgentRoleRunnerRegistry` selects the runner for each frozen assignment while retaining one parent join. The runners share model/tool execution through `ModelExplorerAssignmentRunner`; `ChildAgentPrompt` selects the Explorer, Implementer, SecurityReviewer, TestReviewer, PerformanceReviewer, and ArchitectureReviewer system-prompt amendments from deployed `Prompts/` assets. A role combines those instructions with host-selected model and eligible tools, not a required output template or role-output parser. It cannot grant tools or change host policy. `AgentContextAssembler` includes every eligible, non-stale parent evidence item allowed by the child sensitivity policy. Repository instructions are resolved independently for the child.
+`AgentRoleRunnerRegistry` selects the runner for each frozen assignment while retaining one parent join. The runners share model/tool execution through `ModelExplorerAssignmentRunner`; `ChildAgentPrompt` selects the Explorer, Implementer, SecurityReviewer, TestReviewer, PerformanceReviewer, ArchitectureReviewer, and BugReviewer system-prompt amendments from deployed `Prompts/` assets. A role combines those instructions with host-selected model and eligible tools, not a required output template or role-output parser. It cannot grant tools or change host policy. `AgentContextAssembler` includes every eligible, non-stale parent evidence item allowed by the child sensitivity policy. Repository instructions are resolved independently for the child.
 
 `AgentRoleModelConfiguration` validates trusted `agents:roleModels` at startup. `AgentRoleModelPolicy` holds the immutable role mappings and provider bindings. `AgentModelSelector` applies application assignment pin, role mapping, inherited preference, then compatible default precedence. Configured role routes and their fallback candidates use a catalog and dispatcher built without repository entries, preventing a same-ID repository provider override from redirecting the request or its credentials.
 
@@ -261,10 +261,6 @@ The conversation tool does not:
 
 Operational usage and troubleshooting are documented in [Parallel-agent operations](../operations/parallel-agents.md).
 
-## Explicit focused review skill entry
+## Native skills
 
-[ADR-61](adr-61-focused-review-skill-assignments.md) authorizes the exact verified maintained `review` workflow as one additional host entry. `FocusedReviewExecutor` freezes typed invocation provenance and deterministic batches under the existing assignment/concurrency limits. Each assignment has a host-created binding; the common child loop applies a completion validator only when that binding matches a runtime verified procedure. Ordinary `agent-response/1` roles retain natural text, JSON, whitespace and empty completions without format repair.
-
-Focused context bypasses parent evidence selection. The host supplies frozen target facts, applicable target instructions, explicit user guidance and optional criteria, plus exactly one private procedure/schema. A request-local snapshot reader inherits eligibility from the invoking `read_file` authority. It cannot reach live files or execute processes. Native validation checks delivered ranges and scope before accepting results. Private procedure bodies are absent from public skill checkpoints, discovery and report projections; ordinary role display is suppressed for these private procedure turns.
-
-The existing scheduler, role/model selection, cancellation and delegation checkpoint machinery remain shared. Private review records persist batch identities before dispatch and retain accepted outcomes and canonical report identity. Explicit recovery never restarts a started inference loop. The public report formatter joins accepted advisory data and shows missing coverage. It saves atomically in the invoking repository's existing inbox or streams canonical Markdown once. This does not add CI/publication or change ordinary delegation tool arguments.
+Native model procedures use the same request-scoped tool snapshot and `delegate_agents` entry as conversation models. The actual model call owns the snapshot and frozen parent model/reasoning selection. Role configuration still takes precedence over inherited selection. A skill name, prompt or manifest cannot grant delegation authority. There is no special review entry.

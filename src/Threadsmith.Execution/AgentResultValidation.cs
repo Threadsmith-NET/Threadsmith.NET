@@ -22,7 +22,8 @@ public static class ReviewFindingValidator
         var reviewer = assignment.Role is AgentRole.SecurityReviewer
             or AgentRole.TestReviewer
             or AgentRole.PerformanceReviewer
-            or AgentRole.ArchitectureReviewer;
+            or AgentRole.ArchitectureReviewer
+            or AgentRole.BugReviewer;
         if (!reviewer
             || review.SchemaVersion != 1
             || review.AssignmentId != assignment.AssignmentId

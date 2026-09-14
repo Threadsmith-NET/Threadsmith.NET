@@ -147,7 +147,6 @@ public static partial class PromptAssetArchitectureTests
             [
                 "The model emitted a malformed invocation.",
             ],
-            ["ModelSkillProcedureRunner.RunAsync"] = ["null"],
             ["SessionApplication.CreateReducedToolResultMessage"] = ["{\"isTruncated\":true}"],
         };
 

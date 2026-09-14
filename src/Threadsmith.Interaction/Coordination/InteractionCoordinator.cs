@@ -3823,14 +3823,10 @@ public sealed partial class InteractionCoordinator
 
     private static string FormatSkillInvocation(SkillInvocationResult result)
     {
-        if (result.ReviewDelivery is { } review)
-        {
-            return review.Markdown ?? $"Review saved: [{Path.GetFileName(review.SavedPath)}](<{review.SavedPath}>) ({review.Status}).\n";
-        }
-
-        var output = string.IsNullOrWhiteSpace(result.OutputJson)
+        var response = result.Response ?? result.OutputJson;
+        var output = string.IsNullOrWhiteSpace(response)
             ? string.Empty
-            : $"\n{result.OutputJson}";
+            : $"\n{response}";
         var actions = result.HostActions.Count == 0
             ? string.Empty
             : "\n" + string.Join(
@@ -4873,6 +4869,9 @@ public sealed partial class InteractionCoordinator
             FooterEnabled = _showSessionStatus,
             AgentUsage = _sessionUsage?.GetOwnerSnapshot(sessionId),
             AgentRequest = request,
+            ContextTokens = request is null ? status.ContextTokens : request.ContextTokens,
+            ContextLimit = request is null ? status.ContextLimit : request.ContextLimit,
+            Reasoning = request?.Reasoning ?? status.Reasoning,
             Model = request is null ? status.Model : profile?.Name ?? "Model unavailable",
             ProviderName = request is null ? status.ProviderName : profile?.ProviderName ?? profile?.Provider,
             IsPostResume = _sessionUsage?.HasRestoredUsage(sessionId) == true,

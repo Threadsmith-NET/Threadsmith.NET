@@ -16,6 +16,7 @@ public sealed class AgentNaturalResponseClassificationTests
     [InlineData(AgentRole.TestReviewer)]
     [InlineData(AgentRole.PerformanceReviewer)]
     [InlineData(AgentRole.ArchitectureReviewer)]
+    [InlineData(AgentRole.BugReviewer)]
     public void OrdinaryRole_AcceptsAnyPresentResponseWithoutSemanticGrading(AgentRole role)
     {
         var (plan, outcome) = CreateCase(role);

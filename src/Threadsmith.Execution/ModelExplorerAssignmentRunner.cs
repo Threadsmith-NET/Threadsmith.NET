@@ -80,37 +80,6 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         _steering = steering;
     }
 
-    /// <summary>Creates a runner only for a host-admitted focused batch, with frozen reads and private completion bindings.</summary>
-    public IAgentAssignmentRunner CreateFocused(
-        ToolExecutionContext parentContext,
-        FocusedReviewTarget target,
-        IReadOnlyList<IFocusedReviewCompletionPolicy> procedures)
-    {
-        var registrations = procedures.Select(procedure => new ToolRegistration(
-            new FocusedReviewReadTool(target, procedure, _prompts, _sanitizer),
-            new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "focused-review-read"))).ToArray();
-        return new FocusedReviewBatchRunner(procedures.Select((procedure, index) =>
-            (procedure.Binding.Role, (IAgentAssignmentRunner)new ModelExplorerAssignmentRunner(
-                _contexts,
-                _admission,
-                _selection,
-                _models,
-                _tools,
-                _evidence,
-                new FocusedReviewInstructionProvider(_instructions, target),
-                _sanitizer,
-                _options,
-                parentContext,
-                [registrations[index]],
-                _prompts,
-                _sessionUsage,
-                _steering,
-                _trustedModels,
-                _compactionProfile,
-                display: null,
-                focused: procedure))).ToDictionary(item => item.Role, item => item.Item2));
-    }
-
     /// <inheritdoc />
     public IAgentAssignmentRunner Create(ToolExecutionContext parentContext)
     {
@@ -153,7 +122,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
     private readonly AgentContextAssembler _contexts;
     private readonly IChildAgentInstructionProvider _instructions;
     private readonly ChildAgentModelLoop _loop;
-    private readonly IFocusedReviewCompletionPolicy? _focused;
     private readonly ToolExecutionContext _parentContext;
     private readonly AgentModelSelector _selection;
     private readonly RunSteeringCoordinator? _steering;
@@ -176,8 +144,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         RunSteeringCoordinator? steering = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
-        AgentDisplayStream? display = null,
-        IFocusedReviewCompletionPolicy? focused = null)
+        AgentDisplayStream? display = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -191,7 +158,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         ArgumentNullException.ThrowIfNull(parentContext);
         ArgumentNullException.ThrowIfNull(registrations);
         ArgumentNullException.ThrowIfNull(prompts);
-        _focused = focused;
         _contexts = contexts;
         _admission = admission;
         _selection = selection;
@@ -211,8 +177,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             selection,
             trustedModels,
             compactionProfile,
-            display,
-            focused);
+            display);
     }
 
     /// <inheritdoc />
@@ -233,14 +198,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             throw new UnauthorizedAccessException("The read-only assignment is not owned by this delegation.");
         }
 
-        if ((frozen.FocusedReview is null) != (_focused is null)
-            || (_focused is not null && (frozen.FocusedReview != _focused.Binding
-                || plan.Provenance.ReviewInvocationId != _focused.Binding.InvocationId
-                || plan.Provenance.Generation != _focused.Binding.Generation)))
-        {
-            throw new UnauthorizedAccessException("Focused review binding is absent or invalid for this runner.");
-        }
-
         try
         {
             var model = _selection.Select(frozen);
@@ -254,15 +211,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
                     ModelSelection = model.Provenance,
                 },
             };
-            var context = _focused is null ? _contexts.Assemble(plan, frozen) : new AgentContextSnapshot
-            {
-                AssignmentId = frozen.AssignmentId,
-                BaselineIdentity = plan.Provenance.BaselineIdentity,
-                Objective = frozen.Objective,
-                Tasks = frozen.Tasks,
-                InitialContext = frozen.InitialContext,
-                AllowedToolIds = frozen.Policy.AllowedToolIds,
-            };
+            var context = _contexts.Assemble(plan, frozen);
             var childToolContext = AgentToolPolicy.Scope(
                 _parentContext.Invocation,
                 plan,
@@ -300,7 +249,6 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
                 ModelProfileId = result.Model.ProfileId,
                 ModelSelection = result.Model.Provenance,
                 Response = result.Response,
-                FocusedReviewValidated = _focused is not null,
                 DeliveredEvidenceIds = result.DeliveredEvidenceIds,
             };
         }

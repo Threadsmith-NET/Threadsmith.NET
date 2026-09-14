@@ -1,1 +1,0 @@
-Read the frozen source inventory and relevant ranges; return the assigned evidence-backed review value.

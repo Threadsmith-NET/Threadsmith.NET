@@ -8,7 +8,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 
 - Child agents are in-process asynchronous .NET runs. No process hosts an agent.
 - Delegation depth is exactly one; children cannot create descendants or change their assignment.
-- Ordinary conversation delegation supports all six roles. Every child is read-only, including an implementer that proposes changes.
+- Ordinary conversation delegation supports all seven roles. Every child is read-only, including an implementer that proposes changes.
 - Approved implementation and correction use the parent run through `MutationProposalApplication`, retaining exact-diff approval, transactions, validation, and corrections.
 - Existing isolated-worker APIs require approved ownership and managed detached Git worktrees. Selecting `implementer` in conversation does not start a worktree worker or automatic parallel application.
 - Worktrees isolate file state but are not sandboxes. Trust, prohibited paths, reparse checks, tool policy, secrets, network, process, and approval gates still apply.
@@ -47,6 +47,9 @@ Each request has `task`, `context`, `toolAccess`, and an optional `role`. Omitti
 | `testReviewer` | Review test coverage and useful assertions. |
 | `performanceReviewer` | Review performance behavior and possible measurements. |
 | `architectureReviewer` | Review ownership, dependencies, and contracts. |
+| `bugReviewer` | Compare implementation with requirements and acceptance criteria; find functional bugs and regressions. |
+
+Pass ticket details, including Jira acceptance criteria, in the ordinary delegation `task` and `context` fields. The lead can retrieve those details with its enabled tools; BugReviewer uses the same child execution path and model-selection fallback as the other roles.
 
 Each role is a system-prompt amendment combined with its selected model and eligible tools, not an output template. A child may return any final body, including plain text, JSON, whitespace, or an empty response. No role fields, citation GUIDs, or response-format repair are required. Reviewers cannot publish reviews, approve changes, or run tests. A proposed check or a claim that checks passed is not host verification that those checks ran.
 
@@ -133,7 +136,7 @@ This path does not automatically partition, apply, or merge parallel worktree ch
 
 ## Live role evaluation
 
-From a source checkout, the opt-in `SubagentRoleLiveTests.AllRoles_RealProvider_RecordResponsesAndEfficiency` test exercises the six roles against synthetic files through normal `ModelComposition.CreateAsync` and provider-instruction resolution. It supports configured OpenAI-compatible providers and native `openai-codex` using existing Threadsmith authentication through the normal OAuth resolver and user cache. It never changes provider configuration or reads the checkout as test evidence.
+From a source checkout, the opt-in `SubagentRoleLiveTests.AllRoles_RealProvider_RecordResponsesAndEfficiency` test exercises the seven roles against synthetic files through normal `ModelComposition.CreateAsync` and provider-instruction resolution. It supports configured OpenAI-compatible providers and native `openai-codex` using existing Threadsmith authentication through the normal OAuth resolver and user cache. It never changes provider configuration or reads the checkout as test evidence.
 
 The harness uses the trusted user catalog's default profile unless `THREADSMITH_LIVE_AGENT_PROFILE` names another existing profile ID. Provider selection is derived from that catalog unless `THREADSMITH_LIVE_AGENT_PROVIDER` is set. For a native Codex profile supplied outside the user provider catalog, set the profile ID and `THREADSMITH_LIVE_AGENT_PROVIDER=openai-codex`; the explicit provider is required because the user catalog cannot derive that binding. No separate credential import is needed.
 

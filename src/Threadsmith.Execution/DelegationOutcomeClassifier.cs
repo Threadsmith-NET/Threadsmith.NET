@@ -56,14 +56,6 @@ internal static class DelegationOutcomeClassifier
             return false;
         }
 
-        if (assignment.FocusedReview is { } binding)
-        {
-            return binding.InvocationId == plan.Provenance.ReviewInvocationId
-                && binding.Generation == plan.Provenance.Generation && binding.Role == assignment.Role
-                && binding.SnapshotIdentity == plan.Provenance.BaselineIdentity
-                && outcome.FocusedReviewValidated && outcome.Response is not null;
-        }
-
         if (assignment.OutputSchema == AgentAssignment.ResponseSchema
             && assignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview)
         {
@@ -80,7 +72,7 @@ internal static class DelegationOutcomeClassifier
                 ? outcome.Implementation is not null && outcome.Findings is not null
                 : outcome.ChangeSet is { IsComplete: true },
             AgentRole.SecurityReviewer or AgentRole.TestReviewer
-                or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer => outcome.Review is not null,
+                or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer or AgentRole.BugReviewer => outcome.Review is not null,
             _ => false,
         };
     }

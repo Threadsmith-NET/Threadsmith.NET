@@ -289,7 +289,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Context);
 
-        var invocationId = request.HostBinding?.ToolInvocationId ?? ToolInvocationId.New();
+        var invocationId = ToolInvocationId.New();
         var suppressLifecycleHooks = request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal);
         var startedAt = _timeProvider.GetUtcNow();
         var registration = preparedRegistration;
@@ -358,22 +358,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var executionContext = new ToolExecutionContext(invocationId, request.SessionId, request.RunId, request.Context)
         {
             Phase = request.Phase,
-            HostBinding = request.HostBinding,
         };
         var activityDetail = CreateActivityDetail(tool, input);
         var transientActivityDetail = CreateTransientActivityDetail(tool, input, executionContext);
         await PublishStartedAsync(request, invocationId, startedAt, source, activityDetail, transientActivityDetail);
-
-        if ((tool.Definition.RequiresHostBinding && request.HostBinding is null)
-            || (request.HostBinding is not null && request.HostBinding.ToolId != tool.Definition.Id))
-        {
-            return await CompleteFailureAsync(
-                request,
-                invocationId,
-                ToolErrorClassification.PolicyDenied,
-                "This tool requires admission from its owning host workflow.",
-                startedAt);
-        }
 
         ToolPolicyDecision policyDecision;
         try
@@ -680,7 +668,6 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             {
                 ToolInvocationId = invocationId,
                 ToolId = tool.Definition.Id,
-                ReviewDelivery = (execution.Value as IFocusedReviewToolResult)?.ReviewDelivery,
                 Succeeded = succeeded,
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,
@@ -922,7 +909,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 request.Context.RequestedBy,
                 source,
                 activityDetail,
-                transientActivityDetail),
+                transientActivityDetail,
+                NormalizeActivityDetail(request.Context.ActivityOrigin, _presentationLimits.MaximumActivityDetailCharacters)),
             CancellationToken.None);
     }
 

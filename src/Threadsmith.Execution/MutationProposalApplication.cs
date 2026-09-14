@@ -409,10 +409,27 @@ public sealed class MutationProposalApplication :
             0,
             Guid.NewGuid());
         ModelUsage? reportedUsage = null;
+        var budgetUsage = new ModelRequestBudgetUsage();
         try
         {
+            budgetUsage.Start(operationBudget);
             await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, modelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
             {
+                if (chunk.Usage is not null)
+                {
+                    reportedUsage = chunk.Usage;
+                    _sessionUsage?.Observe(
+                        command.SessionId,
+                        usageRequestId,
+                        chunk.Usage);
+                    var budget = budgetUsage.Accrue(operationBudget, chunk.Usage);
+                    if (budget.IsExhausted)
+                    {
+                        throw new BudgetExceededException(
+                            budget.Reason ?? "Execution budget exhausted during mutation preparation.");
+                    }
+                }
+
                 // Proposal attempts terminate here; no signed tool continuation crosses this boundary.
                 chunk.ResponseEnvelope?.Dispose();
                 if (chunk.Reasoning is not null)
@@ -521,30 +538,11 @@ public sealed class MutationProposalApplication :
 
                     textOutput.Append(chunk.Text);
                 }
-
-                if (chunk.Usage is not null)
-                {
-                    reportedUsage = chunk.Usage;
-                    _sessionUsage?.Observe(
-                        command.SessionId,
-                        usageRequestId,
-                        chunk.Usage);
-                    var budget = operationBudget.Accrue(new BudgetDimensions(
-                        chunk.Usage.InputTokens + chunk.Usage.OutputTokens,
-                        1,
-                        TimeSpan.Zero,
-                        chunk.Usage.EstimatedCost));
-                    if (budget.IsExhausted)
-                    {
-                        throw new BudgetExceededException(
-                            budget.Reason ?? "Execution budget exhausted during mutation preparation.");
-                    }
-                }
             }
         }
         finally
         {
-            if (reportedUsage is null)
+            if (budgetUsage.HasStarted && reportedUsage is null)
             {
                 _sessionUsage?.ObserveMissing(command.SessionId, usageRequestId);
             }

@@ -6,20 +6,13 @@
   "packageId": "threadsmith.review",
   "version": "1.0.0",
   "displayName": "review",
-  "description": "Review current branch changes, a remote branch or special instructions; optionally assess a requirements document. Save canonical Markdown to an existing repository .inbox, otherwise stream it to the console.",
+  "description": "Model-driven code review using available tools, delegated specialists and editable prompts.",
   "tags": [
     "review"
   ],
   "publisher": "Threadsmith.NET",
   "license": "Apache-2.0",
   "assets": [
-    {
-      "path": "instructions/review.md",
-      "bytes": 426,
-      "sha256": "d689ecce27b943ad21f2e24ce5e80f3b140405bb0ff7be0162b7f225bd9ea715",
-      "required": true,
-      "kind": "instructions"
-    },
     {
       "path": "schemas/input.json",
       "bytes": 908,
@@ -29,42 +22,40 @@
     },
     {
       "path": "schemas/output.json",
-      "bytes": 763,
-      "sha256": "a4fd651730886b7398d2b348c7f3a862b50bd5febf49b9f4799ae16f7b7268ef",
+      "bytes": 251,
+      "sha256": "7d8eb2624c559868e0658680d7377dbbc23e80440bca487385c7618bb47b871c",
       "required": true,
       "kind": "schema"
     }
   ],
   "requirements": {
     "requiredTools": [
-      "read_file"
+      "delegate_agents"
     ],
     "optionalTools": [],
     "toolContractVersions": {},
     "minimumTrust": "trustedRead",
-    "approvalCategories": [
-      "read-only review",
-      "existing inbox report"
-    ],
+    "approvalCategories": [],
     "model": {
       "workloads": [
         "Review"
       ],
       "requiresToolCalls": true,
-      "requiresStructuredOutput": false,
+      "requiresStructuredOutput": true,
       "minimumContextWindow": 8192,
       "allowedProfiles": [],
       "deniedProfiles": []
     },
     "minimumHostVersion": "1.0.0",
-    "maximumHostVersion": "1.999.999"
+    "maximumHostVersion": "1.999.999",
+    "inheritAvailableTools": true
   },
   "budget": {
     "contentTokens": 8000,
     "workflowSteps": 8,
     "modelTurns": 64,
     "toolCalls": 128,
-    "mutations": 0,
+    "mutations": 1,
     "validationAttempts": 0,
     "delegatedChildren": 4,
     "parallelChildren": 4,
@@ -78,12 +69,13 @@
     "workflowId": "review",
     "steps": [
       {
-        "stepId": "request-review",
-        "kind": "requestReviews",
-        "instructionAsset": "instructions/review.md",
+        "stepId": "review",
+        "kind": "invokeProcedure",
+        "promptFile": "Skill-Review.md",
         "inputSchemaAsset": "schemas/input.json",
         "outputSchemaAsset": "schemas/output.json",
-        "dependsOn": [],
+        "successProperty": "succeeded",
+        "responseProperty": "response",
         "maximumIterations": 1
       }
     ]

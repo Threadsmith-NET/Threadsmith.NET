@@ -40,6 +40,7 @@ Ordinary `tui.agentNames.defaultNames` supplies an optional shared list. `tui.ag
 | `testReviewer` | Dijkstra, Hoare, Myers, Hamming, Knuth, Hopper |
 | `performanceReviewer` | Amdahl, Gustafson, Cray, Hennessy, Patterson, Knuth |
 | `architectureReviewer` | Brooks, Parnas, Kay, Dijkstra, Liskov, Shaw |
+| `bugReviewer` | Zeller, Dijkstra, Hoare, Hamilton, Hopper, Knuth |
 
 Names are trimmed and NFC-normalized, deduplicated case-insensitively, limited to 128 entries per list and 32 UTF-16 units per normalized name. Inputs over 64 units are rejected before normalization. Control, format, multiline, malformed, and unassigned characters are rejected; bounded warnings never echo rejected values. Printable Unicode names use measured cell widths; full names and roles remain accessible through F2. A catalog is immutable until process restart; live children never rename.
 

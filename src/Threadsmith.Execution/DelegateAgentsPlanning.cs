@@ -123,9 +123,9 @@ public sealed class DelegateAgentsPlanFactory
                 ProhibitedPaths = context.Invocation.ProhibitedPaths.ToArray(),
                 Sensitivity = context.Invocation.Sensitivity,
                 ResultLimits = _options.ResultLimits,
-                ModelProfileId = preference.ProfileId ?? default,
-                ReasoningLevel = preference.Reasoning.ToString(),
-                ModelSelectionRationale = preference.ProfileId is null
+                ModelProfileId = context.Invocation.ModelProfileId ?? preference.ProfileId ?? default,
+                ReasoningLevel = context.Invocation.ModelReasoningLevel ?? preference.Reasoning.ToString(),
+                ModelSelectionRationale = context.Invocation.ModelProfileId is null && preference.ProfileId is null
                     ? "Select a compatible profile for the child role."
                     : "Prefer the frozen parent profile, subject to role configuration and request compatibility.",
                 ContextPolicyVersion = ContextPolicyVersion,

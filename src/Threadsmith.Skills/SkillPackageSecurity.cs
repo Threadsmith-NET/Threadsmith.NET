@@ -239,12 +239,14 @@ public sealed class SkillContentLoader : ISkillContentLoader
         throwOnInvalidBytes: true);
 
     private readonly SecretOutputSanitizer _sanitizer;
+    private readonly IPromptLoader? _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="SkillContentLoader"/> class.</summary>
-    public SkillContentLoader(SecretOutputSanitizer sanitizer)
+    public SkillContentLoader(SecretOutputSanitizer sanitizer, IPromptLoader? prompts = null)
     {
         ArgumentNullException.ThrowIfNull(sanitizer);
         _sanitizer = sanitizer;
+        _prompts = prompts;
     }
 
     /// <inheritdoc />
@@ -319,6 +321,27 @@ public sealed class SkillContentLoader : ISkillContentLoader
                 Required = asset.Required,
             });
             usedTokens += tokens;
+        }
+
+        if (step.PromptFile is { } promptFile)
+        {
+            var content = _sanitizer.Sanitize((_prompts ?? throw new InvalidOperationException("Skill prompt loader is unavailable.")).Get(promptFile));
+            var tokens = Threadsmith.Context.TokenEstimator.Estimate(content);
+            if (usedTokens + tokens > maximumTokens)
+            {
+                throw new InvalidOperationException("The skill prompt does not fit the authorized context budget.");
+            }
+
+            segments.Add(new SkillContextSegment
+            {
+                Package = candidate.Identity,
+                StepId = step.StepId,
+                AssetPath = promptFile,
+                Sha256 = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content))),
+                Content = content,
+                EstimatedTokens = tokens,
+                Required = true,
+            });
         }
 
         return segments;

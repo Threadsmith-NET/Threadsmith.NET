@@ -23,7 +23,7 @@ public sealed partial class AgentRoleOutputTests
             Assert.All(messages, message => AssertNoAnswerContract(message.GetModelVisibleContent()));
         }
 
-        Assert.Equal(6, amendments.Count);
+        Assert.Equal(Enum.GetValues<AgentRole>().Length, amendments.Count);
     }
 
     /// <summary>Technical tool errors use the same host feedback for every role without prescribing a reply shape.</summary>
@@ -34,6 +34,7 @@ public sealed partial class AgentRoleOutputTests
     [InlineData(AgentRole.TestReviewer)]
     [InlineData(AgentRole.PerformanceReviewer)]
     [InlineData(AgentRole.ArchitectureReviewer)]
+    [InlineData(AgentRole.BugReviewer)]
     public static void ToolFeedback_DoesNotConstrainAnswerFormat(AgentRole role)
     {
         const string reason = "read_file: path is required.";

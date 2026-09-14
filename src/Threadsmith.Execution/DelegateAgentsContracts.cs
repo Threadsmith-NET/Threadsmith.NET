@@ -128,7 +128,7 @@ internal sealed class DelegateAgentRoleJsonConverter : JsonConverter<AgentRole>
             && AgentRoleNames.TryParse(reader.GetString(), out var role)
                 ? role
                 : throw new JsonException(
-                    "role must be explorer, implementer, securityReviewer, testReviewer, performanceReviewer, or architectureReviewer.");
+                    $"role must be one of: {string.Join(", ", Enum.GetValues<AgentRole>().Select(AgentRoleNames.GetName))}.");
     }
 
     /// <inheritdoc />

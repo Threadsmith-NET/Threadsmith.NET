@@ -190,13 +190,13 @@ public sealed record ReadFileOutput(
     int? NextStartLine,
     ReadFileTruncationReason? TruncationReason)
 {
-    /// <summary>Exact UTF-8 content when snapshot mode is requested.</summary>
+    /// <summary>UTF-8 source content with centrally sanitized values when snapshot mode is requested.</summary>
     public string? Content { get; init; }
 
     /// <summary>SHA256 of source bytes before sanitization for integrity-sensitive host consumers.</summary>
     public string? ContentDigest { get; init; }
 
-    /// <summary>Next UTF-8 byte offset, or null when the exact snapshot is complete.</summary>
+    /// <summary>Next UTF-8 byte offset in the sanitized snapshot, or null when complete.</summary>
     public int? NextSnapshotOffset { get; init; }
 }
 
@@ -205,12 +205,15 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 {
     private readonly ToolDefinition _definition;
     private readonly ToolLimits _limits;
+    private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="ReadFileTool"/> class.</summary>
-    public ReadFileTool(IPromptLoader promptLoader, ToolLimits? limits = null)
+    public ReadFileTool(IPromptLoader promptLoader, IOutputSanitizer sanitizer, ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
         _limits = limits ?? ToolLimits.Default;
+        ArgumentNullException.ThrowIfNull(sanitizer);
+        _sanitizer = sanitizer;
 
         // Keep the historical envelope and add worst-case JSON escaping and line-array overhead.
         var outputBytes = (384L * 1024)
@@ -277,6 +280,10 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
                 throw new InvalidDataException("The requested snapshot is not text.");
             }
 
+            // Sanitize before paging so a credential spanning pages is removed as a whole.
+            // The digest still identifies the original bytes for source-change detection.
+            var digest = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+            bytes = encoding.GetBytes(_sanitizer.Sanitize(content));
             ArgumentOutOfRangeException.ThrowIfNegative(input.SnapshotOffset);
             ArgumentOutOfRangeException.ThrowIfGreaterThan(input.SnapshotOffset, bytes.Length);
             var end = (int)Math.Min(bytes.Length, (long)input.SnapshotOffset + _limits.ReadFileMaximumContentBytes);
@@ -296,12 +303,22 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             {
                 Content = content,
                 NextSnapshotOffset = end < bytes.Length ? end : null,
-                ContentDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant(),
+                ContentDigest = digest,
             };
             return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", relativePath)]);
         }
 
-        var lines = await File.ReadAllLinesAsync(path, cancellationToken);
+        var sourceText = await File.ReadAllTextAsync(path, cancellationToken);
+        sourceText = _sanitizer.Sanitize(sourceText);
+        using var reader = new StringReader(sourceText);
+        var sourceLines = new List<string>();
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            sourceLines.Add(line);
+        }
+
+        var lines = sourceLines.ToArray();
         var startIndex = Math.Min(input.StartLine - 1, lines.Length);
         var maximumLines = ResolveMaximumLines(input);
         var page = BoundedTextLines.Select(lines, input.StartLine, maximumLines, _limits.ReadFileMaximumContentBytes, cancellationToken: cancellationToken);

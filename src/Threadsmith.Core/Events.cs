@@ -272,7 +272,8 @@ public sealed record ToolInvocationStarted(
     string RequestedBy = "host",
     ToolActivitySource? Source = null,
     string? ActivityDetail = null,
-    [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt);
+    [property: JsonIgnore] string? TransientActivityDetail = null,
+    string? ActivityOrigin = null) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A tool invocation completed.</summary>
 public sealed record ToolInvocationCompleted(

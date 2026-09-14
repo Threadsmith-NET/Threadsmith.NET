@@ -354,6 +354,8 @@ public sealed partial class SkillSubsystemTests
     {
         public string? ModelResultContent { get; init; }
 
+        public ToolExecutionFailure? Failure { get; init; }
+
         public int Executions { get; private set; }
 
         public override ToolDefinition Definition { get; } = new()
@@ -373,7 +375,7 @@ public sealed partial class SkillSubsystemTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Executions++;
-            return Task.FromResult(new ToolExecution<PermissionProbeOutput>(new PermissionProbeOutput(), [], ModelResultContent: ModelResultContent));
+            return Task.FromResult(new ToolExecution<PermissionProbeOutput>(new PermissionProbeOutput(), [], ModelResultContent: ModelResultContent, Failure: Failure));
         }
 
         protected override void ValidateInput(PermissionProbeInput input)

@@ -623,7 +623,6 @@ internal static class ApplicationComposition
                 host.Sanitizer,
                 host.LoggerFactory.CreateLogger<ExecutionOrchestrator>(),
                 correctiveMessages);
-            ModelExplorerAssignmentRunnerFactory? focusedReviewRunners = null;
             if (integration.Models.Catalog.Profiles.Count > 0)
             {
                 if (Enum.GetValues<AgentRole>().Any(role => childModelSelection.CanSelectRole(
@@ -652,7 +651,6 @@ internal static class ApplicationComposition
                         integration.Models.TrustedProvider,
                         activeTurnCompactionProfile,
                         agentDisplay);
-                    focusedReviewRunners = explorerRunners;
                     delegateAgentsTool = new DelegateAgentsTool(
                         new DelegateAgentsPlanFactory(
                             mutationCoordinator,
@@ -779,24 +777,12 @@ internal static class ApplicationComposition
                 tools.ToolRegistry,
                 integration.Models.Catalog,
                 "1.0.0");
-            var reviewActions = FocusedReviewComposition.Create(
-                host,
-                tools,
-                focusedReviewRunners,
-                delegationCoordinator,
-                childModelSelection,
-                preferences,
-                delegateAgentsOptions,
-                conversationToolSnapshots,
-                nativeSkillVerifier,
-                skillSchemaOptions,
-                skillCatalogOptions);
             var skillWorkflow = new SkillWorkflowOrchestrator(
                 compatibleSkillCatalog,
                 skillVerifier,
                 skillCompatibility,
                 new CompatibleSkillContentLoader(
-                    new SkillContentLoader(host.Sanitizer),
+                    new SkillContentLoader(host.Sanitizer, host.PromptLoader),
                     compatibleSkillCatalog,
                     host.Sanitizer),
                 new BoundedJsonSchemaValidator(skillSchemaOptions),
@@ -816,7 +802,9 @@ internal static class ApplicationComposition
                     host.PromptLoader,
                     integration.Models.Catalog,
                     providerInstructionResolver,
-                    skillRuntimeLimits),
+                    skillRuntimeLimits,
+                    conversationToolSnapshots,
+                    usage),
                 host.PromptLoader,
                 persistence.SkillStateStore,
                 async (sessionId, cancellationToken) =>
@@ -827,15 +815,18 @@ internal static class ApplicationComposition
                         cancellationToken) ?? throw new InvalidOperationException(
                             "The current session state is unavailable for skill workflow revalidation.");
 
+                    var selection = preferences.Capture();
                     return new SkillInvocationHostContext
                     {
                         WorkspaceId = state.WorkspaceId,
                         Trust = state.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
                         Phase = state.Phase,
+                        DefaultBudget = host.TrustedConfiguration.GetSection("skills:budget").Get<SkillBudget>() ?? new SkillBudget(),
+                        ModelProfileId = selection.ProfileId,
+                        ReasoningLevel = selection.Reasoning.ToString(),
                     };
                 },
-                host.Events,
-                reviewActions);
+                host.Events);
             var skillApplication = new SkillApplication(
                 compatibleSkillCatalog,
                 skillVerifier,
@@ -868,10 +859,11 @@ internal static class ApplicationComposition
             sessionCheckpointSubscription = host.Events.Subscribe(
                 async (domainEvent, _) =>
                 {
-                    if (domainEvent is RunCompleted completed)
+                    if (domainEvent is RunCompleted or SkillInvocationCompleted
+                        or SkillWorkflowCheckpointWritten { Status: SkillInvocationStatus.AwaitingHost })
                     {
                         await sessionLifecycle.CheckpointCompletedTurnAsync(
-                            completed.SessionId,
+                            domainEvent.SessionId,
                             CancellationToken.None);
                     }
                 });

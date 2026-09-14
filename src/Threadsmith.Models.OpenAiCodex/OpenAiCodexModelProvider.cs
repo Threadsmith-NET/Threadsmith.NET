@@ -56,7 +56,33 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 + $"{profileOutputLimit} tokens.");
         }
 
-        return StreamCoreAsync(request, profileOutputLimit, cancellationToken);
+        return ClassifyStreamTimeoutAsync(StreamCoreAsync(request, profileOutputLimit, cancellationToken), cancellationToken);
+    }
+
+    private static async IAsyncEnumerable<ModelChunk> ClassifyStreamTimeoutAsync(
+        IAsyncEnumerable<ModelChunk> source,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var enumerator = source.GetAsyncEnumerator(cancellationToken);
+        while (true)
+        {
+            bool hasNext;
+            try
+            {
+                hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new ModelProviderTimeoutException("The Codex Responses stream timed out.", exception);
+            }
+
+            if (!hasNext)
+            {
+                yield break;
+            }
+
+            yield return enumerator.Current;
+        }
     }
 
     private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(

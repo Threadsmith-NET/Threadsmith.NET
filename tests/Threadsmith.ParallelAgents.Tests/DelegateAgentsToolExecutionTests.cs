@@ -74,7 +74,12 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Equal(
             ["context", "role", "task", "toolAccess"],
             agentProperties.EnumerateObject().Select(item => item.Name).Order(StringComparer.Ordinal));
-        Assert.Equal(6, agentProperties.GetProperty("role").GetProperty("enum").GetArrayLength());
+        Assert.Equal(
+            Enum.GetValues<AgentRole>().Select(AgentRoleNames.GetName),
+            agentProperties.GetProperty("role").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
+        Assert.Equal(
+            Enum.GetNames<AgentRole>(),
+            childProperties.GetProperty("role").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
         Assert.Equal("explorer", agentProperties.GetProperty("role").GetProperty("default").GetString());
         Assert.Equal(4_096, agentProperties.GetProperty("task").GetProperty("maxLength").GetInt32());
         Assert.Equal(8_192, agentProperties.GetProperty("context").GetProperty("maxLength").GetInt32());

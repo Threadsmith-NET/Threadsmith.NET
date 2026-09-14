@@ -221,9 +221,6 @@ public sealed record ToolDefinition
     /// <summary>Whether availability also requires user-owned outbound consent.</summary>
     public bool RequiresOutboundConsent { get; init; }
 
-    /// <summary>Requires non-serialized host admission; excluded from model tool discovery.</summary>
-    public bool RequiresHostBinding { get; init; }
-
     /// <summary>Contract version.</summary>
     public required string Version { get; init; }
 
@@ -319,6 +316,12 @@ public sealed record ToolInvocationContext
     /// <summary>Opaque identity for the host-owned model-visible tool snapshot, when frozen.</summary>
     public Guid? ModelVisibleToolSnapshotId { get; init; }
 
+    /// <summary>Actual parent model profile captured at the model request boundary.</summary>
+    public ModelProfileId? ModelProfileId { get; init; }
+
+    /// <summary>Actual parent reasoning selection captured at the model request boundary.</summary>
+    public string? ModelReasoningLevel { get; init; }
+
     /// <summary>Selected model context window captured for this request, when model resolution has occurred.</summary>
     public int? ModelContextWindowTokens { get; init; }
 
@@ -331,18 +334,11 @@ public sealed record ToolInvocationContext
     /// <summary>Host-derived source ranges already visible in the current canonical model request.</summary>
     public ModelVisibleSourceFrontier? VisibleSourceFrontier { get; init; }
 
+    /// <summary>Host-owned activity origin inherited by nested tools, independent of requester authorization.</summary>
+    public string? ActivityOrigin { get; init; }
+
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
-}
-
-/// <summary>Non-serialized host admission bound to exactly one tool call; never inherited by child invocations.</summary>
-internal interface IToolHostBinding
-{
-    /// <summary>The exact tool this admission addresses.</summary>
-    string ToolId { get; }
-
-    /// <summary>The durable invocation identity reserved before dispatch.</summary>
-    ToolInvocationId ToolInvocationId { get; }
 }
 
 /// <summary>A model or host request entering the dynamic invocation pipeline.</summary>
@@ -368,10 +364,6 @@ public sealed record ToolInvocationRequest
 
     /// <summary>Policy context.</summary>
     public required ToolInvocationContext Context { get; init; }
-
-    /// <summary>Trusted host admission, unavailable to JSON callers.</summary>
-    [JsonIgnore]
-    internal IToolHostBinding? HostBinding { get; init; }
 }
 
 /// <summary>One source used to produce a tool result.</summary>
@@ -420,10 +412,6 @@ public sealed record ToolResult<TOutput>
 /// <summary>Provider-neutral dynamic result returned to the model execution layer.</summary>
 public sealed record ToolInvocationResult
 {
-    /// <summary>Host-only canonical review handoff; never inferred from model-authored JSON.</summary>
-    [JsonIgnore]
-    public FocusedReviewDelivery? ReviewDelivery { get; init; }
-
     /// <summary>Invocation identity.</summary>
     public required ToolInvocationId ToolInvocationId { get; init; }
 
@@ -521,10 +509,6 @@ public sealed record ToolExecutionContext(
 {
     /// <summary>Authoritative run phase for this invocation.</summary>
     public RunPhase Phase { get; init; } = RunPhase.Intake;
-
-    /// <summary>Trusted host admission for this call only.</summary>
-    [JsonIgnore]
-    internal IToolHostBinding? HostBinding { get; init; }
 }
 
 /// <summary>Non-generic execution envelope retained inside the tool runtime.</summary>
@@ -1057,6 +1041,3 @@ public sealed class ToolArgumentValidationException : Exception
     {
     }
 }
-
-/// <summary>Host admission for one ordinary internal tool invocation.</summary>
-internal sealed record HostToolInvocationBinding(string ToolId, ToolInvocationId ToolInvocationId) : IToolHostBinding;

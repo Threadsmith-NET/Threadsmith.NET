@@ -70,6 +70,15 @@ public sealed partial class SubagentRoleLiveTests
                     ["docs/ADR.md"] = "Core must not reference UI projects or UI types. UI depends on Core. A framework-neutral interface declared in Core may be implemented by UI. This is the only architecture constraint for this fixture.",
                 },
                 ["Core", "UI", "ADR.md"]),
+            AgentRole.BugReviewer => new LiveFixture(
+                "Review Shipping.Fee against Jira BUG-123 in Requirements.md. Check the acceptance boundary; identify a functional mismatch only when supported by the code and ticket.",
+                new Dictionary<string, string>
+                {
+                    ["Shipping.cs"] = "public static class Shipping { public static decimal Fee(decimal subtotal) => subtotal "
+                        + (control ? ">=" : ">") + " 100m ? 0m : 5m; }",
+                    ["Requirements.md"] = "Jira BUG-123: shipping is free for a subtotal of 100 or more. Acceptance criteria: subtotal 99 costs 5; subtotal 100 costs 0; subtotal 101 costs 0. Only non-negative subtotals are in scope.",
+                },
+                ["100", "Shipping", "BUG-123"]),
             _ => throw new ArgumentOutOfRangeException(nameof(role)),
         };
     }

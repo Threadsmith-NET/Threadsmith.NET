@@ -2,6 +2,7 @@ namespace Threadsmith.Execution;
 
 using Threadsmith.Context;
 using Threadsmith.Core;
+using Threadsmith.Models;
 using Threadsmith.Persistence;
 
 /// <summary>Serializes safe-boundary creation, restoration, and independent cloning of active sessions.</summary>
@@ -496,8 +497,8 @@ public sealed class SessionLifecycleApplication :
         var cloneUsage = new SessionDurableUsage(
             0,
             0,
-            sourceUsage.IsEstimate,
-            sourceUsage.HasUnknownUsage,
+            false,
+            false,
             false,
             SaturatingAdd(sourceUsage.InheritedInputTokens, sourceUsage.InputTokens),
             SaturatingAdd(sourceUsage.InheritedOutputTokens, sourceUsage.OutputTokens));

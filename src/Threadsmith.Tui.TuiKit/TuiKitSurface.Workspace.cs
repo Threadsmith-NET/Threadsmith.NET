@@ -4,6 +4,7 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Presentation;
+using Threadsmith.Models;
 using TUIKit;
 using TUIKit.Input;
 using TUIKit.Widgets;

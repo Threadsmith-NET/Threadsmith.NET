@@ -43,36 +43,55 @@ public static partial class SecretRedactor
     public static string Redact(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        var withoutPrivateKeys = PrivateKeyBlockPattern().Replace(value, "[REDACTED PRIVATE KEY]");
-        var redacted = QualifiedEnvironmentCredentialPattern().Replace(withoutPrivateKeys, "$1[REDACTED]");
-        var credentialInput = QualifiedQuotedCredentialPattern().Replace(redacted, "$1[REDACTED]");
+        var withoutPrivateKeys = PrivateKeyBlockPattern().Replace(value, match => RedactLines(match.ValueSpan, "[REDACTED PRIVATE KEY]"));
+        var redacted = QualifiedEnvironmentCredentialPattern().Replace(withoutPrivateKeys, match => match.Groups[1].Value + RedactLines(match.ValueSpan[match.Groups[1].Length..], "[REDACTED]"));
+        var credentialInput = QualifiedQuotedCredentialPattern().Replace(redacted, match => match.Groups[1].Value + RedactLines(match.ValueSpan[match.Groups[1].Length..], "[REDACTED]"));
         var preserveSourceArguments = ContainsSourceCredentialArgumentCandidate(credentialInput);
         redacted = preserveSourceArguments
             || credentialInput.Contains("```cs", StringComparison.OrdinalIgnoreCase)
+            || ContainsMultilineCredential(credentialInput)
             ? RedactSourceCredentialMatches(credentialInput, preserveSourceArguments)
             : CredentialPattern().Replace(credentialInput, "${lead}${prefix}[REDACTED]");
-        redacted = ConnectionStringPasswordPattern().Replace(redacted, "$1[REDACTED]");
+        redacted = ConnectionStringPasswordPattern().Replace(redacted, match => match.Groups[1].Value + RedactLines(match.ValueSpan[match.Groups[1].Length..], "[REDACTED]"));
         redacted = UriUserInfoPattern().Replace(redacted, "$1[REDACTED]@");
         return StandaloneCredentialPattern().Replace(redacted, "[REDACTED]");
     }
 
     [GeneratedRegex(
-        "(?i)(?<lead>[(,]\\s*)?(?<prefix>(?<![A-Za-z0-9_])[\\\"']?(?<key>api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']?\\s*(?::|=(?!>))\\s*)(?<value>\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)(?<lead>[(,]\\s*)?(?<prefix>(?<![A-Za-z0-9_])[\\\"']?(?<key>api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']?\\s*(?::|=(?!>))\\s*)(?<value>\\[REDACTED(?: PRIVATE KEY)?\\]|\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex CredentialPattern();
 
     [GeneratedRegex(
-        "(?i)((?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)\\s*=(?!>)\\s*)(?:\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)((?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)\\s*=(?!>)\\s*)(?:\\[REDACTED(?: PRIVATE KEY)?\\]|\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex QualifiedEnvironmentCredentialPattern();
 
     [GeneratedRegex(
-        "(?i)((?<![A-Za-z0-9_])[\\\"'](?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']\\s*:\\s*)(?:\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
+        "(?i)((?<![A-Za-z0-9_])[\\\"'](?:[A-Za-z0-9]+[_-]+)+(?:api[_-]?key|authorization|token|access[_-]?token|refresh[_-]?token|client[_-]?secret|password|passwd|pwd)[\\\"']\\s*:\\s*)(?:\\[REDACTED(?: PRIVATE KEY)?\\]|\\\"[^\\\"]*(?:\\\"|$)|'[^']*(?:'|$)|(?:(?:Bearer|Basic)\\s+)?[^\\s,;})\\]&]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex QualifiedQuotedCredentialPattern();
 
     [GeneratedRegex("-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex PrivateKeyBlockPattern();
+
+    private static bool ContainsMultilineCredential(string value)
+    {
+        if (value.AsSpan().IndexOfAny('\r', '\n') < 0)
+        {
+            return false;
+        }
+
+        foreach (var match in CredentialPattern().EnumerateMatches(value))
+        {
+            if (value.AsSpan(match.Index, match.Length).IndexOfAny('\r', '\n') >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool ContainsSourceCredentialArgumentCandidate(string value)
     {
@@ -147,6 +166,36 @@ public static partial class SecretRedactor
         return false;
     }
 
+    private static string RedactLines(ReadOnlySpan<char> value, string replacement)
+    {
+        var lineBreaks = 0;
+        foreach (var character in value)
+        {
+            if (character is '\r' or '\n')
+            {
+                lineBreaks++;
+            }
+        }
+
+        if (lineBreaks == 0)
+        {
+            return replacement;
+        }
+
+        var characters = new char[replacement.Length + lineBreaks];
+        replacement.AsSpan().CopyTo(characters);
+        var offset = replacement.Length;
+        foreach (var character in value)
+        {
+            if (character is '\r' or '\n')
+            {
+                characters[offset++] = character;
+            }
+        }
+
+        return new string(characters);
+    }
+
     private static string RedactSourceCredentialMatches(string input, bool preserveSourceArguments)
     {
         return CredentialPattern().Replace(input, match => RedactCredentialMatch(match, input, preserveSourceArguments));
@@ -156,7 +205,7 @@ public static partial class SecretRedactor
     {
         return (preserveSourceArguments && IsIdentifierEcho(match)) || IsSourceFenceHeader(match, input)
             ? match.Value
-            : match.Groups["lead"].Value + match.Groups["prefix"].Value + "[REDACTED]";
+            : match.Groups["lead"].Value + match.Groups["prefix"].Value + RedactLines(match.Groups["value"].ValueSpan, "[REDACTED]");
     }
 
     private static bool IsSourceFenceHeader(Match match, string input)

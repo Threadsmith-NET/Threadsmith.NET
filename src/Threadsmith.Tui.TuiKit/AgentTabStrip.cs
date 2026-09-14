@@ -107,6 +107,7 @@ internal sealed class AgentTabStrip : IWidget, IMouseAware
             Threadsmith.Core.AgentRole.SecurityReviewer => "Sec",
             Threadsmith.Core.AgentRole.PerformanceReviewer => "Perf",
             Threadsmith.Core.AgentRole.ArchitectureReviewer => "Arch",
+            Threadsmith.Core.AgentRole.BugReviewer => "Bugs",
             Threadsmith.Core.AgentRole.TestReviewer => "Test",
             Threadsmith.Core.AgentRole.Implementer => "Impl",
             _ => "Exp",

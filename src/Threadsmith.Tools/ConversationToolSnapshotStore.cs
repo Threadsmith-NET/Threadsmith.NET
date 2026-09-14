@@ -1,8 +1,7 @@
-namespace Threadsmith.Execution;
+namespace Threadsmith.Tools;
 
 using System.Collections.Concurrent;
 using Threadsmith.Core;
-using Threadsmith.Tools;
 
 /// <summary>Owns exact model-visible registrations outside tool-visible invocation contexts.</summary>
 public interface IConversationToolSnapshotStore

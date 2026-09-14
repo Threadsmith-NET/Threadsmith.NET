@@ -3146,7 +3146,7 @@ public static class Milestone4Tests
             var registry = new ToolRegistry(
             [
                 new ListFilesTool(TestPromptLoader.Instance),
-                new ReadFileTool(TestPromptLoader.Instance),
+                new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer()),
                 new RunProcessTool(
                     new NonExecutingProcessManager(),
                     TestPromptLoader.Instance,

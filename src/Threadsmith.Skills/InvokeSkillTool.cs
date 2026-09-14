@@ -72,6 +72,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 InvocationId = SkillInvocationId.New(),
                 UseDefaultBudget = true,
                 InvokingToolInvocationId = context.ToolInvocationId,
+                CallerToolSnapshotId = context.Invocation.ModelVisibleToolSnapshotId,
                 SessionId = context.SessionId,
                 RunId = context.RunId,
                 WorkspaceId = context.Invocation.WorkspaceId,
@@ -163,6 +164,12 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             SideEffect = ToolSideEffect.ReadOnly,
             Idempotency = ToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
+            Scheduling = new ToolSchedulingDescriptor
+            {
+                ConcurrencyMode = ToolConcurrencyMode.ExclusiveSession,
+                ClaimResolverId = "invoke-skill-session-v1",
+                MaximumSourceConcurrency = int.MaxValue,
+            },
             Timeout = TimeSpan.FromMinutes(20),
             MaximumOutputBytes = 64 * 1024,
         };

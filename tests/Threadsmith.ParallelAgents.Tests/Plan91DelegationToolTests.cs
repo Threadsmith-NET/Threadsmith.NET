@@ -12,7 +12,7 @@ using Xunit;
 /// <summary>Verifies Plan 91 model-facing contracts and frozen child policy construction.</summary>
 public sealed class Plan91DelegationToolTests
 {
-    /// <summary>Verifies read-only and inherited children receive distinct, non-recursive tool surfaces.</summary>
+    /// <summary>Verifies read-only and inherited children receive explicitly narrowed and fully inherited tool surfaces.</summary>
     [Fact]
     public void PlanFactory_FreezesContextSensitivityAndNarrowedTools()
     {
@@ -102,16 +102,14 @@ public sealed class Plan91DelegationToolTests
         Assert.False(plan.Assignments[0].Policy.AllowNetwork);
         Assert.False(plan.Assignments[0].Policy.AllowProcesses);
         Assert.Equal(
-            ["read_file", "web_search"],
+            ["approval_read", DelegateAgentsContract.ToolId, "invoke_skill", "read_file", "run_process", "web_search"],
             plan.Assignments[1].Policy.AllowedToolIds);
         Assert.True(plan.Assignments[1].Policy.AllowNetwork);
-        Assert.False(plan.Assignments[1].Policy.AllowProcesses);
-        Assert.All(plan.Assignments, assignment =>
-        {
-            Assert.DoesNotContain(DelegateAgentsContract.ToolId, assignment.Policy.AllowedToolIds);
-            Assert.DoesNotContain("invoke_skill", assignment.Policy.AllowedToolIds);
-            Assert.Contains(DelegateAgentsContract.ToolId, assignment.Policy.DeniedToolIds);
-        });
+        Assert.True(plan.Assignments[1].Policy.AllowProcesses);
+        Assert.Equal(AgentRunMode.SharedWorkspace, plan.Assignments[1].Mode);
+        Assert.Empty(plan.Assignments[1].Policy.DeniedToolIds);
+        Assert.Contains(DelegateAgentsContract.ToolId, plan.Assignments[0].Policy.DeniedToolIds);
+        Assert.All(plan.Assignments, assignment => Assert.DoesNotContain("hidden_read", assignment.Policy.AllowedToolIds));
         Assert.Equal(
             plan.Assignments.Sum(assignment => assignment.Budget.ModelTokens),
             plan.ParentBudget.ModelTokens);

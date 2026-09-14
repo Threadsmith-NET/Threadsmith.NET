@@ -776,7 +776,8 @@ internal static class ApplicationComposition
             var skillCompatibility = new SkillCompatibilityEvaluator(
                 tools.ToolRegistry,
                 integration.Models.Catalog,
-                "1.0.0");
+                "1.0.0",
+                trustedModels: integration.Models.TrustedCatalog);
             var skillWorkflow = new SkillWorkflowOrchestrator(
                 compatibleSkillCatalog,
                 skillVerifier,
@@ -804,7 +805,10 @@ internal static class ApplicationComposition
                     providerInstructionResolver,
                     skillRuntimeLimits,
                     conversationToolSnapshots,
-                    usage),
+                    usage,
+                    integration.Models.TrustedProvider,
+                    integration.Models.TrustedCatalog,
+                    trustedProviderInstructionResolver),
                 host.PromptLoader,
                 persistence.SkillStateStore,
                 async (sessionId, cancellationToken) =>
@@ -826,7 +830,8 @@ internal static class ApplicationComposition
                         ReasoningLevel = selection.Reasoning.ToString(),
                     };
                 },
-                host.Events);
+                host.Events,
+                conversationToolSnapshots);
             var skillApplication = new SkillApplication(
                 compatibleSkillCatalog,
                 skillVerifier,

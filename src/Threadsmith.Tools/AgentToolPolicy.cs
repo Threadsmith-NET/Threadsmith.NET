@@ -77,6 +77,7 @@ public static class AgentToolPolicy
             ModelEffectiveInputBudgetTokens = null,
             VisibleSourceFrontier = null,
             RequestedBy = $"agent:{plan.DelegationId.Value:D}:{frozenAssignment.AssignmentId.Value:D}",
+            ActivityOrigin = parent.ActivityOrigin ?? $"agent:{plan.DelegationId.Value:D}:{frozenAssignment.AssignmentId.Value:D}",
         };
     }
 

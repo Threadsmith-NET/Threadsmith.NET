@@ -108,7 +108,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             _steering,
             _trustedModels,
             _compactionProfile,
-            _display);
+            _display,
+            _snapshots);
         return new AgentRoleRunnerRegistry(
             Enum.GetValues<AgentRole>().Select(role => new ModelAgentRoleRunner(role, execution)),
             execution);
@@ -144,7 +145,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         RunSteeringCoordinator? steering = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
-        AgentDisplayStream? display = null)
+        AgentDisplayStream? display = null,
+        IConversationToolSnapshotStore? snapshots = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -177,7 +179,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             selection,
             trustedModels,
             compactionProfile,
-            display);
+            display,
+            snapshots);
     }
 
     /// <inheritdoc />
@@ -195,7 +198,7 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             || frozen.Mode != assignment.Mode
             || frozen.Mode == AgentRunMode.IsolatedWorktreeMutation)
         {
-            throw new UnauthorizedAccessException("The read-only assignment is not owned by this delegation.");
+            throw new UnauthorizedAccessException("The assignment is not owned by this delegation.");
         }
 
         try

@@ -257,7 +257,9 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             {
                 ConcurrencyMode = ToolConcurrencyMode.ExclusiveSession,
                 ClaimResolverId = "delegate-agents-session-v1",
-                MaximumSourceConcurrency = 1,
+
+                // The agent scheduler owns worker capacity; an orchestration lease must not block nested joins.
+                MaximumSourceConcurrency = int.MaxValue,
             },
         };
     }

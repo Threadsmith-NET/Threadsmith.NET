@@ -56,10 +56,10 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-ChildAgent-HostPolicy.md` | Common child system policy for trust, permissions, tools, and free-form responses. | `None` |
+| `System-ChildAgent-HostPolicy.md` | Common child guidance for advertised tools, inherited authority, shared-workspace coordination, and honest responses. | `None` |
 | `System-ChildAgent-Explorer.md` | Explorer role amendment for focused inspection and useful answers. | `None` |
 | `System-ChildAgent-OutputPolicy.md` | Legacy Explorer JSON output policy retained in the catalog; unused for ordinary child responses. | `None` |
-| `System-ChildAgent-Implementer.md` | Implementer role amendment for read-only implementation suggestions. | `None` |
+| `System-ChildAgent-Implementer.md` | Implementer role amendment for assigned changes and validation using advertised tools, with accurate completion and limitation reporting. | `None` |
 | `System-ChildAgent-SecurityReviewer.md` | SecurityReviewer role amendment for concrete risks and useful fixes. | `None` |
 | `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for useful coverage observations and improvements. | `None` |
 | `System-ChildAgent-PerformanceReviewer.md` | PerformanceReviewer role amendment distinguishing measured behavior from plausible risks. | `None` |
@@ -503,7 +503,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
-| `Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
+| `Tool-delegate_agents-Description.md` | Delegation tool guidance for roles, concurrent assignments, inherited tools, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
 | `Tool-delegate_agents-FindingUncertainty.md` | Conditional uncertainty block in a joined delegation finding. | [`Uncertainty`](#placeholder-uncertainty) |

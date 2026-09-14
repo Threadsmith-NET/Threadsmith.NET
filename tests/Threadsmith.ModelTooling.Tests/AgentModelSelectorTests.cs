@@ -72,6 +72,24 @@ public static class AgentModelSelectorTests
         Assert.Null(defaulted.ModelSelection?.ConfiguredProfileId);
     }
 
+    /// <summary>Inherited preferences retain the caller's actual provider catalog, including same-profile repository overrides.</summary>
+    [Theory]
+    [InlineData(false, "repository-large")]
+    [InlineData(true, "trusted-large")]
+    public static void FreezePolicy_InheritsProviderRouteAlongWithProfile(bool trusted, string providerId)
+    {
+        var selector = CreateSelector(AgentRole.SecurityReviewer);
+        var assignment = CreateAssignment();
+
+        var policy = selector.FreezePolicy(assignment, inheritTrustedModelCatalog: trusted);
+        var selected = selector.Select(assignment with { Policy = policy });
+
+        Assert.Equal(LargeId, selected.ProfileId);
+        Assert.Equal(AgentModelSelectionSource.Inherited, selected.Provenance?.Source);
+        Assert.Equal(providerId, selected.Provenance?.EffectiveProviderId);
+        Assert.Equal(trusted, selected.UsesTrustedCatalog);
+    }
+
     /// <summary>Persisted provenance survives configuration changes without rebinding the role.</summary>
     [Fact]
     public static void FreezePolicy_RestoredProvenanceDoesNotReadChangedRolePreference()

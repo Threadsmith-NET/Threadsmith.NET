@@ -25,7 +25,7 @@ internal static class DelegationOutcomeClassifier
             : outcome;
     }
 
-    /// <summary>Recognizes an ordinary completed read-only response without requiring role-specific structured payloads.</summary>
+    /// <summary>Recognizes an ordinary completed child response without requiring role-specific structured payloads.</summary>
     public static bool HasNaturalResponse(AgentAssignment assignment, AgentRunOutcome outcome)
     {
         ArgumentNullException.ThrowIfNull(assignment);
@@ -35,7 +35,7 @@ internal static class DelegationOutcomeClassifier
             && outcome.ChildRunId == assignment.ChildRunId
             && outcome.Role == assignment.Role
             && Enum.IsDefined(assignment.Role)
-            && assignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview
+            && assignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview or AgentRunMode.SharedWorkspace
             && string.Equals(assignment.OutputSchema, AgentAssignment.ResponseSchema, StringComparison.Ordinal)
             && outcome.Response is not null
             && outcome.ChangeSet is null;
@@ -57,7 +57,7 @@ internal static class DelegationOutcomeClassifier
         }
 
         if (assignment.OutputSchema == AgentAssignment.ResponseSchema
-            && assignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview)
+            && assignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview or AgentRunMode.SharedWorkspace)
         {
             return HasNaturalResponse(assignment, outcome);
         }

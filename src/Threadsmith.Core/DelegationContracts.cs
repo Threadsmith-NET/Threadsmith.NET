@@ -36,6 +36,9 @@ public enum AgentRunMode
 
     /// <summary>Reads immutable change and evidence artifacts for review.</summary>
     ReadOnlyReview,
+
+    /// <summary>Uses the parent workspace and the parent's inherited tool authority.</summary>
+    SharedWorkspace,
 }
 
 /// <summary>Host action after one child fails.</summary>

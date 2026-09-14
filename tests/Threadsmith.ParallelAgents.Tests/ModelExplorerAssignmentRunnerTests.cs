@@ -88,7 +88,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Contains(observed, item => item is ToolInvocationStarted started
             && started.RunId == assignment.ChildRunId
             && started.ToolName == tool.Definition.Id
-            && started.RequestedBy.StartsWith("agent:", StringComparison.Ordinal));
+            && started.RequestedBy == "model");
         Assert.Equal(2, provider.Requests.Count);
         Assert.Equal(50, usage.GetSnapshot(plan.Provenance.SessionId).InputTokens);
         Assert.Equal(20, usage.GetSnapshot(plan.Provenance.SessionId).OutputTokens);

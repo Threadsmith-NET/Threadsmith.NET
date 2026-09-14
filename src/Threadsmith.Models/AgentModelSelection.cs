@@ -76,7 +76,8 @@ public sealed class AgentModelSelector
         ModelProfileId? applicationProfileId = null,
         ReasoningLevel? applicationReasoningLevel = null,
         bool inheritModelPreference = true,
-        bool? requireToolCalls = null)
+        bool? requireToolCalls = null,
+        bool inheritTrustedModelCatalog = false)
     {
         ArgumentNullException.ThrowIfNull(assignment);
         if (assignment.Policy.ModelSelection is not null)
@@ -88,7 +89,8 @@ public sealed class AgentModelSelector
             assignment,
             applicationProfileId,
             applicationReasoningLevel,
-            inheritModelPreference);
+            inheritModelPreference,
+            inheritTrustedModelCatalog);
         var selected = Select(
             assignment with { Policy = assignment.Policy with { ModelSelection = preference } },
             requireToolCalls);
@@ -236,7 +238,8 @@ public sealed class AgentModelSelector
         AgentAssignment assignment,
         ModelProfileId? applicationProfileId = null,
         ReasoningLevel? applicationReasoningLevel = null,
-        bool inheritModelPreference = true)
+        bool inheritModelPreference = true,
+        bool inheritTrustedModelCatalog = false)
     {
         var route = _roleModels.Get(assignment.Role);
         var source = AgentModelSelectionSource.Default;
@@ -261,7 +264,8 @@ public sealed class AgentModelSelector
             reasoning = assignment.Policy.ReasoningLevel;
         }
 
-        var trusted = source == AgentModelSelectionSource.RoleConfiguration;
+        var trusted = source == AgentModelSelectionSource.RoleConfiguration
+            || (source == AgentModelSelectionSource.Inherited && inheritTrustedModelCatalog);
         var catalog = trusted ? _roleModels.TrustedCatalog : _catalog;
         var profile = catalog.Profiles.FirstOrDefault(item => item.Id == profileId);
         if (applicationProfileId is not null && profile is null)

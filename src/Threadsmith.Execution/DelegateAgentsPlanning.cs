@@ -8,7 +8,7 @@ using Threadsmith.Tools;
 public sealed class DelegateAgentsPlanFactory
 {
     private const string ContextPolicyVersion = "agent-context/2";
-    private const string InheritToolPolicyVersion = "delegate-agents-inherit/1";
+    private const string InheritToolPolicyVersion = "delegate-agents-inherit/2";
     private const string ReadOnlyToolPolicyVersion = "delegate-agents-read-only/1";
     private readonly DelegateAgentsOptions _options;
     private readonly SessionModelPreferences _preferences;
@@ -94,16 +94,16 @@ public sealed class DelegateAgentsPlanFactory
         DateTimeOffset acceptedAt)
     {
         var definitions = ResolveDefinitions(request.ToolAccess, context);
-        var allowNetwork = request.ToolAccess == DelegateAgentToolAccess.Inherit
-            && definitions.Any(definition => definition.Category == ToolCategory.ExternalSearch);
+        var inherit = request.ToolAccess == DelegateAgentToolAccess.Inherit;
         var assignment = new AgentAssignment
         {
             AssignmentId = AgentAssignmentId.New(),
             ChildRunId = RunId.New(),
             Role = request.Role,
-            Mode = request.Role is AgentRole.Explorer or AgentRole.Implementer
-                ? AgentRunMode.ReadOnlyBaseline
-                : AgentRunMode.ReadOnlyReview,
+            Mode = inherit ? AgentRunMode.SharedWorkspace
+                : request.Role is AgentRole.Explorer or AgentRole.Implementer
+                    ? AgentRunMode.ReadOnlyBaseline
+                    : AgentRunMode.ReadOnlyReview,
             Objective = request.Task.Trim(),
             Tasks = [_prompts.Get(PromptFileNames.ContextChildAgentStructuredFindingsTask)],
             InitialContext = request.Context.Trim(),
@@ -114,12 +114,13 @@ public sealed class DelegateAgentsPlanFactory
             Policy = new AgentPolicySnapshot
             {
                 AllowedToolIds = definitions.Select(definition => definition.Id).ToArray(),
-                DeniedToolIds = [DelegateAgentsContract.ToolId],
-                TrustCeiling = context.Invocation.TrustLevel > RepositoryTrustLevel.TrustedBuild
+                DeniedToolIds = inherit ? [] : [DelegateAgentsContract.ToolId],
+                TrustCeiling = !inherit && context.Invocation.TrustLevel > RepositoryTrustLevel.TrustedBuild
                     ? RepositoryTrustLevel.TrustedBuild
                     : context.Invocation.TrustLevel,
-                AllowNetwork = allowNetwork,
-                AllowProcesses = false,
+                AllowNetwork = inherit,
+                AllowProcesses = inherit && definitions.Any(definition =>
+                    definition.Category is ToolCategory.ProcessExecution or ToolCategory.CodeExecution),
                 ProhibitedPaths = context.Invocation.ProhibitedPaths.ToArray(),
                 Sensitivity = context.Invocation.Sensitivity,
                 ResultLimits = _options.ResultLimits,
@@ -135,7 +136,10 @@ public sealed class DelegateAgentsPlanFactory
             },
             Budget = _options.EffectiveChildBudget,
         };
-        return _models is null ? assignment : assignment with { Policy = _models.FreezePolicy(assignment) };
+        return _models is null ? assignment : assignment with
+        {
+            Policy = _models.FreezePolicy(assignment, inheritTrustedModelCatalog: context.Invocation.ModelUsesTrustedCatalog),
+        };
     }
 
     private ToolDefinition[] ResolveDefinitions(
@@ -149,18 +153,18 @@ public sealed class DelegateAgentsPlanFactory
         return
         [
             .. registrations
+
+                // Each child gets its own evidence reader bound to its evidence ownership.
+                .Where(registration => registration.Implementation is not ChildAgentEvidenceTool)
                 .Select(registration => registration.Tool.Definition)
-                .Where(definition => definition.Category != ToolCategory.Workflow)
-                .Where(definition => definition.Category is not ToolCategory.ProcessExecution
-                    and not ToolCategory.CodeExecution)
-                .Where(definition => definition.SideEffect == ToolSideEffect.ReadOnly)
-                .Where(definition => !string.Equals(
-                    definition.Id,
-                    DelegateAgentsContract.ToolId,
-                    StringComparison.OrdinalIgnoreCase))
-                .Where(definition => definition.RequiredApproval == ApprovalLevel.None)
-                .Where(definition => access == DelegateAgentToolAccess.Inherit
-                    || definition.Category != ToolCategory.ExternalSearch)
+                .Where(definition => ConversationToolAvailability.IsAdvertised(definition, context.Invocation)
+                    && (access == DelegateAgentToolAccess.Inherit
+                    || (definition.Category is not ToolCategory.Workflow
+                        and not ToolCategory.ProcessExecution
+                        and not ToolCategory.CodeExecution
+                        and not ToolCategory.ExternalSearch
+                        && definition.SideEffect == ToolSideEffect.ReadOnly
+                        && definition.RequiredApproval == ApprovalLevel.None)))
                 .OrderBy(definition => definition.Id, StringComparer.Ordinal),
         ];
     }

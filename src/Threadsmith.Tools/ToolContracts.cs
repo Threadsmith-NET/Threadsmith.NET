@@ -319,6 +319,9 @@ public sealed record ToolInvocationContext
     /// <summary>Actual parent model profile captured at the model request boundary.</summary>
     public ModelProfileId? ModelProfileId { get; init; }
 
+    /// <summary>Whether the actual caller uses the repository-excluding model catalog and provider route.</summary>
+    public bool ModelUsesTrustedCatalog { get; init; }
+
     /// <summary>Actual parent reasoning selection captured at the model request boundary.</summary>
     public string? ModelReasoningLevel { get; init; }
 

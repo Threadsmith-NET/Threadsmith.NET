@@ -2,6 +2,7 @@ namespace Threadsmith.Skills;
 
 using System.Collections.Concurrent;
 using Threadsmith.Core;
+using Threadsmith.Tools;
 
 /// <summary>Runs bounded declarative workflows over host-owned action proposal boundaries.</summary>
 public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsyncDisposable
@@ -16,6 +17,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private readonly ISkillProcedureRunner _runner;
     private readonly BoundedJsonSchemaValidator _schemas;
     private readonly ISkillStateStore _state;
+    private readonly IConversationToolSnapshotStore? _snapshots;
     private readonly Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> _hostContext;
 
     /// <summary>Initializes a new instance of the <see cref="SkillWorkflowOrchestrator"/> class.</summary>
@@ -29,7 +31,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         IPromptLoader prompts,
         ISkillStateStore state,
         Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> hostContext,
-        IDomainEventStream events)
+        IDomainEventStream events,
+        IConversationToolSnapshotStore? snapshots = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -51,6 +54,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         _state = state;
         _hostContext = hostContext;
         _events = events;
+        _snapshots = snapshots;
     }
 
     /// <inheritdoc />
@@ -59,12 +63,36 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
+        var host = await _hostContext(request.SessionId, cancellationToken);
+        if (request.WorkspaceId != host.WorkspaceId)
+        {
+            throw new InvalidOperationException("Skill invocation workspace does not match the current session.");
+        }
+
+        var callerContext = ResolveCallerContext(request.CallerToolSnapshotId, request.SessionId, request.RunId);
+        if (callerContext is not null && callerContext.WorkspaceId != host.WorkspaceId)
+        {
+            throw new InvalidOperationException("The invoking tool workspace does not match the current session.");
+        }
+
+        host = host with
+        {
+            ModelProfileId = callerContext?.ModelProfileId ?? host.ModelProfileId,
+            ReasoningLevel = callerContext?.ModelReasoningLevel ?? host.ReasoningLevel,
+        };
+        request = request with
+        {
+            Trust = callerContext is not null && callerContext.TrustLevel < host.Trust
+                ? callerContext.TrustLevel : host.Trust,
+            Sensitivity = callerContext?.Sensitivity ?? request.Sensitivity,
+            ModelUsesTrustedCatalog = callerContext?.ModelUsesTrustedCatalog ?? false,
+            Phase = host.Phase,
+            HostBudget = request.UseDefaultBudget ? host.DefaultBudget : request.HostBudget,
+        };
         var candidate = await ResolveInvocationCandidateAsync(
             request.Selector,
             request.SessionId,
             cancellationToken);
-        var host = await _hostContext(request.SessionId, cancellationToken);
-        request = request with { HostBudget = request.UseDefaultBudget ? host.DefaultBudget : request.HostBudget };
         var compatibility = _compatibility.Evaluate(candidate, request);
         if (!compatibility.IsCompatible)
         {
@@ -94,7 +122,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 ? profile
                 : null),
             ReasoningLevel = host.ReasoningLevel,
-            AvailableToolIds = ResolveAvailableTools(candidate, compatibility),
+            AvailableToolIds = ResolveAvailableTools(candidate, compatibility, request),
             EffectiveBudget = budget,
         };
         var checkpoint = new SkillWorkflowCheckpoint
@@ -113,6 +141,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Phase = request.Phase,
             Sensitivity = request.Sensitivity,
             ModelProfileId = plan.ModelProfileId,
+            ModelUsesTrustedCatalog = request.ModelUsesTrustedCatalog,
             ReasoningLevel = plan.ReasoningLevel,
             AvailableToolIds = plan.AvailableToolIds,
             EffectiveBudget = budget,
@@ -497,6 +526,18 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         };
     }
 
+    private ToolInvocationContext? ResolveCallerContext(Guid? snapshotId, SessionId sessionId, RunId runId)
+    {
+        if (snapshotId is null)
+        {
+            return null;
+        }
+
+        return (_snapshots ?? throw new InvalidOperationException("The caller snapshot store is unavailable."))
+            .ResolveContext(snapshotId.Value, sessionId, runId)
+            ?? throw new InvalidOperationException("The invoking model request has no tool authority snapshot.");
+    }
+
     private async Task<(SkillCatalogCandidate Candidate, SkillInvocationPlan Plan)> RestorePlanAsync(
         SkillWorkflowCheckpoint checkpoint,
         CancellationToken cancellationToken)
@@ -525,6 +566,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Trust = current.Trust,
             Phase = current.Phase,
             Sensitivity = checkpoint.Sensitivity,
+            ModelUsesTrustedCatalog = checkpoint.ModelUsesTrustedCatalog,
             HostBudget = checkpoint.EffectiveBudget,
         };
         var compatibility = _compatibility.Evaluate(candidate, request);
@@ -845,14 +887,23 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         };
     }
 
-    private static IReadOnlyList<string> ResolveAvailableTools(
+    private IReadOnlyList<string> ResolveAvailableTools(
         SkillCatalogCandidate candidate,
-        SkillCompatibilityResult compatibility)
+        SkillCompatibilityResult compatibility,
+        SkillInvocationRequest request)
     {
-        return compatibility.InheritedTools.Concat(candidate.Metadata.Requirements.RequiredTools)
+        var callerTools = request.CallerToolSnapshotId is { } snapshotId
+            ? (_snapshots ?? throw new InvalidOperationException("The caller snapshot store is unavailable."))
+                .Resolve(snapshotId, request.SessionId, request.RunId)
+                .Select(registration => registration.Tool.Definition.Id).ToArray()
+            : null;
+        var inheritedTools = candidate.Metadata.Requirements.InheritAvailableTools && callerTools is not null
+            ? callerTools : compatibility.InheritedTools;
+        return inheritedTools.Concat(candidate.Metadata.Requirements.RequiredTools)
             .Concat(candidate.Metadata.Requirements.OptionalTools.Except(
                 compatibility.UnavailableOptionalTools,
                 StringComparer.OrdinalIgnoreCase))
+            .Where(toolId => callerTools?.Contains(toolId, StringComparer.OrdinalIgnoreCase) != false)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.Ordinal)
             .ToArray();

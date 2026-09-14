@@ -1,6 +1,6 @@
 # Plan 108 — Focused review skills with private reviewer assignments
 
-**Status:** Implemented and adversarially reviewed. Automated closeout evidence and environment-dependent verification limits are recorded in section 18.
+**Status:** Historical implementation record; the private-review architecture and delivery contract below are superseded by the amended [ADR-61](../architecture/adr-61-focused-review-skill-assignments.md). Current behavior is documented in [skill operations](../operations/skills.md) and [delegation architecture](../architecture/delegate-agents-tool.md). Section 18 retains evidence for the implementation as originally completed.
 **Delivery track:** M24 — focused review foundation for the planned first-class review capability.
 **Prerequisites:** Implemented native skill verification/workflows (Plan 39 / ADR-34), Claude compatibility (Plan 47 / ADR-39), ordinary delegation and role/model contracts (Plans 91 and 95.1), current model-requested delegation admission (ADR-57), governed repository context, immutable workspace/Git comparison facilities, and deployed prompt assets.
 **Relationship to other work:** Plan 60 remains the owner of the broader review-session, CI, SARIF, finding-lifecycle, and publication design. Its implementation is not a prerequisite. This plan supplies an opt-in skill-bound review path, including explicit remote-branch retrieval, without changing ordinary child responses. Plan 60's remote PR-provider/publication and CI contracts remain separate. Plans 106 and 107 are independent.

@@ -514,6 +514,12 @@ public sealed record SkillInvocationRequest
     /// <summary>Host-only correlation to the tool that owns this invocation's visible lifecycle; grants no authority.</summary>
     public ToolInvocationId? InvokingToolInvocationId { get; init; }
 
+    /// <summary>Opaque host-owned caller snapshot; nested tool scope remains bound to that request's lifetime.</summary>
+    public Guid? CallerToolSnapshotId { get; init; }
+
+    /// <summary>Host-selected provider route frozen with the model profile, independent of transient tool authority.</summary>
+    public bool ModelUsesTrustedCatalog { get; init; }
+
     /// <summary>Uses the host's defaults for an exactly bound workflow; explicit callers otherwise retain their supplied budget.</summary>
     public bool UseDefaultBudget { get; init; }
 
@@ -704,6 +710,9 @@ public sealed record SkillWorkflowCheckpoint
 
     /// <summary>Configured model pinned for this invocation.</summary>
     public ModelProfileId? ModelProfileId { get; init; }
+
+    /// <summary>Repository-excluding provider route frozen with the selected model profile.</summary>
+    public bool ModelUsesTrustedCatalog { get; init; }
 
     /// <summary>Session reasoning preference frozen for this invocation.</summary>
     public string? ReasoningLevel { get; init; }

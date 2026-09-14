@@ -14,6 +14,9 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
     private readonly SkillRuntimeLimits _limits;
     private readonly IModelProvider _models;
     private readonly IModelProviderInstructionResolver? _providerInstructionResolver;
+    private readonly ConfiguredModelCatalog? _trustedCatalog;
+    private readonly IModelProvider? _trustedModelProvider;
+    private readonly IModelProviderInstructionResolver? _trustedProviderInstructionResolver;
     private readonly IPromptLoader _prompts;
     private readonly SecretOutputSanitizer _sanitizer;
     private readonly Func<SkillInvocationRequest, CancellationToken, Task<ToolInvocationContext>> _toolContext;
@@ -34,7 +37,10 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         IModelProviderInstructionResolver? providerInstructionResolver = null,
         SkillRuntimeLimits? limits = null,
         IConversationToolSnapshotStore? snapshots = null,
-        SessionUsageProjection? sessionUsage = null)
+        SessionUsageProjection? sessionUsage = null,
+        IModelProvider? trustedModelProvider = null,
+        ConfiguredModelCatalog? trustedCatalog = null,
+        IModelProviderInstructionResolver? trustedProviderInstructionResolver = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -54,6 +60,9 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         _prompts = prompts;
         _catalog = catalog;
         _providerInstructionResolver = providerInstructionResolver;
+        _trustedModelProvider = trustedModelProvider;
+        _trustedCatalog = trustedCatalog;
+        _trustedProviderInstructionResolver = trustedProviderInstructionResolver;
     }
 
     /// <inheritdoc />
@@ -75,8 +84,15 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         }
 
         var profileId = plan.ModelProfileId.Value;
-        var profile = _catalog?.Get(profileId);
-        var providerInstructions = _providerInstructionResolver?.Resolve(profileId);
+        var usesTrustedCatalog = plan.Request.ModelUsesTrustedCatalog;
+        var models = usesTrustedCatalog
+            ? _trustedModelProvider ?? throw new InvalidOperationException("The trusted model provider is unavailable.")
+            : _models;
+        var catalog = usesTrustedCatalog
+            ? _trustedCatalog ?? throw new InvalidOperationException("The trusted model catalog is unavailable.")
+            : _catalog;
+        var profile = catalog?.Get(profileId);
+        var providerInstructions = (usesTrustedCatalog ? _trustedProviderInstructionResolver : _providerInstructionResolver)?.Resolve(profileId);
         var maximumRounds = Math.Max(1, plan.EffectiveBudget.ModelTurns);
         var maximumToolCalls = plan.EffectiveBudget.ToolCalls;
         var toolCalls = 0;
@@ -97,13 +113,17 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             var modelContext = await CreateToolContextAsync(plan, cancellationToken);
+            var callerRegistrations = plan.Request.CallerToolSnapshotId is { } callerSnapshot
+                ? _snapshots.Resolve(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
+                : null;
             var available = ConversationToolAvailability.CreateSnapshot(
                 _toolPipeline,
                 _tools,
                 plan.Request.SessionId,
                 plan.Request.RunId,
                 modelContext,
-                toolsWithheld: false);
+                toolsWithheld: false,
+                callerRegistrations);
             var registrations = available.Registrations.ToDictionary(
                 item => item.Tool.Definition.Id,
                 StringComparer.OrdinalIgnoreCase);
@@ -120,7 +140,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 outputReserveTokens,
                 providerInstructions);
             var modelRequest = ModelRequestPreparation.Prepare(
-                _models,
+                models,
                 new ModelStreamRequest
                 {
                     RunId = plan.Request.RunId,
@@ -163,7 +183,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             var snapshotId = _snapshots.Capture(
                 plan.Request.SessionId,
                 plan.Request.RunId,
-                available.Registrations);
+                available.Registrations,
+                modelContext with
+                {
+                    ModelProfileId = modelRequest.ResolvedProfileId,
+                    ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
+                });
             try
             {
                 transientState.ValidateHistory(modelRequest);
@@ -177,7 +202,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     Stopwatch.GetTimestamp()));
                 try
                 {
-                    await foreach (var chunk in _models.StreamAsync(
+                    await foreach (var chunk in models.StreamAsync(
                         modelRequest,
                         cancellationToken))
                     {
@@ -361,15 +386,16 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         SkillInvocationPlan plan,
         CancellationToken cancellationToken)
     {
-        var context = await _toolContext(plan.Request, cancellationToken);
+        var context = plan.Request.CallerToolSnapshotId is { } callerSnapshot
+            ? _snapshots.ResolveContext(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
+                ?? throw new InvalidOperationException("The invoking model request has no tool authority snapshot.")
+            : await _toolContext(plan.Request, cancellationToken);
         context = PackagedDocumentationPolicy.IsDocumentationSkill(
             plan.Scope,
             plan.Package.SkillId.Value)
                 ? PackagedDocumentationPolicy.BindToBundle(context, AppContext.BaseDirectory)
                 : context;
 
-        // Native procedures cannot recursively acquire an invoke_skill source lease held by their caller.
-        context = context with { DeniedToolIds = [.. context.DeniedToolIds, "invoke_skill"] };
         var allowedTools = plan.AvailableToolIds.Where(toolId =>
             !context.DenyAllTools
             && (context.AllowedToolIds.Count == 0
@@ -377,6 +403,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             && !context.DeniedToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase)).ToArray();
         return context with
         {
+            TrustLevel = (RepositoryTrustLevel)Math.Min((int)context.TrustLevel, (int)plan.Request.Trust),
+            ModelUsesTrustedCatalog = plan.Request.ModelUsesTrustedCatalog,
             AllowedToolIds = allowedTools,
 
             // An empty computed intersection must not become the policy's unrestricted empty list.

@@ -192,16 +192,16 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 && started.RequestedBy == "model");
             Assert.Contains(observed, item => item is ToolInvocationStarted started
                 && started.RunId == assignment.ChildRunId && started.ToolName == metadata.Definition.Id
-                && started.RequestedBy.StartsWith("agent:", StringComparison.Ordinal));
+                && started.RequestedBy == "model");
             var expectedOrigin = $"skill:User:native-delegation-test@1.0.0:{request.InvocationId.Value:D}";
             Assert.All(observed.OfType<ToolInvocationStarted>(), started => Assert.Equal(expectedOrigin, started.ActivityOrigin));
             Assert.NotNull(metadata.LastInvocationContext);
             Assert.Equal(expectedOrigin, metadata.LastInvocationContext.ActivityOrigin);
-            Assert.Null(metadata.LastInvocationContext.ModelVisibleToolSnapshotId);
+            Assert.NotNull(metadata.LastInvocationContext.ModelVisibleToolSnapshotId);
             var captured = snapshots.Captured.ToArray();
-            Assert.Equal(2, captured.Length);
+            Assert.Equal(requests.Length, captured.Length);
             Assert.Contains(captured[0], snapshots.Resolved);
-            Assert.Equal(captured, snapshots.Released.ToArray());
+            Assert.Equal(captured.Order(), snapshots.Released.Order());
             Assert.All(captured, identity => Assert.Throws<InvalidOperationException>(() =>
                 snapshots.Resolve(identity, request.SessionId, request.RunId)));
         }
@@ -283,9 +283,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public ConcurrentQueue<Guid> Released { get; } = new();
 
-        public Guid Capture(SessionId sessionId, RunId runId, IReadOnlyList<ToolRegistration> registrations)
+        public Guid Capture(SessionId sessionId, RunId runId, IReadOnlyList<ToolRegistration> registrations, ToolInvocationContext? invocationContext = null)
         {
-            var identity = _inner.Capture(sessionId, runId, registrations);
+            var identity = _inner.Capture(sessionId, runId, registrations, invocationContext);
             Captured.Enqueue(identity);
             return identity;
         }
@@ -296,6 +296,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Resolved.Enqueue(snapshotId);
             return registrations;
         }
+
+        public ToolInvocationContext? ResolveContext(Guid snapshotId, SessionId sessionId, RunId runId)
+            => _inner.ResolveContext(snapshotId, sessionId, runId);
 
         public void Release(Guid snapshotId)
         {

@@ -438,10 +438,14 @@ public sealed partial class SessionApplication
                     : ConversationSensitivity.None,
                 ModelProfileId = modelRequest.ResolvedProfileId,
                 ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
+            };
+            invocationContext = invocationContext with
+            {
                 ModelVisibleToolSnapshotId = _conversationToolSnapshots?.Capture(
                     registration.SessionId,
                     runId,
-                    conversationTools.Registrations),
+                    conversationTools.Registrations,
+                    invocationContext),
             };
         }
 

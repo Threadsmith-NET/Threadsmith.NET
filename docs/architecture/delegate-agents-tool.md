@@ -1,10 +1,10 @@
 # `delegate_agents` under the hood
 
-This document explains the model-visible `delegate_agents` tool, which creates one bounded layer of read-only children. Each child can explore, propose an implementation, or review security, tests, performance, or architecture. Approved implementer preparation uses the existing mutation proposal application and delegation coordinator; ordinary conversation grants no write authority.
+This document explains the model-visible `delegate_agents` tool. Children can investigate, implement, or review using tools inherited from the parent's actual request, under the parent's existing permissions. An explicit `readOnly` selection narrows that tool surface to inspection. Approved implementer preparation continues to use the existing mutation proposal application.
 
 ## Mental model
 
-`delegate_agents` is a synchronous tool call backed by asynchronous child work. Children in one `agents` array can run concurrently within configured scheduler concurrency; separate tool invocations are session-exclusive and execute sequentially, even when requested in the same model response:
+`delegate_agents` is a synchronous tool call backed by asynchronous child work. Children in one `agents` array can run concurrently within configured scheduler concurrency. Separate calls in the same model-response batch execute sequentially; an inherited child call can delegate further without waiting on a source lease held by its ancestor:
 
 ```text
 parent model
@@ -14,7 +14,7 @@ parent model
 validate input and freeze authority
     |
     v
-create one-level delegation plan
+create delegation plan with frozen caller authority
     |
     v
 schedule bounded children by role concurrently
@@ -33,7 +33,7 @@ retain responses separately from host-owned role/model/status metadata
 project one compact model-visible result
 ```
 
-The parent receives final responses, not child transcripts or hidden reasoning. Each child gets a fresh model request containing its frozen assignment, applicable repository instructions, governed evidence, and an explicitly narrowed tool inventory. Existing cooperative steering can add lower-authority user context at a model/tool boundary without changing that authority.
+The parent receives final responses, not child transcripts or hidden reasoning. Each child gets a fresh model request containing its frozen assignment, applicable repository instructions, governed evidence, and an inherited or explicitly narrowed tool inventory. Existing cooperative steering can add lower-authority user context at a model/tool boundary without changing that authority.
 
 ## End-to-end flow
 
@@ -41,7 +41,7 @@ The parent receives final responses, not child transcripts or hidden reasoning. 
 
 Application composition registers `delegate_agents` only when the configured model catalog can satisfy the child request's capability requirements. An ordinary final response has no required structured-output shape. Ordinary tool availability still applies, including repository trust, an open workspace, effective tool enablement, and invocation policy.
 
-The parent receives an exact immutable snapshot of the tools visible for that model request. Child tool inheritance later resolves against that snapshot, not against a newer global registry state.
+Each conversation, native-skill, and child model request owns an exact snapshot of its advertised tool registrations and invoking scope. Inheritance resolves against that snapshot, not against a newer global registry state. The snapshot remains available through that request's tool execution and descendant joins, then is released. The ordinary pipeline applies policy, approval, and cancellation checks to the captured request authority.
 
 Primary implementation:
 
@@ -80,19 +80,18 @@ Primary implementation:
 Conversation delegation creates:
 
 - the requested role, with `Explorer` as the default;
-- mode `ReadOnlyBaseline` for explorers and implementers, or `ReadOnlyReview` for reviewers;
+- mode `SharedWorkspace` for `inherit`, or `ReadOnlyBaseline`/`ReadOnlyReview` for explicit `readOnly` assignments;
 - the common `agent-response/1` contract marker and runner version, with no required body format;
-- no mutation, process, build, or test budget;
-- delegation depth one;
+- configured ordinary child operational budgets;
 - one frozen generation.
 
-`readOnly` retains only eligible approval-free, non-network read tools from the parent snapshot. `inherit` may also retain eligible network-backed read tools. Both modes remove workflow, delegation, mutation, code/process execution, and approval-bearing tools. The child retains the caller's executable allowlist so retained read-only tools such as semantic and inventory tools can use their declared host-managed dependencies; this does not add tools or executable authority absent from the caller. Central policy rechecks every actual child invocation.
+`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution, writes, skills, and further delegation when available. It preserves the caller's trust, path, executable, network, approval, and tool restrictions. `readOnly` is the explicit narrower option: approval-free, non-network read tools, excluding workflow, process/code execution, and writes. Retained inspection tools can still use their declared executable dependencies under the caller's allowlist. Shared-workspace children do not receive isolated worktrees; overlapping edits and builds need coordinated ownership.
 
 Primary implementation:
 
 - `DelegateAgentsPlanning` creates the plan and narrows child authority.
 - `AgentToolPolicy` scopes and validates every child invocation.
-- `DelegationPlanValidator` validates identities, graph shape, budgets, and one-level authority.
+- `DelegationPlanValidator` validates identities, graph shape, budgets, and assignment authority.
 
 ### 4. The scheduler runs observed in-process children
 
@@ -106,6 +105,8 @@ Primary implementation:
 - bounded shutdown observation.
 
 Every child is a normal asynchronous .NET task. There is no child agent process. Queue saturation returns a failed terminal checkpoint with terminal child outcomes, allowing `DelegateAgentsTool` to return a structured failure rather than leak a scheduler exception.
+
+When a running child awaits nested delegation, the scheduler uses execution ancestry to release its active permits while descendants run and reacquires them before it resumes. This permits nested fork/join with a one-child active limit. The ancestor's original deadline and cancellation remain effective. Orchestration tools retain batch scheduling but do not hold a single source slot across descendant work.
 
 Progress writes carry monotonically increasing revisions. A stale progress write cannot replace a newer terminal checkpoint.
 
@@ -152,7 +153,7 @@ The summary request uses the same optional global compaction profile and reasoni
 
 `ChildAgentEvidenceTool` is a request-local capability, not a new parent or repository tool registration. The loop passes it through the central invocation pipeline with a context allowing only that lookup. All ordinary inspection registrations still come from the exact parent snapshot. Typed lookup arguments and the ordinary batch are prepared before execution; repository inspections use the existing batch pipeline and memory lookups use direct pipeline invocation. The lookup checks session, child run, delivered-ID membership, and current evidence staleness. It returns only the original sanitized stored content, with no fresh filesystem or network access. A lookup does not duplicate evidence or gain another child's access. Children with deny-all tool policy or an explicit lookup deny do not receive this capability.
 
-`ChildAgentModelLoop` streams model output, executes validated read-only tool batches, stores each tool result as child-owned evidence, and sends a bounded tool-result continuation back to the child. Valid JSON tool content is embedded directly in the continuation envelope instead of being serialized as an escaped JSON string inside that envelope; non-JSON content remains a string. Provider adapters still encode the complete envelope according to their transport protocol. One immutable tool-schema estimate is reused across continuation rounds. Wire accounting includes message content, tool-call IDs, tool names, framing, tool schemas, and output reserve.
+`ChildAgentModelLoop` streams model output, executes validated inherited or read-only tool batches, stores each tool result as child-owned evidence, and sends a bounded tool-result continuation back to the child. Valid JSON tool content is embedded directly in the continuation envelope instead of being serialized as an escaped JSON string inside that envelope; non-JSON content remains a string. Provider adapters still encode the complete envelope according to their transport protocol. One immutable tool-schema estimate is reused across continuation rounds. Wire accounting includes message content, tool-call IDs, tool names, framing, tool schemas, and output reserve.
 
 Instructions encourage focused inspection, batching independent calls, and using relevant semantic or structural evidence. These are guidance for useful work, not a required response template or a semantic acceptance test.
 
@@ -162,7 +163,7 @@ The final body is stored unchanged in `AgentRunOutcome.Response`. Plain text, JS
 
 The ledger records model tokens, tool calls, evidence items, files, bytes, and actions. Each request must still fit the selected model's real context window and provider output limit. Active request, tool-payload, transport, deadline, and final-envelope resource controls remain separate from the unrestricted response body. Tool arguments still undergo central validation and policy checks. Cancellation or a transport failure remains a terminal failure/cancellation, not a successful empty reply.
 
-Completion is a host transport/join status, not a judgment that the answer is correct, useful, or complete. A clean review grants no approval and proves no test execution. Implementer suggestions remain read-only even when they name new files.
+Completion is a host transport/join status, not a judgment that the answer is correct, useful, or complete. A clean review grants no approval and proves no test execution. Actual changes and checks are established by their tool results, not by the child's role or response.
 
 Primary implementation:
 
@@ -251,9 +252,8 @@ Application composition connects these services to provider dispatch, persistenc
 
 The conversation tool does not:
 
-- create recursive agents;
-- allow children to mutate files or run processes;
-- merge, commit, push, rebase, or cherry-pick;
+- grant tools or permissions absent from the parent request;
+- automatically merge, commit, push, rebase, or cherry-pick;
 - transfer raw child conversation state to the parent;
 - let the model select authority or resource limits;
 - infer runtime-only evidence that no authorized tool returned;
@@ -264,3 +264,7 @@ Operational usage and troubleshooting are documented in [Parallel-agent operatio
 ## Native skills
 
 Native model procedures use the same request-scoped tool snapshot and `delegate_agents` entry as conversation models. The actual model call owns the snapshot and frozen parent model/reasoning selection. Role configuration still takes precedence over inherited selection. A skill name, prompt or manifest cannot grant delegation authority. There is no special review entry.
+
+An inherited `invoke_skill` call retains the caller's scope and selected model, intersects that scope with current session authority, and uses the ordinary procedure runner and tool pipeline. Its caller snapshot is valid only for the owning model request's lifetime. Explicit host resume or continuation revalidates the durable workflow against current session authority; it does not reuse that transient snapshot. All model calls and child tools feed the existing usage projection and lifecycle rendering.
+
+The workspace baseline identity records provenance; it does not freeze live files. For committed reviews, resolve branch tips to commit SHAs and use those SHAs in Git reads. Keep working changes stable during a review or repeat affected reads after edits. There is no review-specific capture engine. Remote acquisition needs an available ordinary tool, such as `run_process`, with its normal trust, executable allowlist, and approval policy.

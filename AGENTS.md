@@ -32,12 +32,22 @@ The host owns control flow; the model is a pluggable reasoning engine, not an au
 
 - **Use the active Git checkout.** Confirm that `git rev-parse --show-toplevel` matches the user's active checkout before edits, builds, tests, or publishing. Work directly there; do not substitute copied source trees, snapshots, or another checkout found by name.
 - **Read before writing.** Inspect existing code before proposing new abstractions.
+- **Different is difficult.** Reuse the established execution path and extend it when needed. An alternate path requires a concrete technical reason; special authorization or context alone does not justify separate lifecycle, tool, delegation, or presentation machinery.
 - **Propagate `CancellationToken`** through every async boundary. Roslyn/MSBuild APIs that are non-cooperatively cancellable use the abandon-and-discard pattern with a bounded-wait backstop.
 - **Return host-owned DTOs across subsystem boundaries.** No model-provider SDK, Roslyn, extension, or terminal-library types leak into domain events, persistent state, or public projections.
 - **Keep extension types out of durable host state** and out of public projections.
 - **Use `AssemblyLoadContext`, not `AppDomain`,** for extension unloading. `AssemblyLoadContext` is an isolation/unload mechanism, **not** a security boundary.
 - **Keep terminal-library types out of core and extension contracts.** The interactive terminal is a projection of engine state; headless and interactive runs produce identical results.
 - **Do not stage, commit, push, or do destructive Git operations unless explicitly requested.**
+
+## Adversarial review
+
+Review the implementation against the user's intended behavior and the existing system, including relevant code outside the diff. Passing tests and matching a plan are evidence, not sufficient grounds for a clean review. Include these checks in review assignments and apply them wherever relevant:
+
+- **Reuse and ownership:** Find the established implementation of each added capability and trace the actual call sites. Challenge duplicate execution paths, state stores, lifecycle handling, readers, and renderers. Sharing a formatter or interface does not establish shared execution. Prefer reuse or a focused extension; a separate path needs a concrete explanation of why reuse is impossible or would introduce greater complexity.
+- **Observable integration:** Trace manual, model-driven, and internal entry points through existing policy, execution, events, logs, progress, completion, and cancellation boundaries. Look for silent work, duplicate activity, missing child-agent visibility, and paths that bypass normal tool or MCP handling. Check the underlying operation, not just its displayed label.
+- **Work proportional to scope:** Check what is fetched, scanned, read, repeated, retained, and serialized before useful work begins. Challenge unnecessary history, whole-repository preloads, per-file process loops, and paging that first buffers the entire input. Assess realistic repository/file/group sizes, output escaping, and time to first visible activity. Distinguish measurements from source-based estimates.
+- **Evidence and limits:** For each finding, identify the affected path, concrete trigger, consequence, and existing component that can be reused when applicable. Do not invent defects to satisfy a checklist. If required context or runtime evidence is unavailable, record the unassessed area rather than treating it as clean. Re-review fixes through the real entry points and check that they remove the competing implementation rather than add another wrapper.
 
 ## Dependency direction
 

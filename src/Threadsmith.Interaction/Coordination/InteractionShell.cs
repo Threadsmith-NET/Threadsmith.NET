@@ -914,7 +914,8 @@ public class InteractionPresenter
                 var result = tool.ResultPreview is null
                     ? string.Empty
                     : $"\n{tool.ResultPreview}\n";
-                return $"Tool {tool.ToolName} ({tool.RequestedBy}): {status}{error}{result}\n";
+                var origin = tool.ActivityOrigin is null ? string.Empty : $" [{tool.ActivityOrigin}]";
+                return $"Tool {tool.ToolName} ({tool.RequestedBy}){origin}: {status}{error}{result}\n";
             }) ?? [];
         var approvals = state?.PendingApprovals.Select(approval =>
             $"Approval pending: {approval.Action}\n") ?? [];

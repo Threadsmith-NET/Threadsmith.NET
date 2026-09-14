@@ -153,20 +153,48 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                 var requested = await next;
                 if (requested.Actions && action is not null)
                 {
-                    var option = modal.GetOption(requested.Id);
-                    if (option is not null && option.Actions.Count > 0)
+                    var choices = modal.ActionChoices(requested.Id);
+                    if (choices.Count > 0)
                     {
-                        var selection = await SelectAsync(new InteractionSelectionRequest(option.Label, option.Actions), cancellationToken);
+                        var selection = await SelectAsync(new InteractionSelectionRequest(modal.Label(requested.Id), choices), cancellationToken);
                         if (!selection.IsCancelled && selection.SelectedOptionId is { } actionId
-                            && option.Actions.Any(item => item.Id == actionId))
+                            && choices.Any(item => item.Id == actionId))
                         {
                             using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                            var label = option.Actions.Single(item => item.Id == actionId).Label;
-                            await EnqueueAsync(() => modal.BeginAction(label, operation.Cancel), cancellationToken);
-                            InteractionToggleResult? result = null;
+                            var label = choices.Single(item => item.Id == actionId).Label;
+                            await EnqueueAsync(
+                                () =>
+                            {
+                                if (completion.IsCompleted)
+                                {
+                                    operation.Cancel();
+                                }
+                                else
+                                {
+                                    // Admission and the Esc cancellation hook must share one UI turn.
+                                    modal.BeginAction(label, operation.Cancel);
+                                }
+                            },
+                                cancellationToken);
+                            (string Id, InteractionToggleResult Result)? pending = null;
                             try
                             {
-                                result = await action(option.Id, actionId, operation.Token);
+                                foreach (var option in modal.ActionMembers(requested.Id))
+                                {
+                                    if (operation.IsCancellationRequested)
+                                    {
+                                        break;
+                                    }
+
+                                    if (pending is { } previous)
+                                    {
+                                        await EnqueueAsync(() => modal.Reconcile(previous.Id, previous.Result), cancellationToken);
+                                        pending = null;
+                                    }
+
+                                    var result = await action(option.Id, actionId, operation.Token);
+                                    pending = (option.Id, result);
+                                }
                             }
                             finally
                             {
@@ -175,9 +203,9 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                                     await EnqueueAsync(
                                         () =>
                                     {
-                                        if (result is not null)
+                                        if (pending is { } final)
                                         {
-                                            modal.Reconcile(option.Id, result);
+                                            modal.Reconcile(final.Id, final.Result);
                                         }
 
                                         modal.CompleteChange();
@@ -194,13 +222,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                     continue;
                 }
 
-                foreach (var option in modal.Members(requested.Id))
-                {
-                    var result = await change(option.Id, requested.Enabled, cancellationToken);
-                    await EnqueueAsync(() => modal.Reconcile(option.Id, result), cancellationToken);
-                }
-
-                await EnqueueAsync(modal.CompleteChange, cancellationToken);
+                await ApplyToggleChangeAsync(modal, completion, requested.Id, requested.Enabled, change, cancellationToken);
             }
         }
         finally
@@ -208,6 +230,87 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             if (!_stop.IsCancellationRequested)
             {
                 await EnqueueAsync(() => modal.RequestClose(null), _stop.Token);
+            }
+        }
+    }
+
+    private async Task ApplyToggleChangeAsync(
+        ToggleModal modal,
+        Task completion,
+        string id,
+        bool enabled,
+        Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change,
+        CancellationToken cancellationToken)
+    {
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        IReadOnlyList<InteractionToggleOption> members = [];
+        var verb = enabled ? "Enabling" : "Disabling";
+        await EnqueueAsync(
+            () =>
+        {
+            if (completion.IsCompleted)
+            {
+                operation.Cancel();
+            }
+            else
+            {
+                // Freeze the filtered targets and install cancellation before admitting host work.
+                members = modal.Members(id);
+                modal.BeginToggle($"{verb} 0/{members.Count}", operation.Cancel);
+            }
+        },
+            cancellationToken);
+        var processed = 0;
+        var applied = 0;
+        (string Id, InteractionToggleResult Result)? pending = null;
+        try
+        {
+            foreach (var option in members)
+            {
+                operation.Token.ThrowIfCancellationRequested();
+                if (pending is { } previous)
+                {
+                    await EnqueueAsync(
+                        () =>
+                    {
+                        modal.Reconcile(previous.Id, previous.Result);
+                        modal.BeginToggle($"{verb} {processed}/{members.Count}", operation.Cancel);
+                    },
+                        cancellationToken);
+                    pending = null;
+                }
+
+                operation.Token.ThrowIfCancellationRequested();
+
+                // Finish an admitted mutation and its authoritative publication before honoring local Esc.
+                var result = await change(option.Id, enabled, cancellationToken);
+                pending = (option.Id, result);
+                processed++;
+                if (result.Enabled == enabled)
+                {
+                    applied++;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (operation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+        {
+            // Esc cancels this batch; completed acknowledgements remain visible in the open tree.
+        }
+        finally
+        {
+            if (!_stop.IsCancellationRequested)
+            {
+                await EnqueueAsync(
+                    () =>
+                {
+                    if (pending is { } final)
+                    {
+                        modal.Reconcile(final.Id, final.Result);
+                    }
+
+                    modal.CompleteToggle(enabled, members.Count, processed, applied, operation.IsCancellationRequested);
+                },
+                    _stop.Token);
             }
         }
     }

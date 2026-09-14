@@ -28,6 +28,7 @@ internal sealed class ChildAgentPrompt
             AgentRole.TestReviewer => PromptFileNames.SystemChildAgentTestReviewer,
             AgentRole.PerformanceReviewer => PromptFileNames.SystemChildAgentPerformanceReviewer,
             AgentRole.ArchitectureReviewer => PromptFileNames.SystemChildAgentArchitectureReviewer,
+            AgentRole.BugReviewer => PromptFileNames.SystemChildAgentBugReviewer,
             _ => throw new ArgumentOutOfRangeException(nameof(role)),
         };
     }

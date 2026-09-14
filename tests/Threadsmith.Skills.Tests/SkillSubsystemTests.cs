@@ -88,7 +88,7 @@ public sealed partial class SkillSubsystemTests
         ];
 
         // Assert
-        Assert.Equal(4, verified.Length);
+        Assert.Equal(5, verified.Length);
         Assert.All(verified, item => Assert.Equal(SkillVerificationState.Maintained, item.Verification));
         Assert.All(verified, item => Assert.True(item.Enabled));
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "fix-analyzer-warnings");
@@ -1028,6 +1028,8 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class CompatibleEvaluator : ISkillCompatibilityEvaluator
     {
+        public IReadOnlyList<ModelProfileId> Profiles { get; init; } = [];
+
         private readonly ModelProfileId _profileId = ModelProfileId.New();
 
         public SkillCompatibilityResult Evaluate(
@@ -1037,7 +1039,7 @@ public sealed partial class SkillSubsystemTests
             return new SkillCompatibilityResult
             {
                 IsCompatible = true,
-                CompatibleModels = [_profileId],
+                CompatibleModels = Profiles.Count > 0 ? Profiles : [_profileId],
             };
         }
     }
@@ -1138,6 +1140,8 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class CapturingWorkflowOrchestrator : ISkillWorkflowOrchestrator
     {
+        public SkillInvocationStatus ResultStatus { get; init; } = SkillInvocationStatus.Completed;
+
         internal SkillInvocationRequest? Request { get; private set; }
 
         public Task<SkillInvocationResult> InvokeAsync(
@@ -1159,7 +1163,7 @@ public sealed partial class SkillSubsystemTests
                 Trust = request.Trust,
                 Phase = request.Phase,
                 EffectiveBudget = request.HostBudget,
-                Status = SkillInvocationStatus.Completed,
+                Status = ResultStatus,
                 NextAction = "test complete",
                 RecordedAt = DateTimeOffset.UtcNow,
             };
@@ -1167,7 +1171,7 @@ public sealed partial class SkillSubsystemTests
             {
                 InvocationId = request.InvocationId,
                 Package = package,
-                Status = SkillInvocationStatus.Completed,
+                Status = ResultStatus,
                 OutputJson = "{\"summary\":\"done\"}",
                 HostActions =
                 [

@@ -1,7 +1,6 @@
-namespace Threadsmith.Execution;
+namespace Threadsmith.Models;
 
 using Threadsmith.Core;
-using Threadsmith.Models;
 
 /// <summary>Identifies one provider request for idempotent session usage accounting.</summary>
 /// <param name="RunId">Run that owns the request.</param>

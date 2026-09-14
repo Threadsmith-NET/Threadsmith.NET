@@ -389,7 +389,8 @@ public sealed class ProcessManager : IProcessManager
                 continue;
             }
 
-            sanitized.Add(sanitizer.Sanitize(record));
+            var value = sanitizer.Sanitize(record);
+            sanitized.Add(value);
         }
 
         return JsonSerializer.Serialize(sanitized);

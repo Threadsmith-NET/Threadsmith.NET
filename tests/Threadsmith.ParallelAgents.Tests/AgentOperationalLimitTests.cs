@@ -159,6 +159,79 @@ public sealed partial class AgentOperationalLimitTests
         Assert.Throws<InvalidDataException>(() => DelegationPlanValidator.Validate(plan));
     }
 
+    /// <summary>Elapsed child deadlines fail honestly and retain usage for both thrown and returned cancellation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Scheduler_DeadlineIsFailureAndPreservesUsage(bool returnAfterCancellation)
+    {
+        var plan = CreatePlan(1, TimeSpan.FromMilliseconds(200));
+        var runner = new DeadlineRunner(returnAfterCancellation);
+        await using var scheduler = new AgentRunScheduler();
+        var outcome = Assert.Single(await scheduler.RunAsync(plan, runner).WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(AgentRunStatus.Failed, outcome.Status);
+        Assert.Equal("child timed out: assignment deadline elapsed", outcome.Reason);
+        Assert.Equal(17, outcome.Usage.ModelTokens);
+        Assert.Equal(runner.ModelProfileId, outcome.ModelProfileId);
+        Assert.Null(outcome.Response);
+    }
+
+    /// <summary>A targeted user cancellation remains cancellation when no child deadline is configured.</summary>
+    [Fact]
+    public async Task Scheduler_TargetedCancellationIsNotTimeout()
+    {
+        var plan = CreatePlan(1);
+        var runner = new DeadlineRunner(false);
+        await using var scheduler = new AgentRunScheduler();
+        var running = scheduler.RunAsync(plan, runner);
+        await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(await scheduler.CancelAssignmentAsync(plan.DelegationId, plan.Assignments[0].AssignmentId));
+        var outcome = Assert.Single(await running.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.Equal(AgentRunStatus.Cancelled, outcome.Status);
+        Assert.Equal("child cancellation observed", outcome.Reason);
+        Assert.Equal(17, outcome.Usage.ModelTokens);
+    }
+
+    private sealed class DeadlineRunner(bool returnAfterCancellation) : IAgentAssignmentRunner
+    {
+        public ModelProfileId ModelProfileId { get; } = ModelProfileId.New();
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<AgentRunOutcome> RunAsync(DelegationPlan plan, AgentAssignment assignment, CancellationToken cancellationToken = default)
+        {
+            var usage = new AgentResourceUsage { ModelTokens = 17 };
+            Started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException exception)
+            {
+                if (!returnAfterCancellation)
+                {
+                    ChildAgentFailureDetails.Attach(exception, "child cancellation observed", usage, ModelProfileId);
+                    throw;
+                }
+            }
+
+            return new AgentRunOutcome
+            {
+                AssignmentId = assignment.AssignmentId,
+                ChildRunId = assignment.ChildRunId,
+                Role = assignment.Role,
+                Generation = plan.Provenance.Generation,
+                Status = AgentRunStatus.Completed,
+                Reason = "late completion",
+                Response = "Late response must not be treated as complete.",
+                Usage = usage,
+                ModelProfileId = ModelProfileId,
+            };
+        }
+    }
+
     private static DelegateAgentsOptions BindOptions(string key, string value)
     {
         var configuration = new ConfigurationBuilder()

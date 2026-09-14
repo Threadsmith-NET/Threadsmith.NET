@@ -16,6 +16,8 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
 
     private readonly ConfiguredModelCatalog _models;
     private readonly IModelSelectionPolicy _selection;
+    private readonly ConfiguredModelCatalog? _trustedModels;
+    private readonly IModelSelectionPolicy? _trustedSelection;
     private readonly ToolRegistry _tools;
     private readonly string _hostVersion;
 
@@ -24,7 +26,8 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
         ToolRegistry tools,
         ConfiguredModelCatalog models,
         string hostVersion,
-        IModelSelectionPolicy? selection = null)
+        IModelSelectionPolicy? selection = null,
+        ConfiguredModelCatalog? trustedModels = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
         ArgumentNullException.ThrowIfNull(models);
@@ -33,6 +36,8 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
         _models = models;
         _hostVersion = hostVersion;
         _selection = selection ?? new DefaultModelSelectionPolicy(models);
+        _trustedModels = trustedModels;
+        _trustedSelection = trustedModels is null ? null : new DefaultModelSelectionPolicy(trustedModels);
     }
 
     /// <inheritdoc />
@@ -42,6 +47,12 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
     {
         ArgumentNullException.ThrowIfNull(candidate);
         ArgumentNullException.ThrowIfNull(request);
+        var models = request.ModelUsesTrustedCatalog
+            ? _trustedModels ?? throw new InvalidOperationException("The trusted model catalog is unavailable.")
+            : _models;
+        var selection = request.ModelUsesTrustedCatalog
+            ? _trustedSelection ?? throw new InvalidOperationException("The trusted model selection policy is unavailable.")
+            : _selection;
         var denials = new List<string>();
         if (!candidate.Enabled)
         {
@@ -69,7 +80,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
             denials.Add("host-version-incompatible");
         }
 
-        IReadOnlyDictionary<string, ToolDefinition> definitions = _tools.Definitions
+        IReadOnlyDictionary<string, ToolDefinition> definitions = _tools.GetDefinitions(request.SessionId, request.RunId)
             .ToDictionary(item => item.Id, StringComparer.OrdinalIgnoreCase);
         var availableRequired = new List<string>();
         foreach (var toolId in requirements.RequiredTools)
@@ -98,17 +109,14 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
         ];
         ModelProfile[] compatibleModels =
         [
-            .. _models.Profiles
+            .. models.Profiles
                 .Where(profile => MeetsModelRequirements(
                     profile,
                     requirements.Model,
                     request.Sensitivity))
                 .OrderBy(profile => profile.Name, StringComparer.Ordinal),
         ];
-        var requiresModel = candidate.Metadata.Workflow.Steps.Any(step =>
-            step.Kind is SkillWorkflowStepKind.InvokeProcedure
-                or SkillWorkflowStepKind.CollectEvidence
-                or SkillWorkflowStepKind.Summarize);
+        var requiresModel = RequiresModel(candidate);
         if (requiresModel && compatibleModels.Length == 0)
         {
             denials.Add("no-compatible-model");
@@ -118,7 +126,8 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
             compatibleModels = OrderByHostSelection(
                 compatibleModels,
                 requirements.Model,
-                request.Sensitivity);
+                request.Sensitivity,
+                selection);
         }
 
         return new SkillCompatibilityResult
@@ -126,6 +135,7 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
             IsCompatible = denials.Count == 0,
             DenialReasons = denials,
             AvailableRequiredTools = availableRequired,
+            InheritedTools = requirements.InheritAvailableTools ? definitions.Keys.ToArray() : [],
             UnavailableOptionalTools = unavailableOptional,
             CompatibleModels = compatibleModels.Select(item => item.Id).ToArray(),
         };
@@ -152,13 +162,19 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
         };
     }
 
-    private ModelProfile[] OrderByHostSelection(
+    /// <summary>Whether the workflow contains a model-backed procedure.</summary>
+    internal static bool RequiresModel(SkillCatalogCandidate candidate) =>
+        candidate.Metadata.Workflow.Steps.Any(step => step.Kind is SkillWorkflowStepKind.InvokeProcedure
+            or SkillWorkflowStepKind.CollectEvidence or SkillWorkflowStepKind.Summarize);
+
+    private static ModelProfile[] OrderByHostSelection(
         IReadOnlyList<ModelProfile> compatible,
         SkillModelRequirements requirements,
-        ConversationSensitivity sensitivity)
+        ConversationSensitivity sensitivity,
+        IModelSelectionPolicy selectionPolicy)
     {
         var workload = ParseWorkloads(requirements).FirstOrDefault(WorkloadClass.General);
-        var selection = _selection.Resolve(
+        var selection = selectionPolicy.Resolve(
             new ModelSelectionRequest
             {
                 WorkloadClass = workload,

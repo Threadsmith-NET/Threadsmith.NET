@@ -16,6 +16,7 @@ public sealed class DelegateAgentRoleContractTests
     [InlineData("testReviewer", AgentRole.TestReviewer)]
     [InlineData("performanceReviewer", AgentRole.PerformanceReviewer)]
     [InlineData("architectureReviewer", AgentRole.ArchitectureReviewer)]
+    [InlineData("bugReviewer", AgentRole.BugReviewer)]
     public void Deserialize_ExactRole_RetainsSelection(string name, AgentRole expected)
     {
         var json = JsonSerializer.Serialize(new

@@ -7,8 +7,8 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 ## Safety boundary
 
 - Child agents are in-process asynchronous .NET runs. No process hosts an agent.
-- Delegation depth is exactly one; children cannot create descendants or change their assignment.
-- Ordinary conversation delegation supports all six roles. Every child is read-only, including an implementer that proposes changes.
+- Tools can opt out of subagent visibility with `ToolDefinition.SubagentAvailable = false`. `delegate_agents` opts out, so child agents cannot launch further agents.
+- Ordinary conversation delegation supports all seven roles. `inherit` uses `SharedWorkspace` mode with the parent's enabled, permitted tools; explicit `readOnly` selects a narrower inspection surface.
 - Approved implementation and correction use the parent run through `MutationProposalApplication`, retaining exact-diff approval, transactions, validation, and corrections.
 - Existing isolated-worker APIs require approved ownership and managed detached Git worktrees. Selecting `implementer` in conversation does not start a worktree worker or automatic parallel application.
 - Worktrees isolate file state but are not sandboxes. Trust, prohibited paths, reparse checks, tool policy, secrets, network, process, and approval gates still apply.
@@ -17,7 +17,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 
 ## Start from ordinary conversation
 
-Ask Threadsmith for parallel inspection in a trusted repository with a selected semantic workspace. When useful, the parent model can invoke the built-in `delegate_agents` tool with one to three children by default. Independent assignments belong in the same `agents` array to run concurrently, subject to configured concurrency. Separate invocations are session-exclusive and run sequentially, including calls requested together:
+Ask Threadsmith for parallel work in a trusted repository with a selected semantic workspace. When useful, the parent model can invoke the built-in `delegate_agents` tool with one to three children by default. Independent assignments belong in the same `agents` array to run concurrently, subject to configured concurrency. Separate calls in one model-response batch run sequentially. The parent can request several assignments in one call:
 
 ```json
 {
@@ -42,19 +42,26 @@ Each request has `task`, `context`, `toolAccess`, and an optional `role`. Omitti
 | Role | Instruction focus |
 |---|---|
 | `explorer` | Investigate relevant code, behavior, and contracts. This is the default. |
-| `implementer` | Inspect implementation work and propose changes without applying them. |
+| `implementer` | Carry out the assigned implementation using available tools, or propose changes when execution is unavailable. |
 | `securityReviewer` | Review security risks and possible mitigations. |
 | `testReviewer` | Review test coverage and useful assertions. |
 | `performanceReviewer` | Review performance behavior and possible measurements. |
 | `architectureReviewer` | Review ownership, dependencies, and contracts. |
+| `bugReviewer` | Compare implementation with requirements and acceptance criteria; find functional bugs and regressions. |
 
-Each role is a system-prompt amendment combined with its selected model and eligible tools, not an output template. A child may return any final body, including plain text, JSON, whitespace, or an empty response. No role fields, citation GUIDs, or response-format repair are required. Reviewers cannot publish reviews, approve changes, or run tests. A proposed check or a claim that checks passed is not host verification that those checks ran.
+Pass ticket details, including Jira acceptance criteria, in the ordinary delegation `task` and `context` fields. The lead can retrieve those details with its enabled tools; BugReviewer uses the same child execution path and model-selection fallback as the other roles.
+
+Each role is a system-prompt amendment combined with its selected model and eligible tools, not an output template. A child may return any final body, including plain text, JSON, whitespace, or an empty response. No role fields, citation GUIDs, or response-format repair are required. Reviewers can run tests or save results when the corresponding tools and permissions are inherited. A proposed check or a claim that checks passed is not host verification that those checks ran; inspect the actual tool results.
 
 Give each child a distinct task and include the relevant files, symbols, evidence, and constraints in `context`. Role prompts encourage focused inspection and batching independent reads when useful. Tool progress reports distinguish new source coverage from repeated or different payloads; they do not grade the answer. Rejected tool calls remain in the conversation with their error results, so the child can see what failed and decide how to proceed.
 
-`readOnly` uses only approval-free, non-network read tools from the exact parent request. `inherit` may additionally retain eligible network-backed read tools, but both modes remove mutation, process/code-execution, approval-required, workflow, and delegation tools before rechecking every invocation through central child policy. Children retain the caller's executable allowlist so retained read-only tools can use their declared host-managed dependencies. Inheritance never grants a tool or executable authority that the parent did not have.
+`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution, file writes, and skills. Tools marked `SubagentAvailable = false` are excluded from both inherited and explicitly read-only child inventories; the default is `true`. Trust, approved roots, prohibited paths, executable/network allowlists, approval requirements, and tool policy remain effective. `readOnly` explicitly selects only approval-free, non-network read tools and excludes workflow, process/code execution, and writes. Retained inspection tools can use their declared executable dependencies under the caller's allowlist. Inheritance never grants authority the parent did not have.
 
-The tool is session-exclusive and returns only after the children join or terminate. Its result carries child responses separately from host-owned delegation and assignment IDs, role, status, model-selection details, usage, and aggregate status (`Completed`, `Partial`, `Failed`, or `Cancelled`). A present response, even empty, can complete; completion describes transport and join mechanics, not answer quality. Failed or cancelled transport is not successful completion. Successful siblings remain available when another child fails, producing `Partial`. The joined checkpoint becomes durable before responses are exposed as joined results. Keep the delegation ID for inspection.
+Inherited children share the invoking workspace. Give overlapping file edits to one owner and coordinate builds/tests that write the same output directories. Caller cancellation, assignment deadlines, and configured resource limits still apply.
+
+Each actual model request owns the snapshot used to inherit tools and scope. It stays available through that request's tool calls and child joins, then is released. A skill invoked by a child uses that caller scope and model through the normal skill runner. After the request ends, explicit host resume or continuation revalidates current session authority and the durable workflow instead of reusing its transient caller snapshot. Model calls, usage, and tool activity use the same shared paths as ordinary conversation and native skills.
+
+The tool returns only after the children join or terminate. Its result carries child responses separately from host-owned delegation and assignment IDs, role, status, model-selection details, usage, and aggregate status (`Completed`, `Partial`, `Failed`, or `Cancelled`). A present response, even empty, can complete; completion describes transport and join mechanics, not answer quality. Failed or cancelled transport is not successful completion. Successful siblings remain available when another child fails, producing `Partial`. The joined checkpoint becomes durable before responses are exposed as joined results. Keep the delegation ID for inspection.
 
 The ordinary final body is stored in `AgentRunOutcome.Response` and is not parsed into findings, graded, or repaired. Host result-envelope limits may omit detail; they do not define a role-specific body format. Legacy structured outcomes retain their compatibility path rather than being inferred from a new response's contents.
 
@@ -107,7 +114,7 @@ The repository example documents these conservative defaults:
 
 These values limit resources; they do not grant delegation, mutation, process, network, secret, model, or trust authority. Child reservations must fit within the parent resource limits. Selected-model context and output capacity, tool-policy checks, transport and result-envelope bounds, and cancellation still apply. Approved-plan preparation failures cannot authorize staging or borrow authority from siblings.
 
-Trusted machine/user configuration controls ordinary conversation delegation under `agents:delegation`. Existing defaults allow three children, 4,096 task characters, 8,192 context characters, 1,024 summary characters, and a five-minute deadline. Positive values enforce their caps; zero disables that configurable cap. When a count or text cap is disabled, the advertised `delegate_agents` schema omits the matching `maxItems` or `maxLength` keyword instead of publishing a stale compiled limit. An unrestricted final body does not disable active scheduler, request, tool, transport, or provider controls. Mutation, process, build, and test authority remains unavailable through tool policy. Every eligible parent evidence item and every resolved `AGENTS.md` and configured prompt append source is included in the child request. Repository configuration cannot replace these trusted settings, and none are model-authored fields.
+Trusted machine/user configuration controls ordinary conversation delegation under `agents:delegation`. Existing defaults allow three children, 4,096 task characters, 8,192 context characters, 1,024 summary characters, and a five-minute deadline. Positive values enforce their caps; zero disables that configurable cap. When a count or text cap is disabled, the advertised `delegate_agents` schema omits the matching `maxItems` or `maxLength` keyword instead of publishing a stale compiled limit. An unrestricted final body does not disable active scheduler, request, tool, transport, or provider controls. Mutation, process, build, and test tools can be inherited when the parent's advertised tools and permissions allow them; explicit `readOnly` excludes execution and writes. Every eligible parent evidence item and every resolved `AGENTS.md` and configured prompt append source is included in the child request. Repository configuration cannot replace these trusted settings, and none are model-authored fields.
 
 `childBudget:wallTime: "00:00:00"` or `enforceOperationalLimits: false` disables child deadlines. There is no additional delegation-tool timer that can override that choice. Caller cancellation and provider settings remain effective. Failed/cancelled and legacy fallback summaries, structured joined results, and parent-model joined text honor their configured delegation limits, including zero and the operational-limit off switch, so a disabled cap is not silently replaced with an older production value.
 
@@ -128,12 +135,12 @@ This path does not automatically partition, apply, or merge parallel worktree ch
 - No `delegate_agents` tool: confirm the repository is at least `TrustedRead`, a solution/workspace is selected, the tool remains enabled by effective tool policy, and a configured profile meets the actual request's capability and capacity requirements. Sensitive assignments additionally require a profile that permits sensitive data.
 - Request rejected before a delegation ID: inspect the exact input shape and configured child/text bounds.
 - `Partial` or `Failed`: inspect the original joined tool result for omissions and `/agents <delegation-id>` for the latest child status, reason, and usage exhaustion. Retry only with a narrower, non-duplicative assignment.
-- Child tool unavailable: compare `readOnly` versus `inherit`, then check parent request availability, approval, trust, path, network, phase, and sensitivity policy. Every ordinary role excludes process/code and mutation tools in both modes. A role or its context cannot widen policy.
+- Child tool unavailable: compare `readOnly` versus `inherit`, then check the parent's actual advertised tools and current approval, trust, path, executable/network, phase, and sensitivity policy. A role or its context cannot widen policy. Remote fetch requires an enabled ordinary tool such as `run_process` under those same permissions; there is no hidden acquisition path.
 - Cancelled run: use the durable delegation ID to confirm queued and running children reached terminal cancellation; late results from the cancelled generation are not authoritative.
 
 ## Live role evaluation
 
-From a source checkout, the opt-in `SubagentRoleLiveTests.AllRoles_RealProvider_RecordResponsesAndEfficiency` test exercises the six roles against synthetic files through normal `ModelComposition.CreateAsync` and provider-instruction resolution. It supports configured OpenAI-compatible providers and native `openai-codex` using existing Threadsmith authentication through the normal OAuth resolver and user cache. It never changes provider configuration or reads the checkout as test evidence.
+From a source checkout, the opt-in `SubagentRoleLiveTests.AllRoles_RealProvider_RecordResponsesAndEfficiency` test exercises the seven roles against synthetic files through normal `ModelComposition.CreateAsync` and provider-instruction resolution. It supports configured OpenAI-compatible providers and native `openai-codex` using existing Threadsmith authentication through the normal OAuth resolver and user cache. It never changes provider configuration or reads the checkout as test evidence.
 
 The harness uses the trusted user catalog's default profile unless `THREADSMITH_LIVE_AGENT_PROFILE` names another existing profile ID. Provider selection is derived from that catalog unless `THREADSMITH_LIVE_AGENT_PROVIDER` is set. For a native Codex profile supplied outside the user provider catalog, set the profile ID and `THREADSMITH_LIVE_AGENT_PROVIDER=openai-codex`; the explicit provider is required because the user catalog cannot derive that binding. No separate credential import is needed.
 

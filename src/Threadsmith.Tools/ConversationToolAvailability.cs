@@ -1,7 +1,6 @@
-namespace Threadsmith.Execution;
+namespace Threadsmith.Tools;
 
 using Threadsmith.Core;
-using Threadsmith.Tools;
 
 /// <summary>Resolves the ordinary model-visible tool surface under current host policy.</summary>
 internal static class ConversationToolAvailability
@@ -13,7 +12,8 @@ internal static class ConversationToolAvailability
         SessionId sessionId,
         RunId runId,
         ToolInvocationContext? invocationContext,
-        bool toolsWithheld)
+        bool toolsWithheld,
+        IReadOnlyList<ToolRegistration>? callerRegistrations = null)
     {
         if (toolsWithheld || toolPipeline is null || toolRegistry is null)
         {
@@ -22,7 +22,7 @@ internal static class ConversationToolAvailability
 
         ToolRegistration[] registrations =
         [
-            .. toolRegistry.GetRegistrations(sessionId, runId)
+            .. (callerRegistrations ?? toolRegistry.GetRegistrations(sessionId, runId))
                 .Where(registration => (registration.Tool.Definition.SideEffect == ToolSideEffect.ReadOnly
                     || registration.Tool.Definition.ConversationAvailable)
                     && IsAdvertised(registration.Tool.Definition, invocationContext)),

@@ -22,6 +22,8 @@ Delegated agents report their current named role and queued, running, or final s
 
 `/hooks` (or `/hooks list`), `/mcp` (or `/mcp list`), and `/extensions` use the same keyboard-only CheckTree as `/tools`. Space toggles an item or the unlocked, filtered members of a group; each operation applies immediately and the dialog stays open for further changes. Esc closes without rolling back completed changes. Type to filter and use F2 for details.
 
+Bare `/skills` uses that tree with nested Claude/Native → scope groups. F3 → Verify acts on a package or the filtered members of a group; Space enables/disables through existing skill policy. Opening remains metadata-only, and checkboxes/status reflect completed host checks. Esc during verification cancels remaining work while preserving completed results. `/skills list` retains text output. See [skill operations](skills.md).
+
 OAuth-enabled MCP profiles display sign-in status. Select an individual profile and press F3 to open Actions, then choose **Sign in / Authenticate**. This uses the existing browser OAuth flow and may reuse cached credentials. While authentication is pending, Esc cancels the attempt and keeps the MCP list open; afterward the status and connection checkbox refresh from the manager. The Actions menu targets one profile; group connection changes still follow each profile's existing authentication requirements. Static-token profiles do not offer it. Use `/mcp logout <profile>` to clear an existing identity before signing in again; the modal does not offer Switch account.
 
 Hook checkboxes mean enabled, extension checkboxes mean loaded, and MCP profile checkboxes mean connected. MCP connection changes do not change startup auto-connect configuration or individual tool preferences; `/mcp capabilities [profile]` manages tool enablement separately. Hook enablement does not grant repository approval. Every checkbox is reconciled against current host state after an operation, including failed connections and blocked unloads. Direct subcommands and the original frontend remain available.
@@ -38,6 +40,7 @@ Ordinary `tui.agentNames.defaultNames` supplies an optional shared list. `tui.ag
 | `testReviewer` | Dijkstra, Hoare, Myers, Hamming, Knuth, Hopper |
 | `performanceReviewer` | Amdahl, Gustafson, Cray, Hennessy, Patterson, Knuth |
 | `architectureReviewer` | Brooks, Parnas, Kay, Dijkstra, Liskov, Shaw |
+| `bugReviewer` | Zeller, Dijkstra, Hoare, Hamilton, Hopper, Knuth |
 
 Names are trimmed and NFC-normalized, deduplicated case-insensitively, limited to 128 entries per list and 32 UTF-16 units per normalized name. Inputs over 64 units are rejected before normalization. Control, format, multiline, malformed, and unassigned characters are rejected; bounded warnings never echo rejected values. Printable Unicode names use measured cell widths; full names and roles remain accessible through F2. A catalog is immutable until process restart; live children never rename.
 

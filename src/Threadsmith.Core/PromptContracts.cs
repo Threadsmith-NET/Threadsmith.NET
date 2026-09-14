@@ -542,6 +542,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the CorrectionSemanticFirstSearchRejected prompt asset.</summary>
     public const string CorrectionSemanticFirstSearchRejected = "Correction-SemanticFirstSearch-Rejected.md";
 
+    /// <summary>Model-driven review acquisition, delegation, synthesis and delivery instructions.</summary>
+    public const string SkillReview = "Skill-Review.md";
+
     /// <summary>Gets the stable filename for the SkillProcedureSystem prompt asset.</summary>
     public const string SkillProcedureSystem = "Skill-Procedure-System.md";
 
@@ -607,6 +610,9 @@ public static class PromptFileNames
 
     /// <summary>System guidance for architecture review backed by code and document citations.</summary>
     public const string SystemChildAgentArchitectureReviewer = "System-ChildAgent-ArchitectureReviewer.md";
+
+    /// <summary>System guidance for functional correctness and requirements review.</summary>
+    public const string SystemChildAgentBugReviewer = "System-ChildAgent-BugReviewer.md";
 
     /// <summary>Joined child model-selection and implementation proposal details.</summary>
     public const string ToolDelegateAgentsChildDetails = "Tool-delegate_agents-ChildDetails.md";
@@ -1179,6 +1185,7 @@ public static class PromptFileNames
         CorrectionMutationRenameSymbolSemanticUnavailable,
         CorrectionMutationRenameSymbolOverlap,
         CorrectionMutationReplaceTextAmbiguousExpectedText,
+        SkillReview,
         SkillProcedureSystem,
         SkillProcedureRequest,
         SkillProcedureContinuation,
@@ -1201,6 +1208,7 @@ public static class PromptFileNames
         SystemChildAgentTestReviewer,
         SystemChildAgentPerformanceReviewer,
         SystemChildAgentArchitectureReviewer,
+        SystemChildAgentBugReviewer,
         ToolDelegateAgentsChildDetails,
         ToolDelegateAgentsReviewDetails,
         ToolDelegateAgentsImplementationOmitted,
@@ -1452,6 +1460,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemChildAgentTestReviewer,
             PromptFileNames.SystemChildAgentPerformanceReviewer,
             PromptFileNames.SystemChildAgentArchitectureReviewer,
+            PromptFileNames.SystemChildAgentBugReviewer,
             PromptFileNames.ToolDelegateAgentsChildDetails,
             PromptFileNames.ToolDelegateAgentsReviewDetails,
             PromptFileNames.ToolDelegateAgentsImplementationOmitted,
@@ -1495,6 +1504,7 @@ public static class PromptAssetCatalog
         var skillAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.ToolInvokeSkillDescription,
+            PromptFileNames.SkillReview,
             PromptFileNames.SkillProcedureSystem,
             PromptFileNames.SkillProcedureRequest,
             PromptFileNames.SkillProcedureContinuation,

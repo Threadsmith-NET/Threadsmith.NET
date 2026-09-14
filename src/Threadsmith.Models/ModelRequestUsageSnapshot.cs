@@ -1,6 +1,4 @@
-namespace Threadsmith.Execution;
-
-using Threadsmith.Models;
+namespace Threadsmith.Models;
 
 /// <summary>One observed request's usage, retaining missing counters and provider input semantics.</summary>
 public sealed record ModelRequestUsageSnapshot(ModelRequestUsageId RequestId, ModelUsage? Usage)

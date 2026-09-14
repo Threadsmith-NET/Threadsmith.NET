@@ -31,7 +31,7 @@ public enum DelegateAgentToolAccess
     /// <summary>Only currently available non-network read-only inspection tools.</summary>
     ReadOnly,
 
-    /// <summary>The parent's eligible read-only surface after child policy narrowing.</summary>
+    /// <summary>The parent's enabled and permitted tool surface, including execution and writing tools.</summary>
     Inherit,
 }
 
@@ -128,7 +128,7 @@ internal sealed class DelegateAgentRoleJsonConverter : JsonConverter<AgentRole>
             && AgentRoleNames.TryParse(reader.GetString(), out var role)
                 ? role
                 : throw new JsonException(
-                    "role must be explorer, implementer, securityReviewer, testReviewer, performanceReviewer, or architectureReviewer.");
+                    $"role must be one of: {string.Join(", ", Enum.GetValues<AgentRole>().Select(AgentRoleNames.GetName))}.");
     }
 
     /// <inheritdoc />
@@ -315,7 +315,7 @@ public sealed record DelegateAgentsOptions
         init => _resultLimits = value;
     }
 
-    /// <summary>Reserved resources for each Explorer child.</summary>
+    /// <summary>Reserved resources for each delegated child.</summary>
     public AgentResourceBudget ChildBudget { get; init; } =
         AgentResourceBudget.CreateTelemetryOnly(TimeSpan.FromMinutes(5));
 

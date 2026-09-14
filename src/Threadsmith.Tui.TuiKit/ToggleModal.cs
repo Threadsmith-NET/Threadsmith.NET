@@ -13,7 +13,10 @@ internal sealed class ToggleModal : Modal
 {
     private readonly InteractionToggleRequest _request;
     private readonly Dictionary<string, InteractionToggleOption> _options;
-    private readonly Dictionary<string, string[]> _groups;
+    private readonly Dictionary<string, List<string>> _groups = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, List<string>> _children = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _groupLabels = new(StringComparer.Ordinal);
+    private readonly List<string> _roots = [];
     private readonly ComposerBuffer _filter;
     private readonly TuiResourceLimits _limits;
     private readonly Dictionary<string, bool> _expansion = new(StringComparer.Ordinal);
@@ -26,6 +29,7 @@ internal sealed class ToggleModal : Modal
     private TranscriptView? _details;
     private string? _selected;
     private string _notice = "Arrows navigate; Space applies now; Esc closes";
+    private string _cancellationNotice = "Cancelling action...";
     private bool _busy;
     private bool _fits = true;
 
@@ -40,13 +44,31 @@ internal sealed class ToggleModal : Modal
         _cancel = cancel;
         _toggleMouse = toggleMouse;
         _options = request.Options.ToDictionary(option => "item:" + option.Id, StringComparer.Ordinal);
-        _groups = request.Options.GroupBy(option => option.Group).ToDictionary(group => "group:" + group.Key, group => group.Select(option => "item:" + option.Id).ToArray(), StringComparer.Ordinal);
-        _tree = new CheckTree<string>(
-            _groups.Keys.ToArray(),
-            id => _groups.GetValueOrDefault(id) ?? [],
-            id => _options.TryGetValue(id, out var option) ? (option.Locked ? "[locked] " : string.Empty) + TranscriptView.Safe(option.Label) : TranscriptView.Safe(id[6..]),
-            id => _groups.ContainsKey(id),
-            StringComparer.Ordinal);
+        foreach (var option in request.Options)
+        {
+            var path = option.GroupPath.Count > 0 ? option.GroupPath : [option.Group];
+            var siblings = _roots;
+            var key = "group:";
+            for (var index = 0; index < path.Count; index++)
+            {
+                key += (index == 0 ? string.Empty : "/") + Uri.EscapeDataString(path[index]);
+                if (!_groups.TryGetValue(key, out var members))
+                {
+                    members = [];
+                    _groups.Add(key, members);
+                    _children.Add(key, []);
+                    _groupLabels.Add(key, path[index]);
+                    siblings.Add(key);
+                }
+
+                members.Add("item:" + option.Id);
+                siblings = _children[key];
+            }
+
+            siblings.Add("item:" + option.Id);
+        }
+
+        _tree = CreateTree();
         foreach (var group in _groups.Keys)
         {
             _tree.Expand(group);
@@ -82,7 +104,7 @@ internal sealed class ToggleModal : Modal
             if (CancelOperation is { } cancelOperation)
             {
                 cancelOperation();
-                _notice = "Cancelling authentication...";
+                _notice = _cancellationNotice;
             }
             else
             {
@@ -91,14 +113,13 @@ internal sealed class ToggleModal : Modal
         }
         else if (_fits && !_busy && _details is null && SupportsActions && key.Code == KeyCode.F3)
         {
-            var selected = _options.GetValueOrDefault(_tree.SelectedNode);
-            if (selected?.Actions.Count > 0)
+            if (ActionChoices(_tree.SelectedNode).Count > 0)
             {
                 _busy = _changes.Writer.TryWrite((_tree.SelectedNode, false, true));
             }
             else
             {
-                _notice = "Select an individual item with available actions.";
+                _notice = _request.AllowGroupActions ? "Select a skill or group with available actions." : "Select an individual item with available actions.";
             }
         }
         else if (_fits && !_busy && key.Code == KeyCode.F2)
@@ -107,7 +128,7 @@ internal sealed class ToggleModal : Modal
             {
                 _details = new TranscriptView(_limits) { ResolveStyle = _style };
                 var selected = _options.GetValueOrDefault(_tree.SelectedNode);
-                var label = selected is null ? _tree.SelectedNode[6..] : selected.Label + "\n" + selected.Reason;
+                var label = selected is null ? Label(_tree.SelectedNode) : selected.Label + "\n" + selected.Reason;
                 _details.Present(new PresentationBatch([new PresentationTextItem([new(label, PresentationTextRole.Default)])]));
                 _details.HandleKey(KeyEvent.Special(KeyCode.Home));
             }
@@ -136,7 +157,7 @@ internal sealed class ToggleModal : Modal
             }
             else
             {
-                _busy = _changes.Writer.TryWrite((id, !Members(id).All(option => option.Enabled), false));
+                _busy = _changes.Writer.TryWrite((id, !Members(id).Any(option => option.Enabled), false));
                 _notice = "Applying host checks…";
             }
         }
@@ -207,20 +228,47 @@ internal sealed class ToggleModal : Modal
         _text.Draw(frame, 0, frame.Size.Height - 1, selected?.Reason ?? "Space applies immediately; closing keeps changes", _style(PresentationTextRole.Muted));
     }
 
-    /// <summary>Gets or sets cancellation of the current individual action.</summary>
+    /// <summary>Gets or sets cancellation of the current host operation.</summary>
     internal Action? CancelOperation { get; set; }
 
     /// <summary>Gets or sets whether the caller can execute individual actions.</summary>
     internal bool SupportsActions { get; set; }
 
-    /// <summary>Gets the selected immutable item for individual action dispatch.</summary>
-    internal InteractionToggleOption? GetOption(string key) => _options.GetValueOrDefault(key);
+    /// <summary>Gets the current eligible action targets without expanding group scope beyond the filter.</summary>
+    internal IReadOnlyList<InteractionToggleOption> ActionMembers(string id) =>
+        _options.TryGetValue(id, out var option) ? [option]
+            : _request.AllowGroupActions && _groups.TryGetValue(id, out var members)
+                ? members.Select(key => _options[key]).Where(Matches).ToArray()
+                : [];
+
+    /// <summary>Offers only actions available on every target of the current leaf or group.</summary>
+    internal IReadOnlyList<InteractionSelectionOption> ActionChoices(string id)
+    {
+        var members = ActionMembers(id);
+        return members.Count == 0 ? [] : members[0].Actions
+            .Where(action => members.All(member => member.Actions.Any(candidate => candidate.Id == action.Id)))
+            .ToArray();
+    }
+
+    /// <summary>Gets a safe display label without treating catalog text as a tree identity.</summary>
+    internal string Label(string id) => TranscriptView.Safe(_options.TryGetValue(id, out var option)
+        ? (option.Locked ? "[locked] " : string.Empty) + option.Label
+        : _groupLabels.GetValueOrDefault(id) ?? "No matching settings");
 
     /// <summary>Shows progress while the host owns a cancellable action.</summary>
     internal void BeginAction(string label, Action cancel)
     {
         CancelOperation = cancel;
-        _notice = label + " - waiting for authentication; Esc cancels";
+        _cancellationNotice = "Cancelling action...";
+        _notice = label + " - working; Esc cancels";
+    }
+
+    /// <summary>Reports toggle progress while allowing the current host mutation to finish before stopping.</summary>
+    internal void BeginToggle(string label, Action stop)
+    {
+        CancelOperation = stop;
+        _cancellationNotice = "Stopping after current item...";
+        _notice = label + " - Esc stops after current item";
     }
 
     /// <summary>Gets serialized pending host requests.</summary>
@@ -235,7 +283,9 @@ internal sealed class ToggleModal : Modal
     internal void Reconcile(string id, InteractionToggleResult result)
     {
         var key = "item:" + id;
-        if (result.UpdatedOption is { } updated && updated.Id == id && updated.Group == _options[key].Group)
+        var matched = Matches(_options[key]);
+        if (result.UpdatedOption is { } updated && updated.Id == id && updated.Group == _options[key].Group
+            && updated.GroupPath.SequenceEqual(_options[key].GroupPath, StringComparer.Ordinal))
         {
             _options[key] = updated with { Enabled = result.Enabled };
         }
@@ -244,7 +294,15 @@ internal sealed class ToggleModal : Modal
             _options[key] = _options[key] with { Enabled = result.Enabled };
         }
 
-        ReconcileTree();
+        if (matched != Matches(_options[key]))
+        {
+            Filter();
+        }
+        else
+        {
+            ReconcileTree();
+        }
+
         _notice = result.Reason is null ? "Applied immediately; Esc closes" : TranscriptView.Safe(result.Reason);
     }
 
@@ -253,6 +311,26 @@ internal sealed class ToggleModal : Modal
     {
         CancelOperation = null;
         _busy = false;
+    }
+
+    /// <summary>Reports acknowledged batch outcomes and releases the input gate in the same UI turn.</summary>
+    internal void CompleteToggle(bool enabled, int total, int processed, int applied, bool cancelled)
+    {
+        CompleteChange();
+        if (total > 1 || cancelled)
+        {
+            var state = enabled ? "enabled" : "disabled";
+            _notice = (cancelled ? "Cancelled: " : string.Empty) + (enabled ? "Enabled " : "Disabled ") + $"{applied}/{total}";
+            if (processed > applied)
+            {
+                _notice += $"; {processed - applied} not {state}";
+            }
+
+            if (total > processed)
+            {
+                _notice += $"; {total - processed} not processed";
+            }
+        }
     }
 
     private bool Matches(InteractionToggleOption option) =>
@@ -268,13 +346,8 @@ internal sealed class ToggleModal : Modal
             }
         }
 
-        var groups = _groups.Where(group => group.Value.Any(id => Matches(_options[id]))).Select(group => group.Key).ToArray();
-        _tree = new CheckTree<string>(
-            groups.Length == 0 ? ["empty:No matching settings"] : groups,
-            id => (_groups.GetValueOrDefault(id) ?? []).Where(child => Matches(_options[child])),
-            id => _options.TryGetValue(id, out var option) ? (option.Locked ? "[locked] " : string.Empty) + TranscriptView.Safe(option.Label) : TranscriptView.Safe(id[6..]),
-            id => _groups.ContainsKey(id),
-            StringComparer.Ordinal);
+        var groups = _groups.Keys.Where(GroupMatches).ToArray();
+        _tree = CreateTree();
         foreach (var group in groups)
         {
             if (_expansion.GetValueOrDefault(group, true))
@@ -294,6 +367,20 @@ internal sealed class ToggleModal : Modal
 
         ReconcileTree();
     }
+
+    private CheckTree<string> CreateTree()
+    {
+        var roots = _roots.Where(GroupMatches).ToArray();
+        return new CheckTree<string>(
+            roots.Length == 0 ? ["empty:No matching settings"] : roots,
+            id => (_children.GetValueOrDefault(id) ?? []).Where(child =>
+                _options.TryGetValue(child, out var option) ? Matches(option) : GroupMatches(child)),
+            Label,
+            id => _groups.ContainsKey(id),
+            StringComparer.Ordinal);
+    }
+
+    private bool GroupMatches(string id) => _groups[id].Any(child => Matches(_options[child]));
 
     private void ReconcileTree()
     {

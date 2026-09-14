@@ -497,7 +497,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 promptLoader,
                 codeExploreOptions,
                 persistence.ConversationStore,
-                operationalLimits);
+                operationalLimits,
+                sanitizer);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -944,7 +945,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         IPromptLoader promptLoader,
         CodeExploreOptions codeExploreOptions,
         IConversationStore conversationStore,
-        OperationalLimits operationalLimits)
+        OperationalLimits operationalLimits,
+        IOutputSanitizer sanitizer)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -998,7 +1000,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         ITool[] tools =
         [
             new ListFilesTool(promptLoader, limits),
-            new ReadFileTool(promptLoader, limits),
+            new ReadFileTool(promptLoader, sanitizer, limits),
             new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader, limits),
             new SearchTextTool(promptLoader, limits, processManager, ripgrepExecutable),
             new GitStatusTool(processManager, promptLoader),

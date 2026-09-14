@@ -176,13 +176,30 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 return true;
             }
 
+            var skillRun = item switch
+            {
+                SkillWorkflowCheckpointWritten skillCheckpoint => skillCheckpoint.RunId,
+                SkillInvocationProgressObserved progress => progress.RunId,
+                _ => null,
+            };
+            if (skillRun is { } owner && _children.TryGetValue(owner, out var skillChild))
+            {
+                if (skillChild.Operations.Observe(item))
+                {
+                    skillChild.Snapshot = skillChild.Snapshot with { ToolActivities = skillChild.Operations.Activities };
+                    await _workspace.PresentAgentAsync(skillChild.Snapshot, cancellationToken);
+                }
+
+                return true;
+            }
+
             if (item is ToolInvocationStarted started && _children.ContainsKey(started.RunId))
             {
                 _tools[started.ToolInvocationId] = started;
                 await FlushAsync(_children[started.RunId], cancellationToken);
                 var child = _children[started.RunId];
-                child.ToolActivities[started.ToolInvocationId] = InteractionPresentationFormatter.CreateToolActivity(started, TimeProvider.System, _showOperationDurations);
-                child.Snapshot = child.Snapshot with { ToolActivities = child.ToolActivities.Values.ToArray() };
+                child.Operations.Observe(started);
+                child.Snapshot = child.Snapshot with { ToolActivities = child.Operations.Activities };
                 await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);
                 return true;
             }
@@ -199,8 +216,8 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                     var segments = new List<PresentationTextSegment>();
                     InteractionEventSegments.Append(segments, completed, text, _showOperationDurations);
                     await _surface.PresentAsync(new PresentationBatch([new PresentationTextItem(segments)]) { Target = child.Snapshot.Target }, cancellationToken);
-                    child.ToolActivities.Remove(completed.ToolInvocationId);
-                    child.Snapshot = child.Snapshot with { ToolActivities = child.ToolActivities.Values.ToArray() };
+                    child.Operations.Observe(completed);
+                    child.Snapshot = child.Snapshot with { ToolActivities = child.Operations.Activities };
                     await _workspace.PresentAgentAsync(child.Snapshot, cancellationToken);
                     return true;
                 }
@@ -316,7 +333,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
             }
 
             var snapshot = new AgentPresentationSnapshot(target, _names.Allocate(target, lifecycle.Role), lifecycle.Role, lifecycle.Status, lifecycle.Revision);
-            state = new ChildState(snapshot, _markdown, _limits.Markdown);
+            state = new ChildState(snapshot, _markdown, _limits.Markdown, _showOperationDurations);
             _children.Add(lifecycle.ChildRunId, state);
             _usage?.RegisterChild(_session, lifecycle.ChildRunId);
         }
@@ -329,7 +346,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         if (terminal)
         {
             await FlushAsync(state, cancellationToken);
-            state.ToolActivities.Clear();
+            state.Operations.Observe(new RunCompleted(_session, lifecycle.OccurredAt, lifecycle.ChildRunId, false));
             state.Snapshot = state.Snapshot with { ToolActivities = [] };
             _terminal[target] = state.Snapshot;
             await PresentOutcomeAsync(state.Snapshot, lifecycle.Reason, false, cancellationToken);
@@ -504,10 +521,11 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
     private sealed class ChildState
     {
-        internal ChildState(AgentPresentationSnapshot snapshot, bool markdown, MarkdownRenderingLimits limits)
+        internal ChildState(AgentPresentationSnapshot snapshot, bool markdown, MarkdownRenderingLimits limits, bool showDurations)
         {
             Snapshot = snapshot;
             Answer = new ModelAnswerCollector(markdown, limits: limits);
+            Operations = new InteractionOperationActivities(TimeProvider.System, showDurations);
         }
 
         internal AgentPresentationSnapshot Snapshot { get; set; }
@@ -522,6 +540,6 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
 
         internal Guid ResponseId { get; set; }
 
-        internal Dictionary<ToolInvocationId, InteractionActivity> ToolActivities { get; } = [];
+        internal InteractionOperationActivities Operations { get; }
     }
 }

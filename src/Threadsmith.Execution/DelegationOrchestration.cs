@@ -158,23 +158,25 @@ public static class DelegationPlanValidator
         var reviewer = assignment.Role is AgentRole.SecurityReviewer
             or AgentRole.TestReviewer
             or AgentRole.PerformanceReviewer
-            or AgentRole.ArchitectureReviewer;
-        if (reviewer != (assignment.Mode == AgentRunMode.ReadOnlyReview))
+            or AgentRole.ArchitectureReviewer
+            or AgentRole.BugReviewer;
+        var sharedWorkspace = assignment.Mode == AgentRunMode.SharedWorkspace;
+        if (!sharedWorkspace && reviewer != (assignment.Mode == AgentRunMode.ReadOnlyReview))
         {
             throw new InvalidDataException("Reviewer roles require read-only review mode.");
         }
 
-        if (assignment.Role == AgentRole.Explorer && assignment.Mode != AgentRunMode.ReadOnlyBaseline)
+        if (!sharedWorkspace && assignment.Role == AgentRole.Explorer && assignment.Mode != AgentRunMode.ReadOnlyBaseline)
         {
             throw new InvalidDataException("Explorers require read-only baseline mode.");
         }
 
-        if (!mutationWorker && assignment.Policy.TrustCeiling > RepositoryTrustLevel.TrustedBuild)
+        if (!mutationWorker && !sharedWorkspace && assignment.Policy.TrustCeiling > RepositoryTrustLevel.TrustedBuild)
         {
             throw new UnauthorizedAccessException("Read-only children cannot receive mutation trust.");
         }
 
-        if (!mutationWorker && assignment.Policy.AllowedToolIds.Any(IsMutationTool))
+        if (!mutationWorker && !sharedWorkspace && assignment.Policy.AllowedToolIds.Any(IsMutationTool))
         {
             throw new UnauthorizedAccessException("Read-only children cannot receive mutation tools.");
         }
@@ -482,6 +484,7 @@ public sealed class AssignmentPartitioner : IAssignmentPartitioner
 /// <summary>Runs bounded child assignments as observed in-process asynchronous operations.</summary>
 public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 {
+    private readonly AsyncLocal<ActiveChildLease?> _activeChild = new();
     private readonly ConcurrentDictionary<(DelegationId, AgentAssignmentId), CancellationTokenSource> _children = new();
     private readonly SemaphoreSlim? _global;
     private readonly SemaphoreSlim? _implementers;
@@ -509,60 +512,23 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         DelegationPlanValidator.Validate(plan);
         ArgumentNullException.ThrowIfNull(runner);
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _stopped) != 0, this);
-        var admitted = Interlocked.Add(ref _admittedOrQueued, plan.Assignments.Count);
-        if (_options.QueueCapacity > 0 && admitted > _options.QueueCapacity)
+        var ancestor = _activeChild.Value;
+        var nested = ancestor?.Owns(plan) == true;
+        if (nested && ancestor is not null)
         {
-            Interlocked.Add(ref _admittedOrQueued, -plan.Assignments.Count);
-            throw new AgentQueueCapacityException();
+            await ancestor.SuspendAsync(cancellationToken);
         }
 
-        using var parentCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            _shutdown.Token);
-        var completions = plan.Assignments.ToDictionary(
-            item => item.AssignmentId,
-            static _ => new TaskCompletionSource<AgentRunOutcome>(
-                TaskCreationOptions.RunContinuationsAsynchronously));
-        var terminalResults = Channel.CreateBounded<AgentRunOutcome>(
-            new BoundedChannelOptions(plan.Assignments.Count)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true,
-                SingleWriter = false,
-            });
-        var parentLimiter = AcquireParentLimiter(plan.Provenance.ParentRunId);
-        Task<AgentRunOutcome>[] tasks =
-        [
-            .. plan.Assignments.Select(async assignment =>
-            {
-                var outcome = await RunObservedAsync(
-                    plan,
-                    assignment,
-                    runner,
-                    completions,
-                    parentCancellation,
-                    parentLimiter.Semaphore,
-                    parentCancellation.Token);
-                await terminalResults.Writer.WriteAsync(outcome, CancellationToken.None);
-                return outcome;
-            }),
-        ];
         try
         {
-            var outcomes = new List<AgentRunOutcome>(plan.Assignments.Count);
-            while (outcomes.Count < plan.Assignments.Count)
-            {
-                outcomes.Add(await terminalResults.Reader.ReadAsync(CancellationToken.None));
-            }
-
-            _ = await Task.WhenAll(tasks);
-            terminalResults.Writer.TryComplete();
-            return [.. outcomes.OrderBy(item => item.AssignmentId.Value)];
+            return await RunScheduledAsync(plan, runner, cancellationToken);
         }
         finally
         {
-            Interlocked.Add(ref _admittedOrQueued, -plan.Assignments.Count);
-            ReleaseParentLimiter(plan.Provenance.ParentRunId, parentLimiter);
+            if (nested && ancestor is not null)
+            {
+                await ancestor.ResumeAsync();
+            }
         }
     }
 
@@ -619,6 +585,68 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         foreach (var child in _children.Values)
         {
             child.Dispose();
+        }
+    }
+
+    private async Task<IReadOnlyList<AgentRunOutcome>> RunScheduledAsync(
+        DelegationPlan plan,
+        IAgentAssignmentRunner runner,
+        CancellationToken cancellationToken)
+    {
+        var admitted = Interlocked.Add(ref _admittedOrQueued, plan.Assignments.Count);
+        if (_options.QueueCapacity > 0 && admitted > _options.QueueCapacity)
+        {
+            Interlocked.Add(ref _admittedOrQueued, -plan.Assignments.Count);
+            throw new AgentQueueCapacityException();
+        }
+
+        using var parentCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            _shutdown.Token);
+        var completions = plan.Assignments.ToDictionary(
+            item => item.AssignmentId,
+            static _ => new TaskCompletionSource<AgentRunOutcome>(
+                TaskCreationOptions.RunContinuationsAsynchronously));
+        var terminalResults = Channel.CreateBounded<AgentRunOutcome>(
+            new BoundedChannelOptions(plan.Assignments.Count)
+            {
+                FullMode = BoundedChannelFullMode.Wait,
+                SingleReader = true,
+                SingleWriter = false,
+            });
+        var parentLimiter = AcquireParentLimiter(plan.Provenance.ParentRunId);
+        Task<AgentRunOutcome>[] tasks =
+        [
+            .. plan.Assignments.Select(async assignment =>
+            {
+                var outcome = await RunObservedAsync(
+                    plan,
+                    assignment,
+                    runner,
+                    completions,
+                    parentCancellation,
+                    parentLimiter.Semaphore,
+                    parentCancellation.Token);
+                await terminalResults.Writer.WriteAsync(outcome, CancellationToken.None);
+                return outcome;
+            }),
+        ];
+        try
+        {
+            var outcomes = new List<AgentRunOutcome>(plan.Assignments.Count);
+            while (outcomes.Count < plan.Assignments.Count)
+            {
+                outcomes.Add(await terminalResults.Reader.ReadAsync(CancellationToken.None));
+            }
+
+            _ = await Task.WhenAll(tasks);
+            terminalResults.Writer.TryComplete();
+            return [.. outcomes.OrderBy(item => item.AssignmentId.Value)];
+        }
+        finally
+        {
+            Interlocked.Add(ref _admittedOrQueued, -plan.Assignments.Count);
+            ReleaseParentLimiter(plan.Provenance.ParentRunId, parentLimiter);
         }
     }
 
@@ -730,8 +758,8 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             return CreateTerminal(
                 plan,
                 assignment,
-                AgentRunStatus.Cancelled,
-                "assignment deadline elapsed");
+                AgentRunStatus.Failed,
+                "child timed out: assignment deadline elapsed");
         }
 
         var timeout = assignment.Deadline == DateTimeOffset.MaxValue ? TimeSpan.Zero : remaining;
@@ -743,35 +771,22 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
 
         await using var deadline = new AgentTimeoutScope(timeout, cancellationToken);
         _children[(plan.DelegationId, assignment.AssignmentId)] = deadline.Source;
-        var globalHeld = false;
-        var parentHeld = false;
-        var implementerHeld = false;
+        var lease = new ActiveChildLease(
+            plan.Provenance.SessionId,
+            assignment.ChildRunId,
+            [_global, parent, assignment.Role == AgentRole.Implementer ? _implementers : null],
+            deadline.Token);
+        var previous = _activeChild.Value;
         try
         {
-            if (_global is not null)
-            {
-                await _global.WaitAsync(deadline.Token);
-                globalHeld = true;
-            }
-
-            if (parent is not null)
-            {
-                await parent.WaitAsync(deadline.Token);
-                parentHeld = true;
-            }
-
-            if (assignment.Role == AgentRole.Implementer && _implementers is not null)
-            {
-                await _implementers.WaitAsync(deadline.Token);
-                implementerHeld = true;
-            }
-
+            await lease.AcquireAsync();
+            _activeChild.Value = lease;
             var outcome = await runner.RunAsync(plan, assignment, deadline.Token);
             return deadline.Token.IsCancellationRequested
                 ? outcome with
                 {
-                    Status = AgentRunStatus.Cancelled,
-                    Reason = "child cancellation observed",
+                    Status = deadline.TimedOut ? AgentRunStatus.Failed : AgentRunStatus.Cancelled,
+                    Reason = deadline.TimedOut ? "child timed out: assignment deadline elapsed" : "child cancellation observed",
                     Response = null,
                     Findings = null,
                     ChangeSet = null,
@@ -780,23 +795,22 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                 }
                 : outcome;
         }
+        catch (OperationCanceledException exception) when (deadline.TimedOut)
+        {
+            var outcome = CreateTerminal(plan, assignment, AgentRunStatus.Failed, "child timed out: assignment deadline elapsed");
+            return ChildAgentFailureDetails.TryGet(exception, out var failure)
+                ? outcome with
+                {
+                    Usage = failure.Usage,
+                    ModelProfileId = failure.ModelProfileId,
+                    ModelSelection = failure.ModelSelection,
+                }
+                : outcome;
+        }
         finally
         {
-            if (implementerHeld)
-            {
-                _implementers?.Release();
-            }
-
-            if (parentHeld)
-            {
-                parent?.Release();
-            }
-
-            if (globalHeld)
-            {
-                _global?.Release();
-            }
-
+            _activeChild.Value = previous;
+            lease.Dispose();
             _children.TryRemove((plan.DelegationId, assignment.AssignmentId), out _);
         }
     }
@@ -896,7 +910,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                 AgentRole.Implementer => outcome.Implementation is not null && outcome.Findings is not null
                     && outcome.ChangeSet is null && outcome.Review is null,
                 AgentRole.SecurityReviewer or AgentRole.TestReviewer
-                    or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer =>
+                    or AgentRole.PerformanceReviewer or AgentRole.ArchitectureReviewer or AgentRole.BugReviewer =>
                     outcome.Review is not null && outcome.ChangeSet is null && outcome.Implementation is null,
                 _ => false,
             };
@@ -930,6 +944,102 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
     private static SemaphoreSlim? CreateLimiter(int limit)
     {
         return limit == 0 ? null : new SemaphoreSlim(limit, limit);
+    }
+
+    private sealed class ActiveChildLease : IDisposable
+    {
+        private readonly SessionId _sessionId;
+        private readonly RunId _runId;
+        private readonly SemaphoreSlim[] _permits;
+        private readonly CancellationToken _cancellationToken;
+        private readonly SemaphoreSlim _gate = new(1, 1);
+        private int _held;
+        private int _suspensions;
+        private int _disposed;
+
+        public ActiveChildLease(
+            SessionId sessionId,
+            RunId runId,
+            IReadOnlyList<SemaphoreSlim?> permits,
+            CancellationToken cancellationToken)
+        {
+            _sessionId = sessionId;
+            _runId = runId;
+            _permits = [.. permits.OfType<SemaphoreSlim>()];
+            _cancellationToken = cancellationToken;
+        }
+
+        public bool Owns(DelegationPlan plan)
+        {
+            return Volatile.Read(ref _disposed) == 0
+                && plan.Provenance.SessionId == _sessionId
+                && plan.Provenance.ParentRunId == _runId;
+        }
+
+        public async Task AcquireAsync()
+        {
+            try
+            {
+                foreach (var permit in _permits)
+                {
+                    await permit.WaitAsync(_cancellationToken);
+                    _held++;
+                }
+            }
+            catch
+            {
+                Release();
+                throw;
+            }
+        }
+
+        public async Task SuspendAsync(CancellationToken cancellationToken)
+        {
+            await _gate.WaitAsync(cancellationToken);
+            try
+            {
+                if (_suspensions++ == 0)
+                {
+                    Release();
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+
+        public async Task ResumeAsync()
+        {
+            // Balance every suspension during cancellation cleanup as well as successful joins.
+            await _gate.WaitAsync(CancellationToken.None);
+            try
+            {
+                if (--_suspensions == 0)
+                {
+                    await AcquireAsync();
+                }
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+
+        public void Dispose()
+        {
+            Volatile.Write(ref _disposed, 1);
+            Release();
+            _gate.Dispose();
+        }
+
+        private void Release()
+        {
+            while (_held > 0)
+            {
+                _permits[--_held].Release();
+            }
+        }
     }
 
     private sealed class ParentLimiter : IDisposable

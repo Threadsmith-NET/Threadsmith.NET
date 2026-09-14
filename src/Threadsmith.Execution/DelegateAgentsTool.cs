@@ -23,7 +23,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                 "required": ["assignmentId", "role", "toolAccess", "status", "summary", "findings", "omissions", "usage"],
                 "properties": {
                   "assignmentId": { "type": "string", "format": "uuid" },
-                  "role": { "type": "string", "enum": ["Explorer", "Implementer", "SecurityReviewer", "TestReviewer", "PerformanceReviewer", "ArchitectureReviewer"] },
+                  "role": { "type": "string", "enum": ["Explorer", "Implementer", "SecurityReviewer", "TestReviewer", "PerformanceReviewer", "ArchitectureReviewer", "BugReviewer"] },
                   "toolAccess": { "type": "string", "enum": ["readOnly", "inherit"] },
                   "status": { "type": "string", "enum": ["Completed", "Failed", "Cancelled", "Discarded"] },
                   "summary": { "type": "string" },
@@ -251,13 +251,16 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             Timeout = Timeout.InfiniteTimeSpan,
             MaximumOutputBytes = options.EffectiveToolOutputBytes(),
             ConversationAvailable = true,
+            SubagentAvailable = false,
             RequiresWorkspace = true,
             PreferStrictArguments = true,
             Scheduling = new ToolSchedulingDescriptor
             {
                 ConcurrencyMode = ToolConcurrencyMode.ExclusiveSession,
                 ClaimResolverId = "delegate-agents-session-v1",
-                MaximumSourceConcurrency = 1,
+
+                // The agent scheduler owns worker capacity; an orchestration lease must not block nested joins.
+                MaximumSourceConcurrency = int.MaxValue,
             },
         };
     }
@@ -292,13 +295,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                     ["role"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["enum"] = CreateStringArray(
-                            "explorer",
-                            "implementer",
-                            "securityReviewer",
-                            "testReviewer",
-                            "performanceReviewer",
-                            "architectureReviewer"),
+                        ["enum"] = CreateStringArray([.. Enum.GetValues<AgentRole>().Select(AgentRoleNames.GetName)]),
                         ["default"] = "explorer",
                     },
                     ["task"] = task,

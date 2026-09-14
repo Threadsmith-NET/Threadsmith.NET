@@ -98,3 +98,13 @@ Before distribution:
 8. confirm events, logs, persistence, and diagnostic bundles contain no package body, secret, raw provider payload, or hidden reasoning.
 
 See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and the source-repository [skills implementation plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/plan-39-governed-skills-reusable-workflows.md).
+
+## Editable native procedures
+
+A model step may reference a code-declared deployed `promptFile` instead of a package `instructionAsset`. Prompt text comes from the normal startup cache; package schemas remain integrity-checked assets. `requirements.inheritAvailableTools` includes enabled session tools under normal policy, without requiring a separate hard-coded tool list.
+
+Optional step `successProperty` and `responseProperty` name top-level output fields. The former must be a boolean and determines execution success; the latter must be a string and supplies readable output. Include them in the output schema. A false success value preserves the response and fails the workflow; explicit resume reruns that failed procedure. Findings do not themselves mean execution failed.
+
+The maintained review packages use these generic contracts with `prompts/Skill-Review.md` and ordinary `delegate_agents`. There is no private reviewer package format or special host entry.
+
+Native procedures do not advertise recursive `invoke_skill` calls: the invoking tool owns its source lease until the procedure returns. Use the ordinary `delegate_agents` tool for child work.

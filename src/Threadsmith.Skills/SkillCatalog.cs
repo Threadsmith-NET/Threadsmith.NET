@@ -391,7 +391,7 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
             throw new InvalidDataException("Skill tags exceed their bounds.");
         }
 
-        if (metadata.Assets.Count is < 3
+        if (metadata.Assets.Count is < 1
             || metadata.Assets.Count > options.MaximumAssetsPerPackage)
         {
             throw new InvalidDataException("Skill asset count is outside the supported bound.");

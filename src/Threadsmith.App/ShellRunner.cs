@@ -103,6 +103,19 @@ internal static class ShellRunner
                     processCancellation.Token);
             }
 
+            var skillArguments = request.Split((char[]?)null, 4, StringSplitOptions.RemoveEmptyEntries);
+            if (skillArguments.Length >= 3
+                && string.Equals(skillArguments[0], "/skills", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(skillArguments[1], "use", StringComparison.OrdinalIgnoreCase))
+            {
+                return await headlessShell.RunSkillAsync(
+                    context.Paths.RepositoryRoot,
+                    context.CommandLine.RequestedTrust ?? RepositoryTrustLevel.UntrustedInspection,
+                    skillArguments[2],
+                    skillArguments.Length == 4 ? skillArguments[3] : "{}",
+                    processCancellation.Token);
+            }
+
             if (context.CommandLine.RepositoryOptionsSpecified)
             {
                 if (context.CommandLine.RequestArguments.Count > 0)

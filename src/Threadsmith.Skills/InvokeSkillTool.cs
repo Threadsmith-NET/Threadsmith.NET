@@ -70,12 +70,16 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             new SkillInvocationRequest
             {
                 InvocationId = SkillInvocationId.New(),
+                UseDefaultBudget = true,
+                InvokingToolInvocationId = context.ToolInvocationId,
+                CallerToolSnapshotId = context.Invocation.ModelVisibleToolSnapshotId,
                 SessionId = context.SessionId,
                 RunId = context.RunId,
                 WorkspaceId = context.Invocation.WorkspaceId,
                 Selector = input.Selector,
                 InputJson = inputJson,
                 Trust = context.Invocation.TrustLevel,
+                Sensitivity = context.Invocation.Sensitivity,
                 Phase = context.Phase,
                 HostBudget = new SkillBudget(),
             },
@@ -104,13 +108,20 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 action.StepId,
                 ParsePayload(action.PayloadJson))).ToArray(),
             ParseOptionalPayload(result.OutputJson));
+        var failure = result.Status switch
+        {
+            SkillInvocationStatus.Failed => new ToolExecutionFailure(ToolErrorClassification.ExecutionFailure, result.Reason),
+            SkillInvocationStatus.Cancelled => new ToolExecutionFailure(ToolErrorClassification.Cancelled, result.Reason),
+            _ => null,
+        };
         return new ToolExecution<InvokeSkillOutput>(
             output,
             [new ToolProvenanceSource(
                 "skill-package",
                 result.Package.SkillId.Value,
                 result.Package.Digest.Value)],
-            ModelResultContent: JsonSerializer.Serialize(modelOutput, ModelJsonOptions));
+            ModelResultContent: JsonSerializer.Serialize(modelOutput, ModelJsonOptions),
+            Failure: failure);
     }
 
     /// <inheritdoc />
@@ -153,6 +164,12 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             SideEffect = ToolSideEffect.ReadOnly,
             Idempotency = ToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
+            Scheduling = new ToolSchedulingDescriptor
+            {
+                ConcurrencyMode = ToolConcurrencyMode.ExclusiveSession,
+                ClaimResolverId = "invoke-skill-session-v1",
+                MaximumSourceConcurrency = int.MaxValue,
+            },
             Timeout = TimeSpan.FromMinutes(20),
             MaximumOutputBytes = 64 * 1024,
         };

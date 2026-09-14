@@ -436,10 +436,16 @@ public sealed partial class SessionApplication
                 Sensitivity = modelRequest.ContainsSensitiveData
                     ? ConversationSensitivity.Sensitive
                     : ConversationSensitivity.None,
+                ModelProfileId = modelRequest.ResolvedProfileId,
+                ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
+            };
+            invocationContext = invocationContext with
+            {
                 ModelVisibleToolSnapshotId = _conversationToolSnapshots?.Capture(
                     registration.SessionId,
                     runId,
-                    conversationTools.Registrations),
+                    conversationTools.Registrations,
+                    invocationContext),
             };
         }
 
@@ -558,6 +564,7 @@ public sealed partial class SessionApplication
                 try
                 {
                     loopState.TransientState.ValidateHistory(round.ModelRequest);
+                    streamState.BudgetUsage.Start(round.Registration.Budget);
                     await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
                     {
                         await ProcessModelChunkAsync(
@@ -709,7 +716,7 @@ public sealed partial class SessionApplication
                 streamState.ModelSucceeded,
                 streamState.ReportedUsage is not null);
 
-            if (streamState.ReportedUsage is null)
+            if (streamState.BudgetUsage.HasStarted && streamState.ReportedUsage is null)
             {
                 _sessionUsage?.ObserveMissing(round.Registration.SessionId, round.UsageRequestId);
             }
@@ -731,6 +738,7 @@ public sealed partial class SessionApplication
         CorrectiveTurnState correctiveTurns,
         CancellationToken cancellationToken)
     {
+        ProcessUsageChunk(chunk, round, streamState);
         if (chunk.ResponseEnvelope is { } envelope)
         {
             loopState.TransientState.Accept(round.ModelRequest, envelope);
@@ -739,7 +747,6 @@ public sealed partial class SessionApplication
 
         if (streamState.CorrectiveTurnRequested)
         {
-            ProcessUsageChunk(chunk, round, streamState);
             return;
         }
 
@@ -785,8 +792,6 @@ public sealed partial class SessionApplication
                 correctiveTurns,
                 cancellationToken);
         }
-
-        ProcessUsageChunk(chunk, round, streamState);
     }
 
     private void ProcessUsageChunk(
@@ -804,11 +809,7 @@ public sealed partial class SessionApplication
             round.Registration.SessionId,
             round.UsageRequestId,
             chunk.Usage);
-        var usage = round.Registration.Budget.Accrue(new BudgetDimensions(
-            chunk.Usage.InputTokens + chunk.Usage.OutputTokens,
-            1,
-            TimeSpan.Zero,
-            chunk.Usage.EstimatedCost));
+        var usage = streamState.BudgetUsage.Accrue(round.Registration.Budget, chunk.Usage);
         if (usage.IsExhausted)
         {
             throw new BudgetExceededException(
@@ -3143,6 +3144,8 @@ public sealed partial class SessionApplication
         public bool PlanProposalObserved { get; private set; }
 
         public ModelUsage? ReportedUsage { get; set; }
+
+        public ModelRequestBudgetUsage BudgetUsage { get; } = new();
 
         public StringBuilder TextOutput { get; }
 

@@ -20,6 +20,9 @@ public enum AgentRole
 
     /// <summary>Reviews architecture and dependency boundaries.</summary>
     ArchitectureReviewer,
+
+    /// <summary>Reviews functional correctness against requirements and expected behavior.</summary>
+    BugReviewer,
 }
 
 /// <summary>Repository authority granted to a child run.</summary>
@@ -33,6 +36,9 @@ public enum AgentRunMode
 
     /// <summary>Reads immutable change and evidence artifacts for review.</summary>
     ReadOnlyReview,
+
+    /// <summary>Uses the parent workspace and the parent's inherited tool authority.</summary>
+    SharedWorkspace,
 }
 
 /// <summary>Host action after one child fails.</summary>

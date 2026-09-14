@@ -32,6 +32,7 @@ internal sealed class ChildAgentModelLoop
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
+    private readonly IConversationToolSnapshotStore _snapshots;
     private readonly AgentDisplayStream? _display;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentModelLoop"/> class.</summary>
@@ -48,7 +49,8 @@ internal sealed class ChildAgentModelLoop
         AgentModelSelector? selection = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
-        AgentDisplayStream? display = null)
+        AgentDisplayStream? display = null,
+        IConversationToolSnapshotStore? snapshots = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -60,6 +62,7 @@ internal sealed class ChildAgentModelLoop
         _models = models;
         _display = display;
         _tools = tools;
+        _snapshots = snapshots ?? new ConversationToolSnapshotStore();
         _evidence = evidence;
         _sanitizer = sanitizer;
         _prompts = prompts;
@@ -97,6 +100,10 @@ internal sealed class ChildAgentModelLoop
             registrations.Add(new ToolRegistration(
                 new ChildAgentEvidenceTool(_evidence, plan.Provenance.SessionId, assignment.ChildRunId, deliveredEvidenceIds, _prompts),
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "child-evidence")));
+            childToolContext = childToolContext with
+            {
+                AllowedToolIds = [.. childToolContext.AllowedToolIds, ChildAgentEvidenceTool.ToolId],
+            };
         }
 
         var toolDefinitions = ModelToolCanonicalizer.Canonicalize(
@@ -162,114 +169,134 @@ internal sealed class ChildAgentModelLoop
                     ModelContextWindowTokens = model.ContextWindowTokens,
                     ModelRequestOutputReserveTokens = model.OutputReserveTokens,
                     ModelEffectiveInputBudgetTokens = model.ContextWindowTokens - model.OutputReserveTokens,
+                    ModelProfileId = model.ProfileId,
+                    ModelUsesTrustedCatalog = model.UsesTrustedCatalog,
+                    ModelReasoningLevel = model.ReasoningLevel.ToString(),
+                    ModelVisibleToolSnapshotId = null,
+                    RequestedBy = "model",
                 };
 
-                var response = await StreamAsync(
+                var snapshotId = _snapshots.Capture(
                     plan.Provenance.SessionId,
-                    assignment,
-                    model,
-                    fitted.Request,
-                    transientState,
-                    cancellationToken);
-                ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
-                cancellationToken.ThrowIfCancellationRequested();
-                history.MarkDelivered();
-                if (response.InvocationFailure is { } failure)
+                    assignment.ChildRunId,
+                    registrations,
+                    childToolContext);
+                childToolContext = childToolContext with { ModelVisibleToolSnapshotId = snapshotId };
+                try
                 {
-                    var correctionStart = messages.Count;
-                    AddCorrection(messages, ledger, failure.SafeMessage, prompt, [], registrationById, assignment, round, transientState);
-                    history.RecordExchange(correctionStart, round, []);
-                    continue;
-                }
-
-                if (response.ToolRequests.Count > 0)
-                {
-                    if (_steering is not null)
+                    var response = await StreamAsync(
+                        plan.Provenance.SessionId,
+                        assignment,
+                        model,
+                        fitted.Request,
+                        transientState,
+                        cancellationToken);
+                    ledger.Charge(new AgentResourceUsage { ModelTokens = response.ModelTokens });
+                    cancellationToken.ThrowIfCancellationRequested();
+                    history.MarkDelivered();
+                    if (response.InvocationFailure is { } failure)
                     {
-                        var steering = await _steering.PauseChildAtBoundaryAsync(
-                            plan.Provenance.SessionId,
-                            plan.Provenance.ParentRunId,
-                            assignment.ChildRunId,
-                            cancellationToken);
-                        if (steering.Count > 0)
+                        var correctionStart = messages.Count;
+                        AddCorrection(messages, ledger, failure.SafeMessage, prompt, [], registrationById, assignment, round, transientState);
+                        history.RecordExchange(correctionStart, round, []);
+                        continue;
+                    }
+
+                    if (response.ToolRequests.Count > 0)
+                    {
+                        if (_steering is not null)
                         {
-                            if (transientState.HasResponses)
+                            var steering = await _steering.PauseChildAtBoundaryAsync(
+                                plan.Provenance.SessionId,
+                                plan.Provenance.ParentRunId,
+                                assignment.ChildRunId,
+                                cancellationToken);
+                            if (steering.Count > 0)
                             {
-                                var cancelledExchangeStart = messages.Count;
-                                for (var ordinal = 0; ordinal < response.ToolRequests.Count; ordinal++)
+                                if (transientState.HasResponses)
                                 {
-                                    var call = response.ToolRequests[ordinal];
-                                    var correlationId = CreateToolCallId(assignment, round, ordinal);
-                                    transientState.BindToolCall(round, ordinal, correlationId);
-                                    messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, call, round));
-                                    messages.Add(ChildAgentPrompt.CreateToolResultMessage(
-                                        correlationId,
-                                        call.ToolName,
-                                        JsonSerializer.Serialize(new { error = "cancelledByUserSteering" }),
-                                        round,
-                                        isError: true));
+                                    var cancelledExchangeStart = messages.Count;
+                                    for (var ordinal = 0; ordinal < response.ToolRequests.Count; ordinal++)
+                                    {
+                                        var call = response.ToolRequests[ordinal];
+                                        var correlationId = CreateToolCallId(assignment, round, ordinal);
+                                        transientState.BindToolCall(round, ordinal, correlationId);
+                                        messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, call, round));
+                                        messages.Add(ChildAgentPrompt.CreateToolResultMessage(
+                                            correlationId,
+                                            call.ToolName,
+                                            JsonSerializer.Serialize(new { error = "cancelledByUserSteering" }),
+                                            round,
+                                            isError: true));
+                                    }
+
+                                    transientState.SealRound(round, messages.ToArray());
+                                    history.RecordExchange(cancelledExchangeStart, round, []);
                                 }
 
-                                transientState.SealRound(round, messages.ToArray());
-                                history.RecordExchange(cancelledExchangeStart, round, []);
+                                messages.AddRange(steering.Select(prompt.CreateSteeringMessage));
+                                continue;
                             }
-
-                            messages.AddRange(steering.Select(prompt.CreateSteeringMessage));
-                            continue;
                         }
+
+                        var exchangeStart = messages.Count;
+                        IReadOnlyList<EvidenceId> exchangeEvidence = [];
+                        try
+                        {
+                            var continuation = await InvokeToolsAsync(
+                                plan,
+                                assignment,
+                                model.ProfileId,
+                                response.ToolRequests,
+                                childToolContext,
+                                registrationById,
+                                ledger,
+                                evidenceProgress,
+                                round,
+                                transientState,
+                                cancellationToken);
+                            messages.AddRange(continuation.Messages);
+                            var progressMessage = prompt.CreateEvidenceProgressMessage(continuation.Progress);
+                            messages.Add(transientState.HasResponses
+                                ? progressMessage with { Role = ModelMessageRole.User }
+                                : progressMessage);
+                            deliveredEvidenceIds.UnionWith(continuation.DeliveredEvidenceIds);
+                            exchangeEvidence = continuation.DeliveredEvidenceIds;
+                        }
+                        catch (Exception exception) when (exception is InvalidDataException
+                            or ToolArgumentValidationException
+                            or UnauthorizedAccessException)
+                        {
+                            AddCorrection(
+                                messages,
+                                ledger,
+                                exception.Message,
+                                prompt,
+                                response.ToolRequests,
+                                registrationById,
+                                assignment,
+                                round,
+                                transientState);
+                        }
+
+                        history.RecordExchange(exchangeStart, round, exchangeEvidence);
+
+                        continue;
                     }
 
-                    var exchangeStart = messages.Count;
-                    IReadOnlyList<EvidenceId> exchangeEvidence = [];
-                    try
-                    {
-                        var continuation = await InvokeToolsAsync(
-                            plan,
-                            assignment,
-                            model.ProfileId,
-                            response.ToolRequests,
-                            childToolContext,
-                            registrationById,
-                            ledger,
-                            evidenceProgress,
-                            round,
-                            transientState,
-                            cancellationToken);
-                        messages.AddRange(continuation.Messages);
-                        var progressMessage = prompt.CreateEvidenceProgressMessage(continuation.Progress);
-                        messages.Add(transientState.HasResponses
-                            ? progressMessage with { Role = ModelMessageRole.User }
-                            : progressMessage);
-                        deliveredEvidenceIds.UnionWith(continuation.DeliveredEvidenceIds);
-                        exchangeEvidence = continuation.DeliveredEvidenceIds;
-                    }
-                    catch (Exception exception) when (exception is InvalidDataException
-                        or ToolArgumentValidationException
-                        or UnauthorizedAccessException)
-                    {
-                        AddCorrection(
-                            messages,
-                            ledger,
-                            exception.Message,
-                            prompt,
-                            response.ToolRequests,
-                            registrationById,
-                            assignment,
-                            round,
-                            transientState);
-                    }
+                    var acceptedResponse = JsonOutputSanitizer.SanitizeJsonOrText(response.Text, _sanitizer);
 
-                    history.RecordExchange(exchangeStart, round, exchangeEvidence);
-
-                    continue;
+                    stopwatch.Stop();
+                    return new ChildAgentModelResult(
+                        acceptedResponse,
+                        ledger.Snapshot with { WallTime = stopwatch.Elapsed },
+                        deliveredEvidenceIds.OrderBy(item => item.Value).ToArray(),
+                        model);
                 }
-
-                stopwatch.Stop();
-                return new ChildAgentModelResult(
-                    _sanitizer.Sanitize(response.Text),
-                    ledger.Snapshot with { WallTime = stopwatch.Elapsed },
-                    deliveredEvidenceIds.OrderBy(item => item.Value).ToArray(),
-                    model);
+                finally
+                {
+                    _snapshots.Release(snapshotId);
+                }
             }
 
             throw new InvalidOperationException("The child model-turn limit is exhausted.");
@@ -297,10 +324,12 @@ internal sealed class ChildAgentModelLoop
         }
     }
 
-    private static string ResolveSafeFailureReason(Exception exception)
+    private string ResolveSafeFailureReason(Exception exception)
     {
         return exception switch
         {
+            TransientModelException or ModelProviderException or ModelProviderTimeoutException =>
+                BoundedText.Truncate(_sanitizer.Sanitize(exception.Message), _options.MaximumCorrectionReasonCharacters, out _),
             InvalidDataException => exception.Message,
             ToolArgumentValidationException => exception.Message,
             UnauthorizedAccessException => exception.Message,
@@ -432,6 +461,12 @@ internal sealed class ChildAgentModelLoop
                 request,
                 cancellationToken))
             {
+                if (chunk.Usage is not null)
+                {
+                    usage = chunk.Usage;
+                    _sessionUsage?.Observe(sessionId, usageRequestId, chunk.Usage);
+                }
+
                 if (chunk.ResponseEnvelope is { } envelope)
                 {
                     transientState.Accept(request, envelope);
@@ -489,12 +524,6 @@ internal sealed class ChildAgentModelLoop
                     default:
                         throw new InvalidDataException(
                             "The child returned an unsupported structured output type.");
-                }
-
-                if (chunk.Usage is not null)
-                {
-                    usage = chunk.Usage;
-                    _sessionUsage?.Observe(sessionId, usageRequestId, chunk.Usage);
                 }
 
                 if (ExceedsLimit(checked(text.Length + reasoningCharacters), _options.MaximumChildOutputCharacters))
@@ -603,16 +632,14 @@ internal sealed class ChildAgentModelLoop
                         Phase = RunPhase.EvidenceCollection,
                         ToolId = request.ToolName,
                         ArgumentsJson = request.ArgumentsJson,
-                        Context = registration.Implementation is ChildAgentEvidenceTool
-                            ? childContext with { AllowedToolIds = [ChildAgentEvidenceTool.ToolId] }
-                            : childContext,
+                        Context = childContext,
                     });
             }),
         ];
         var reads = batch.Where(item => item.Invocation.ExpectedRegistration?.Implementation is ChildAgentEvidenceTool).ToArray();
         foreach (var read in reads)
         {
-            registrations[ChildAgentEvidenceTool.ToolId].Tool.DeserializeInput(read.Invocation.ArgumentsJson);
+            registrations[read.Invocation.ToolId].Tool.DeserializeInput(read.Invocation.ArgumentsJson);
         }
 
         var ordinary = batch.Except(reads).ToArray();
@@ -771,19 +798,14 @@ internal sealed class ChildAgentModelLoop
             StringComparer.OrdinalIgnoreCase);
         return assignment.Policy.AllowedToolIds.Select(toolId =>
         {
-            if (!available.TryGetValue(toolId, out var registration)
-                || registration.Tool.Definition.Category == ToolCategory.Workflow
-                || string.Equals(
-                    registration.Tool.Definition.Id,
-                    DelegateAgentsContract.ToolId,
-                    StringComparison.OrdinalIgnoreCase))
+            if (!available.TryGetValue(toolId, out var registration))
             {
                 throw new UnauthorizedAccessException(
                     "The child tool policy is not backed by the exact parent registration snapshot.");
             }
 
             return registration;
-        }).ToArray();
+        }).Where(registration => registration.Tool.Definition.SubagentAvailable).ToArray();
     }
 
     private static ToolRegistration ResolveRegistration(

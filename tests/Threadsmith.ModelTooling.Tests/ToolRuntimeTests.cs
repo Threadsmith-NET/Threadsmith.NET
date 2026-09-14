@@ -19,7 +19,7 @@ using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Verifies the plan-08 tool runtime, policy, persistence, UI, and process lifecycle.</summary>
-public static class ToolRuntimeTests
+public static partial class ToolRuntimeTests
 {
     private const string SanitizerExpansionMarker = "token=x";
 
@@ -34,7 +34,7 @@ public static class ToolRuntimeTests
         {
             var content = new string(character, 400 * 1024);
             await File.WriteAllTextAsync(Path.Combine(repository, "large.txt"), content);
-            var tool = new ReadFileTool(TestPromptLoader.Instance, new ToolLimits { ReadFileMaximumContentBytes = 512 * 1024 });
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer(), new ToolLimits { ReadFileMaximumContentBytes = 512 * 1024 });
             await using var events = new DomainEventStream();
             var pipeline = CreatePipeline(events, [tool]);
             var result = await pipeline.InvokeAsync(CreateBatchRequest(
@@ -50,7 +50,7 @@ public static class ToolRuntimeTests
             Assert.NotNull(output);
             Assert.Equal(content, Assert.Single(output.Lines));
             Assert.False(output.IsTruncated);
-            Assert.Equal(384 * 1024, new ReadFileTool(TestPromptLoader.Instance).Definition.MaximumOutputBytes);
+            Assert.Equal(384 * 1024, new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()).Definition.MaximumOutputBytes);
         }
         finally
         {
@@ -155,7 +155,7 @@ public static class ToolRuntimeTests
             ITool[] tools =
             [
                 countingTool,
-                new ReadFileTool(TestPromptLoader.Instance),
+                new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
                 new ListFilesTool(TestPromptLoader.Instance),
                 new SearchTextTool(TestPromptLoader.Instance),
                 new RunProcessTool(processManager, TestPromptLoader.Instance),
@@ -1140,7 +1140,7 @@ public static class ToolRuntimeTests
             var outsideFile = Path.Combine(outside, "outside.txt");
             await File.WriteAllTextAsync(outsideFile, "outside");
             await using var events = new DomainEventStream();
-            var pipeline = CreatePipeline(events, [new ReadFileTool(TestPromptLoader.Instance)]);
+            var pipeline = CreatePipeline(events, [new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())]);
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
@@ -1175,7 +1175,7 @@ public static class ToolRuntimeTests
             await using var events = new DomainEventStream();
             var pipeline = CreatePipeline(
                 events,
-                [new ReadFileTool(TestPromptLoader.Instance)],
+                [new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())],
                 sanitizer: new SecretOutputSanitizer());
 
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
@@ -1383,7 +1383,7 @@ public static class ToolRuntimeTests
                 NullLogger<ProcessManager>.Instance);
             var pipeline = CreatePipeline(
                 events,
-                [new ReadFileTool(TestPromptLoader.Instance), new SearchTextTool(TestPromptLoader.Instance), new GitStatusTool(manager, TestPromptLoader.Instance)]);
+                [new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new SearchTextTool(TestPromptLoader.Instance), new GitStatusTool(manager, TestPromptLoader.Instance)]);
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -2010,7 +2010,7 @@ public static class ToolRuntimeTests
         ITool[] tools =
         [
             new ListFilesTool(TestPromptLoader.Instance),
-            new ReadFileTool(TestPromptLoader.Instance),
+            new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
             new SearchTextTool(TestPromptLoader.Instance),
             new GitStatusTool(processManager, TestPromptLoader.Instance),
             new FindSymbolTool(resolver, TestPromptLoader.Instance),
@@ -2515,7 +2515,7 @@ public static class ToolRuntimeTests
         {
             var lines = Enumerable.Range(1, 430).Select(index => $"line {index}").ToArray();
             await File.WriteAllLinesAsync(Path.Combine(repository, "source.cs"), lines);
-            var tool = new ReadFileTool(TestPromptLoader.Instance);
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -2551,7 +2551,7 @@ public static class ToolRuntimeTests
                 Path.Combine(repository, "long.cs"),
                 Enumerable.Range(1, 2001).Select(static index => index.ToString(
                     System.Globalization.CultureInfo.InvariantCulture)));
-            var tool = new ReadFileTool(TestPromptLoader.Instance);
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
             var context = CreateContext(repository) with
             {
                 TrustLevel = RepositoryTrustLevel.TrustedRead,
@@ -2585,7 +2585,7 @@ public static class ToolRuntimeTests
         try
         {
             await File.WriteAllLinesAsync(Path.Combine(repository, "content.txt"), ["1234", "5678", "9"]);
-            var tool = new ReadFileTool(TestPromptLoader.Instance, new ToolLimits
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer(), new ToolLimits
             {
                 ReadFileMaximumContentBytes = 9,
             });
@@ -2630,7 +2630,7 @@ public static class ToolRuntimeTests
                 ReadFileDefaultLines = 2,
                 ListFilesMaxEntries = 5,
             };
-            var readTool = new ReadFileTool(TestPromptLoader.Instance, tightLimits);
+            var readTool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer(), tightLimits);
             var listTool = new ListFilesTool(TestPromptLoader.Instance, tightLimits);
 
             // Custom ReadFileMaximumBytes rejects a file that exceeds the configured bound.
@@ -2656,7 +2656,7 @@ public static class ToolRuntimeTests
                 listTool.DeserializeInput("{\"path\":\".\",\"maximumEntries\":6}"));
 
             // Default tool limits (no injection) still apply the compiled 1 MiB read bound, so big.txt reads fine.
-            var defaultReadTool = new ReadFileTool(TestPromptLoader.Instance);
+            var defaultReadTool = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
             var defaultResult = await defaultReadTool.ExecuteAsync(
                 new ReadFileInput { Path = "big.txt", MaximumLines = 4 },
                 new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
@@ -2746,7 +2746,7 @@ public static class ToolRuntimeTests
     [InlineData("{\"maximumLines\":10}")]
     public static void ReadFileTool_InvalidArguments_RemainRejected(string argumentsJson)
     {
-        var tool = new ReadFileTool(TestPromptLoader.Instance);
+        var tool = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
 
         Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(argumentsJson));
     }
@@ -3103,7 +3103,7 @@ public static class ToolRuntimeTests
                 [
                     new ListFilesTool(TestPromptLoader.Instance),
                     new SearchTextTool(TestPromptLoader.Instance),
-                    new ReadFileTool(TestPromptLoader.Instance),
+                    new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
                 ]);
             var context = CreateContext(repository) with
             {
@@ -3208,7 +3208,7 @@ public static class ToolRuntimeTests
             var pipeline = CreatePipeline(
                 events,
                 [
-                    new ReadFileTool(TestPromptLoader.Instance),
+                    new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
                     new SearchTextTool(TestPromptLoader.Instance),
                     new OrderedReadTool("valid_read", ToolConcurrencyMode.ParallelSafe, executionOrder),
                 ]);

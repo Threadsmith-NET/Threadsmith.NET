@@ -82,7 +82,8 @@ public sealed record ToolActivityProjection(
     bool Succeeded,
     bool IsTruncated,
     string? Error,
-    string? ResultPreview = null);
+    string? ResultPreview = null,
+    string? ActivityOrigin = null);
 
 /// <summary>One approval awaiting a user or host policy decision.</summary>
 public sealed record ApprovalProjection(

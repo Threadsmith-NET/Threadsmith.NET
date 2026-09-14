@@ -16,5 +16,6 @@
     <ProjectReference Include="..\..\src\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Skills\Threadsmith.Skills.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Workspaces\Threadsmith.Workspaces.csproj" />
   </ItemGroup>
 </Project>

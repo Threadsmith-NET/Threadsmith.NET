@@ -150,7 +150,7 @@ public sealed partial class SubagentRoleLiveTests
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
         var prompts = TestPromptLoader.Instance;
-        var registry = new ToolRegistry([new ReadFileTool(prompts), new ListFilesTool(prompts)]);
+        var registry = new ToolRegistry([new ReadFileTool(prompts, new Threadsmith.Telemetry.SecretOutputSanitizer()), new ListFilesTool(prompts)]);
         var pipeline = new ToolInvocationPipeline(
             registry,
             new DefaultPolicyEngine(),

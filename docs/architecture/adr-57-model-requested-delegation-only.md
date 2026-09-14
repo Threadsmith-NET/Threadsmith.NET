@@ -17,3 +17,7 @@ Plan and mutation approval, bounded proposal repair, scope/baseline validation, 
 ## Consequences
 
 An approved edit never causes a subagent launch on its own. Explicit model delegation retains the existing read-only roles, one-layer limit, authority checks, scheduling, and durable outcomes. This change removes automatic child orchestration; it does not by itself make the separate mutation request preserve the preceding conversation's cached prefix. Historical implementation plans remain unchanged.
+
+## Native skills
+
+Native model procedures use the same request-scoped tool snapshot and `delegate_agents` entry as conversation models. The actual model call owns the snapshot and frozen parent model/reasoning selection. Role configuration still takes precedence over inherited selection. A skill name, prompt or manifest cannot grant delegation authority. There is no special review entry.

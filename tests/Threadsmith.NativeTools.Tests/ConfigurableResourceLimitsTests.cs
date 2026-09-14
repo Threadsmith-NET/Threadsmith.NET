@@ -49,8 +49,8 @@ public sealed class ConfigurableResourceLimitsTests
             ByTool = [new() { ToolId = "read_file", MaximumOutputBytes = 2000000, MaximumSourceConcurrency = 20 }],
         };
         var registry = new ToolRegistry([], runtimeOptions: options);
-        var original = new ReadFileTool(TestPromptLoader.Instance);
-        var replacement = new ReadFileTool(TestPromptLoader.Instance);
+        var original = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer());
+        var replacement = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer());
         var source = new ToolActivitySource(ToolActivitySourceKind.Mcp, "configured test");
         registry.RegisterOrReplace(original, source);
         var first = registry.GetRegistration("read_file");
@@ -90,7 +90,7 @@ public sealed class ConfigurableResourceLimitsTests
         try
         {
             await File.WriteAllLinesAsync(Path.Combine(root, "large.txt"), Enumerable.Repeat(new string('a', 30), 2100));
-            var tool = new ReadFileTool(TestPromptLoader.Instance, new ToolLimits
+            var tool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer(), new ToolLimits
             {
                 ReadFileDefaultLines = 3000,
                 ReadFileMaxLines = 3000,

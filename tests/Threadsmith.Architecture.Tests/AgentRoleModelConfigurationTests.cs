@@ -14,7 +14,7 @@ public static class AgentRoleModelConfigurationTests
     private const string ProfileId = "11111111-1111-1111-1111-111111111111";
     private const string RolePath = "agents:roleModels:explorer:";
 
-    /// <summary>All six roles may share one trusted profile and inherit its default reasoning.</summary>
+    /// <summary>All defined roles may share one trusted profile and inherit its default reasoning.</summary>
     [Fact]
     public static void Load_AllRolesMayShareOneProfileAndOmittedReasoningUsesDefault()
     {
@@ -28,7 +28,7 @@ public static class AgentRoleModelConfigurationTests
 
         var policy = AgentRoleModelConfiguration.Load(Build(entries), CreateCatalog());
 
-        Assert.Equal(6, policy.RoleModels.Count);
+        Assert.Equal(Enum.GetValues<AgentRole>().Length, policy.RoleModels.Count);
         Assert.All(policy.RoleModels.Values, route =>
         {
             Assert.Equal(ReasoningLevel.Medium, route.ReasoningLevel);

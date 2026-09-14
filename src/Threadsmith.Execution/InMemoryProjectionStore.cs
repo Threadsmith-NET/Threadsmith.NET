@@ -158,7 +158,8 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                             IsCompleted: false,
                             Succeeded: false,
                             IsTruncated: false,
-                            Error: null),
+                            Error: null,
+                            ActivityOrigin: started.ActivityOrigin),
                     ],
                 },
                 ToolInvocationCompleted completed when existing is not null => existing with

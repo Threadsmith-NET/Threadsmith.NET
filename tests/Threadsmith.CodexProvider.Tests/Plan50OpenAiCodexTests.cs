@@ -786,6 +786,37 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("function_call_output", continuedInput[nextInput.GetArrayLength() + 1].GetProperty("type").GetString());
     }
 
+    /// <summary>Response body timeouts are failures; actual caller cancellation remains cancellation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ResponseStreamClassifiesTimeoutAndCallerCancellation(bool callerCancels)
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new WaitingResponseStream()),
+        });
+        var provider = await CreateProviderAsync(
+            handler,
+            "token",
+            configureProfile: profile => profile with { Timeout = callerCancels ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(100) });
+        using var caller = new CancellationTokenSource();
+        if (callerCancels)
+        {
+            caller.CancelAfter(TimeSpan.FromMilliseconds(100));
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+                await provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token));
+        }
+        else
+        {
+            var exception = await Assert.ThrowsAsync<ModelProviderTimeoutException>(async () =>
+                await provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token));
+            Assert.Contains("timed out", exception.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(1, handler.RequestCount);
+    }
+
     private static HttpResponseMessage JsonResponse(string value)
     {
         return new(HttpStatusCode.OK)
@@ -803,6 +834,15 @@ public sealed class Plan50OpenAiCodexTests
             Encoding.UTF8,
             "text/event-stream"),
         };
+    }
+
+    private sealed class WaitingResponseStream : MemoryStream
+    {
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
     }
 
     private static async Task<IModelProvider> CreateProviderAsync(

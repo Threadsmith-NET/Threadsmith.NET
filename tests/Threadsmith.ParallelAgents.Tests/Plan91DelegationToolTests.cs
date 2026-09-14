@@ -12,7 +12,7 @@ using Xunit;
 /// <summary>Verifies Plan 91 model-facing contracts and frozen child policy construction.</summary>
 public sealed class Plan91DelegationToolTests
 {
-    /// <summary>Verifies read-only and inherited children receive distinct, non-recursive tool surfaces.</summary>
+    /// <summary>Verifies read-only and inherited children receive explicitly narrowed and fully inherited tool surfaces.</summary>
     [Fact]
     public void PlanFactory_FreezesContextSensitivityAndNarrowedTools()
     {
@@ -37,7 +37,8 @@ public sealed class Plan91DelegationToolTests
                 conversationAvailable: true),
             new MetadataTool("web_search", ToolCategory.ExternalSearch, ToolSideEffect.ReadOnly),
             new MetadataTool("invoke_skill", ToolCategory.Workflow, ToolSideEffect.ReadOnly),
-            new MetadataTool(DelegateAgentsContract.ToolId, ToolCategory.Workflow, ToolSideEffect.ReadOnly),
+            new MetadataTool(DelegateAgentsContract.ToolId, ToolCategory.Workflow, ToolSideEffect.ReadOnly, subagentAvailable: false),
+            new MetadataTool("parent_only_read", ToolCategory.FileRead, ToolSideEffect.ReadOnly, subagentAvailable: false),
             new MetadataTool(
                 "approval_read",
                 ToolCategory.FileRead,
@@ -62,6 +63,7 @@ public sealed class Plan91DelegationToolTests
             visibleToolIds:
             [
                 "approval_read",
+                "parent_only_read",
                 DelegateAgentsContract.ToolId,
                 "invoke_skill",
                 "read_file",
@@ -102,15 +104,18 @@ public sealed class Plan91DelegationToolTests
         Assert.False(plan.Assignments[0].Policy.AllowNetwork);
         Assert.False(plan.Assignments[0].Policy.AllowProcesses);
         Assert.Equal(
-            ["read_file", "web_search"],
+            ["approval_read", "invoke_skill", "read_file", "run_process", "web_search"],
             plan.Assignments[1].Policy.AllowedToolIds);
         Assert.True(plan.Assignments[1].Policy.AllowNetwork);
-        Assert.False(plan.Assignments[1].Policy.AllowProcesses);
+        Assert.True(plan.Assignments[1].Policy.AllowProcesses);
+        Assert.Equal(AgentRunMode.SharedWorkspace, plan.Assignments[1].Mode);
+        Assert.Empty(plan.Assignments[1].Policy.DeniedToolIds);
+        Assert.Empty(plan.Assignments[0].Policy.DeniedToolIds);
         Assert.All(plan.Assignments, assignment =>
         {
+            Assert.DoesNotContain("hidden_read", assignment.Policy.AllowedToolIds);
+            Assert.DoesNotContain("parent_only_read", assignment.Policy.AllowedToolIds);
             Assert.DoesNotContain(DelegateAgentsContract.ToolId, assignment.Policy.AllowedToolIds);
-            Assert.DoesNotContain("invoke_skill", assignment.Policy.AllowedToolIds);
-            Assert.Contains(DelegateAgentsContract.ToolId, assignment.Policy.DeniedToolIds);
         });
         Assert.Equal(
             plan.Assignments.Sum(assignment => assignment.Budget.ModelTokens),
@@ -832,7 +837,8 @@ public sealed class Plan91DelegationToolTests
             ToolCategory category,
             ToolSideEffect sideEffect,
             bool conversationAvailable = false,
-            ApprovalLevel requiredApproval = ApprovalLevel.None)
+            ApprovalLevel requiredApproval = ApprovalLevel.None,
+            bool subagentAvailable = true)
         {
             _definition = new ToolDefinition
             {
@@ -850,6 +856,7 @@ public sealed class Plan91DelegationToolTests
                 Timeout = TimeSpan.FromSeconds(1),
                 MaximumOutputBytes = 1_024,
                 ConversationAvailable = conversationAvailable,
+                SubagentAvailable = subagentAvailable,
             };
         }
 

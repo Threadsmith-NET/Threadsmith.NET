@@ -57,11 +57,11 @@ public sealed partial class SkillSubsystemTests
         });
     }
 
-    /// <summary>Both successful and denied tools retain chronological continuation instructions.</summary>
+    /// <summary>Successful and denied tools have one structured result and a compatible legacy continuation.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task SkillProcedure_ContinuationGuidanceFollowsNativeToolResult(bool denyTool)
+    public async Task SkillProcedure_ToolContinuationPreservesStructuredAndLegacyProjections(bool denyTool)
     {
         var model = new PermissionModelProvider();
         var tool = new PermissionProbeTool();
@@ -75,14 +75,16 @@ public sealed partial class SkillSubsystemTests
         Assert.Single(model.Requests[0].Messages);
         var continuation = model.Requests[1];
         Assert.Equal(
-            [ModelMessageRole.User, ModelMessageRole.Assistant, ModelMessageRole.Tool, ModelMessageRole.User],
+            [ModelMessageRole.User, ModelMessageRole.Assistant, ModelMessageRole.Tool],
             continuation.Messages.Select(message => message.Role));
         Assert.Equal(continuation.Messages[1].ToolCallId, continuation.Messages[2].ToolCallId);
         Assert.Equal(denyTool, continuation.Messages[2].IsError);
-        var guidance = Assert.Single(continuation.Messages[^1].Content).Content;
-        Assert.Contains("Continue the declared procedure. Return only output-schema JSON.", guidance, StringComparison.Ordinal);
-        Assert.Contains(Assert.Single(continuation.Messages[2].Content).Content, guidance, StringComparison.Ordinal);
-        Assert.EndsWith(guidance, continuation.Input, StringComparison.Ordinal);
+        var instructions = Assert.Single(continuation.Messages[0].Content).Content;
+        Assert.Contains("Return only JSON matching the declared output schema.", instructions, StringComparison.Ordinal);
+        Assert.Contains("Continue the declared procedure. Return only output-schema JSON.", continuation.Input, StringComparison.Ordinal);
+        var toolResult = Assert.Single(continuation.Messages[2].Content).Content;
+        Assert.Contains(toolResult, continuation.Input, StringComparison.Ordinal);
+        Assert.Single(continuation.Messages, message => message.GetModelVisibleContent().Contains(toolResult, StringComparison.Ordinal));
         Assert.Equal(ReasoningLevel.None, continuation.ReasoningLevel);
     }
 }

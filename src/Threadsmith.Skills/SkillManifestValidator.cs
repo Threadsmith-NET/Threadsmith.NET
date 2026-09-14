@@ -125,13 +125,18 @@ internal static partial class SkillManifestValidator
                 throw new InvalidDataException("Skill workflow step identity, loop, or dependencies are invalid.");
             }
 
+            if (step.PromptFile is { } promptFile && !PromptFileNames.All.Contains(promptFile, StringComparer.Ordinal))
+            {
+                throw new InvalidDataException("Skill workflow references an unknown deployed prompt.");
+            }
+
             ValidateOptionalAsset(step.InstructionAsset, assetPaths);
             ValidateOptionalAsset(step.InputSchemaAsset, assetPaths);
             ValidateOptionalAsset(step.OutputSchemaAsset, assetPaths);
             if ((step.Kind is SkillWorkflowStepKind.InvokeProcedure
                     or SkillWorkflowStepKind.CollectEvidence
                     or SkillWorkflowStepKind.Summarize)
-                && (step.InstructionAsset is null || step.OutputSchemaAsset is null))
+                && ((step.InstructionAsset is null && step.PromptFile is null) || step.OutputSchemaAsset is null))
             {
                 throw new InvalidDataException(
                     "Model-backed workflow steps require instruction and output-schema assets.");

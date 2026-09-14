@@ -42,7 +42,7 @@ public static class InteractiveCommandCatalog
         new("/reasoning", "/reasoning [level]", "Set reasoning effort using the active model's configured levels"),
         new("/resume", "/resume [id]", "Resume a durable repository session"),
         new("/semantic_refresh", "/semantic_refresh", "Force and await a complete semantic refresh"),
-        new("/skills", "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]", "Govern skills"),
+        new("/skills", "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]", "Browse, verify, and toggle skills"),
         new("/theme", "/theme [id|current]", "Select, change, or report the active theme", IsFrontendLocal: true),
         new("/thinking", "/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
         new("/tools", "/tools", "Browse and toggle repository tool availability"),

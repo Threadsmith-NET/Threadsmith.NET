@@ -30,7 +30,7 @@ using Xunit;
 
 /// <summary>Verifies the complete Milestone 1 command, event, shell, and durability contracts.</summary>
 [Collection("TUIKit terminal")]
-public static class Milestone1Tests
+public static partial class Milestone1Tests
 {
     /// <summary>Gets every legal non-terminal transition path used by the transition matrix.</summary>
     public static TheoryData<RunPhase[]> LegalTransitionPaths => [.. GetLegalTransitionPaths()];
@@ -798,14 +798,18 @@ public static class Milestone1Tests
     [Fact]
     public static async Task FakeModel_MissingUsage_DoesNotCrashBudgetLayer()
     {
+        var budget = new ExecutionBudget(new BudgetDimensions(0, 1, TimeSpan.FromMinutes(1)));
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession { Turns = [new ScriptedTurn { Text = "no usage" }] },
-            budget: new ExecutionBudget(new BudgetDimensions(0, 0, TimeSpan.FromMinutes(1))));
+            budget: budget);
         var sessionId = await harness.Dispatcher.DispatchAsync(new CreateSessionCommand("test"));
         var runId = await harness.Dispatcher.DispatchAsync(
             new SubmitRequestCommand(sessionId, "request"));
 
         Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        var charged = budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
+        Assert.Equal(1, charged.Calls);
+        Assert.Equal(0, charged.Tokens);
     }
 
     /// <summary>The TUI controller maps open, submit, wait, and cancel gestures to commands.</summary>
@@ -2200,7 +2204,7 @@ public static class Milestone1Tests
             "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]"
                 + Environment.NewLine
                 + descriptionIndent
-                + "Govern skills",
+                + "Browse, verify, and toggle skills",
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -5966,6 +5970,7 @@ public static class Milestone1Tests
                 SkillInvocationStatus.AwaitingHost,
                 1,
                 "resolve host action"),
+            new SkillInvocationProgressObserved(sessionId, occurredAt, SkillInvocationId.New(), 1, "Preparing source snapshots"),
             new SkillInvocationCompleted(
                 sessionId,
                 occurredAt,
@@ -6035,6 +6040,8 @@ public static class Milestone1Tests
 
         internal int ToggleCount { get; private set; }
 
+        internal Func<InteractionToggleRequest, Func<string, bool, CancellationToken, Task<InteractionToggleResult>>, Func<string, string, CancellationToken, Task<InteractionToggleResult>>, CancellationToken, Task>? Manage { get; set; }
+
         internal Func<InteractionToggleRequest, Func<string, string, CancellationToken, Task<InteractionToggleResult>>, CancellationToken, Task>? Actions { get; set; }
 
         public Task SelectActionTogglesAsync(
@@ -6043,7 +6050,8 @@ public static class Milestone1Tests
             Func<string, string, CancellationToken, Task<InteractionToggleResult>> action,
             CancellationToken cancellationToken = default)
         {
-            return Actions is { } actions ? actions(request, action, cancellationToken) : SelectTogglesAsync(request, change, cancellationToken);
+            return Manage is { } manage ? manage(request, change, action, cancellationToken)
+                : Actions is { } actions ? actions(request, action, cancellationToken) : SelectTogglesAsync(request, change, cancellationToken);
         }
 
         public Task SelectTogglesAsync(InteractionToggleRequest request, Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change, CancellationToken cancellationToken = default)
@@ -6793,7 +6801,8 @@ public static class Milestone1Tests
             TimeSpan? delay = null,
             IBudget? budget = null,
             IEnumerable<object>? additionalHandlers = null,
-            IModelProvider? modelProvider = null)
+            IModelProvider? modelProvider = null,
+            Func<IDomainEventStream, IProjectionStore, IEnumerable<object>>? additionalHandlerFactory = null)
         {
             var stream = new DomainEventStream();
             var projections = new InMemoryProjectionStore();
@@ -6820,6 +6829,11 @@ public static class Milestone1Tests
             if (additionalHandlers is not null)
             {
                 handlers.AddRange(additionalHandlers);
+            }
+
+            if (additionalHandlerFactory is not null)
+            {
+                handlers.AddRange(additionalHandlerFactory(stream, projections));
             }
 
             ICommandDispatcher dispatcher = new CommandDispatcher(handlers);

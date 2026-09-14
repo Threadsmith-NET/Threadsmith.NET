@@ -171,7 +171,8 @@ internal static class ToolPathRules
     /// <summary>Normalizes and confines a tool path using host filesystem semantics.</summary>
     internal static string NormalizeAndValidate(
         string candidatePath,
-        ToolInvocationContext context)
+        ToolInvocationContext context,
+        bool inspectFileSystem = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(candidatePath);
         ArgumentNullException.ThrowIfNull(context);
@@ -201,6 +202,11 @@ internal static class ToolPathRules
         if (RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths))
         {
             throw new UnauthorizedAccessException("Tool path matches a prohibited repository pattern.");
+        }
+
+        if (!inspectFileSystem)
+        {
+            return normalized;
         }
 
         var current = repositoryRoot;

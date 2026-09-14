@@ -210,6 +210,9 @@ public sealed record SkillModelRequirements
 /// <summary>All declarative requirements resolved before content loading.</summary>
 public sealed record SkillRequirementSet
 {
+    /// <summary>Include currently enabled host tools, still subject to the invoking session's policy.</summary>
+    public bool InheritAvailableTools { get; init; }
+
     /// <summary>Required host tool ids.</summary>
     public IReadOnlyList<string> RequiredTools { get; init; } = [];
 
@@ -246,10 +249,10 @@ public sealed record SkillBudget
     public int WorkflowSteps { get; init; } = 16;
 
     /// <summary>Maximum model turns.</summary>
-    public int ModelTurns { get; init; } = 8;
+    public int ModelTurns { get; init; } = 64;
 
     /// <summary>Maximum tool calls.</summary>
-    public int ToolCalls { get; init; } = 32;
+    public int ToolCalls { get; init; } = 128;
 
     /// <summary>Maximum mutation proposals.</summary>
     public int Mutations { get; init; } = 16;
@@ -304,11 +307,20 @@ public sealed record SkillWorkflowStep
     /// <summary>Procedure instruction asset when applicable.</summary>
     public string? InstructionAsset { get; init; }
 
+    /// <summary>Optional deployed prompt asset loaded through the shared prompt catalog.</summary>
+    public string? PromptFile { get; init; }
+
     /// <summary>Input schema asset path.</summary>
     public string? InputSchemaAsset { get; init; }
 
     /// <summary>Output schema asset path.</summary>
     public string? OutputSchemaAsset { get; init; }
+
+    /// <summary>Optional boolean output property declaring whether this procedure succeeded.</summary>
+    public string? SuccessProperty { get; init; }
+
+    /// <summary>Optional string output property displayed as the procedure response.</summary>
+    public string? ResponseProperty { get; init; }
 
     /// <summary>Maximum fixed repetitions; values above one consume the correction budget.</summary>
     public int MaximumIterations { get; init; } = 1;
@@ -458,6 +470,9 @@ public sealed record SkillCompatibilityResult
     /// <summary>Stable incompatibility reasons.</summary>
     public IReadOnlyList<string> DenialReasons { get; init; } = [];
 
+    /// <summary>Enabled tools inherited when requested by the package.</summary>
+    public IReadOnlyList<string> InheritedTools { get; init; } = [];
+
     /// <summary>Required tools currently available.</summary>
     public IReadOnlyList<string> AvailableRequiredTools { get; init; } = [];
 
@@ -496,6 +511,18 @@ public sealed record SkillContextSegment
 /// <summary>Typed JSON invocation request encoded as bounded canonical JSON.</summary>
 public sealed record SkillInvocationRequest
 {
+    /// <summary>Host-only correlation to the tool that owns this invocation's visible lifecycle; grants no authority.</summary>
+    public ToolInvocationId? InvokingToolInvocationId { get; init; }
+
+    /// <summary>Opaque host-owned caller snapshot; nested tool scope remains bound to that request's lifetime.</summary>
+    public Guid? CallerToolSnapshotId { get; init; }
+
+    /// <summary>Host-selected provider route frozen with the model profile, independent of transient tool authority.</summary>
+    public bool ModelUsesTrustedCatalog { get; init; }
+
+    /// <summary>Uses the host's defaults for an exactly bound workflow; explicit callers otherwise retain their supplied budget.</summary>
+    public bool UseDefaultBudget { get; init; }
+
     /// <summary>Stable invocation identity.</summary>
     public required SkillInvocationId InvocationId { get; init; }
 
@@ -505,7 +532,7 @@ public sealed record SkillInvocationRequest
     /// <summary>Owning run.</summary>
     public required RunId RunId { get; init; }
 
-    /// <summary>Owning workspace when repository work is possible.</summary>
+    /// <summary>Owning workspace; when omitted, initial invocation binds it to the active session.</summary>
     public WorkspaceId? WorkspaceId { get; init; }
 
     /// <summary>Explicit immutable selection or scope-qualified id/version selector.</summary>
@@ -538,6 +565,15 @@ public sealed record SkillInvocationHostContext
 
     /// <summary>Current session phase.</summary>
     public RunPhase Phase { get; init; }
+
+    /// <summary>Configured host budget used when the invocation did not supply a ceiling.</summary>
+    public SkillBudget DefaultBudget { get; init; } = new();
+
+    /// <summary>Current model selected by the invoking session.</summary>
+    public ModelProfileId? ModelProfileId { get; init; }
+
+    /// <summary>Current reasoning preference selected by the invoking session.</summary>
+    public string? ReasoningLevel { get; init; }
 }
 
 /// <summary>Frozen invocation resolution used throughout one workflow.</summary>
@@ -564,6 +600,9 @@ public sealed record SkillInvocationPlan
     /// <summary>Selected configured model when a procedure needs one.</summary>
     public ModelProfileId? ModelProfileId { get; init; }
 
+    /// <summary>Session reasoning preference frozen for this invocation.</summary>
+    public string? ReasoningLevel { get; init; }
+
     /// <summary>Declared currently available tool ids eligible for procedure turns.</summary>
     public IReadOnlyList<string> AvailableToolIds { get; init; } = [];
 
@@ -587,6 +626,12 @@ public sealed record SkillHostActionProposal
 /// <summary>One durable completed or waiting workflow step.</summary>
 public sealed record SkillWorkflowStepResult
 {
+    /// <summary>Readable response selected by the package's declared response property.</summary>
+    public string? Response { get; init; }
+
+    /// <summary>Validated procedure outcome; absent mappings preserve ordinary completion.</summary>
+    public bool Succeeded { get; init; } = true;
+
     /// <summary>Step identity.</summary>
     public required string StepId { get; init; }
 
@@ -621,6 +666,9 @@ public sealed record SkillWorkflowStepResult
 /// <summary>Durable workflow checkpoint pinned to one immutable package.</summary>
 public sealed record SkillWorkflowCheckpoint
 {
+    /// <summary>Host-only correlation to the tool that owns this invocation's visible lifecycle; grants no authority.</summary>
+    public ToolInvocationId? InvokingToolInvocationId { get; init; }
+
     /// <summary>Supported checkpoint schema version.</summary>
     public int SchemaVersion { get; init; } = 1;
 
@@ -663,6 +711,12 @@ public sealed record SkillWorkflowCheckpoint
     /// <summary>Configured model pinned for this invocation.</summary>
     public ModelProfileId? ModelProfileId { get; init; }
 
+    /// <summary>Repository-excluding provider route frozen with the selected model profile.</summary>
+    public bool ModelUsesTrustedCatalog { get; init; }
+
+    /// <summary>Session reasoning preference frozen for this invocation.</summary>
+    public string? ReasoningLevel { get; init; }
+
     /// <summary>Declared currently available tool ids pinned for restoration.</summary>
     public IReadOnlyList<string> AvailableToolIds { get; init; } = [];
 
@@ -691,6 +745,9 @@ public sealed record SkillWorkflowCheckpoint
 /// <summary>Authoritative skill invocation result.</summary>
 public sealed record SkillInvocationResult
 {
+    /// <summary>Readable response selected by the package's declared response property.</summary>
+    public string? Response { get; init; }
+
     /// <summary>Invocation identity.</summary>
     public required SkillInvocationId InvocationId { get; init; }
 

@@ -164,7 +164,7 @@ public static class Plan49ToolTimingTests
     [Fact]
     public static void BuiltInTools_ValidatedInput_ProvidesActivityDetail()
     {
-        ITool readTool = new ReadFileTool(TestPromptLoader.Instance);
+        ITool readTool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer());
         var readInput = readTool.DeserializeInput("{\"path\":\"src/Program.cs\"}");
         ITool processTool = new RunProcessTool(new UnusedProcessManager(), TestPromptLoader.Instance);
         var processInput = processTool.DeserializeInput("{\"command\":\"dotnet test src/Threadsmith.sln\"}");
@@ -203,7 +203,7 @@ public static class Plan49ToolTimingTests
         int maximumLines,
         string expected)
     {
-        ITool readTool = new ReadFileTool(TestPromptLoader.Instance);
+        ITool readTool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer());
         var input = readTool.DeserializeInput(JsonSerializer.Serialize(new ReadFileInput
         {
             Path = "docs/implementation-plans/milestones.md",
@@ -219,7 +219,7 @@ public static class Plan49ToolTimingTests
     public static async Task ReadFileTool_LongPath_PublishesLineRangeBeforeTruncatedPath()
     {
         var timeProvider = new ManualTimeProvider();
-        ITool readTool = new ReadFileTool(TestPromptLoader.Instance);
+        ITool readTool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer());
         await using var events = new DomainEventStream();
         ToolInvocationStarted? started = null;
         await using var subscription = events.Subscribe((item, _) =>

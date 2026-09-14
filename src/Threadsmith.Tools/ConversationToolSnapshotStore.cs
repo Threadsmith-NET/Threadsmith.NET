@@ -1,8 +1,7 @@
-namespace Threadsmith.Execution;
+namespace Threadsmith.Tools;
 
 using System.Collections.Concurrent;
 using Threadsmith.Core;
-using Threadsmith.Tools;
 
 /// <summary>Owns exact model-visible registrations outside tool-visible invocation contexts.</summary>
 public interface IConversationToolSnapshotStore
@@ -11,10 +10,14 @@ public interface IConversationToolSnapshotStore
     Guid Capture(
         SessionId sessionId,
         RunId runId,
-        IReadOnlyList<ToolRegistration> registrations);
+        IReadOnlyList<ToolRegistration> registrations,
+        ToolInvocationContext? invocationContext = null);
 
     /// <summary>Resolves one exact registration set for its owning request.</summary>
     IReadOnlyList<ToolRegistration> Resolve(Guid snapshotId, SessionId sessionId, RunId runId);
+
+    /// <summary>Resolves the host-owned invocation authority captured with the exact request.</summary>
+    ToolInvocationContext? ResolveContext(Guid snapshotId, SessionId sessionId, RunId runId);
 
     /// <summary>Releases one request-bound snapshot after model and tool processing completes.</summary>
     void Release(Guid snapshotId);
@@ -29,13 +32,14 @@ public sealed class ConversationToolSnapshotStore : IConversationToolSnapshotSto
     public Guid Capture(
         SessionId sessionId,
         RunId runId,
-        IReadOnlyList<ToolRegistration> registrations)
+        IReadOnlyList<ToolRegistration> registrations,
+        ToolInvocationContext? invocationContext = null)
     {
         ArgumentNullException.ThrowIfNull(registrations);
         var snapshotId = Guid.NewGuid();
         if (!_snapshots.TryAdd(
             snapshotId,
-            new Snapshot(sessionId, runId, registrations.ToArray())))
+            new Snapshot(sessionId, runId, registrations.ToArray(), invocationContext)))
         {
             throw new InvalidOperationException("A model-visible tool snapshot identity collided.");
         }
@@ -62,6 +66,15 @@ public sealed class ConversationToolSnapshotStore : IConversationToolSnapshotSto
     }
 
     /// <inheritdoc />
+    public ToolInvocationContext? ResolveContext(Guid snapshotId, SessionId sessionId, RunId runId)
+    {
+        _ = Resolve(snapshotId, sessionId, runId);
+        return _snapshots.TryGetValue(snapshotId, out var snapshot)
+            ? snapshot.InvocationContext
+            : throw new InvalidOperationException("The invoking model request has already completed.");
+    }
+
+    /// <inheritdoc />
     public void Release(Guid snapshotId)
     {
         if (snapshotId != Guid.Empty)
@@ -73,5 +86,6 @@ public sealed class ConversationToolSnapshotStore : IConversationToolSnapshotSto
     private sealed record Snapshot(
         SessionId SessionId,
         RunId RunId,
-        IReadOnlyList<ToolRegistration> Registrations);
+        IReadOnlyList<ToolRegistration> Registrations,
+        ToolInvocationContext? InvocationContext);
 }

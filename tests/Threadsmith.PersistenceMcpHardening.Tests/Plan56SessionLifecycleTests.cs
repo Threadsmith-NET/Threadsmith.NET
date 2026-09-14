@@ -11,7 +11,7 @@ using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Plan 56 durable catalog and independent clone verification.</summary>
-public static class Plan56SessionLifecycleTests
+public static partial class Plan56SessionLifecycleTests
 {
     /// <summary>Migration 8 makes pre-catalog durable sessions selectable without losing conversation metadata.</summary>
     [Fact]
@@ -240,7 +240,8 @@ public static class Plan56SessionLifecycleTests
         harness.Usage.Observe(
             source.ActiveSession.SessionId,
             new ModelRequestUsageId(RunId.New(), "turn", 0, Guid.NewGuid()),
-            new ModelUsage(13, 7));
+            new ModelUsage(13, 7, IsEstimate: true));
+        harness.Usage.ObserveMissing(source.ActiveSession.SessionId, new ModelRequestUsageId(RunId.New(), "failed", 0, Guid.NewGuid()));
         await harness.Evidence.AddAsync(new Evidence
         {
             EvidenceId = EvidenceId.New(),
@@ -255,6 +256,15 @@ public static class Plan56SessionLifecycleTests
 
         var clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand());
 
+        var cloneSession = clone.ActiveSession.SessionId;
+        harness.Usage.Observe(cloneSession, new ModelRequestUsageId(RunId.New(), "turn", 0, Guid.NewGuid()), new ModelUsage(10, 2));
+        await harness.Lifecycle.CheckpointCompletedTurnAsync(cloneSession);
+        var persistedUsage = await catalog.GetUsageAsync(cloneSession);
+        Assert.Equal(10, persistedUsage.InputTokens);
+        Assert.Equal(2, persistedUsage.OutputTokens);
+        Assert.False(persistedUsage.IsEstimate);
+        Assert.False(persistedUsage.HasUnknownUsage);
+        Assert.False(harness.Usage.GetSnapshot(cloneSession).HasUnknownUsage);
         Assert.Equal(0, clone.InputTokens);
         Assert.Equal(0, clone.OutputTokens);
         Assert.Equal(13, clone.InheritedInputTokens);
@@ -623,6 +633,8 @@ public static class Plan56SessionLifecycleTests
             Conversations = conversations;
         }
 
+        internal string DirectoryPath => _directory;
+
         internal string ConnectionString { get; }
 
         internal SqliteConversationStore Conversations { get; }
@@ -691,7 +703,8 @@ public static class Plan56SessionLifecycleTests
             ISessionLifecycleStore store,
             IConversationStore conversations,
             ActiveModelSelectionService? activeModels = null,
-            IModelProvider? modelProvider = null)
+            IModelProvider? modelProvider = null,
+            JsonlModelExchangeLog? modelExchangeLog = null)
         {
             var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
@@ -719,7 +732,8 @@ public static class Plan56SessionLifecycleTests
                 evidence,
                 new UnusedContextAssembler(),
                 usage,
-                activeModels);
+                activeModels,
+                modelExchangeLog: modelExchangeLog);
             return new LifecycleHarness(events, evidence, usage, lifecycle, sessions);
         }
     }

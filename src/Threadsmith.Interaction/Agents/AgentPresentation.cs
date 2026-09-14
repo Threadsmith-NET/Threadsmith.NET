@@ -43,6 +43,7 @@ public sealed record AgentPresentationSnapshot(
         AgentRole.TestReviewer => "Test Reviewer",
         AgentRole.PerformanceReviewer => "Performance Reviewer",
         AgentRole.ArchitectureReviewer => "Architecture Reviewer",
+        AgentRole.BugReviewer => "Bug Reviewer",
         _ => role.ToString(),
     };
 }

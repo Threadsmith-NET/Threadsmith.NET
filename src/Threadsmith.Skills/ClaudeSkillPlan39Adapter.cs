@@ -41,7 +41,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
     /// <inheritdoc />
     public async Task<SkillCatalogSnapshot> RefreshAsync(CancellationToken cancellationToken = default)
     {
-        var native = await _native.RefreshAsync(cancellationToken);
+        _ = await _native.RefreshAsync(cancellationToken);
         var claude = await _claude.RefreshAsync(cancellationToken);
         SkillCatalogSnapshot next;
         lock (_gate)
@@ -49,7 +49,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
             next = new SkillCatalogSnapshot
             {
                 Generation = checked(_snapshot.Generation + 1),
-                Candidates = native.Candidates
+                Candidates = _native.Snapshot.Candidates
                     .Concat(claude.Select(ProjectMetadata))
                     .OrderBy(item => item.Metadata.SkillId.Value, StringComparer.Ordinal)
                     .ThenBy(item => item.Provenance.Scope)
@@ -152,22 +152,24 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
     public SkillCatalogCandidate UpdateCandidate(SkillCatalogCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
-        if (!IsClaude(candidate))
-        {
-            return _native is IUpdatableSkillCatalog updatable
-                ? updatable.UpdateCandidate(candidate)
-                : candidate;
-        }
-
-        var key = candidate.Identity.Digest.Value;
-        if (!_snapshots.ContainsKey(key))
-        {
-            throw new KeyNotFoundException("The activated Claude skill snapshot is no longer available.");
-        }
-
-        _exactCandidates[key] = candidate;
         lock (_gate)
         {
+            var isClaude = IsClaude(candidate);
+            if (isClaude)
+            {
+                var key = candidate.Identity.Digest.Value;
+                if (!_snapshots.ContainsKey(key))
+                {
+                    throw new KeyNotFoundException("The activated Claude skill snapshot is no longer available.");
+                }
+
+                _exactCandidates[key] = candidate;
+            }
+            else if (_native is IUpdatableSkillCatalog updatable)
+            {
+                candidate = updatable.UpdateCandidate(candidate);
+            }
+
             SkillCatalogCandidate[] updated =
             [
                 .. _snapshot.Candidates.Select(item =>
@@ -180,6 +182,10 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
                         item.Provenance.Source,
                         candidate.Provenance.Source,
                         StringComparison.Ordinal)
+                    && (isClaude || string.Equals(
+                        item.Identity.Digest.Value,
+                        candidate.Identity.Digest.Value,
+                        StringComparison.Ordinal))
                         ? candidate
                         : item),
             ];

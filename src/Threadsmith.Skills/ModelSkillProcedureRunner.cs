@@ -1,5 +1,6 @@
 namespace Threadsmith.Skills;
 
+using System.Diagnostics;
 using System.Text;
 using Threadsmith.Core;
 using Threadsmith.Models;
@@ -13,11 +14,16 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
     private readonly SkillRuntimeLimits _limits;
     private readonly IModelProvider _models;
     private readonly IModelProviderInstructionResolver? _providerInstructionResolver;
+    private readonly ConfiguredModelCatalog? _trustedCatalog;
+    private readonly IModelProvider? _trustedModelProvider;
+    private readonly IModelProviderInstructionResolver? _trustedProviderInstructionResolver;
     private readonly IPromptLoader _prompts;
     private readonly SecretOutputSanitizer _sanitizer;
     private readonly Func<SkillInvocationRequest, CancellationToken, Task<ToolInvocationContext>> _toolContext;
     private readonly IToolInvocationPipeline _toolPipeline;
     private readonly ToolRegistry _tools;
+    private readonly IConversationToolSnapshotStore _snapshots;
+    private readonly SessionUsageProjection? _sessionUsage;
 
     /// <summary>Initializes a new instance of the <see cref="ModelSkillProcedureRunner"/> class.</summary>
     public ModelSkillProcedureRunner(
@@ -29,7 +35,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         IPromptLoader prompts,
         ConfiguredModelCatalog? catalog = null,
         IModelProviderInstructionResolver? providerInstructionResolver = null,
-        SkillRuntimeLimits? limits = null)
+        SkillRuntimeLimits? limits = null,
+        IConversationToolSnapshotStore? snapshots = null,
+        SessionUsageProjection? sessionUsage = null,
+        IModelProvider? trustedModelProvider = null,
+        ConfiguredModelCatalog? trustedCatalog = null,
+        IModelProviderInstructionResolver? trustedProviderInstructionResolver = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -39,6 +50,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         ArgumentNullException.ThrowIfNull(prompts);
         _limits = limits ?? new();
         _limits.Validate();
+        _snapshots = snapshots ?? new ConversationToolSnapshotStore();
+        _sessionUsage = sessionUsage;
         _models = models;
         _tools = tools;
         _toolPipeline = toolPipeline;
@@ -47,6 +60,9 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         _prompts = prompts;
         _catalog = catalog;
         _providerInstructionResolver = providerInstructionResolver;
+        _trustedModelProvider = trustedModelProvider;
+        _trustedCatalog = trustedCatalog;
+        _trustedProviderInstructionResolver = trustedProviderInstructionResolver;
     }
 
     /// <inheritdoc />
@@ -68,8 +84,15 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         }
 
         var profileId = plan.ModelProfileId.Value;
-        var profile = _catalog?.Get(profileId);
-        var providerInstructions = _providerInstructionResolver?.Resolve(profileId);
+        var usesTrustedCatalog = plan.Request.ModelUsesTrustedCatalog;
+        var models = usesTrustedCatalog
+            ? _trustedModelProvider ?? throw new InvalidOperationException("The trusted model provider is unavailable.")
+            : _models;
+        var catalog = usesTrustedCatalog
+            ? _trustedCatalog ?? throw new InvalidOperationException("The trusted model catalog is unavailable.")
+            : _catalog;
+        var profile = catalog?.Get(profileId);
+        var providerInstructions = (usesTrustedCatalog ? _trustedProviderInstructionResolver : _providerInstructionResolver)?.Resolve(profileId);
         var maximumRounds = Math.Max(1, plan.EffectiveBudget.ModelTurns);
         var maximumToolCalls = plan.EffectiveBudget.ToolCalls;
         var toolCalls = 0;
@@ -90,7 +113,21 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
             var modelContext = await CreateToolContextAsync(plan, cancellationToken);
-            var modelTools = BuildToolDefinitions(modelContext.AllowedToolIds);
+            var callerRegistrations = plan.Request.CallerToolSnapshotId is { } callerSnapshot
+                ? _snapshots.Resolve(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
+                : null;
+            var available = ConversationToolAvailability.CreateSnapshot(
+                _toolPipeline,
+                _tools,
+                plan.Request.SessionId,
+                plan.Request.RunId,
+                modelContext,
+                toolsWithheld: false,
+                callerRegistrations);
+            var registrations = available.Registrations.ToDictionary(
+                item => item.Tool.Definition.Id,
+                StringComparer.OrdinalIgnoreCase);
+            var modelTools = BuildToolDefinitions(available.Registrations);
             var text = new StringBuilder();
             ToolRequestModelOutput? toolRequest = null;
             var outputReserveTokens = profile?.EffectiveRequestOutputTokenReserve ?? 0;
@@ -103,7 +140,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 outputReserveTokens,
                 providerInstructions);
             var modelRequest = ModelRequestPreparation.Prepare(
-                _models,
+                models,
                 new ModelStreamRequest
                 {
                     RunId = plan.Request.RunId,
@@ -123,7 +160,9 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         ContainsSensitiveData = plan.Request.Sensitivity == ConversationSensitivity.Sensitive,
                     },
                     ResolvedProfileId = profileId,
-                    ReasoningLevel = profile?.DefaultReasoningLevel ?? ReasoningLevel.None,
+                    ReasoningLevel = plan.ReasoningLevel is { } reasoning
+                        ? new ReasoningLevel(reasoning)
+                        : profile?.DefaultReasoningLevel ?? ReasoningLevel.None,
                     MaximumOutputTokens = profile?.EffectiveRequestOutputTokenReserve,
                     Tools = canonicalModelTools,
                     AllowMultipleToolCalls = false,
@@ -141,150 +180,198 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     "The complete skill procedure request exceeds the selected model context window.");
             }
 
-            transientState.ValidateHistory(modelRequest);
-            await foreach (var chunk in _models.StreamAsync(
-                modelRequest,
-                cancellationToken))
-            {
-                if (chunk.ResponseEnvelope is { } envelope)
+            var snapshotId = _snapshots.Capture(
+                plan.Request.SessionId,
+                plan.Request.RunId,
+                available.Registrations,
+                modelContext with
                 {
-                    transientState.Accept(modelRequest, envelope);
-                }
-
-                if (chunk.Text is { } delta)
-                {
-                    text.Append(delta);
-                    if (text.Length > _limits.MaximumModelOutputCharacters)
-                    {
-                        throw new InvalidDataException("Skill procedure output exceeds its byte-oriented bound.");
-                    }
-                }
-
-                if (chunk.Output is ToolRequestModelOutput requested)
-                {
-                    if (toolRequest is not null)
-                    {
-                        throw new InvalidDataException("Skill procedure returned multiple tools despite its single-call policy.");
-                    }
-
-                    toolRequest = requested;
-                }
-                else if (chunk.Output is not null)
-                {
-                    throw new InvalidDataException(
-                        "Skill procedure returned a structured output type not declared for skill workflows.");
-                }
-            }
-
-            if (toolRequest is null)
-            {
-                var output = _sanitizer.Sanitize(text.ToString()).Trim();
-                if (string.IsNullOrWhiteSpace(output))
-                {
-                    throw new InvalidDataException("Skill procedure returned empty output.");
-                }
-
-                if (PackagedDocumentationPolicy.IsDocumentationSkill(
-                    plan.Scope,
-                    plan.Package.SkillId.Value))
-                {
-                    var documentationContext = await CreateToolContextAsync(plan, cancellationToken);
-                    output = await PackagedDocumentationPolicy.ValidateAnswerAsync(
-                        output,
-                        documentationContext.RepositoryPath,
-                        cancellationToken);
-                }
-
-                return new SkillProcedureResult(output, round + 1, toolCalls);
-            }
-
-            if (!plan.AvailableToolIds.Contains(toolRequest.ToolName, StringComparer.OrdinalIgnoreCase))
-            {
-                throw new UnauthorizedAccessException("Skill procedure requested an undeclared tool.");
-            }
-
-            toolCalls++;
-            if (toolCalls > maximumToolCalls)
-            {
-                throw new InvalidOperationException("Skill procedure tool-call budget is exhausted.");
-            }
-
-            var callKey = $"{toolRequest.ToolName}\n{SkillCanonicalJson.CanonicalizeValue(toolRequest.ArgumentsJson)}";
-            if (!seenCalls.Add(callKey))
-            {
-                throw new InvalidOperationException("Skill procedure repeated an identical tool request.");
-            }
-
-            var context = await CreateToolContextAsync(plan, cancellationToken);
-            var result = await _toolPipeline.InvokeAsync(
-                new ToolInvocationRequest
-                {
-                    SessionId = plan.Request.SessionId,
-                    RunId = plan.Request.RunId,
-                    Phase = plan.Request.Phase,
-                    ToolId = toolRequest.ToolName,
-                    ArgumentsJson = toolRequest.ArgumentsJson,
-                    Context = context,
-                },
-                cancellationToken);
-            var boundedResult = result.Succeeded
-                ? result.ResultJson ?? "null"
-                : SkillCanonicalJson.CanonicalizeValue(
-                    System.Text.Json.JsonSerializer.Serialize(new
-                    {
-                        error = result.ErrorClassification.ToString(),
-                        message = result.Error,
-                    }));
-            var toolCallId = $"skill-{plan.Request.InvocationId.Value:N}-{round}-0";
-            messages.Add(new ModelMessage
-            {
-                Role = ModelMessageRole.Assistant,
-                SectionId = "skill-tool-call",
-                ToolCallId = toolCallId,
-                ToolName = toolRequest.ToolName,
-                ModelRound = round,
-                Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = toolRequest.ArgumentsJson }],
-            });
-            messages.Add(new ModelMessage
-            {
-                Role = ModelMessageRole.Tool,
-                SectionId = "skill-tool-result",
-                ToolCallId = toolCallId,
-                ToolName = toolRequest.ToolName,
-                ModelRound = round,
-                IsError = !result.Succeeded,
-                Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = boundedResult }],
-            });
-            if (transientState.HasResponses)
-            {
-                transientState.BindToolCall(round, 0, toolCallId);
-                transientState.SealRound(round, messages.ToArray());
-            }
-
-            var continuation = _prompts.Render(
-                PromptFileNames.SkillProcedureContinuation,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["ToolName"] = toolRequest.ToolName,
-                    ["ToolResult"] = boundedResult,
+                    ModelProfileId = modelRequest.ResolvedProfileId,
+                    ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
                 });
-            prompt += continuation;
-            messages.Add(new ModelMessage
+            try
             {
-                Role = ModelMessageRole.User,
-                SectionId = "skill-procedure-continuation",
-                Content = [new ModelContentPart { Content = continuation }],
-            });
+                transientState.ValidateHistory(modelRequest);
+                var usageRequestId = new ModelRequestUsageId(plan.Request.RunId, "skill-procedure", round, Guid.NewGuid());
+                ModelUsage? reportedUsage = null;
+                _sessionUsage?.ObserveRequest(plan.Request.SessionId, plan.Request.RunId, new AgentRequestStatus(
+                    modelRequest.ResolvedProfileId,
+                    modelRequest.ReasoningLevel,
+                    wireEstimate.WireInputTokens,
+                    profile?.ContextWindow,
+                    Stopwatch.GetTimestamp()));
+                try
+                {
+                    await foreach (var chunk in models.StreamAsync(
+                        modelRequest,
+                        cancellationToken))
+                    {
+                        if (chunk.Usage is { } usage)
+                        {
+                            reportedUsage = usage;
+                            _sessionUsage?.Observe(plan.Request.SessionId, usageRequestId, usage);
+                        }
+
+                        if (chunk.ResponseEnvelope is { } envelope)
+                        {
+                            transientState.Accept(modelRequest, envelope);
+                        }
+
+                        if (chunk.Text is { } delta)
+                        {
+                            text.Append(delta);
+                            if (text.Length > _limits.MaximumModelOutputCharacters)
+                            {
+                                throw new InvalidDataException("Skill procedure output exceeds its byte-oriented bound.");
+                            }
+                        }
+
+                        if (chunk.Output is ToolRequestModelOutput requested)
+                        {
+                            if (toolRequest is not null)
+                            {
+                                throw new InvalidDataException("Skill procedure returned multiple tools despite its single-call policy.");
+                            }
+
+                            toolRequest = requested;
+                        }
+                        else if (chunk.Output is not null)
+                        {
+                            throw new InvalidDataException(
+                                "Skill procedure returned a structured output type not declared for skill workflows.");
+                        }
+                    }
+                }
+                finally
+                {
+                    if (reportedUsage is null)
+                    {
+                        _sessionUsage?.ObserveMissing(plan.Request.SessionId, usageRequestId);
+                    }
+                }
+
+                if (toolRequest is null)
+                {
+                    var output = JsonOutputSanitizer.SanitizeJsonOrText(text.ToString(), _sanitizer).Trim();
+                    if (string.IsNullOrWhiteSpace(output))
+                    {
+                        throw new InvalidDataException("Skill procedure returned empty output.");
+                    }
+
+                    if (PackagedDocumentationPolicy.IsDocumentationSkill(
+                        plan.Scope,
+                        plan.Package.SkillId.Value))
+                    {
+                        var documentationContext = await CreateToolContextAsync(plan, cancellationToken);
+                        output = await PackagedDocumentationPolicy.ValidateAnswerAsync(
+                            output,
+                            documentationContext.RepositoryPath,
+                            cancellationToken);
+                    }
+
+                    return new SkillProcedureResult(output, round + 1, toolCalls);
+                }
+
+                if (!plan.AvailableToolIds.Contains(toolRequest.ToolName, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new UnauthorizedAccessException("Skill procedure requested an undeclared tool.");
+                }
+
+                toolCalls++;
+                if (toolCalls > maximumToolCalls)
+                {
+                    throw new InvalidOperationException("Skill procedure tool-call budget is exhausted.");
+                }
+
+                var callKey = $"{toolRequest.ToolName}\n{SkillCanonicalJson.CanonicalizeValue(toolRequest.ArgumentsJson)}";
+                if (!seenCalls.Add(callKey))
+                {
+                    throw new InvalidOperationException("Skill procedure repeated an identical tool request.");
+                }
+
+                var context = (await CreateToolContextAsync(plan, cancellationToken)) with
+                {
+                    RequestedBy = "model",
+                    ModelVisibleToolSnapshotId = snapshotId,
+                    ModelProfileId = modelRequest.ResolvedProfileId,
+                    ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
+                };
+                if (!modelTools.Any(tool => tool.Name.Equals(toolRequest.ToolName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    context = context with { DenyAllTools = true };
+                }
+
+                registrations.TryGetValue(toolRequest.ToolName, out var registration);
+                var result = await _toolPipeline.InvokeAsync(
+                    new ToolInvocationRequest
+                    {
+                        SessionId = plan.Request.SessionId,
+                        RunId = plan.Request.RunId,
+                        Phase = plan.Request.Phase,
+                        ToolId = toolRequest.ToolName,
+                        ExpectedRegistration = registration,
+                        ArgumentsJson = toolRequest.ArgumentsJson,
+                        Context = context,
+                    },
+                    cancellationToken);
+                var boundedResult = result.ModelResultContent ?? result.ResultJson
+                    ?? SkillCanonicalJson.CanonicalizeValue(
+                        System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            error = result.ErrorClassification.ToString(),
+                            message = result.Error,
+                        }));
+                var toolCallId = $"skill-{plan.Request.InvocationId.Value:N}-{round}-0";
+                messages.Add(new ModelMessage
+                {
+                    Role = ModelMessageRole.Assistant,
+                    SectionId = "skill-tool-call",
+                    ToolCallId = toolCallId,
+                    ToolName = toolRequest.ToolName,
+                    ModelRound = round,
+                    Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = toolRequest.ArgumentsJson }],
+                });
+                messages.Add(new ModelMessage
+                {
+                    Role = ModelMessageRole.Tool,
+                    SectionId = "skill-tool-result",
+                    ToolCallId = toolCallId,
+                    ToolName = toolRequest.ToolName,
+                    ModelRound = round,
+                    IsError = !result.Succeeded,
+                    Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = boundedResult }],
+                });
+                if (transientState.HasResponses)
+                {
+                    transientState.BindToolCall(round, 0, toolCallId);
+                    transientState.SealRound(round, messages.ToArray());
+                }
+
+                var continuation = _prompts.Render(
+                    PromptFileNames.SkillProcedureContinuation,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["ToolName"] = toolRequest.ToolName,
+                        ["ToolResult"] = boundedResult,
+                    });
+
+                // Legacy input needs the result text; structured messages already contain its tool response.
+                prompt += continuation;
+            }
+            finally
+            {
+                _snapshots.Release(snapshotId);
+            }
         }
 
         throw new InvalidOperationException("Skill procedure model-turn budget is exhausted.");
     }
 
-    private IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IReadOnlyList<string> toolIds)
+    private static IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IEnumerable<ToolRegistration> registrations)
     {
-        return toolIds.Select(toolId =>
+        return registrations.Select(registration =>
         {
-            var definition = _tools.Get(toolId).Definition;
+            var definition = registration.Tool.Definition;
             return new ModelToolDefinition
             {
                 Name = definition.Id,
@@ -299,12 +386,16 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         SkillInvocationPlan plan,
         CancellationToken cancellationToken)
     {
-        var context = await _toolContext(plan.Request, cancellationToken);
+        var context = plan.Request.CallerToolSnapshotId is { } callerSnapshot
+            ? _snapshots.ResolveContext(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
+                ?? throw new InvalidOperationException("The invoking model request has no tool authority snapshot.")
+            : await _toolContext(plan.Request, cancellationToken);
         context = PackagedDocumentationPolicy.IsDocumentationSkill(
             plan.Scope,
             plan.Package.SkillId.Value)
                 ? PackagedDocumentationPolicy.BindToBundle(context, AppContext.BaseDirectory)
                 : context;
+
         var allowedTools = plan.AvailableToolIds.Where(toolId =>
             !context.DenyAllTools
             && (context.AllowedToolIds.Count == 0
@@ -312,11 +403,13 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             && !context.DeniedToolIds.Contains(toolId, StringComparer.OrdinalIgnoreCase)).ToArray();
         return context with
         {
+            TrustLevel = (RepositoryTrustLevel)Math.Min((int)context.TrustLevel, (int)plan.Request.Trust),
+            ModelUsesTrustedCatalog = plan.Request.ModelUsesTrustedCatalog,
             AllowedToolIds = allowedTools,
 
             // An empty computed intersection must not become the policy's unrestricted empty list.
             DenyAllTools = context.DenyAllTools || allowedTools.Length == 0,
-            RequestedBy = $"skill:{plan.Package.SkillId.Value}:{plan.Request.InvocationId.Value:D}",
+            ActivityOrigin = $"skill:{plan.Scope}:{plan.Package.SkillId.Value}@{plan.Package.Version}:{plan.Request.InvocationId.Value:D}",
         };
     }
 

@@ -2,6 +2,7 @@ namespace Threadsmith.Skills;
 
 using System.Collections.Concurrent;
 using Threadsmith.Core;
+using Threadsmith.Tools;
 
 /// <summary>Runs bounded declarative workflows over host-owned action proposal boundaries.</summary>
 public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsyncDisposable
@@ -16,6 +17,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private readonly ISkillProcedureRunner _runner;
     private readonly BoundedJsonSchemaValidator _schemas;
     private readonly ISkillStateStore _state;
+    private readonly IConversationToolSnapshotStore? _snapshots;
     private readonly Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> _hostContext;
 
     /// <summary>Initializes a new instance of the <see cref="SkillWorkflowOrchestrator"/> class.</summary>
@@ -29,7 +31,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         IPromptLoader prompts,
         ISkillStateStore state,
         Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> hostContext,
-        IDomainEventStream events)
+        IDomainEventStream events,
+        IConversationToolSnapshotStore? snapshots = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -51,6 +54,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         _state = state;
         _hostContext = hostContext;
         _events = events;
+        _snapshots = snapshots;
     }
 
     /// <inheritdoc />
@@ -59,6 +63,33 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         CancellationToken cancellationToken = default)
     {
         ValidateRequest(request);
+        var host = await _hostContext(request.SessionId, cancellationToken);
+        if (request.WorkspaceId is { } requestedWorkspace && requestedWorkspace != host.WorkspaceId)
+        {
+            throw new InvalidOperationException("Skill invocation workspace does not match the current session.");
+        }
+
+        var callerContext = ResolveCallerContext(request.CallerToolSnapshotId, request.SessionId, request.RunId);
+        if (callerContext is not null && callerContext.WorkspaceId != host.WorkspaceId)
+        {
+            throw new InvalidOperationException("The invoking tool workspace does not match the current session.");
+        }
+
+        host = host with
+        {
+            ModelProfileId = callerContext?.ModelProfileId ?? host.ModelProfileId,
+            ReasoningLevel = callerContext?.ModelReasoningLevel ?? host.ReasoningLevel,
+        };
+        request = request with
+        {
+            WorkspaceId = host.WorkspaceId,
+            Trust = callerContext is not null && callerContext.TrustLevel < host.Trust
+                ? callerContext.TrustLevel : host.Trust,
+            Sensitivity = callerContext?.Sensitivity ?? request.Sensitivity,
+            ModelUsesTrustedCatalog = callerContext?.ModelUsesTrustedCatalog ?? false,
+            Phase = host.Phase,
+            HostBudget = request.UseDefaultBudget ? host.DefaultBudget : request.HostBudget,
+        };
         var candidate = await ResolveInvocationCandidateAsync(
             request.Selector,
             request.SessionId,
@@ -68,6 +99,12 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             throw new InvalidOperationException(
                 $"Skill is incompatible: {string.Join(", ", compatibility.DenialReasons)}.");
+        }
+
+        if (SkillCompatibilityEvaluator.RequiresModel(candidate)
+            && host.ModelProfileId is { } selected && !compatibility.CompatibleModels.Contains(selected))
+        {
+            throw new InvalidOperationException("The selected session model is incompatible with this skill.");
         }
 
         var budget = SkillCompatibilityEvaluator.CapBudget(
@@ -82,15 +119,17 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             CatalogGeneration = _catalog.Snapshot.Generation,
             Verification = candidate.Verification,
             Compatibility = compatibility,
-            ModelProfileId = compatibility.CompatibleModels.FirstOrDefault() is { } profile && profile != default
+            ModelProfileId = host.ModelProfileId ?? (compatibility.CompatibleModels.FirstOrDefault() is { } profile && profile != default
                 ? profile
-                : null,
-            AvailableToolIds = ResolveAvailableTools(candidate, compatibility),
+                : null),
+            ReasoningLevel = host.ReasoningLevel,
+            AvailableToolIds = ResolveAvailableTools(candidate, compatibility, request),
             EffectiveBudget = budget,
         };
         var checkpoint = new SkillWorkflowCheckpoint
         {
             WorkflowId = SkillWorkflowId.New(),
+            InvokingToolInvocationId = request.InvokingToolInvocationId,
             InvocationId = request.InvocationId,
             SessionId = request.SessionId,
             RunId = request.RunId,
@@ -103,6 +142,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Phase = request.Phase,
             Sensitivity = request.Sensitivity,
             ModelProfileId = plan.ModelProfileId,
+            ModelUsesTrustedCatalog = request.ModelUsesTrustedCatalog,
+            ReasoningLevel = plan.ReasoningLevel,
             AvailableToolIds = plan.AvailableToolIds,
             EffectiveBudget = budget,
             Status = SkillInvocationStatus.Accepted,
@@ -124,18 +165,20 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             throw new InvalidOperationException("Completed or already-running skill invocations cannot resume.");
         }
 
+        (var candidate, var plan) = await RestorePlanAsync(
+            checkpoint,
+            cancellationToken);
         if (checkpoint.Status == SkillInvocationStatus.AwaitingHost)
         {
             throw new InvalidOperationException("A waiting invocation requires ContinueSkillCommand with host result JSON.");
         }
 
-        (var candidate, var plan) = await RestorePlanAsync(
-            checkpoint,
-            cancellationToken);
         var resumed = checkpoint with
         {
+            Steps = checkpoint.Steps.TakeWhile(item => item.Succeeded).ToArray(),
             Attempt = checked(checkpoint.Attempt + 1),
             Generation = checked(checkpoint.Generation + 1),
+            InvokingToolInvocationId = null,
             Trust = plan.Request.Trust,
             Phase = plan.Request.Phase,
             Status = SkillInvocationStatus.Accepted,
@@ -181,6 +224,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             Steps = steps,
             Generation = checked(checkpoint.Generation + 1),
+            InvokingToolInvocationId = null,
             Trust = plan.Request.Trust,
             Phase = plan.Request.Phase,
             Status = SkillInvocationStatus.Accepted,
@@ -316,17 +360,24 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 {
                     return CreateResult(current, "workflow is waiting for a governed host action");
                 }
+
+                if (!result.Succeeded)
+                {
+                    break;
+                }
             }
 
+            var succeeded = current.Steps.All(item => item.Succeeded);
+            var reason = succeeded ? "workflow completed" : "procedure reported failure";
             var completed = current with
             {
-                Status = SkillInvocationStatus.Completed,
+                Status = succeeded ? SkillInvocationStatus.Completed : SkillInvocationStatus.Failed,
                 NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionInspectAuthoritativeOutcome),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
             await SaveAsync(completed, VersionOf(current), CancellationToken.None);
-            await PublishCompletionAsync(completed, "workflow completed", CancellationToken.None);
-            return CreateResult(completed, "workflow completed");
+            await PublishCompletionAsync(completed, reason, CancellationToken.None);
+            return CreateResult(completed, reason);
         }
         catch (OperationCanceledException) when (source.IsCancellationRequested)
         {
@@ -432,8 +483,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 step.OutputSchemaAsset,
                 procedure.OutputJson,
                 cancellationToken);
+            using var output = System.Text.Json.JsonDocument.Parse(validated);
             return new SkillWorkflowStepResult
             {
+                Succeeded = step.SuccessProperty is null || output.RootElement.GetProperty(step.SuccessProperty).GetBoolean(),
+                Response = step.ResponseProperty is null ? null : output.RootElement.GetProperty(step.ResponseProperty).GetString(),
                 StepId = step.StepId,
                 Kind = step.Kind,
                 Iteration = iteration,
@@ -473,6 +527,18 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         };
     }
 
+    private ToolInvocationContext? ResolveCallerContext(Guid? snapshotId, SessionId sessionId, RunId runId)
+    {
+        if (snapshotId is null)
+        {
+            return null;
+        }
+
+        return (_snapshots ?? throw new InvalidOperationException("The caller snapshot store is unavailable."))
+            .ResolveContext(snapshotId.Value, sessionId, runId)
+            ?? throw new InvalidOperationException("The invoking model request has no tool authority snapshot.");
+    }
+
     private async Task<(SkillCatalogCandidate Candidate, SkillInvocationPlan Plan)> RestorePlanAsync(
         SkillWorkflowCheckpoint checkpoint,
         CancellationToken cancellationToken)
@@ -501,11 +567,13 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Trust = current.Trust,
             Phase = current.Phase,
             Sensitivity = checkpoint.Sensitivity,
+            ModelUsesTrustedCatalog = checkpoint.ModelUsesTrustedCatalog,
             HostBudget = checkpoint.EffectiveBudget,
         };
         var compatibility = _compatibility.Evaluate(candidate, request);
         if (!compatibility.IsCompatible
-            || (checkpoint.ModelProfileId is { } model
+            || (SkillCompatibilityEvaluator.RequiresModel(candidate)
+                && checkpoint.ModelProfileId is { } model
                 && !compatibility.CompatibleModels.Contains(model)))
         {
             throw new InvalidOperationException("Skill resume requirements no longer resolve.");
@@ -520,6 +588,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             Verification = candidate.Verification,
             Compatibility = compatibility,
             ModelProfileId = checkpoint.ModelProfileId,
+            ReasoningLevel = checkpoint.ReasoningLevel,
             AvailableToolIds = checkpoint.AvailableToolIds,
             EffectiveBudget = checkpoint.EffectiveBudget,
         });
@@ -698,7 +767,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 checkpoint.Package.Digest.Value,
                 checkpoint.Status,
                 checkpoint.Generation,
-                checkpoint.NextAction),
+                checkpoint.NextAction)
+            {
+                RunId = checkpoint.RunId,
+                InvokingToolInvocationId = checkpoint.InvokingToolInvocationId,
+            },
             cancellationToken);
     }
 
@@ -799,10 +872,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     {
         return new SkillInvocationResult
         {
+            Response = checkpoint.Steps.LastOrDefault()?.Response,
             InvocationId = checkpoint.InvocationId,
             Package = checkpoint.Package,
             Status = checkpoint.Status,
-            OutputJson = checkpoint.Status == SkillInvocationStatus.Completed
+            OutputJson = checkpoint.Status is SkillInvocationStatus.Completed or SkillInvocationStatus.Failed
                 ? checkpoint.Steps.LastOrDefault()?.OutputJson
                 : null,
             HostActions = checkpoint.Steps
@@ -814,14 +888,23 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         };
     }
 
-    private static IReadOnlyList<string> ResolveAvailableTools(
+    private IReadOnlyList<string> ResolveAvailableTools(
         SkillCatalogCandidate candidate,
-        SkillCompatibilityResult compatibility)
+        SkillCompatibilityResult compatibility,
+        SkillInvocationRequest request)
     {
-        return candidate.Metadata.Requirements.RequiredTools
+        var callerTools = request.CallerToolSnapshotId is { } snapshotId
+            ? (_snapshots ?? throw new InvalidOperationException("The caller snapshot store is unavailable."))
+                .Resolve(snapshotId, request.SessionId, request.RunId)
+                .Select(registration => registration.Tool.Definition.Id).ToArray()
+            : null;
+        var inheritedTools = candidate.Metadata.Requirements.InheritAvailableTools && callerTools is not null
+            ? callerTools : compatibility.InheritedTools;
+        return inheritedTools.Concat(candidate.Metadata.Requirements.RequiredTools)
             .Concat(candidate.Metadata.Requirements.OptionalTools.Except(
                 compatibility.UnavailableOptionalTools,
                 StringComparer.OrdinalIgnoreCase))
+            .Where(toolId => callerTools?.Contains(toolId, StringComparer.OrdinalIgnoreCase) != false)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(item => item, StringComparer.Ordinal)
             .ToArray();

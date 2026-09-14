@@ -263,6 +263,9 @@ public sealed record ToolDefinition
     /// </summary>
     public bool ConversationAvailable { get; init; }
 
+    /// <summary>Whether this tool may be included in a subagent's inherited tool surface.</summary>
+    public bool SubagentAvailable { get; init; } = true;
+
     /// <summary>Whether invocation requires a currently loaded semantic workspace identity.</summary>
     public bool RequiresWorkspace { get; init; }
 
@@ -316,6 +319,15 @@ public sealed record ToolInvocationContext
     /// <summary>Opaque identity for the host-owned model-visible tool snapshot, when frozen.</summary>
     public Guid? ModelVisibleToolSnapshotId { get; init; }
 
+    /// <summary>Actual parent model profile captured at the model request boundary.</summary>
+    public ModelProfileId? ModelProfileId { get; init; }
+
+    /// <summary>Whether the actual caller uses the repository-excluding model catalog and provider route.</summary>
+    public bool ModelUsesTrustedCatalog { get; init; }
+
+    /// <summary>Actual parent reasoning selection captured at the model request boundary.</summary>
+    public string? ModelReasoningLevel { get; init; }
+
     /// <summary>Selected model context window captured for this request, when model resolution has occurred.</summary>
     public int? ModelContextWindowTokens { get; init; }
 
@@ -327,6 +339,9 @@ public sealed record ToolInvocationContext
 
     /// <summary>Host-derived source ranges already visible in the current canonical model request.</summary>
     public ModelVisibleSourceFrontier? VisibleSourceFrontier { get; init; }
+
+    /// <summary>Host-owned activity origin inherited by nested tools, independent of requester authorization.</summary>
+    public string? ActivityOrigin { get; init; }
 
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
@@ -363,13 +378,17 @@ public sealed record ToolProvenanceSource(
     string Identifier,
     string? Range = null);
 
+/// <summary>A terminal failure that retains the tool's bounded diagnostic output.</summary>
+public sealed record ToolExecutionFailure(ToolErrorClassification Classification, string Message);
+
 /// <summary>Typed execution output before dynamic serialization.</summary>
 public sealed record ToolExecution<TOutput>(
     TOutput Value,
     IReadOnlyList<ToolProvenanceSource> Sources,
     bool IsTruncated = false,
     string? ModelResultContent = null,
-    [property: JsonIgnore] string? TransientActivityDetail = null);
+    [property: JsonIgnore] string? TransientActivityDetail = null,
+    ToolExecutionFailure? Failure = null);
 
 /// <summary>Typed attributable result for direct host invocation.</summary>
 public sealed record ToolResult<TOutput>
@@ -505,7 +524,8 @@ public sealed record ToolExecutionEnvelope(
     bool IsTruncated,
     long? AuthoritativeElapsedMilliseconds = null,
     string? ModelResultContent = null,
-    [property: JsonIgnore] string? TransientActivityDetail = null);
+    [property: JsonIgnore] string? TransientActivityDetail = null,
+    ToolExecutionFailure? Failure = null);
 
 /// <summary>Supplies live-only display detail that must not enter serialized events or model output.</summary>
 internal interface ITransientToolActivityDetail
@@ -681,7 +701,8 @@ public abstract class Tool<TInput, TOutput> : ITool
             result.Sources,
             result.IsTruncated,
             ModelResultContent: result.ModelResultContent,
-            TransientActivityDetail: result.TransientActivityDetail);
+            TransientActivityDetail: result.TransientActivityDetail,
+            Failure: result.Failure);
     }
 
     /// <summary>Executes validated typed input.</summary>

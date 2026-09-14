@@ -35,7 +35,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Null(restored.Policy.ModelSelection);
     }
 
-    /// <summary>All six roles receive their instructions and return ordinary text without synthetic results.</summary>
+    /// <summary>All defined roles receive their instructions and return ordinary text without synthetic results.</summary>
     [Theory]
     [InlineData(AgentRole.Explorer, PromptFileNames.SystemChildAgentExplorer)]
     [InlineData(AgentRole.Implementer, PromptFileNames.SystemChildAgentImplementer)]
@@ -43,6 +43,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(AgentRole.TestReviewer, PromptFileNames.SystemChildAgentTestReviewer)]
     [InlineData(AgentRole.PerformanceReviewer, PromptFileNames.SystemChildAgentPerformanceReviewer)]
     [InlineData(AgentRole.ArchitectureReviewer, PromptFileNames.SystemChildAgentArchitectureReviewer)]
+    [InlineData(AgentRole.BugReviewer, PromptFileNames.SystemChildAgentBugReviewer)]
     public async Task RunAsync_AllRoles_OrdinaryResponsePreservesRoleAndModel(AgentRole role, string rolePromptFileName)
     {
         await using var events = new DomainEventStream();

@@ -636,8 +636,13 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             var duration = authoritativeElapsedMilliseconds is { } measured
                 ? TimeSpan.FromMilliseconds(measured)
                 : TimeSpan.Zero;
-            activity?.SetTag("threadsmith.tool.succeeded", true);
-            activity?.SetStatus(ActivityStatusCode.Ok);
+            var failure = execution.Failure;
+            var succeeded = failure is null;
+            var classification = failure?.Classification ?? ToolErrorClassification.None;
+            var error = failure is null ? null : _sanitizer.Sanitize(failure.Message);
+            activity?.SetTag("threadsmith.tool.succeeded", succeeded);
+            activity?.SetTag("threadsmith.tool.error_classification", classification.ToString());
+            activity?.SetStatus(succeeded ? ActivityStatusCode.Ok : ActivityStatusCode.Error);
             _latency.Record(duration.TotalMilliseconds, new KeyValuePair<string, object?>(
                 "threadsmith.tool.id",
                 tool.Definition.Id));
@@ -646,28 +651,30 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     request.SessionId,
                     _timeProvider.GetUtcNow(),
                     invocationId,
-                    true,
+                    succeeded,
                     resultJson,
+                    Error: error,
                     IsTruncated: isTruncated,
                     Source: source,
                     ElapsedMilliseconds: authoritativeElapsedMilliseconds,
-                    Outcome: OperationActivityOutcome.Completed,
+                    Outcome: GetOutcome(classification),
                     ModelResultContent: modelResultContent,
                     TransientActivityDetail: NormalizeActivityDetail(
                         execution.TransientActivityDetail,
                         _presentationLimits.MaximumTransientActivityDetailCharacters)) { RunId = request.RunId },
                 CancellationToken.None);
-            await InvokeAfterHookAsync(request, invocationId, succeeded: true, null, suppressLifecycleHooks);
+            await InvokeAfterHookAsync(request, invocationId, succeeded, failure?.Classification.ToString(), suppressLifecycleHooks);
             return new ToolInvocationResult
             {
                 ToolInvocationId = invocationId,
                 ToolId = tool.Definition.Id,
-                Succeeded = true,
+                Succeeded = succeeded,
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,
                 Sources = execution.Sources,
                 IsTruncated = isTruncated,
-                ErrorClassification = ToolErrorClassification.None,
+                ErrorClassification = classification,
+                Error = error,
                 Duration = duration,
             };
         }
@@ -902,9 +909,18 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 request.Context.RequestedBy,
                 source,
                 activityDetail,
-                transientActivityDetail),
+                transientActivityDetail,
+                NormalizeActivityDetail(request.Context.ActivityOrigin, _presentationLimits.MaximumActivityDetailCharacters)),
             CancellationToken.None);
     }
+
+    private static OperationActivityOutcome GetOutcome(ToolErrorClassification classification) => classification switch
+    {
+        ToolErrorClassification.None => OperationActivityOutcome.Completed,
+        ToolErrorClassification.Cancelled => OperationActivityOutcome.Cancelled,
+        ToolErrorClassification.Timeout => OperationActivityOutcome.TimedOut,
+        _ => OperationActivityOutcome.Failed,
+    };
 
     private async Task<ToolInvocationResult> CompleteFailureAsync(
         ToolInvocationRequest request,
@@ -940,12 +956,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 classification.ToString()));
         }
 
-        var outcome = classification switch
-        {
-            ToolErrorClassification.Cancelled => OperationActivityOutcome.Cancelled,
-            ToolErrorClassification.Timeout => OperationActivityOutcome.TimedOut,
-            _ => OperationActivityOutcome.Failed,
-        };
+        var outcome = GetOutcome(classification);
         await _events.PublishAsync(
             new ToolInvocationCompleted(
                 request.SessionId,

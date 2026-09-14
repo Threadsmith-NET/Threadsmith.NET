@@ -199,6 +199,31 @@ internal static class ApplicationComposition
             : [];
     }
 
+    /// <summary>Captures current repository tool authority for explicit host operations.</summary>
+    internal static ToolInvocationContext CreateToolInvocationContext(
+        HostCompositionInputs host,
+        SessionProjection? state)
+    {
+        return new ToolInvocationContext
+        {
+            WorkspaceId = state?.WorkspaceId,
+            RepositoryPath = state?.RepositoryPath ?? host.Paths.RepositoryRoot,
+            TrustLevel = state?.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
+            ApprovedRoots = ["."],
+            ProhibitedPaths = host.Configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [],
+            AllowedExecutables = HostFoundation.ResolveAllowedExecutables(host.Configuration),
+            AllowedNetworkHosts = host.TrustedConfiguration
+                .GetSection("tools:allowedNetworkHosts")
+                .Get<string[]>() ?? [],
+            AllowedToolIds = host.Configuration.GetSection("tools:allow").Get<string[]>() ?? [],
+            DeniedToolIds = host.Configuration.GetSection("tools:deny").Get<string[]>() ?? [],
+            RequireApprovalToolIds = host.Configuration
+                .GetSection("tools:requireApproval")
+                .Get<string[]>() ?? [],
+            RequestedBy = "model",
+        };
+    }
+
     private static async Task<ApplicationServices> CreateCoreAsync(
         ApplicationCompositionInputs inputs,
         LocalTextEmbeddingGenerator embeddings,
@@ -751,13 +776,14 @@ internal static class ApplicationComposition
             var skillCompatibility = new SkillCompatibilityEvaluator(
                 tools.ToolRegistry,
                 integration.Models.Catalog,
-                "1.0.0");
+                "1.0.0",
+                trustedModels: integration.Models.TrustedCatalog);
             var skillWorkflow = new SkillWorkflowOrchestrator(
                 compatibleSkillCatalog,
                 skillVerifier,
                 skillCompatibility,
                 new CompatibleSkillContentLoader(
-                    new SkillContentLoader(host.Sanitizer),
+                    new SkillContentLoader(host.Sanitizer, host.PromptLoader),
                     compatibleSkillCatalog,
                     host.Sanitizer),
                 new BoundedJsonSchemaValidator(skillSchemaOptions),
@@ -777,7 +803,12 @@ internal static class ApplicationComposition
                     host.PromptLoader,
                     integration.Models.Catalog,
                     providerInstructionResolver,
-                    skillRuntimeLimits),
+                    skillRuntimeLimits,
+                    conversationToolSnapshots,
+                    usage,
+                    integration.Models.TrustedProvider,
+                    integration.Models.TrustedCatalog,
+                    trustedProviderInstructionResolver),
                 host.PromptLoader,
                 persistence.SkillStateStore,
                 async (sessionId, cancellationToken) =>
@@ -788,14 +819,19 @@ internal static class ApplicationComposition
                         cancellationToken) ?? throw new InvalidOperationException(
                             "The current session state is unavailable for skill workflow revalidation.");
 
+                    var selection = preferences.Capture();
                     return new SkillInvocationHostContext
                     {
                         WorkspaceId = state.WorkspaceId,
                         Trust = state.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
                         Phase = state.Phase,
+                        DefaultBudget = host.TrustedConfiguration.GetSection("skills:budget").Get<SkillBudget>() ?? new SkillBudget(),
+                        ModelProfileId = selection.ProfileId,
+                        ReasoningLevel = selection.Reasoning.ToString(),
                     };
                 },
-                host.Events);
+                host.Events,
+                conversationToolSnapshots);
             var skillApplication = new SkillApplication(
                 compatibleSkillCatalog,
                 skillVerifier,
@@ -823,15 +859,17 @@ internal static class ApplicationComposition
                 persistence.EvidenceStore,
                 contextAssembler,
                 usage,
-                integration.Models.ActiveModels);
+                integration.Models.ActiveModels,
+                modelExchangeLog: integration.Models.RawModelLog);
             repositoryBindings.AttachSessionLifecycle(sessionLifecycle);
             sessionCheckpointSubscription = host.Events.Subscribe(
                 async (domainEvent, _) =>
                 {
-                    if (domainEvent is RunCompleted completed)
+                    if (domainEvent is RunCompleted or SkillInvocationCompleted
+                        or SkillWorkflowCheckpointWritten { Status: SkillInvocationStatus.AwaitingHost })
                     {
                         await sessionLifecycle.CheckpointCompletedTurnAsync(
-                            completed.SessionId,
+                            domainEvent.SessionId,
                             CancellationToken.None);
                     }
                 });
@@ -984,30 +1022,6 @@ internal static class ApplicationComposition
         return stages
             .Distinct()
             .ToArray();
-    }
-
-    private static ToolInvocationContext CreateToolInvocationContext(
-        HostCompositionInputs host,
-        SessionProjection? state)
-    {
-        return new ToolInvocationContext
-        {
-            WorkspaceId = state?.WorkspaceId,
-            RepositoryPath = state?.RepositoryPath ?? host.Paths.RepositoryRoot,
-            TrustLevel = state?.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
-            ApprovedRoots = ["."],
-            ProhibitedPaths = host.Configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [],
-            AllowedExecutables = HostFoundation.ResolveAllowedExecutables(host.Configuration),
-            AllowedNetworkHosts = host.TrustedConfiguration
-                .GetSection("tools:allowedNetworkHosts")
-                .Get<string[]>() ?? [],
-            AllowedToolIds = host.Configuration.GetSection("tools:allow").Get<string[]>() ?? [],
-            DeniedToolIds = host.Configuration.GetSection("tools:deny").Get<string[]>() ?? [],
-            RequireApprovalToolIds = host.Configuration
-                .GetSection("tools:requireApproval")
-                .Get<string[]>() ?? [],
-            RequestedBy = "model",
-        };
     }
 }
 

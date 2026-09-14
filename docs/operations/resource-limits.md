@@ -2,7 +2,7 @@
 
 Threadsmith-owned operational limits can be changed in configuration. Omitted values retain their defaults. This includes the formerly fixed conversation tool-call count, workspace baseline and mutation limits, file response windows, semantic search and inventory limits, validation and Git output, MCP transport bounds, memory retrieval, and TUI retention/rendering.
 
-The [complete defaults example](../../.threadsmith/resource-limits.example) is a **merge reference**, not another automatically loaded file. Copy only the settings you want into `~/.threadsmith/config.json` or another eligible layer. The [main example](../../.threadsmith/config.example) shows common settings. Settings and units are identical on Windows, Linux, and macOS.
+Use the tables below as a **merge reference**. Copy only the settings you want into `~/.threadsmith/config.json` or another eligible layer. The `config.example` beside the installed application shows common settings; it is not another automatically loaded configuration file. Settings and units are identical on Windows, Linux, and macOS.
 
 ## Scope and validation
 
@@ -51,11 +51,11 @@ Every registered tool has a deadline, serialized result-byte limit, and source c
 
 ## Settings and defaults
 
-Each table gives fields beneath the named configuration section. Defaults below retain prior behavior unless noted.
+Each table gives fields beneath the named configuration section. Defaults below retain prior behavior unless noted. Implementation paths refer to files in a source checkout.
 
 ### `limits:workspace`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -76,7 +76,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 
 ### `limits:semantic`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -111,7 +111,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 
 ### `limits:git`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -126,7 +126,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 
 ### `limits:validation`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -156,7 +156,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 
 ### `limits:plan`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -169,7 +169,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 
 ### `limits:process`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -180,7 +180,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Core/OperationalL
 
 ### `limits:policyStores`
 
-Trusted configuration only (user, environment, or CLI); repository values do not control these user-wide approval and skill-policy stores. Lowering a repository setting must not invalidate or replace approvals belonging to other repositories. [Implementation](../../src/Threadsmith.Core/OperationalLimits.cs).
+Trusted configuration only (user, environment, or CLI); repository values do not control these user-wide approval and skill-policy stores. Lowering a repository setting must not invalidate or replace approvals belonging to other repositories. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -191,7 +191,7 @@ Trusted configuration only (user, environment, or CLI); repository values do not
 
 ### `tui:limits`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Interaction/Contracts/TuiResourceLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Interaction/Contracts/TuiResourceLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -228,7 +228,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Interaction/Contr
 
 ### `tui:limits:markdown`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Interaction/Markdown/MarkdownRenderingLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Interaction/Markdown/MarkdownRenderingLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -245,7 +245,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Interaction/Markd
 
 ### `mcp:limits`
 
-Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Mcp/McpResourceLimits.cs).
+Trusted machine/user/environment configuration. Implementation: `src/Threadsmith.Mcp/McpResourceLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -291,7 +291,7 @@ Trusted machine/user/environment configuration. [Implementation](../../src/Threa
 
 ### `hooks:limits`
 
-Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Hooks/HookResourceLimits.cs).
+Trusted machine/user/environment configuration. Implementation: `src/Threadsmith.Hooks/HookResourceLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -312,7 +312,7 @@ Trusted machine/user/environment configuration. [Implementation](../../src/Threa
 
 ### `secretResolution:limits`
 
-Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Tools/SecretResourceLimits.cs).
+Trusted machine/user/environment configuration. Implementation: `src/Threadsmith.Tools/SecretResourceLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -324,7 +324,7 @@ Trusted machine/user/environment configuration. [Implementation](../../src/Threa
 
 ### `model:catalogLimits`
 
-Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Models/ModelProviderConfiguration.cs).
+Trusted machine/user/environment configuration. Implementation: `src/Threadsmith.Models/ModelProviderConfiguration.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -338,7 +338,7 @@ Trusted machine/user/environment configuration. [Implementation](../../src/Threa
 
 ### `skills:catalogLimits`
 
-Trusted machine/user/environment ceilings; repository settings may narrow them. [Implementation](../../src/Threadsmith.Skills/SkillCatalog.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. Implementation: `src/Threadsmith.Skills/SkillCatalog.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -358,7 +358,7 @@ Trusted machine/user/environment ceilings; repository settings may narrow them. 
 
 ### `skills:schemaLimits`
 
-Trusted machine/user/environment ceilings; repository settings may narrow them. [Implementation](../../src/Threadsmith.Skills/BoundedJsonSchema.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. Implementation: `src/Threadsmith.Skills/BoundedJsonSchema.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -373,7 +373,7 @@ Trusted machine/user/environment ceilings; repository settings may narrow them. 
 
 ### `skills:claudeLimits`
 
-Trusted machine/user/environment ceilings; repository settings may narrow them. [Implementation](../../src/Threadsmith.Skills/ClaudeSkillCompatibilityCatalog.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. Implementation: `src/Threadsmith.Skills/ClaudeSkillCompatibilityCatalog.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -386,7 +386,7 @@ Trusted machine/user/environment ceilings; repository settings may narrow them. 
 
 ### `skills:installerLimits`
 
-Trusted machine/user/environment ceilings; repository settings may narrow them. [Implementation](../../src/Threadsmith.Skills/SkillPackageSecurity.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. Implementation: `src/Threadsmith.Skills/SkillPackageSecurity.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -396,7 +396,7 @@ Trusted machine/user/environment ceilings; repository settings may narrow them. 
 
 ### `skills:runtimeLimits`
 
-Trusted machine/user/environment configuration. [Implementation](../../src/Threadsmith.Skills/SkillRuntimeLimits.cs).
+Trusted machine/user/environment configuration. Implementation: `src/Threadsmith.Skills/SkillRuntimeLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -406,7 +406,7 @@ Trusted machine/user/environment configuration. [Implementation](../../src/Threa
 
 ### `tools:config:memories`
 
-Ordinary configuration; repository rebinding supported. [Implementation](../../src/Threadsmith.Core/ManagedMemoryContracts.cs).
+Ordinary configuration; repository rebinding supported. Implementation: `src/Threadsmith.Core/ManagedMemoryContracts.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -424,7 +424,7 @@ Ordinary configuration; repository rebinding supported. [Implementation](../../s
 
 ### `tools:runtime:presentation`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/ToolRuntimeOptions.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Tools/ToolRuntimeOptions.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -434,7 +434,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/ToolRuntime
 
 ### `context:promptAppends:limits`
 
-Trusted machine/user/environment ceilings; repository settings may narrow them. The effective per-file bound also cannot exceed the aggregate bound. [Implementation](../../src/Threadsmith.Context/PromptAppendLoader.cs).
+Trusted machine/user/environment ceilings; repository settings may narrow them. The effective per-file bound also cannot exceed the aggregate bound. Implementation: `src/Threadsmith.Context/PromptAppendLoader.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -443,7 +443,7 @@ Trusted machine/user/environment ceilings; repository settings may narrow them. 
 
 ### `context:instructions:limits`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Context/RepositoryInstructionResolver.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Context/RepositoryInstructionResolver.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -454,7 +454,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Context/Repositor
 
 ### `context:deployedPrompts:limits`
 
-Trusted machine/user/environment configuration only. Repository, session, and CLI overrides cannot change admission of the host's shipped prompt assets. [Implementation](../../src/Threadsmith.Context/DeployedPromptLoader.cs).
+Trusted machine/user/environment configuration only. Repository, session, and CLI overrides cannot change admission of the host's shipped prompt assets. Implementation: `src/Threadsmith.Context/DeployedPromptLoader.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -463,7 +463,7 @@ Trusted machine/user/environment configuration only. Repository, session, and CL
 
 ### `semanticRefresh:limits`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.DotNet/SemanticRefreshCoordinator.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.DotNet/SemanticRefreshCoordinator.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -474,7 +474,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.DotNet/SemanticRe
 
 ### `execution`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Execution/ExecutionLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -488,7 +488,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Execution/Executi
 
 ### `agents:delegation`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Execution/DelegateAgentsContracts.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Execution/DelegateAgentsContracts.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -497,7 +497,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Execution/Delegat
 
 ### `events`
 
-Trusted-only machine/user/environment configuration. Repository, session, and CLI settings cannot shorten durable event delivery. [Implementation](../../src/Threadsmith.Execution/DomainEventStream.cs).
+Trusted-only machine/user/environment configuration. Repository, session, and CLI settings cannot shorten durable event delivery. Implementation: `src/Threadsmith.Execution/DomainEventStream.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -505,7 +505,7 @@ Trusted-only machine/user/environment configuration. Repository, session, and CL
 
 ### `embeddings`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Embeddings.Local/LocalTextEmbeddingGenerator.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Embeddings.Local/LocalTextEmbeddingGenerator.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -513,7 +513,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Embeddings.Local/
 
 ### `reranking`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Reranking.Local/LocalTextCrossEncoder.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Reranking.Local/LocalTextCrossEncoder.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -522,7 +522,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Reranking.Local/L
 
 ### `extensions`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Extensions.Runtime/ShadowCopier.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Extensions.Runtime/ShadowCopier.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -531,7 +531,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Extensions.Runtim
 
 ### `tools:writeFile`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/WriteFileTool.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Tools/WriteFileTool.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -540,7 +540,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/WriteFileTo
 
 ### `tools:semantic`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/ToolLimits.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Tools/ToolLimits.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -548,7 +548,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/ToolLimits.
 
 ### `tools:search`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/BuiltInTools.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Tools/BuiltInTools.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -558,7 +558,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/BuiltInTool
 
 ### `tools:config:csharp_script`
 
-Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/NewBuiltInTools.cs).
+Ordinary configuration. Implementation: `src/Threadsmith.Tools/NewBuiltInTools.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -571,7 +571,7 @@ Ordinary configuration. [Implementation](../../src/Threadsmith.Tools/NewBuiltInT
 
 ### `webFetch`
 
-Trusted ceiling; repository settings can narrow it. [Implementation](../../src/Threadsmith.Tools/WebFetch.cs).
+Trusted ceiling; repository settings can narrow it. Implementation: `src/Threadsmith.Tools/WebFetch.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|
@@ -587,7 +587,7 @@ Trusted ceiling; repository settings can narrow it. [Implementation](../../src/T
 
 ### `webSearch:provider`
 
-Trusted provider configuration. [Implementation](../../src/Threadsmith.Tools/WebSearch.cs).
+Trusted provider configuration. Implementation: `src/Threadsmith.Tools/WebSearch.cs`.
 
 | Field | Default | Purpose |
 |---|---:|---|

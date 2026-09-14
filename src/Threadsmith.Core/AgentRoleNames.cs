@@ -14,6 +14,7 @@ public static class AgentRoleNames
             AgentRole.TestReviewer => "testReviewer",
             AgentRole.PerformanceReviewer => "performanceReviewer",
             AgentRole.ArchitectureReviewer => "architectureReviewer",
+            AgentRole.BugReviewer => "bugReviewer",
             _ => throw new ArgumentOutOfRangeException(nameof(role)),
         };
     }
@@ -29,6 +30,7 @@ public static class AgentRoleNames
             "testReviewer" => AgentRole.TestReviewer,
             "performanceReviewer" => AgentRole.PerformanceReviewer,
             "architectureReviewer" => AgentRole.ArchitectureReviewer,
+            "bugReviewer" => AgentRole.BugReviewer,
             _ => (AgentRole)(-1),
         };
         return Enum.IsDefined(role);

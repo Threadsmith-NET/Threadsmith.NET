@@ -71,6 +71,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(SkillCatalogRefreshed), "skillCatalogRefreshed")]
 [JsonDerivedType(typeof(SkillVerificationDecided), "skillVerificationDecided")]
 [JsonDerivedType(typeof(SkillWorkflowCheckpointWritten), "skillWorkflowCheckpointWritten")]
+[JsonDerivedType(typeof(SkillInvocationProgressObserved), "skillInvocationProgressObserved")]
 [JsonDerivedType(typeof(SkillInvocationCompleted), "skillInvocationCompleted")]
 [JsonDerivedType(typeof(HookInvocationStartedEvent), "hookInvocationStarted")]
 [JsonDerivedType(typeof(HookInvocationCompletedEvent), "hookInvocationCompleted")]
@@ -271,7 +272,8 @@ public sealed record ToolInvocationStarted(
     string RequestedBy = "host",
     ToolActivitySource? Source = null,
     string? ActivityDetail = null,
-    [property: JsonIgnore] string? TransientActivityDetail = null) : DomainEvent(SessionId, OccurredAt);
+    [property: JsonIgnore] string? TransientActivityDetail = null,
+    string? ActivityOrigin = null) : DomainEvent(SessionId, OccurredAt);
 
 /// <summary>A tool invocation completed.</summary>
 public sealed record ToolInvocationCompleted(
@@ -767,7 +769,26 @@ public sealed record SkillWorkflowCheckpointWritten(
     string Digest,
     SkillInvocationStatus Status,
     int Generation,
-    string NextAction) : DomainEvent(SessionId, OccurredAt);
+    string NextAction) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Owning run, when recorded by a current host.</summary>
+    public RunId? RunId { get; init; }
+
+    /// <summary>Existing tool activity that owns this invocation, if any.</summary>
+    public ToolInvocationId? InvokingToolInvocationId { get; init; }
+}
+
+/// <summary>Bounded host-owned progress for an active skill generation; contains no source or process output.</summary>
+public sealed record SkillInvocationProgressObserved(
+    SessionId SessionId,
+    DateTimeOffset OccurredAt,
+    SkillInvocationId InvocationId,
+    int Generation,
+    string Message) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Owning run for routing activity to the correct agent workspace.</summary>
+    public RunId? RunId { get; init; }
+}
 
 /// <summary>A skill invocation reached an authoritative terminal state.</summary>
 public sealed record SkillInvocationCompleted(
@@ -913,6 +934,7 @@ public static class DomainEventJson
             ["skillCatalogRefreshed"] = typeof(SkillCatalogRefreshed),
             ["skillVerificationDecided"] = typeof(SkillVerificationDecided),
             ["skillWorkflowCheckpointWritten"] = typeof(SkillWorkflowCheckpointWritten),
+            ["skillInvocationProgressObserved"] = typeof(SkillInvocationProgressObserved),
             ["skillInvocationCompleted"] = typeof(SkillInvocationCompleted),
             ["hookInvocationStarted"] = typeof(HookInvocationStartedEvent),
             ["hookInvocationCompleted"] = typeof(HookInvocationCompletedEvent),

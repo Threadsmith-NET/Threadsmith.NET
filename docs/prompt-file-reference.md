@@ -35,14 +35,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 26 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| System and phase prompts | 27 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
 | Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
-| Skill prompts | 13 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
+| Skill prompts | 14 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **304** | Complete deployed catalog. |
+| **Total** | **306** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -56,14 +56,15 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-ChildAgent-HostPolicy.md` | Common child system policy for trust, permissions, tools, and free-form responses. | `None` |
+| `System-ChildAgent-HostPolicy.md` | Common child guidance for advertised tools, inherited authority without further delegation, shared-workspace coordination, and honest responses. | `None` |
 | `System-ChildAgent-Explorer.md` | Explorer role amendment for focused inspection and useful answers. | `None` |
 | `System-ChildAgent-OutputPolicy.md` | Legacy Explorer JSON output policy retained in the catalog; unused for ordinary child responses. | `None` |
-| `System-ChildAgent-Implementer.md` | Implementer role amendment for read-only implementation suggestions. | `None` |
+| `System-ChildAgent-Implementer.md` | Implementer role amendment for assigned changes and validation using advertised tools, with accurate completion and limitation reporting. | `None` |
 | `System-ChildAgent-SecurityReviewer.md` | SecurityReviewer role amendment for concrete risks and useful fixes. | `None` |
 | `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for useful coverage observations and improvements. | `None` |
 | `System-ChildAgent-PerformanceReviewer.md` | PerformanceReviewer role amendment distinguishing measured behavior from plausible risks. | `None` |
 | `System-ChildAgent-ArchitectureReviewer.md` | ArchitectureReviewer role amendment informed by repository design and applicable documents. | `None` |
+| `System-ChildAgent-BugReviewer.md` | BugReviewer role amendment for functional correctness against supplied requirements and acceptance criteria. | `None` |
 
 #### `GovernedRequestState` family
 
@@ -502,7 +503,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
-| `Tool-delegate_agents-Description.md` | Advertised description for `delegate_agents`. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
+| `Tool-delegate_agents-Description.md` | Delegation tool guidance for roles, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
 | `Tool-delegate_agents-FindingUncertainty.md` | Conditional uncertainty block in a joined delegation finding. | [`Uncertainty`](#placeholder-uncertainty) |
@@ -584,7 +585,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_diff-Description.md` | Advertised description for `git_diff`. | `None` |
+| `Tool-git_diff-Description.md` | Bounded Git comparisons, literal path filters, metadata-only frozen ranges, optional working-tree base, and patch context lines. | `None` |
 
 #### `git_log` family
 
@@ -596,7 +597,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_show-Description.md` | Advertised description for `git_show`. | `None` |
+| `Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | `None` |
 
 #### `git_status` family
 
@@ -639,7 +640,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-read_file-Description.md` | Advertised description for `read_file`. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
+| `Tool-read_file-Description.md` | Bounded line reads and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
 | `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
 #### `run_process` family
@@ -701,11 +702,19 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages.
 
+#### `Review` family
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Skill-Review.md` | Lead review acquisition, delegation, synthesis and delivery through enabled tools. | `None` |
+
+Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
+
 #### `Procedure` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Procedure-Continuation.md` | Skill continuation guidance, appended as a user message after each native tool result and retained in the legacy input projection. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
+| `Skill-Procedure-Continuation.md` | Tool result and continuation guidance for the legacy input projection; structured model messages carry the result once as a tool response. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
 | `Skill-Procedure-Request.md` | Skill procedure guidance for `Procedure-Request`. | [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
 | `Skill-Procedure-System.md` | Skill procedure guidance for `Procedure-System`. | `None` |
 
@@ -879,7 +888,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-returnedprojects"></a>`ReturnedProjects` | Number of project entries actually returned after bounds. |
 | <a id="placeholder-returnedtests"></a>`ReturnedTests` | Number of test entries actually returned after bounds. |
 | <a id="placeholder-role"></a>`Role` | Host-assigned child-agent or message role. |
-| <a id="placeholder-schema"></a>`Schema` | Tool input JSON schema shown to the model; it may come from a built-in definition or an imported MCP server and is escaped before insertion. |
+| <a id="placeholder-schema"></a>`Schema` | Tool input or focused specialist output JSON schema shown to its assigned model; it may come from a built-in definition or an imported MCP server and is escaped before insertion. |
 | <a id="placeholder-scope"></a>`Scope` | Host-approved repository or task scope. |
 | <a id="placeholder-sequence"></a>`Sequence` | Monotonic sequence number used to order steering or context items. |
 | <a id="placeholder-servername"></a>`ServerName` | Configured MCP server display name. |

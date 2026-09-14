@@ -2,6 +2,7 @@ namespace Threadsmith.Execution;
 
 using Threadsmith.Context;
 using Threadsmith.Core;
+using Threadsmith.Models;
 using Threadsmith.Persistence;
 
 /// <summary>Serializes safe-boundary creation, restoration, and independent cloning of active sessions.</summary>
@@ -17,6 +18,7 @@ public sealed class SessionLifecycleApplication :
     private readonly IEvidenceStore _evidenceStore;
     private readonly IDomainEventStream _events;
     private readonly ISessionLifecycleStore _lifecycleStore;
+    private readonly JsonlModelExchangeLog? _modelExchangeLog;
     private readonly InMemoryProjectionStore _projections;
     private readonly ISessionRestorer _restorer;
     private readonly SemaphoreSlim _transitionGate = new(1, 1);
@@ -39,7 +41,8 @@ public sealed class SessionLifecycleApplication :
         IContextAssembler contextAssembler,
         SessionUsageProjection usage,
         ActiveModelSelectionService? activeModels = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        JsonlModelExchangeLog? modelExchangeLog = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         ArgumentNullException.ThrowIfNull(lifecycleStore);
@@ -53,6 +56,7 @@ public sealed class SessionLifecycleApplication :
         (_repositoryIdentity, _repositoryDisplayName) = CreateRepositoryBinding(repositoryPath);
 
         _lifecycleStore = lifecycleStore;
+        _modelExchangeLog = modelExchangeLog;
         _restorer = restorer;
         _sessions = sessions;
         _projections = projections;
@@ -289,6 +293,11 @@ public sealed class SessionLifecycleApplication :
 
             try
             {
+                if (kind == SessionTransitionKind.New && source is not null && _modelExchangeLog is not null)
+                {
+                    await _modelExchangeLog.RotateAsync(cancellationToken);
+                }
+
                 if (source is not null)
                 {
                     _active = source = await CheckpointAsync(
@@ -496,8 +505,8 @@ public sealed class SessionLifecycleApplication :
         var cloneUsage = new SessionDurableUsage(
             0,
             0,
-            sourceUsage.IsEstimate,
-            sourceUsage.HasUnknownUsage,
+            false,
+            false,
             false,
             SaturatingAdd(sourceUsage.InheritedInputTokens, sourceUsage.InputTokens),
             SaturatingAdd(sourceUsage.InheritedOutputTokens, sourceUsage.OutputTokens));

@@ -1,0 +1,50 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": [
+        "currentBranchChanges",
+        "remoteBranch",
+        "specialInstructions"
+      ]
+    },
+    "baseBranch": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "repository": {
+      "type": "string",
+      "maxLength": 2048
+    },
+    "branch": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "instructions": {
+      "type": "string",
+      "maxLength": 4096
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 1024
+      },
+      "maxItems": 128
+    },
+    "requirementsDocumentPath": {
+      "type": "string",
+      "maxLength": 1024
+    },
+    "requirementsSource": {
+      "type": "string",
+      "enum": [
+        "workspace",
+        "reviewTarget"
+      ]
+    }
+  },
+  "required": []
+}

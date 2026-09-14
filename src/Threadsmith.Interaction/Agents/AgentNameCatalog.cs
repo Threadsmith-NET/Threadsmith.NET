@@ -23,6 +23,7 @@ public sealed class AgentNameCatalog
         [AgentRole.TestReviewer] = Array.AsReadOnly<string>(["Dijkstra", "Hoare", "Myers", "Hamming", "Knuth", "Hopper"]),
         [AgentRole.PerformanceReviewer] = Array.AsReadOnly<string>(["Amdahl", "Gustafson", "Cray", "Hennessy", "Patterson", "Knuth"]),
         [AgentRole.ArchitectureReviewer] = Array.AsReadOnly<string>(["Brooks", "Parnas", "Kay", "Dijkstra", "Liskov", "Shaw"]),
+        [AgentRole.BugReviewer] = Array.AsReadOnly<string>(["Zeller", "Dijkstra", "Hoare", "Hamilton", "Hopper", "Knuth"]),
     }.ToFrozenDictionary();
 
     private readonly FrozenDictionary<AgentRole, IReadOnlyList<string>> _names;

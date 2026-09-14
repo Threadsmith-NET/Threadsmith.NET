@@ -349,7 +349,7 @@ public sealed class ParallelAgentTests
             assignment,
             Environment.CurrentDirectory);
         var decision = new DefaultPolicyEngine().Evaluate(
-            new ReadFileTool(TestPromptLoader.Instance),
+            new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new ReadFileInput { Path = "src/A.cs" },
             child);
 
@@ -673,7 +673,8 @@ public sealed class ParallelAgentTests
         var reviewer = role is AgentRole.SecurityReviewer
             or AgentRole.TestReviewer
             or AgentRole.PerformanceReviewer
-            or AgentRole.ArchitectureReviewer;
+            or AgentRole.ArchitectureReviewer
+            or AgentRole.BugReviewer;
         return new AgentAssignment
         {
             AssignmentId = AgentAssignmentId.New(),

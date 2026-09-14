@@ -824,3 +824,25 @@ Record automated and physical-terminal evidence separately; unexecuted operator 
 ## Scenario AU — TUIKit agent workspace
 
 Follow [the agent workspace procedure](../operations/agent-workspace.md#verification-procedure). Confirm stable person/role labels and one-cell tab gaps, suffix collisions, targeted output/tool/status/counters, selected and unselected retirement, child input blocking, draft retention, centered modal isolation, immediate authoritative toggles, single theme selection, OAuth actions/cancellation, modal help columns, startup input discard and splash-only successful output, seven theme roles, semantic-refresh toasts, narrow layout/overflow, and queue/retention notices. Tool activities must appear before completion with independent timers; named child status rows update inside their originating delegation block and remain below its final timer without duplicates. MAIN’s active-turn hint is transient. Optional reasoning counts distinguish missing from zero and never add to output totals a second time; latest-request cache reporting remains independent. Repeat physical Windows and Unix cases and record evidence independently; automated headless success does not close those platform checks.
+
+## Scenario AV — Focused review skills
+
+1. Discover public skills and invoke the verified maintained `review` package for current branch changes, a specific remote branch or explicit instructions. Only `review` is added to the public catalog; specialist procedures cannot be selected publicly.
+2. Capture immutable source and optional requirements before four independent role/model-routed reviewers start. Their provider requests contain only their own procedure and allowed facts, without parent/sibling conversation. Tools inspect frozen source only.
+3. Reject malformed outputs, fabricated citations and out-of-scope issue locations. Preserve accepted siblings and show failed/interrupted coverage. Ordinary native/Claude skills and delegated-role responses remain unchanged.
+4. Render fixed Markdown sections with all P1/P2/P3 headings, evidence-backed strengths/architecture and separate observations. Supplied requirements yield an exhaustive sourced criterion table and honest unknown/runtime states.
+5. Save atomically to an existing authorized invoking-repository `.inbox`, or stream canonical Markdown if absent. Remote acquisition does not change the active checkout. Invalid inbox destinations fail without creating folders or silently choosing another output.
+6. Resume interrupted work with exact pin and permission revalidation, preserving completed results and never silently restarting inference. Retry delivery without overwriting or duplicating reports.
+
+**Verifies:** exact opt-in review authority, private context separation, immutable evidence, scoped validation, existing role/model and resource controls, deterministic advisory reports, confined delivery and compatibility.
+
+
+## Scenario AW — Hierarchical Skill Management
+
+1. Open `/skills` with maintained native packages, repository/user native packages, and Claude-style packages. Confirm a retained tree groups candidates first by format, then scope, without activating or enabling anything on open.
+2. Navigate, collapse/expand, and filter groups. Verify one package and a filtered group from F3 Actions. Maintained integrity verification enables packages unless explicitly disabled; unsigned Claude verification alone does not authorize them.
+3. Enable/disable leaves and filtered groups with Space. In a large mixed Claude group, confirm partial outcome counts and that the next Space disables every eligible member. Confirm Esc during a toggle batch stops after the current item finishes and preserves its published state. Confirm every package uses its ordinary exact-identity verification and policy checks, reflected immediately in its checkbox and status. Unrelated formats/scopes and filtered-out candidates remain unchanged.
+4. Cancel verification, corrupt a package, revoke a digest, and change a selected catalog identity. Confirm honest current/failed status, no replacement authorization, and continued access to the manager. Esc preserves completed changes.
+5. Use `/skills list`, `refresh`, `inspect`, `verify`, `enable`, `disable`, and existing workflow subcommands. Confirm their command contracts remain available. Repeat verification and toggles through the original frontend's sequential choices.
+
+**Verifies:** shared native/Claude authority, metadata-only discovery, exact package selection, maintained auto-enablement, repository-excluding policy, retained tree/action parity, filtering boundaries, cancellation, and command compatibility.

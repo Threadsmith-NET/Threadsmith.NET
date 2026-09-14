@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "skillId": {
+    "value": "review"
+  },
+  "packageId": "threadsmith.review",
+  "version": "1.0.0",
+  "displayName": "review",
+  "description": "Model-driven code review using available tools, delegated specialists and editable prompts.",
+  "tags": [
+    "review"
+  ],
+  "publisher": "Threadsmith.NET",
+  "license": "Apache-2.0",
+  "assets": [
+    {
+      "path": "schemas/input.json",
+      "bytes": 908,
+      "sha256": "fb69f9883facd75e2be6c66517456e465b90c3853e976d06e06bad5a9a4245d0",
+      "required": true,
+      "kind": "schema"
+    },
+    {
+      "path": "schemas/output.json",
+      "bytes": 251,
+      "sha256": "7d8eb2624c559868e0658680d7377dbbc23e80440bca487385c7618bb47b871c",
+      "required": true,
+      "kind": "schema"
+    }
+  ],
+  "requirements": {
+    "requiredTools": [
+      "delegate_agents"
+    ],
+    "optionalTools": [],
+    "toolContractVersions": {},
+    "minimumTrust": "trustedRead",
+    "approvalCategories": [],
+    "model": {
+      "workloads": [
+        "Review"
+      ],
+      "requiresToolCalls": true,
+      "requiresStructuredOutput": true,
+      "minimumContextWindow": 8192,
+      "allowedProfiles": [],
+      "deniedProfiles": []
+    },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999",
+    "inheritAvailableTools": true
+  },
+  "budget": {
+    "contentTokens": 8000,
+    "workflowSteps": 8,
+    "modelTurns": 64,
+    "toolCalls": 128,
+    "mutations": 1,
+    "validationAttempts": 0,
+    "delegatedChildren": 4,
+    "parallelChildren": 4,
+    "worktrees": 0,
+    "reviewerFindings": 128,
+    "wallTime": "00:20:00"
+  },
+  "agents": [],
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "review",
+    "steps": [
+      {
+        "stepId": "review",
+        "kind": "invokeProcedure",
+        "promptFile": "Skill-Review.md",
+        "inputSchemaAsset": "schemas/input.json",
+        "outputSchemaAsset": "schemas/output.json",
+        "successProperty": "succeeded",
+        "responseProperty": "response",
+        "maximumIterations": 1
+      }
+    ]
+  }
+}

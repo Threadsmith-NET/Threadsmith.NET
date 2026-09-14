@@ -2711,6 +2711,114 @@ public static class Milestone3Tests
         Assert.Contains(events, e => e is ModelOutputObserved observed && observed.Text == "answer");
     }
 
+    /// <summary>Cumulative stream usage is charged once per request and agrees with the shared visible counters.</summary>
+    [Fact]
+    public static async Task SessionApplication_RepeatedUsageDoesNotMultiplyBudgetCharges()
+    {
+        var provider = new CapturingModelProvider(
+            new ModelChunk { Usage = new ModelUsage(10, 2, EstimatedCost: 0.1m) },
+            new ModelChunk { Usage = new ModelUsage(10, 2, EstimatedCost: 0.1m) },
+            new ModelChunk { Text = "answer", Usage = new ModelUsage(10, 3, EstimatedCost: 0.2m) });
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromHours(1), 1m));
+        var usage = new SessionUsageProjection();
+        await using var stream = new DomainEventStream();
+        var application = new SessionApplication(
+            stream,
+            provider,
+            budget,
+            new PassthroughSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            sessionUsage: usage,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var session = await dispatcher.DispatchAsync(new CreateSessionCommand("test"));
+        var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "request"));
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run)));
+
+        var charged = budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
+        Assert.Equal(13, charged.Tokens);
+        Assert.Equal(1, charged.Calls);
+        Assert.Equal(0.2m, charged.Cost);
+        Assert.Equal(charged.Tokens, usage.GetSnapshot(session).TotalTokens);
+    }
+
+    /// <summary>Completed and failed provider requests consume a call even without reported token usage.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task SessionApplication_MissingUsageStillChargesModelCall(bool fails)
+    {
+        var provider = new CapturingModelProvider(new ModelChunk { Text = "partial answer" })
+        {
+            Failure = fails ? new InvalidOperationException("provider failed before usage") : null,
+        };
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromHours(1)));
+        var usage = new SessionUsageProjection();
+        await using var stream = new DomainEventStream();
+        var application = new SessionApplication(
+            stream,
+            provider,
+            budget,
+            new PassthroughSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            sessionUsage: usage,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var session = await dispatcher.DispatchAsync(new CreateSessionCommand("test"));
+        var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "request"));
+        if (fails)
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                dispatcher.DispatchAsync(new WaitForRunCommand(run)));
+        }
+        else
+        {
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run)));
+        }
+
+        Assert.Single(provider.Requests);
+        var charged = budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
+        Assert.Equal(1, charged.Calls);
+        Assert.Equal(0, charged.Tokens);
+        Assert.True(usage.GetSnapshot(session).HasUnknownUsage);
+    }
+
+    /// <summary>A request denied by the call budget does not invent another provider call or unknown usage.</summary>
+    [Fact]
+    public static async Task SessionApplication_DeniedModelCallDoesNotRecordMissingUsage()
+    {
+        var provider = new CapturingModelProvider(
+            new ModelChunk { Text = "answer", Usage = new ModelUsage(10, 3) });
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 1, TimeSpan.FromHours(1)));
+        var usage = new SessionUsageProjection();
+        await using var stream = new DomainEventStream();
+        var application = new SessionApplication(
+            stream,
+            provider,
+            budget,
+            new PassthroughSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            sessionUsage: usage,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var session = await dispatcher.DispatchAsync(new CreateSessionCommand("test"));
+        var firstRun = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "first request"));
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(firstRun)));
+        var deniedRun = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "denied request"));
+        await Assert.ThrowsAsync<BudgetExceededException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(deniedRun)));
+
+        Assert.Single(provider.Requests);
+        var charged = budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
+        Assert.Equal(1, charged.Calls);
+        Assert.Equal(13, charged.Tokens);
+        Assert.Equal(charged.Tokens, usage.GetSnapshot(session).TotalTokens);
+        Assert.False(usage.GetSnapshot(session).HasUnknownUsage);
+    }
+
     /// <summary>The configured startup default is present on the first composed model request.</summary>
     [Fact]
     public static async Task SessionApplication_ConfiguredStartupDefault_IsSentOnFirstRequest()
@@ -2949,6 +3057,8 @@ public static class Milestone3Tests
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
+        public Exception? Failure { get; init; }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
             [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -2959,6 +3069,11 @@ public static class Milestone3Tests
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return chunk;
+            }
+
+            if (Failure is not null)
+            {
+                throw Failure;
             }
         }
     }

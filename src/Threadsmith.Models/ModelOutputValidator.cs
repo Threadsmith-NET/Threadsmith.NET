@@ -528,8 +528,8 @@ public static class ModelOutputValidator
             if (mutation.Content is { } content
                 && (content.Text.Length > limits.MaximumMutationCharacters
                     || (content.Sha256 is not null && !IsSha256(content.Sha256))
-                    || !Enum.IsDefined(content.Encoding)
-                    || !Enum.IsDefined(content.Newline)))
+                    || (content.Encoding is { } encoding && !Enum.IsDefined(encoding))
+                    || (content.Newline is { } newline && !Enum.IsDefined(newline))))
             {
                 throw new MalformedModelOutputException("Lifecycle content encoding, newline, hash, or size is invalid.");
             }

@@ -1930,7 +1930,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             };
             var content = encoding.GetBytes(normalizedText);
             var includePreamble = Content?.Encoding == FileTextEncoding.Utf8Bom
-                || (Content is null && (Original ?? EncodingSource)?.HasPreamble == true);
+                || (Content?.Encoding is null && (Original ?? EncodingSource)?.HasPreamble == true);
             if (!includePreamble)
             {
                 return content;

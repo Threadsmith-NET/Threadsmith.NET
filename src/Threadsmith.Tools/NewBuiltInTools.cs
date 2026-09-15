@@ -277,8 +277,8 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
         ArgumentNullException.ThrowIfNull(promptLoader);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCodeCharacters);
         _maximumCodeCharacters = maximumCodeCharacters;
-        _definition = ToolDefinitionFactory
-            .Create<CSharpScriptInput, CSharpScriptOutput>(
+        _definition = ToolDefinitionFactory.WithStringEnum(
+            ToolDefinitionFactory.Create<CSharpScriptInput, CSharpScriptOutput>(
                 "csharp_script",
                 promptLoader.Get(PromptFileNames.ToolCsharpScriptDescription),
                 ToolCategory.CodeExecution,
@@ -287,12 +287,16 @@ public sealed class CSharpScriptTool : Tool<CSharpScriptInput, CSharpScriptOutpu
                 ToolSideEffect.ExecutesCode,
                 TimeSpan.FromSeconds(35),
                 7 * 1024 * 1024) with
-        {
-            DisplayName = "C# Script",
-            EnabledByDefault = false,
-            ConversationAvailable = true,
-            Idempotency = ToolIdempotency.NonIdempotent,
-        };
+            {
+                DisplayName = "C# Script",
+                EnabledByDefault = false,
+                ConversationAvailable = true,
+                Idempotency = ToolIdempotency.NonIdempotent,
+            },
+            "kind",
+            "expression",
+            "expression",
+            "statement");
         _engine = engine;
     }
 

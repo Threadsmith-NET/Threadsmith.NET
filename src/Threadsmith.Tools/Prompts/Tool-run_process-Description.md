@@ -1,1 +1,1 @@
-Executes a {{ShellLanguage}} command in the repository root and returns bounded stdout and stderr.
+Executes a {{ShellLanguage}} command in the repository root and returns bounded stdout and stderr. timeoutSeconds is a nonnegative timeout hint: 0 uses the host default and larger values are clamped to the host maximum.

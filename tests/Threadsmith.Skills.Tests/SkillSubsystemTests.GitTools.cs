@@ -24,7 +24,7 @@ public sealed partial class SkillSubsystemTests
         await File.WriteAllTextAsync(Path.Combine(fixture.Root, "escaped.txt"), new string('<', 100 * 1024));
         await fixture.GitAsync("add", "escaped.txt");
         await fixture.GitAsync("commit", "-m", "escaped source");
-        var result = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowRequest { Revision = "HEAD", Paths = ["escaped.txt", "tracked.txt"] });
+        var result = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = "HEAD", Paths = ["escaped.txt", "tracked.txt"] });
         Assert.True(result.Files[0].IsTruncated);
         Assert.Null(result.Files[0].Content);
         Assert.Equal("original content\n", result.Files[1].Content);
@@ -44,11 +44,11 @@ public sealed partial class SkillSubsystemTests
 
         await fixture.GitAsync("add", "--all");
         await fixture.GitAsync("commit", "-m", "large inventory");
-        var first = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowRequest { Revision = "HEAD", Inventory = true, InventoryMaximumEntries = 1 });
+        var first = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = "HEAD", Inventory = true, InventoryMaximumEntries = 1 });
         var inventory = JsonSerializer.Deserialize<GitShowInventory>(first.Content)!;
         Assert.Single(inventory.Files);
         Assert.Equal(1, inventory.NextOffset);
-        var last = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowRequest { Revision = inventory.Revision, Inventory = true, InventoryOffset = 5500 });
+        var last = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = inventory.Revision, Inventory = true, InventoryOffset = 5500 });
         var tail = JsonSerializer.Deserialize<GitShowInventory>(last.Content)!;
         Assert.Equal("tracked.txt", Assert.Single(tail.Files).Path);
         Assert.Null(tail.NextOffset);
@@ -57,7 +57,7 @@ public sealed partial class SkillSubsystemTests
             await File.WriteAllTextAsync(Path.Combine(fixture.Root, $"{index:D5}-{suffix}.txt"), "changed");
         }
 
-        var dirty = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowRequest { Revision = inventory.Revision, Inventory = true, IncludeWorkingTree = true, InventoryMaximumEntries = 1 });
+        var dirty = await InvokeFixtureToolAsync<GitShowResult>(fixture, "git_show", new GitShowInput { Revision = inventory.Revision, Inventory = true, IncludeWorkingTree = true, InventoryMaximumEntries = 1 });
         Assert.NotNull(JsonSerializer.Deserialize<GitShowInventory>(dirty.Content)!.StatusDigest);
     }
 

@@ -103,7 +103,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | `None` |
-| `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields and offered-tool versus final-JSON output guidance. | `None` |
+| `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields, host-owned bookkeeping exclusions, and offered-tool versus final-JSON output guidance. | `None` |
 | `System-RequiredOutput-Plan.md` | Flat plan-content JSON guidance; the host assigns schema version, revision and step IDs. | `None` |
 
 #### `SystemPrompt` family
@@ -272,7 +272,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-search-Bounds.md` | Corrective guidance for invalid `search` bounds. | [`MaximumMatches`](#placeholder-maximummatches), [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
+| `Correction-search-Bounds.md` | Corrective guidance for query length or negative `maximumMatches`; oversized positive hints are clamped. | [`MaximumMatches`](#placeholder-maximummatches), [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
 
 #### `SemanticFirstSearch` family
 
@@ -484,7 +484,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-csharp_script-Description.md` | Advertised description for `csharp_script`. | `None` |
+| `Tool-csharp_script-Description.md` | Advertised script-kind enum and default for `csharp_script`. | `None` |
 
 #### `datetime` family
 
@@ -515,7 +515,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-diagnostic_query-Description.md` | Advertised description for `diagnostic_query`. | `None` |
+| `Tool-diagnostic_query-Description.md` | Diagnostic query guidance with a flat optional UUID `runId`. | `None` |
 
 #### `dotnet_analyzers` family
 
@@ -585,7 +585,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_diff-Description.md` | Bounded Git comparisons, literal path filters, metadata-only frozen ranges, optional working-tree base, and patch context lines. | `None` |
+| `Tool-git_diff-Description.md` | Bounded Git comparisons with one `paths` filter shape, metadata-only frozen ranges, optional working-tree base, and patch context lines. | `None` |
 
 #### `git_log` family
 
@@ -597,7 +597,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | `None` |
+| `Tool-git_show-Description.md` | Bounded Git object reads through one `paths` filter shape, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | `None` |
 
 #### `git_status` family
 
@@ -615,7 +615,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-list_files-Description.md` | Advertised description for `list_files`. | `None` |
+| `Tool-list_files-Description.md` | Repository listing guidance and clamped `maximumEntries` hint semantics. | `None` |
 
 #### `nuget_health` family
 
@@ -628,7 +628,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-propose_mutations-Description.md` | Advertised description for `propose_mutations`. | `None` |
+| `Tool-propose_mutations-Description.md` | Mutation proposal guidance separating model-authored changes from host-owned identities, lengths, and policy. | `None` |
 
 #### `propose_plan` family
 
@@ -647,13 +647,13 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-run_process-Description.md` | Advertised description for `run_process`. | [`ShellLanguage`](#placeholder-shelllanguage) |
+| `Tool-run_process-Description.md` | Process execution guidance and clamped timeout-hint semantics. | [`ShellLanguage`](#placeholder-shelllanguage) |
 
 #### `search` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-search-Description.md` | Advertised description for `search`. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
+| `Tool-search-Description.md` | Search guidance, concise-query bounds, and clamped `maximumMatches` hint semantics. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
 
 #### `symbol_impact` family
 
@@ -674,7 +674,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-test_run_targeted-Description.md` | Advertised description for `test_run_targeted`. | `None` |
+| `Tool-test_run_targeted-Description.md` | Targeted-test guidance with the direct discovery-issued string `testId`. | `None` |
 
 #### `ToolInvocation` family
 

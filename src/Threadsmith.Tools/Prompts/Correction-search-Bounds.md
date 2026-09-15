@@ -1,1 +1,1 @@
-query is limited to {{MaximumQueryCharacters}} characters; use a concise literal or regex, not pasted source/tool output. maximumMatches is limited to 0..{{MaximumMatches}} (0 uses the host default).
+query is limited to {{MaximumQueryCharacters}} characters; use a concise literal or regex, not pasted source/tool output. maximumMatches must be nonnegative; 0 uses the host default and values above {{MaximumMatches}} are clamped to that host maximum.

@@ -4,8 +4,30 @@ using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
 
+/// <summary>Model-facing Git diff request with one path-filter representation.</summary>
+public sealed record GitDiffInput
+{
+    /// <summary>Optional batch of up to 64 literal path filters.</summary>
+    public IReadOnlyList<string> Paths { get; init; } = [];
+
+    /// <summary>Includes patch text; false returns changed-path metadata only.</summary>
+    public bool IncludePatch { get; init; } = true;
+
+    /// <summary>Context lines per hunk, from zero through fifty.</summary>
+    public int ContextLines { get; init; } = 3;
+
+    /// <summary>Comparison mode; omission selects the working tree.</summary>
+    public GitComparisonMode? Mode { get; init; } = GitComparisonMode.WorkingTree;
+
+    /// <summary>First revision where required by the mode.</summary>
+    public string? BaseRevision { get; init; }
+
+    /// <summary>Second revision where required by the mode.</summary>
+    public string? TargetRevision { get; init; }
+}
+
 /// <summary>Gets a bounded Git diff through the workspace-owned query service.</summary>
-public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
+public sealed class GitDiffTool : Tool<GitDiffInput, GitDiffResult>
 {
     private readonly IPromptLoader _prompts;
     private readonly IGitQueryService _service;
@@ -15,10 +37,13 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(promptLoader);
-        Definition = RepositoryInventoryToolDefinitions.Create<GitDiffRequest, GitDiffResult>(
-            "git_diff",
-            promptLoader,
-            PromptFileNames.ToolGitDiffDescription);
+        Definition = ToolDefinitionFactory.WithStringArrayBounds(
+            RepositoryInventoryToolDefinitions.Create<GitDiffInput, GitDiffResult>(
+                "git_diff",
+                promptLoader,
+                PromptFileNames.ToolGitDiffDescription),
+            "paths",
+            64);
         _prompts = promptLoader;
         _service = service;
     }
@@ -28,17 +53,18 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
 
     /// <inheritdoc />
     public override async Task<ToolExecution<GitDiffResult>> ExecuteAsync(
-        GitDiffRequest input,
+        GitDiffInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
         RepositoryInventoryToolPolicy.EnsureResourcePaths(this, input, context.Invocation);
-        var mode = input.Mode ?? GitComparisonMode.WorkingTree;
+        var request = CreateRequest(input);
+        var mode = request.Mode ?? GitComparisonMode.WorkingTree;
         var result = await _service.DiffAsync(
             context.Invocation.RepositoryPath,
-            input,
+            request,
             cancellationToken);
-        result = RepositoryInventoryToolPolicy.Confine(result, input, context.Invocation);
+        result = RepositoryInventoryToolPolicy.Confine(result, request, context.Invocation);
         result = result with
         {
             EntriesDigest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
@@ -52,38 +78,38 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
     }
 
     /// <inheritdoc />
-    protected override string DescribeActivity(GitDiffRequest input)
+    protected override string DescribeActivity(GitDiffInput input)
     {
         var comparison = input.BaseRevision is null ? (input.Mode ?? GitComparisonMode.WorkingTree).ToString()
             : input.TargetRevision is null ? input.BaseRevision + " -> working tree" : input.BaseRevision + " -> " + input.TargetRevision;
-        return comparison + (input.Paths.Count > 0 ? " · " + input.Paths.Count + " path filter(s)" : input.Path is null ? " · all paths" : " · " + input.Path);
+        return comparison + (input.Paths.Count > 0 ? " · " + input.Paths.Count + " path filter(s)" : " · all paths");
     }
 
     /// <inheritdoc />
-    protected override void ValidateInput(GitDiffRequest input)
+    protected override void ValidateInput(GitDiffInput input)
     {
         ValidateDiffRequest(input);
-        if (input.Paths.Count > 64 || (input.Path is not null && input.Paths.Count > 0) || input.Paths.Any(string.IsNullOrWhiteSpace))
+        if (input.Paths.Count > 64 || input.Paths.Any(string.IsNullOrWhiteSpace))
         {
-            throw new ToolArgumentValidationException("Git diff accepts one path or up to 64 literal path filters.");
+            throw new ToolArgumentValidationException("Git diff accepts up to 64 literal path filters.");
         }
     }
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetResourcePaths(
-        GitDiffRequest input,
+        GitDiffInput input,
         ToolInvocationContext context)
     {
-        return input.Paths.Count > 0 ? input.Paths : input.Path is null ? [context.RepositoryPath] : [input.Path];
+        return input.Paths.Count > 0 ? input.Paths : [context.RepositoryPath];
     }
 
     /// <inheritdoc />
-    protected override string? GetExecutable(GitDiffRequest input)
+    protected override string? GetExecutable(GitDiffInput input)
     {
         return "git";
     }
 
-    private void ValidateDiffRequest(GitDiffRequest input)
+    private void ValidateDiffRequest(GitDiffInput input)
     {
         var mode = input.Mode ?? GitComparisonMode.WorkingTree;
         ArgumentOutOfRangeException.ThrowIfNegative(input.ContextLines);
@@ -122,6 +148,20 @@ public sealed class GitDiffTool : Tool<GitDiffRequest, GitDiffResult>
     private static IReadOnlyDictionary<string, string> Tokens(params (string Name, string Value)[] values)
     {
         return values.ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
+    }
+
+    private static GitDiffRequest CreateRequest(GitDiffInput input)
+    {
+        return new GitDiffRequest
+        {
+            Path = input.Paths.Count == 1 ? input.Paths[0] : null,
+            Paths = input.Paths.Count > 1 ? input.Paths : [],
+            IncludePatch = input.IncludePatch,
+            ContextLines = input.ContextLines,
+            Mode = input.Mode,
+            BaseRevision = input.BaseRevision,
+            TargetRevision = input.TargetRevision,
+        };
     }
 }
 
@@ -212,8 +252,33 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
     }
 }
 
+/// <summary>Model-facing Git object request with one path-filter representation.</summary>
+public sealed record GitShowInput
+{
+    /// <summary>Zero-based offset into a normalized inventory page.</summary>
+    public int InventoryOffset { get; init; }
+
+    /// <summary>Requested inventory page size.</summary>
+    public int InventoryMaximumEntries { get; init; } = 200;
+
+    /// <summary>Returns normalized immutable tree metadata.</summary>
+    public bool Inventory { get; init; }
+
+    /// <summary>Includes current tracked and untracked path metadata in inventory mode.</summary>
+    public bool IncludeWorkingTree { get; init; }
+
+    /// <summary>Includes tracked entries in inventory mode.</summary>
+    public bool IncludeTrackedFiles { get; init; } = true;
+
+    /// <summary>Optional batch of up to 64 literal paths.</summary>
+    public IReadOnlyList<string> Paths { get; init; } = [];
+
+    /// <summary>Validated revision or object identity.</summary>
+    public required string Revision { get; init; }
+}
+
 /// <summary>Gets a bounded local Git object.</summary>
-public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
+public sealed class GitShowTool : Tool<GitShowInput, GitShowResult>
 {
     private readonly IGitQueryService _service;
 
@@ -221,10 +286,13 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
     public GitShowTool(IGitQueryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
-        Definition = RepositoryInventoryToolDefinitions.Create<GitShowRequest, GitShowResult>(
-            "git_show",
-            promptLoader,
-            PromptFileNames.ToolGitShowDescription);
+        Definition = ToolDefinitionFactory.WithStringArrayBounds(
+            RepositoryInventoryToolDefinitions.Create<GitShowInput, GitShowResult>(
+                "git_show",
+                promptLoader,
+                PromptFileNames.ToolGitShowDescription),
+            "paths",
+            64);
         _service = service;
     }
 
@@ -233,16 +301,17 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
 
     /// <inheritdoc />
     public override async Task<ToolExecution<GitShowResult>> ExecuteAsync(
-        GitShowRequest input,
+        GitShowInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
         RepositoryInventoryToolPolicy.EnsureResourcePaths(this, input, context.Invocation);
+        var request = CreateRequest(input);
         var result = await _service.ShowAsync(
             context.Invocation.RepositoryPath,
-            input,
+            request,
             cancellationToken);
-        result = RepositoryInventoryToolPolicy.Confine(result, input, context.Invocation);
+        result = RepositoryInventoryToolPolicy.Confine(result, request, context.Invocation);
         while (result.Files.Any(file => file.Content is not null)
             && Encoding.UTF8.GetByteCount(JsonSerializer.SerializeToElement(result).GetRawText()) > Definition.MaximumOutputBytes)
         {
@@ -252,12 +321,12 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
 
         return new(
             result,
-            [new ToolProvenanceSource("git-object", input.Revision, input.Path)],
+            [new ToolProvenanceSource("git-object", input.Revision, input.Paths.FirstOrDefault())],
             result.IsTruncated);
     }
 
     /// <inheritdoc />
-    protected override string DescribeActivity(GitShowRequest input)
+    protected override string DescribeActivity(GitShowInput input)
     {
         if (input.Inventory)
         {
@@ -266,31 +335,47 @@ public sealed class GitShowTool : Tool<GitShowRequest, GitShowResult>
 
         return input.Paths.Count > 0
             ? $"{input.Revision} · {input.Paths.Count} file(s): {string.Join(", ", input.Paths.Take(3))}{(input.Paths.Count > 3 ? ", …" : string.Empty)}"
-            : input.Path is null ? input.Revision : input.Revision + " · " + input.Path;
+            : input.Revision;
     }
 
     /// <inheritdoc />
-    protected override void ValidateInput(GitShowRequest input)
+    protected override void ValidateInput(GitShowInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Revision);
-        if (input.Paths.Count > 64 || (input.Path is not null && input.Paths.Count > 0) || input.Paths.Any(string.IsNullOrWhiteSpace))
+        if (input.Paths.Count > 64 || input.Paths.Any(string.IsNullOrWhiteSpace))
         {
-            throw new ArgumentException("Git show requires one path or up to 64 explicit batch paths.");
+            throw new ArgumentException("Git show accepts up to 64 explicit paths.");
         }
     }
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetResourcePaths(
-        GitShowRequest input,
+        GitShowInput input,
         ToolInvocationContext context)
     {
-        return input.Inventory ? [context.RepositoryPath] : input.Paths.Count > 0 ? input.Paths : input.Path is null ? [context.RepositoryPath] : [input.Path];
+        return input.Paths.Count > 0 ? input.Paths : [context.RepositoryPath];
     }
 
     /// <inheritdoc />
-    protected override string? GetExecutable(GitShowRequest input)
+    protected override string? GetExecutable(GitShowInput input)
     {
         return "git";
+    }
+
+    private static GitShowRequest CreateRequest(GitShowInput input)
+    {
+        var scalarPath = !input.Inventory && input.Paths.Count == 1 ? input.Paths[0] : null;
+        return new GitShowRequest
+        {
+            InventoryOffset = input.InventoryOffset,
+            InventoryMaximumEntries = input.InventoryMaximumEntries,
+            Inventory = input.Inventory,
+            IncludeWorkingTree = input.IncludeWorkingTree,
+            IncludeTrackedFiles = input.IncludeTrackedFiles,
+            Paths = scalarPath is null ? input.Paths : [],
+            Revision = input.Revision,
+            Path = scalarPath,
+        };
     }
 }
 

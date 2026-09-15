@@ -47,7 +47,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `System-Phase-Validation.md` | `Threadsmith.Context` | `prompts/System-Phase-Validation.md` | System guidance for the `Validation` phase. | None |
 | `System-Phase-Default.md` | `Threadsmith.Context` | `prompts/System-Phase-Default.md` | System guidance for the `Default` phase. | None |
 | `System-RequiredOutput-EvidenceCollection.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | None |
-| `System-RequiredOutput-MutationProposal.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-MutationProposal.md` | Mutation proposal fields and offered-tool versus final-JSON output guidance. | None |
+| `System-RequiredOutput-MutationProposal.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-MutationProposal.md` | Mutation proposal fields, host-owned bookkeeping exclusions, and offered-tool versus final-JSON output guidance. | None |
 | `System-RequiredOutput-Plan.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-Plan.md` | Flat plan-content JSON guidance; the host assigns schema version, revision and step IDs. | None |
 | `System-RepositoryInstructions-None.md` | `Threadsmith.Context` | `prompts/System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | None |
 | `System-RepositoryMemoryGuidance.md` | `Threadsmith.Context` | `prompts/System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | None |
@@ -68,18 +68,18 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-ToolInvocation-Completed.md` | `Threadsmith.Execution` | `prompts/Tool-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a parent tool invocation with no other result content. | None |
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | `Threadsmith.Execution` | `prompts/Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | None |
 | `Tool-ReadAgentEvidence-Description.md` | `Threadsmith.Execution` | `prompts/Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of original results by previously delivered evidence ID. | None |
-| `Tool-list_files-Description.md` | `Threadsmith.Tools` | `prompts/Tool-list_files-Description.md` | Advertised description for `list_files`. | None |
+| `Tool-list_files-Description.md` | `Threadsmith.Tools` | `prompts/Tool-list_files-Description.md` | Repository listing guidance and clamped `maximumEntries` hint semantics. | None |
 | `Tool-read_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-read_file-Description.md` | Bounded line reads and exact UTF-8 snapshot pages with whole-file digest continuity. | `DefaultLines`, `MaximumLines`, `MaximumContentBytes`, `MaximumFileBytes` |
 | `Tool-write_file-Description.md` | `Threadsmith.Tools` | `prompts/Tool-write_file-Description.md` | Advertised description for `write_file`. | `MaximumContentBytes` |
 | `Tool-memories-Description.md` | `Threadsmith.Tools` | `prompts/Tool-memories-Description.md` | Advertised description for `memories`. | `MaximumTextCharacters` |
-| `Tool-search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-search-Description.md` | Advertised description for `search`. | `MaximumQueryCharacters` |
+| `Tool-search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-search-Description.md` | Search guidance, concise-query bounds, and clamped `maximumMatches` hint semantics. | `MaximumQueryCharacters` |
 | `Tool-git_status-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_status-Description.md` | Advertised description for `git_status`. | None |
 | `Tool-find_symbol-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_symbol-Description.md` | Advertised description for `find_symbol`. | None |
 | `Tool-find_references-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_references-Description.md` | Advertised description for `find_references`. | None |
 | `Tool-find_implementations-Description.md` | `Threadsmith.Tools` | `prompts/Tool-find_implementations-Description.md` | Advertised description for `find_implementations`. | None |
-| `Tool-run_process-Description.md` | `Threadsmith.Tools` | `prompts/Tool-run_process-Description.md` | Advertised description for `run_process`. | `ShellLanguage` |
+| `Tool-run_process-Description.md` | `Threadsmith.Tools` | `prompts/Tool-run_process-Description.md` | Process execution guidance and clamped timeout-hint semantics. | `ShellLanguage` |
 | `Tool-datetime-Description.md` | `Threadsmith.Tools` | `prompts/Tool-datetime-Description.md` | Advertised description for `datetime`. | None |
-| `Tool-csharp_script-Description.md` | `Threadsmith.Tools` | `prompts/Tool-csharp_script-Description.md` | Advertised description for `csharp_script`. | None |
+| `Tool-csharp_script-Description.md` | `Threadsmith.Tools` | `prompts/Tool-csharp_script-Description.md` | Advertised script-kind enum and default for `csharp_script`. | None |
 | `Tool-code_explore-Description.md` | `Threadsmith.Tools` | `prompts/Tool-code_explore-Description.md` | Advertised description for `code_explore`. | None |
 | `Tool-call_hierarchy-Description.md` | `Threadsmith.Tools` | `prompts/Tool-call_hierarchy-Description.md` | Advertised description for `call_hierarchy`. | None |
 | `Tool-symbol_impact-Description.md` | `Threadsmith.Tools` | `prompts/Tool-symbol_impact-Description.md` | Advertised description for `symbol_impact`. | None |
@@ -105,9 +105,9 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-generated_code_query-HiddenDocuments.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-HiddenDocuments.md` | Hidden-document notice in `generated_code_query` results. | `HiddenCount`, `Plural` |
 | `Tool-generated_code_query-ContentHostTruncation.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-ContentHostTruncation.md` | Host content-truncation notice in `generated_code_query` results. | None |
 | `Tool-generated_code_query-ContentProjectionTruncation.md` | `Threadsmith.Tools` | `prompts/Tool-generated_code_query-ContentProjectionTruncation.md` | Model-projection content-shortening notice in `generated_code_query` results. | None |
-| `Tool-git_diff-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_diff-Description.md` | Bounded Git comparisons, literal path filters, metadata-only frozen ranges, optional working-tree base, and patch context lines. | None |
+| `Tool-git_diff-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_diff-Description.md` | Bounded Git comparisons with one `paths` filter shape, metadata-only frozen ranges, optional working-tree base, and patch context lines. | None |
 | `Tool-git_log-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_log-Description.md` | Advertised description for `git_log`. | None |
-| `Tool-git_show-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_show-Description.md` | Bounded Git object reads, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | None |
+| `Tool-git_show-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_show-Description.md` | Bounded Git object reads through one `paths` filter shape, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | None |
 | `Tool-git_blame-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_blame-Description.md` | Advertised description for `git_blame`. | None |
 | `Tool-git_compare_branches-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_compare_branches-Description.md` | Advertised description for `git_compare_branches`. | None |
 | `Tool-dotnet_inventory-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_inventory-Description.md` | Advertised description for `dotnet_inventory`. | None |
@@ -115,9 +115,9 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-dotnet_build-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_build-Description.md` | Advertised description for `dotnet_build`. | None |
 | `Tool-dotnet_analyzers-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_analyzers-Description.md` | Advertised description for `dotnet_analyzers`. | None |
 | `Tool-dotnet_format_check-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_format_check-Description.md` | Advertised description for `dotnet_format_check`. | None |
-| `Tool-diagnostic_query-Description.md` | `Threadsmith.Tools` | `prompts/Tool-diagnostic_query-Description.md` | Advertised description for `diagnostic_query`. | None |
+| `Tool-diagnostic_query-Description.md` | `Threadsmith.Tools` | `prompts/Tool-diagnostic_query-Description.md` | Diagnostic query guidance with a flat optional UUID `runId`. | None |
 | `Tool-test_discover-Description.md` | `Threadsmith.Tools` | `prompts/Tool-test_discover-Description.md` | Advertised description for `test_discover`. | None |
-| `Tool-test_run_targeted-Description.md` | `Threadsmith.Tools` | `prompts/Tool-test_run_targeted-Description.md` | Advertised description for `test_run_targeted`. | None |
+| `Tool-test_run_targeted-Description.md` | `Threadsmith.Tools` | `prompts/Tool-test_run_targeted-Description.md` | Targeted-test guidance with the direct discovery-issued string `testId`. | None |
 | `Tool-web_fetch-Description.md` | `Threadsmith.Tools` | `prompts/Tool-web_fetch-Description.md` | Advertised description for `web_fetch`. | None |
 | `Tool-web_fetch-DirectAuthorizationInactive.md` | `Threadsmith.Tools` | `prompts/Tool-web_fetch-DirectAuthorizationInactive.md` | Recovery guidance when direct fetch authorization is inactive. | None |
 | `Tool-web_fetch-DirectAuthorizationUnavailable.md` | `Threadsmith.Tools` | `prompts/Tool-web_fetch-DirectAuthorizationUnavailable.md` | Recovery guidance when direct fetch authorization is transiently unavailable. | `Origin`, `Path`, `UrlDigest` |
@@ -126,7 +126,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-web_search-TrustBoundary.md` | `Threadsmith.Tools` | `prompts/Tool-web_search-TrustBoundary.md` | Mandatory trust boundary serialized with `web_search` results. | None |
 | `Tool-invoke_skill-Description.md` | `Threadsmith.Skills` | `prompts/Tool-invoke_skill-Description.md` | Advertised description for `invoke_skill`. | None |
 | `Tool-propose_plan-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_plan-Description.md` | Advertised plan-content proposal; the host owns version, revision and step identity. | None |
-| `Tool-propose_mutations-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_mutations-Description.md` | Advertised description for `propose_mutations`. | None |
+| `Tool-propose_mutations-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_mutations-Description.md` | Mutation proposal guidance separating model-authored changes from host-owned identities, lengths, and policy. | None |
 | `Tool-delegate_agents-Description.md` | `Threadsmith.Execution` | `prompts/Tool-delegate_agents-Description.md` | Delegation tool guidance for roles, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | `AgentCountDescription` |
 | `Adapter-McpExplicitReadPolicy-Description.md` | `Threadsmith.Mcp` | `prompts/Adapter-McpExplicitReadPolicy-Description.md` | Host-owned MCP adapter prose for `McpExplicitReadPolicy-Description`. | None |
 | `Adapter-McpImportedTool-FallbackDescription.md` | `Threadsmith.Mcp` | `prompts/Adapter-McpImportedTool-FallbackDescription.md` | Host-owned MCP adapter prose for `McpImportedTool-FallbackDescription`. | `ServerName` |
@@ -174,7 +174,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Correction-git_diff-MissingRevision.md` | `Threadsmith.Tools` | `prompts/Correction-git_diff-MissingRevision.md` | Corrective guidance for a missing `git_diff` revision. | `FieldName`, `ModeDescription` |
 | `Correction-git_log-InvalidRevision.md` | `Threadsmith.Tools` | `prompts/Correction-git_log-InvalidRevision.md` | Corrective guidance for an invalid `git_log` revision. | `FieldName` |
 | `Correction-git_blame-InvalidRevision.md` | `Threadsmith.Tools` | `prompts/Correction-git_blame-InvalidRevision.md` | Corrective guidance for an invalid `git_blame` revision. | `FieldName` |
-| `Correction-search-Bounds.md` | `Threadsmith.Tools` | `prompts/Correction-search-Bounds.md` | Corrective guidance for invalid `search` bounds. | `MaximumMatches`, `MaximumQueryCharacters` |
+| `Correction-search-Bounds.md` | `Threadsmith.Tools` | `prompts/Correction-search-Bounds.md` | Corrective guidance for query length or negative `maximumMatches`; oversized positive hints are clamped. | `MaximumMatches`, `MaximumQueryCharacters` |
 | `Correction-run_process-UnsupportedShell.md` | `Threadsmith.Tools` | `prompts/Correction-run_process-UnsupportedShell.md` | Corrective guidance for an unsupported `run_process` shell. | `ShellExecutable` |
 | `Correction-Mutation-ImplementationRequiresTool.md` | `Threadsmith.Execution` | `prompts/Correction-Mutation-ImplementationRequiresTool.md` | Corrective guidance when a requested mutation requires the proposal tool. | None |
 | `Correction-Mutation-RenameSymbolSemanticUnavailable.md` | `Threadsmith.Execution` | `prompts/Correction-Mutation-RenameSymbolSemanticUnavailable.md` | Corrective guidance when semantic rename support is unavailable. | None |

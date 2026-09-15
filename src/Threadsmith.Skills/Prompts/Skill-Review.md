@@ -43,8 +43,8 @@ If all specialists fail, report that the review failed; do not report successful
 - **Summary**: Summarize the scope of the changes. If a requirements document was provided (local file, Jira ticket, etc.) use that to help form the summary in addition to the actual changes.
 Note that the the ArchitectureReviewer may include one or more mermaid architecural diagrams in its response, and the BugReviewer may return one or more call-trace digrams in mermaid or ASCII art. All of these digrams should ALWAYS be included in the summary section, under appropriate sub-headings.
 - **Changes**: List changed files (added, removed, edited) organized by .NET project
-- **Issues**: List each valid issue cited by a reviewer, organized by P1 (Critical), P2 (Significant), P3 (Minor) in order
-- **Observations**: Any notable observations from any of the reviewers. These may be items worth looking at but, depending on intent, may not be an actual issue.
+- **Issues**: List each valid issue cited by a reviewer, organized by P1 (Critical), P2 (Significant), P3 (Minor) in order. Include which reviewer(s) noted the issue. 
+- **Observations**: Any notable observations from any of the reviewers. These may be items worth looking at but, depending on intent, may not be an actual issue. Include which reviewer(s) made the observations. 
 - **Requirements coverage**: Call out any specific gaps between the requirements (if provided). If no specific requirements document was provided by the user when the skill was launched, just include the text "No specific requirements documentation provided."
 - **Validation and coverage limits** Note the results of any tests that were run, note if all the review agents specialists completed or not, and any other information that is noteworthy and related to the validity and comprehensiveness of the review.
 - **Final recommendation**: Ship|Ship with Observations|Changes Needed. If changes are needed, briefly summarize.

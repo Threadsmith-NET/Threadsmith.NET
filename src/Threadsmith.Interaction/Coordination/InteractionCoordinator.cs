@@ -3509,16 +3509,6 @@ public sealed partial class InteractionCoordinator
                 case "inspect":
                 case "provenance":
                     var inspectSelector = RequireSkillArgument(remainder);
-                    if (inspectSelector.StartsWith("claude:", StringComparison.OrdinalIgnoreCase))
-                    {
-                        var claude = ResolveClaudeSkill(inspectSelector);
-                        await _surface.WriteAsync(
-                            FormatClaudeSkillCandidate(claude),
-                            PresentationTextRole.Status,
-                            cancellationToken);
-                        return;
-                    }
-
                     var inspected = await controller.GetSkillAsync(
                         inspectSelector,
                         cancellationToken);
@@ -3527,7 +3517,11 @@ public sealed partial class InteractionCoordinator
                         CreateSkillCompatibilityRequest(sessionId, trust, inspectSelector),
                         cancellationToken);
                     await _surface.WriteAsync(
-                        FormatSkillCandidate(inspected, compatibility),
+                        FormatSkillCandidate(inspected, compatibility)
+                            + (_claudeSkills is not null
+                                && inspectSelector.StartsWith("claude:", StringComparison.OrdinalIgnoreCase)
+                                ? FormatClaudeCompatibility(ResolveClaudeSkill(inspectSelector))
+                                : string.Empty),
                         PresentationTextRole.Status,
                         cancellationToken);
                     return;
@@ -3715,7 +3709,7 @@ public sealed partial class InteractionCoordinator
             ?? throw new KeyNotFoundException($"Claude-style skill '{selector}' was not found.");
     }
 
-    private static string FormatClaudeSkillCandidate(ClaudeSkillCandidate candidate)
+    private static string FormatClaudeCompatibility(ClaudeSkillCandidate candidate)
     {
         var mapped = candidate.MappedTools.Count == 0
             ? "none"
@@ -3726,14 +3720,11 @@ public sealed partial class InteractionCoordinator
         var reasons = candidate.ReasonCodes.Count == 0
             ? "none"
             : string.Join(", ", candidate.ReasonCodes);
-        return $"Claude-style skill: {candidate.Identity.Scope}:{candidate.Identity.Name}\n"
-            + $"  contract: {candidate.Version}\n"
-            + $"  compatibility: {candidate.Status}\n"
-            + $"  description: {candidate.Description}\n"
+        return $"  Claude contract: {candidate.Version}\n"
+            + $"  Claude compatibility: {candidate.Status}\n"
             + $"  mapped tools: {mapped}\n"
             + $"  unavailable tools: {unavailable}\n"
-            + $"  restrictions: {reasons}\n"
-            + "  trust: unsigned compatibility source; exact external enablement required\n";
+            + $"  restrictions: {reasons}\n";
     }
 
     private static string RequireSkillArgument(string argument)

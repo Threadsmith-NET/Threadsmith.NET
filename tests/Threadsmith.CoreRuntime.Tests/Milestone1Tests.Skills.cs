@@ -16,7 +16,7 @@ public static partial class Milestone1Tests
     {
         var manager = new DialogSkillHandler();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [manager]);
-        var surface = new ToggleInteractionSurface(["/skills", "/skills list", "/skills verify Maintained:review@1.0.0", "/skills disable Maintained:review@1.0.0", "/skills enable Maintained:review@1.0.0", "/quit"]);
+        var surface = new ToggleInteractionSurface(["/skills", "/skills list", "/skills inspect claude:Repository:portable-review", "/skills verify Maintained:review@1.0.0", "/skills disable Maintained:review@1.0.0", "/skills enable Maintained:review@1.0.0", "/quit"]);
         var dialogs = 0;
         surface.Manage = async (request, change, action, token) =>
         {
@@ -57,6 +57,9 @@ public static partial class Milestone1Tests
         Assert.Equal(0, manager.Refreshes);
         var text = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
         Assert.Contains("native:Maintained:review@1.0.0 [Maintained] enabled", text, StringComparison.Ordinal);
+        Assert.Contains("Repository:claude.portable-review@1.0.0", text, StringComparison.Ordinal);
+        Assert.Contains("sha256=" + new string('d', 64), text, StringComparison.Ordinal);
+        Assert.Contains("enabled=True", text, StringComparison.Ordinal);
     }
 
     /// <summary>Changed identities and failures cannot silently authorize a replacement package.</summary>
@@ -161,6 +164,8 @@ public static partial class Milestone1Tests
 
     private sealed class DialogSkillHandler :
         ICommandHandler<ListSkillsCommand, IReadOnlyList<SkillCatalogCandidate>>,
+        ICommandHandler<GetSkillCommand, SkillCatalogCandidate>,
+        ICommandHandler<GetSkillCompatibilityCommand, SkillCompatibilityResult>,
         ICommandHandler<VerifySkillCommand, SkillCatalogCandidate>,
         ICommandHandler<SetSkillEnabledCommand, SkillCatalogCandidate>,
         ICommandHandler<RefreshSkillsCommand, SkillCatalogSnapshot>
@@ -190,6 +195,18 @@ public static partial class Milestone1Tests
             return Task.FromResult<IReadOnlyList<SkillCatalogCandidate>>(Candidates.Where(item =>
                 (command.Query.Scope is null || item.Provenance.Scope == command.Query.Scope)
                 && (command.Query.SkillId is null || item.Metadata.SkillId == command.Query.SkillId)).Take(command.Query.MaximumResults).ToArray());
+        }
+
+        public Task<SkillCatalogCandidate> HandleAsync(GetSkillCommand command, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(Resolve(command.Selector));
+        }
+
+        public Task<SkillCompatibilityResult> HandleAsync(GetSkillCompatibilityCommand command, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new SkillCompatibilityResult { IsCompatible = true });
         }
 
         public Task<SkillCatalogCandidate> HandleAsync(VerifySkillCommand command, CancellationToken cancellationToken = default)
@@ -241,7 +258,9 @@ public static partial class Milestone1Tests
 
         private SkillCatalogCandidate Resolve(string selector) => Candidates.Single(candidate =>
             selector == $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}"
-            || selector == $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}");
+            || selector == $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}"
+            || (candidate.Metadata.SkillId.Value.StartsWith("claude.", StringComparison.Ordinal)
+                && selector == $"claude:{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value["claude.".Length..]}"));
 
         private SkillCatalogCandidate Update(SkillCatalogCandidate candidate)
         {

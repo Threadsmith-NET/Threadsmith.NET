@@ -63,13 +63,20 @@ public sealed class SkillApplication :
     }
 
     /// <inheritdoc />
-    public Task<IReadOnlyList<SkillCatalogCandidate>> HandleAsync(
+    public async Task<IReadOnlyList<SkillCatalogCandidate>> HandleAsync(
         ListSkillsCommand command,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_catalog.Search(command.Query));
+        var candidates = _catalog.Search(command.Query);
+        var restored = new SkillCatalogCandidate[candidates.Count];
+        for (var index = 0; index < candidates.Count; index++)
+        {
+            restored[index] = await RestoreAvailabilityAsync(candidates[index], cancellationToken);
+        }
+
+        return restored;
     }
 
     /// <inheritdoc />
@@ -79,7 +86,7 @@ public sealed class SkillApplication :
     {
         ArgumentNullException.ThrowIfNull(command);
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_catalog.Resolve(command.Selector));
+        return RestoreAvailabilityAsync(_catalog.Resolve(command.Selector), cancellationToken);
     }
 
     /// <inheritdoc />
@@ -277,5 +284,47 @@ public sealed class SkillApplication :
         return _catalog is IUpdatableSkillCatalog updatable
             ? updatable.UpdateCandidate(candidate)
             : candidate;
+    }
+
+    private async Task<SkillCatalogCandidate> RestoreAvailabilityAsync(
+        SkillCatalogCandidate candidate,
+        CancellationToken cancellationToken)
+    {
+        if (!ShouldRestoreAvailability(candidate, _policy.Snapshot))
+        {
+            return candidate;
+        }
+
+        var verified = await _verifier.VerifyAsync(candidate, cancellationToken);
+        return Update(verified);
+    }
+
+    private static bool ShouldRestoreAvailability(
+        SkillCatalogCandidate candidate,
+        SkillTrustPolicySnapshot policy)
+    {
+        if (candidate.Verification != SkillVerificationState.Unverified)
+        {
+            return false;
+        }
+
+        if (candidate.Provenance.Scope == SkillScope.Maintained)
+        {
+            return true;
+        }
+
+        var selectorPrefix = SkillPolicyIdentity.FormatSelectorPrefix(candidate);
+        if (CompatibleSkillCatalog.IsClaude(candidate))
+        {
+            return candidate.Identity.Digest.Value.All(character => character == '0')
+                && (policy.EnabledSelectors.Any(selector => selector.StartsWith(selectorPrefix, StringComparison.Ordinal))
+                    || policy.DisabledSelectors.Any(selector => selector.StartsWith(selectorPrefix, StringComparison.Ordinal)));
+        }
+
+        var selector = SkillPolicyIdentity.FormatSelector(candidate);
+        var allowlistEntry = SkillPolicyIdentity.FormatAllowlistEntry(candidate);
+        return policy.EnabledSelectors.Contains(selector)
+            || policy.DisabledSelectors.Contains(selector)
+            || policy.AllowlistedDigests.Contains(allowlistEntry);
     }
 }

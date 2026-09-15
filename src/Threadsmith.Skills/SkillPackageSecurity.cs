@@ -58,7 +58,7 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
             await VerifyManifestUnchangedAsync(candidate, cancellationToken);
             await VerifyAssetsAsync(candidate, cancellationToken);
             (var state, var reason) = VerifyTrust(candidate, policy);
-            var selector = FormatSelector(candidate);
+            var selector = SkillPolicyIdentity.FormatSelector(candidate);
             var enabled = state switch
             {
                 SkillVerificationState.Maintained => true,
@@ -190,11 +190,7 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
             return (SkillVerificationState.Maintained, "immutable host-shipped package integrity verified");
         }
 
-        var allowlistEntry = string.Join(
-            '|',
-            digest,
-            candidate.Metadata.Publisher,
-            candidate.Provenance.Source);
+        var allowlistEntry = SkillPolicyIdentity.FormatAllowlistEntry(candidate);
         if (policy.AllowlistedDigests.Contains(allowlistEntry))
         {
             return (SkillVerificationState.DigestAllowlisted, "exact digest/publisher/source tuple allowlisted");
@@ -222,12 +218,6 @@ public sealed class SkillPackageVerifier : ISkillPackageVerifier
         return valid
             ? (SkillVerificationState.SignedTrusted, "detached signature matched trusted signer")
             : (SkillVerificationState.Invalid, "detached signature is invalid");
-    }
-
-    private static string FormatSelector(SkillCatalogCandidate candidate)
-    {
-        return $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}"
-            + $"@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}";
     }
 }
 

@@ -56,7 +56,14 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(verified, await catalog.ResolveAsync(selector));
         Assert.Equal(verified, native.Resolve(selector));
         Assert.Equal(initial.Candidates.Count, listed.Count);
-        Assert.All(initial.Candidates.Where(item => item != selected), item => Assert.Contains(item, listed));
+        Assert.All(listed.Where(item => item.Provenance.Scope == SkillScope.Maintained), item =>
+        {
+            Assert.Equal(SkillVerificationState.Maintained, item.Verification);
+            Assert.Equal(item != verified || !disabled, item.Enabled);
+        });
+        Assert.All(
+            initial.Candidates.Where(item => item.Provenance.Scope != SkillScope.Maintained),
+            item => Assert.Contains(item, listed));
         Assert.False(File.Exists(policyPath));
         Assert.Empty(policy.Snapshot.EnabledSelectors);
 
@@ -124,6 +131,128 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(rejected, await catalog.ResolveAsync(selector));
         Assert.Equal(rejected, Assert.Single(await application.HandleAsync(new ListSkillsCommand(new SkillCatalogQuery()))));
         Assert.Equal(persistedPolicy, await File.ReadAllTextAsync(policyPath));
+    }
+
+    /// <summary>A fresh catalog restores exact Claude enablement from the persisted user policy.</summary>
+    [Fact]
+    public async Task CompatibleCatalog_FreshApplication_RestoresPersistedClaudeEnablement()
+    {
+        // Arrange: enable one Claude skill through the normal application boundary.
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var claudeRoot = Path.Combine(package.Root, "claude");
+        var skillRoot = Path.Combine(claudeRoot, "portable-review");
+        Directory.CreateDirectory(skillRoot);
+        await File.WriteAllTextAsync(
+            Path.Combine(skillRoot, "SKILL.md"),
+            "---\nname: portable-review\ndescription: Review repository\n---\nReview this repository.\n");
+        var policyPath = Path.Combine(package.Root, "policy.json");
+        var policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        var catalog = CreateCatalog();
+        await catalog.RefreshAsync();
+        var application = CreateCatalogApplication(catalog, policy, package.Root);
+        var enabled = await application.HandleAsync(
+            new SetSkillEnabledCommand("User:claude.portable-review@0.0.0-claude-v1", true));
+        Assert.True(enabled.Enabled);
+
+        // Act: reconstruct the policy, catalog, and application as process startup does.
+        policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        catalog = CreateCatalog();
+        await catalog.RefreshAsync();
+        application = CreateCatalogApplication(catalog, policy, package.Root);
+        var restored = Assert.Single(await application.HandleAsync(
+            new ListSkillsCommand(new SkillCatalogQuery { Scope = SkillScope.User })));
+
+        // Assert: listing revalidates only the persisted candidate and publishes its actual state.
+        Assert.Equal(SkillVerificationState.DigestAllowlisted, restored.Verification);
+        Assert.True(restored.Enabled);
+        Assert.Equal(enabled.Identity, restored.Identity);
+
+        CompatibleSkillCatalog CreateCatalog() =>
+            new(
+                package.CreateCatalog(SkillScope.Maintained),
+                new ClaudeSkillCompatibilityCatalog(
+                    [new ClaudeSkillRoot(SkillScope.User, claudeRoot, "user:claude", false)]));
+    }
+
+    /// <summary>Failed restoration remains visible without aborting the complete skill listing.</summary>
+    [Fact]
+    public async Task CompatibleCatalog_FreshApplication_InvalidPersistedClaudeSkillDoesNotAbortList()
+    {
+        // Arrange: persist an authorization for a valid Claude skill, then add malformed text content.
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var claudeRoot = Path.Combine(package.Root, "claude");
+        var skillRoot = Path.Combine(claudeRoot, "portable-review");
+        Directory.CreateDirectory(skillRoot);
+        await File.WriteAllTextAsync(
+            Path.Combine(skillRoot, "SKILL.md"),
+            "---\nname: portable-review\ndescription: Review repository\n---\nReview this repository.\n");
+        var policyPath = Path.Combine(package.Root, "policy.json");
+        var policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        var catalog = CreateCatalog();
+        await catalog.RefreshAsync();
+        var application = CreateCatalogApplication(catalog, policy, package.Root);
+        Assert.True((await application.HandleAsync(
+            new SetSkillEnabledCommand("User:claude.portable-review@0.0.0-claude-v1", true))).Enabled);
+        await File.WriteAllBytesAsync(Path.Combine(skillRoot, "invalid.txt"), [0xff, 0xff]);
+
+        // Act: reconstruct the startup state and list the changed source.
+        policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        catalog = CreateCatalog();
+        await catalog.RefreshAsync();
+        application = CreateCatalogApplication(catalog, policy, package.Root);
+        var listed = await application.HandleAsync(new ListSkillsCommand(new SkillCatalogQuery()));
+
+        // Assert: the failed package is one invalid row and unrelated candidates remain available.
+        var restored = Assert.Single(listed, candidate => candidate.Provenance.Scope == SkillScope.User);
+        Assert.Equal(SkillVerificationState.Invalid, restored.Verification);
+        Assert.False(restored.Enabled);
+        Assert.All(
+            listed.Where(candidate => candidate.Provenance.Scope == SkillScope.Maintained),
+            candidate => Assert.True(candidate.Enabled));
+
+        CompatibleSkillCatalog CreateCatalog(ClaudeSkillCompatibilityOptions? options = null) =>
+            new(
+                package.CreateCatalog(SkillScope.Maintained),
+                new ClaudeSkillCompatibilityCatalog(
+                    [new ClaudeSkillRoot(SkillScope.User, claudeRoot, "user:claude", false)],
+                    options));
+    }
+
+    /// <summary>A fresh catalog restores an explicit maintained-package disable.</summary>
+    [Fact]
+    public async Task CompatibleCatalog_FreshApplication_RestoresPersistedMaintainedDisable()
+    {
+        // Arrange: disable a maintained package through the normal application boundary.
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var policyPath = Path.Combine(package.Root, "policy.json");
+        var policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        var catalog = CreateCatalog();
+        await catalog.RefreshAsync();
+        var application = CreateCatalogApplication(catalog, policy, package.Root);
+        var disabled = await application.HandleAsync(
+            new SetSkillEnabledCommand("Maintained:review@1.0.0", false));
+        Assert.False(disabled.Enabled);
+
+        // Act: reconstruct the policy, catalog, and application as process startup does.
+        policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot());
+        catalog = CreateCatalog();
+        await catalog.RefreshAsync();
+        application = CreateCatalogApplication(catalog, policy, package.Root);
+        var restored = Assert.Single(await application.HandleAsync(
+            new ListSkillsCommand(new SkillCatalogQuery { Scope = SkillScope.Maintained })));
+
+        // Assert: list and inspect both publish the persisted disabled state.
+        Assert.Equal(SkillVerificationState.Maintained, restored.Verification);
+        Assert.False(restored.Enabled);
+        Assert.Equal(disabled.Identity, restored.Identity);
+        Assert.False((await application.HandleAsync(
+            new GetSkillCommand("Maintained:review@1.0.0"))).Enabled);
+
+        CompatibleSkillCatalog CreateCatalog() =>
+            new(
+                package.CreateCatalog(SkillScope.Maintained),
+                new ClaudeSkillCompatibilityCatalog(
+                    [new ClaudeSkillRoot(SkillScope.Repository, Path.Combine(package.Root, "claude"), "repository:claude", true)]));
     }
 
     /// <summary>A refresh waiting on Claude discovery must not overwrite a newer native verification result.</summary>

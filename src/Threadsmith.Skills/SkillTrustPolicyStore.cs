@@ -90,8 +90,8 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
     {
         ArgumentNullException.ThrowIfNull(candidate);
         cancellationToken.ThrowIfCancellationRequested();
-        var selector = FormatSelector(candidate);
-        var allowlistEntry = FormatAllowlistEntry(candidate);
+        var selector = SkillPolicyIdentity.FormatSelector(candidate);
+        var allowlistEntry = SkillPolicyIdentity.FormatAllowlistEntry(candidate);
         UserSkillPolicy next;
         lock (_gate)
         {
@@ -204,21 +204,6 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
                 .Concat(userPolicy.DisabledSelectors)
                 .ToHashSet(StringComparer.Ordinal),
         };
-    }
-
-    private static string FormatSelector(SkillCatalogCandidate candidate)
-    {
-        return $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}"
-            + $"@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}";
-    }
-
-    private static string FormatAllowlistEntry(SkillCatalogCandidate candidate)
-    {
-        return string.Join(
-            '|',
-            candidate.Identity.Digest.Value,
-            candidate.Metadata.Publisher,
-            candidate.Provenance.Source);
     }
 
     private sealed record UserSkillPolicy

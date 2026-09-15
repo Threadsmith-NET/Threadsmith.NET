@@ -2,6 +2,7 @@ namespace Threadsmith.Skills;
 
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text;
 using Threadsmith.Core;
 using Threadsmith.Telemetry;
 
@@ -158,12 +159,16 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
             if (isClaude)
             {
                 var key = candidate.Identity.Digest.Value;
-                if (!_snapshots.ContainsKey(key))
+                var pending = string.Equals(key, PendingDigest, StringComparison.Ordinal);
+                if (!pending && !_snapshots.ContainsKey(key))
                 {
                     throw new KeyNotFoundException("The activated Claude skill snapshot is no longer available.");
                 }
 
-                _exactCandidates[key] = candidate;
+                if (!pending)
+                {
+                    _exactCandidates[key] = candidate;
+                }
             }
             else if (_native is IUpdatableSkillCatalog updatable)
             {
@@ -206,7 +211,7 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
             PendingDigest,
             StringComparison.Ordinal)
             ? $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}"
-            : FormatSelector(candidate);
+            : SkillPolicyIdentity.FormatSelector(candidate);
         var exact = await ResolveAsync(selector, cancellationToken);
         var digest = exact.Identity.Digest.Value;
         var snapshot = _snapshots[digest];
@@ -355,12 +360,6 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
 
         return $"{scope}:claude.{parts[2]}";
     }
-
-    private static string FormatSelector(SkillCatalogCandidate candidate)
-    {
-        return $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}"
-            + $"@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}";
-    }
 }
 
 /// <summary>Verifies native packages or exact Claude source snapshots through one external policy.</summary>
@@ -410,13 +409,8 @@ public sealed class CompatibleSkillPackageVerifier : ISkillPackageVerifier
                 };
             }
 
-            var allowlist = string.Join(
-                '|',
-                digest,
-                exact.Metadata.Publisher,
-                exact.Provenance.Source);
-            var selector = $"{exact.Provenance.Scope}:{exact.Metadata.SkillId.Value}"
-                + $"@{exact.Metadata.Version}+{digest}";
+            var allowlist = SkillPolicyIdentity.FormatAllowlistEntry(exact);
+            var selector = SkillPolicyIdentity.FormatSelector(exact);
             if (policy.DeniedSkillIds.Contains(exact.Metadata.SkillId.Value)
                 || policy.DeniedPublishers.Contains(exact.Metadata.Publisher)
                 || policy.RevokedDigests.Contains(digest))
@@ -445,6 +439,7 @@ public sealed class CompatibleSkillPackageVerifier : ISkillPackageVerifier
         catch (Exception exception) when (exception is IOException
             or UnauthorizedAccessException
             or InvalidDataException
+            or DecoderFallbackException
             or CryptographicException)
         {
             return candidate with

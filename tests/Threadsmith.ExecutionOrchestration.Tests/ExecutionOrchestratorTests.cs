@@ -1026,12 +1026,9 @@ public sealed partial class ExecutionOrchestratorTests
     {
         return JsonSerializer.Serialize(new
         {
-            schemaVersion = plan.SchemaVersion,
-            plan.Revision,
             plan.Summary,
             steps = plan.Steps.Select(step => new
             {
-                stepId = step.StepId.Value.ToString("D"),
                 step.Title,
                 step.Description,
                 fileIntents = step.FileIntents.Select(intent => new

@@ -11,6 +11,9 @@ public enum ActiveRunInputSignal
 
     /// <summary>Enter requested one idempotent safe-boundary steering prompt.</summary>
     SteeringRequested,
+
+    /// <summary>The user requested read-only inspection while execution continues.</summary>
+    ContextMap,
 }
 
 /// <summary>One exclusive semantic active-run input lease.</summary>

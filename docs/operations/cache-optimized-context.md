@@ -39,6 +39,10 @@ Eligible tools are grouped and ordered deterministically. JSON schemas preserve 
 
 ## `/context inspect`
 
+For an ordered graphical breakdown of the **latest actual MAIN request**, use `/context map` (or double-click MAIN's Context meter in TUIKit with mouse capture enabled). `/context inspect` retains its assembly/governance diagnostics. The map and measured header occupancy share the same request observation; auxiliary compaction-generation calls and child requests do not replace MAIN's map.
+
+The map's input total is the admission estimate, not cumulative provider billing. Category shares divide by included input; window usage divides by the captured model window. Output reserve is shown separately. Cache hits do not reduce occupied context. Estimates reconcile through non-overlapping source contributions and explicit framing/allowance entries. The neutral estimator uses rounded character counts; Anthropic conservatively counts serialized UTF-8 bytes plus framing and retained-output allowances. Native fields are shown separately; their hidden cross-field prompt order is unavailable. Opaque replay contributes sizes without exposing its contents.
+
 The interactive command reports:
 
 - logical unique tokens;

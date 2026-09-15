@@ -104,7 +104,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 |---|---|---|
 | `System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | `None` |
 | `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields and offered-tool versus final-JSON output guidance. | `None` |
-| `System-RequiredOutput-Plan.md` | Required-output guidance for `Plan`. | `None` |
+| `System-RequiredOutput-Plan.md` | Flat plan-content JSON guidance; the host assigns schema version, revision and step IDs. | `None` |
 
 #### `SystemPrompt` family
 
@@ -221,8 +221,8 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Correction-Plan-SanityEvidence.md` | Corrective or retry guidance for `Plan-SanityEvidence`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
-| `Correction-Plan-SanityStructuredOutput.md` | Corrective or retry guidance for `Plan-SanityStructuredOutput`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
-| `Correction-Plan-Schema.md` | Corrective or retry guidance for `Plan-Schema`. | [`Reason`](#placeholder-reason) |
+| `Correction-Plan-SanityStructuredOutput.md` | Revision correction using the same flat plan-content JSON shape. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
+| `Correction-Plan-Schema.md` | Field-specific plan-content correction (`Reason`); no model-authored bookkeeping fields. | [`Reason`](#placeholder-reason) |
 | `Correction-Plan-WrongPhase.md` | Corrective or retry guidance for `Plan-WrongPhase`. | `None` |
 
 #### `PlanProposal` family
@@ -634,7 +634,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-propose_plan-Description.md` | Advertised description for `propose_plan`. | `None` |
+| `Tool-propose_plan-Description.md` | Advertised plan-content proposal; the host owns version, revision and step identity. | `None` |
 
 #### `read_file` family
 

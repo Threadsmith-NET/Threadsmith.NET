@@ -336,20 +336,20 @@ public sealed class ContextAssembler : IContextAssembler
                 PreferStrictArguments = schema.PreferStrictArguments,
             }));
         var toolInventoryDigest = ModelToolCanonicalizer.ComputeDigest(canonicalTools);
+        IReadOnlyList<ModelContextSource> textToolSources = [];
         var toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
-            ? ModelToolCanonicalizer.RenderText(canonicalTools, _prompts)
+            ? ModelToolCanonicalizer.RenderText(canonicalTools, _prompts, out textToolSources)
             : string.Empty;
         var outputSchema = GetRequiredOutput(request.Phase);
-        var appendContent = string.Join(
-            '\n',
-            instructionBundle.Sources.Select(source => source.Kind == RepositoryInstructionSourceKind.PromptAppend
+        var appendParts = instructionBundle.Sources.Select(source => source.Kind == RepositoryInstructionSourceKind.PromptAppend
                 ? $"<project_context id=\"{Escape(source.Id)}\" version=\"{Escape(source.Version)}\">\n"
                     + Escape(source.Content)
                     + "\n</project_context>"
                 : $"<repository_instruction kind=\"{source.Kind}\" id=\"{Escape(source.Id)}\" "
                     + $"path=\"{Escape(source.RelativePath)}\" version=\"{Escape(source.Version)}\" untrusted=\"true\">\n"
                     + Escape(source.Content)
-                    + "\n</repository_instruction>"));
+                    + "\n</repository_instruction>").ToArray();
+        var appendContent = string.Join('\n', appendParts);
 
         var tokensByCategory = new Dictionary<string, int>(StringComparer.Ordinal)
         {
@@ -480,7 +480,7 @@ public sealed class ContextAssembler : IContextAssembler
             : TokenEstimator.Estimate(providerInstructions.Content);
         tokenBudget = ResolveInputTokenBudget(modelResolution, _options.MaximumTokens);
 
-        var evidenceContent = BuildEvidenceContent(selected);
+        var evidenceContent = BuildEvidenceContent(selected, out var evidenceSources);
         var modelInput = BuildModelInput(
             appendContent,
             phaseInstructions,
@@ -528,7 +528,7 @@ public sealed class ContextAssembler : IContextAssembler
             }
 
             reductions.Add($"{removed.EvidenceId.Value:D}: {reason}");
-            evidenceContent = BuildEvidenceContent(selected);
+            evidenceContent = BuildEvidenceContent(selected, out evidenceSources);
             modelInput = BuildModelInput(
                 appendContent,
                 phaseInstructions,
@@ -655,6 +655,44 @@ public sealed class ContextAssembler : IContextAssembler
             outputSchema,
             additionalMessages);
         var stablePrefixMessageCount = Math.Min(3, messages.Count);
+        var sourcePosition = 0;
+        var instructionSources = instructionBundle.Sources.Select((source, index) =>
+        {
+            var range = new ModelContextSource(
+                source.Kind == RepositoryInstructionSourceKind.PromptAppend ? "Appended prompts" : "Repository instructions",
+                source.RelativePath,
+                sourcePosition,
+                appendParts[index].Length);
+            sourcePosition += appendParts[index].Length + 1;
+            return range;
+        }).ToArray();
+        messages = messages.Select(message => message.SectionId switch
+        {
+            "repository-instructions" => message with { Sources = Array.AsReadOnly(instructionSources) },
+            "repository-memory" => message with { Sources = repositoryMemory.CreateSources(message.GetModelVisibleContent()) },
+            "governed-request-state" => message with
+            {
+                Sources = CreateSources(
+                    message.GetModelVisibleContent(),
+                    [
+                        ("Task and governed state", "Task", $"<task_state>{structuredTaskStateJson}</task_state>"),
+                        ("Task and governed state", "Governed state", $"<governed_state>{Escape(governedState)}</governed_state>"),
+                        ("Evidence", "Included evidence", string.IsNullOrWhiteSpace(evidenceContent) ? string.Empty : $"<evidence_set>{evidenceContent}</evidence_set>"),
+                        ("Tools", "Text tool definitions", string.IsNullOrWhiteSpace(toolSchemas) ? string.Empty : $"<available_tools>{toolSchemas}</available_tools>"),
+                        ("Output contract", "Required output", $"<required_output>{Escape(outputSchema)}</required_output>"),
+                    ]),
+            },
+            _ => message,
+        }).ToArray();
+        messages = messages.Select(message => message.SectionId == "governed-request-state" ? message with
+        {
+            Sources = Array.AsReadOnly(message.Sources.SelectMany(source => source.Label switch
+            {
+                "Included evidence" => evidenceSources.Select(item => item with { Start = item.Start + source.Start + "<evidence_set>".Length }),
+                "Text tool definitions" => textToolSources.Select(item => item with { Start = item.Start + source.Start + "<available_tools>".Length }),
+                _ => [source],
+            }).ToArray()),
+        } : message).ToArray();
         var stablePrefixDigest = ComputeMessageDigest(
             messages.Take(stablePrefixMessageCount),
             providerInstructions);
@@ -1131,11 +1169,9 @@ public sealed class ContextAssembler : IContextAssembler
         return new PromptAssetReference(id, $"sha256:{hash}", source, position, content.Length);
     }
 
-    private static string BuildEvidenceContent(IReadOnlyList<Evidence> selected)
+    private static string BuildEvidenceContent(IReadOnlyList<Evidence> selected, out IReadOnlyList<ModelContextSource> sources)
     {
-        return string.Join(
-        '\n',
-        selected.Select(item =>
+        var parts = selected.Select(item =>
         {
             var digest = Convert.ToHexStringLower(
                 SHA256.HashData(Encoding.UTF8.GetBytes(item.Content)));
@@ -1156,7 +1192,15 @@ public sealed class ContextAssembler : IContextAssembler
                 + " untrusted=\"true\">\n"
                 + Escape(FileReadEvidenceRenderer.Render(item))
                 + "\n</evidence>";
-        }));
+        }).ToArray();
+        var position = 0;
+        sources = Array.AsReadOnly(selected.Select((item, index) =>
+        {
+            var source = new ModelContextSource("Evidence", item.Provenance.SourcePath ?? $"{item.Kind}: {item.EvidenceId.Value:D}", position, parts[index].Length);
+            position += parts[index].Length + 1;
+            return source;
+        }).ToArray());
+        return string.Join('\n', parts);
     }
 
     private static string Escape(string value)
@@ -1449,6 +1493,25 @@ public sealed class ContextAssembler : IContextAssembler
         return string.IsNullOrWhiteSpace(content) ? string.Empty : "\n\n" + content;
     }
 
+    private static IReadOnlyList<ModelContextSource> CreateSources(string content, IEnumerable<(string Category, string Label, string Text)> sources)
+    {
+        var ranges = new List<ModelContextSource>();
+        var position = 0;
+        foreach (var source in sources.Where(item => item.Text.Length > 0))
+        {
+            var start = content.IndexOf(source.Text, position, StringComparison.Ordinal);
+            if (start < 0)
+            {
+                throw new InvalidOperationException("Rendered context source is missing from its owning message.");
+            }
+
+            ranges.Add(new(source.Category, source.Label, start, source.Text.Length));
+            position = start + source.Text.Length;
+        }
+
+        return ranges.AsReadOnly();
+    }
+
     private sealed class RepositoryMemoryAssemblyState
     {
         private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _included = [];
@@ -1501,6 +1564,11 @@ public sealed class ContextAssembler : IContextAssembler
 
         public IReadOnlyList<RepositoryMemoryInclusion> CreateInclusions() =>
             [.. _standingPreferences.Concat(_included).Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
+
+        public IReadOnlyList<ModelContextSource> CreateSources(string content) => ContextAssembler.CreateSources(
+            content,
+            _standingPreferences.Concat(_included).Select(item => ("Memories", $"{item.Candidate.Entry.MemoryType}: {item.Candidate.Entry.Id.Value:D}",
+                $"<memory id=\"{item.Candidate.Entry.Id.Value:D}\">{Escape(item.Candidate.Entry.Text)}</memory>")));
 
         public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections() =>
             [.. _standingPreferences.Select(item => CreateProjection(item.Candidate, true, "Standing preference included independently of the current query.", item.Tokens)),

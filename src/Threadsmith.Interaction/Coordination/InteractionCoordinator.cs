@@ -424,6 +424,7 @@ public sealed partial class InteractionCoordinator
         TaskCompletionSource<string?>? renderedRunCompletion = null;
         string? latestRunDiagnostic = null;
         Task? activityDisplayTask = null;
+        Task? contextMapPresentation = null;
         InteractionActivity? currentActivity = null;
         SemanticActivityKey? currentSemanticActivityKey = null;
         var semanticActivitiesByKey = new Dictionary<SemanticActivityKey, InteractionActivity>();
@@ -900,6 +901,12 @@ public sealed partial class InteractionCoordinator
 
                 if (input.Kind == InteractionInputKind.IdleOutputYield)
                 {
+                    continue;
+                }
+
+                if (input.Kind == InteractionInputKind.ContextMap)
+                {
+                    await HandleContextCommandAsync(controller, "/context map", lifetime.Token);
                     continue;
                 }
 
@@ -1681,6 +1688,11 @@ public sealed partial class InteractionCoordinator
                                 pendingTasks.Add(activeInputTask);
                             }
 
+                            if (contextMapPresentation is not null)
+                            {
+                                pendingTasks.Add(contextMapPresentation);
+                            }
+
                             if (steeringWaitTask?.IsCompleted == false)
                             {
                                 pendingTasks.Add(steeringWaitTask);
@@ -1692,6 +1704,13 @@ public sealed partial class InteractionCoordinator
                             }
 
                             var completed = await Task.WhenAny(pendingTasks);
+                            if (completed == contextMapPresentation)
+                            {
+                                await contextMapPresentation;
+                                contextMapPresentation = null;
+                                continue;
+                            }
+
                             if (completed == drainTask)
                             {
                                 await drainTask;
@@ -1706,6 +1725,11 @@ public sealed partial class InteractionCoordinator
                             {
                                 var signal = await activeInputTask;
                                 activeInputTask = activeInput.ReadAsync(operation.Token);
+                                if (signal == ActiveRunInputSignal.ContextMap && contextMapPresentation is null)
+                                {
+                                    contextMapPresentation = HandleContextCommandAsync(controller, "/context map", lifetime.Token);
+                                }
+
                                 if (signal == ActiveRunInputSignal.CancellationRequested)
                                 {
                                     await operation.CancelAsync();
@@ -1871,6 +1895,17 @@ public sealed partial class InteractionCoordinator
                 finally
                 {
                     await lifetime.CancelAsync();
+                    if (contextMapPresentation is not null)
+                    {
+                        try
+                        {
+                            await contextMapPresentation;
+                        }
+                        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+                        {
+                            // Shutdown closes the existing retained modal through its cancellation path.
+                        }
+                    }
                 }
             }
         }
@@ -3352,6 +3387,27 @@ public sealed partial class InteractionCoordinator
         }
 
         var argument = commandText.Length == 8 ? "mode" : commandText[8..].Trim();
+        if (string.Equals(argument, "map", StringComparison.OrdinalIgnoreCase))
+        {
+            var inspection = await _presenter.GetContextInspectionAsync(controller.LatestRunId ?? default, sessionId, cancellationToken);
+            var usage = inspection?.RequestUsage;
+            if (usage is not null && _modelCatalog?.Profiles.FirstOrDefault(profile => profile.Id == usage.ModelProfileId) is { } capturedProfile)
+            {
+                usage = usage with { ModelName = capturedProfile.Name };
+            }
+
+            if (_surface.Surface is IContextUsageSurface contextSurface)
+            {
+                await contextSurface.ShowContextUsageAsync(usage, cancellationToken);
+            }
+            else
+            {
+                await _surface.WriteAsync(ContextUsageFormatter.Format(usage), PresentationTextRole.Status, cancellationToken);
+            }
+
+            return;
+        }
+
         if (string.Equals(argument, "mode", StringComparison.OrdinalIgnoreCase))
         {
             var state = await _presenter.GetConversationStateAsync(
@@ -3435,7 +3491,7 @@ public sealed partial class InteractionCoordinator
         }
 
         await _surface.WriteAsync(
-            "Usage: /context [mode [conversation-aware|governed-memory|stateless]|inspect|compact (retired)]\n",
+            "Usage: /context [mode [conversation-aware|governed-memory|stateless]|inspect|map|compact (retired)]\n",
             PresentationTextRole.Warning,
             cancellationToken);
     }
@@ -4855,16 +4911,19 @@ public sealed partial class InteractionCoordinator
     {
         var request = _sessionUsage?.GetRequestStatus(sessionId);
         var profile = request is null ? null : _modelCatalog?.Profiles.FirstOrDefault(profile => profile.Id == request.ProfileId);
+        var useRequestIdentity = _sessionPreferences is null && request is not null;
+        var useRequestContext = request is not null
+            && (_sessionPreferences?.CurrentProfileId is not { } selectedProfile || request.ProfileId == selectedProfile);
         return status with
         {
             FooterEnabled = _showSessionStatus,
             AgentUsage = _sessionUsage?.GetOwnerSnapshot(sessionId),
             AgentRequest = request,
-            ContextTokens = request is null ? status.ContextTokens : request.ContextTokens,
-            ContextLimit = request is null ? status.ContextLimit : request.ContextLimit,
-            Reasoning = request?.Reasoning ?? status.Reasoning,
-            Model = request is null ? status.Model : profile?.Name ?? "Model unavailable",
-            ProviderName = request is null ? status.ProviderName : profile?.ProviderName ?? profile?.Provider,
+            ContextTokens = request is null ? status.ContextTokens : useRequestContext ? request.ContextTokens : null,
+            ContextLimit = useRequestContext ? request?.ContextLimit : status.ContextLimit,
+            Reasoning = useRequestIdentity ? request?.Reasoning ?? status.Reasoning : status.Reasoning,
+            Model = useRequestIdentity ? profile?.Name ?? "Model unavailable" : status.Model,
+            ProviderName = useRequestIdentity ? profile?.ProviderName ?? profile?.Provider : status.ProviderName,
             IsPostResume = _sessionUsage?.HasRestoredUsage(sessionId) == true,
         };
     }

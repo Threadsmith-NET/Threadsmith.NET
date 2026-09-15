@@ -269,7 +269,7 @@ public static class Milestone4Tests
         var exception = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
-        Assert.Contains("positive revision, summary", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("summary must be nonempty text with at most 4096 characters", exception.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("maximum retained output size", exception.Message, StringComparison.Ordinal);
     }
 
@@ -309,21 +309,16 @@ public static class Milestone4Tests
         Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
     }
 
-    /// <summary>Runtime parsing rejects enum and identifier shapes outside the advertised JSON schema.</summary>
+    /// <summary>Runtime parsing rejects enum shapes outside the advertised JSON schema.</summary>
     [Theory]
-    [InlineData("0", "11111111-1111-1111-1111-111111111111")]
-    [InlineData("\"Modify\"", "{11111111-1111-1111-1111-111111111111}")]
-    public static void ModelOutputValidator_NonSchemaScalarShapes_AreRejected(
-        string kindJson,
-        string stepId)
+    [InlineData("0")]
+    [InlineData("\"UnknownKind\"")]
+    public static void ModelOutputValidator_NonSchemaScalarShapes_AreRejected(string kindJson)
     {
         var json = $$"""
             {
-              "schemaVersion": 2,
-              "revision": 1,
               "summary": "Invalid scalar shape",
               "steps": [{
-                "stepId": "{{stepId}}",
                 "title": "Invalid scalar",
                 "description": "Use only schema-advertised scalars.",
                 "fileIntents": [{ "kind": {{kindJson}}, "path": "src/Foo.cs" }],
@@ -347,12 +342,9 @@ public static class Milestone4Tests
     {
         const string json = """
             {
-              "schemaVersion": 2,
-              "revision": 1,
               "summary": "Invalid path plan.",
               "steps": [
                 {
-                  "stepId": "11111111-1111-1111-1111-111111111111",
                   "title": "Invalid path",
                   "description": "Declare a null path.",
                   "fileIntents": [
@@ -371,7 +363,7 @@ public static class Milestone4Tests
             ModelOutputValidator.ParsePlan(json));
 
         Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
-        Assert.Contains("file intents", exception.InnerException?.Message, StringComparison.Ordinal);
+        Assert.Contains("steps[0].fileIntents[0].path", exception.Diagnostic.SafeMessage, StringComparison.Ordinal);
     }
 
     /// <summary>Null plan collections are corrective schema mismatches, not runtime null dereferences.</summary>
@@ -392,7 +384,6 @@ public static class Milestone4Tests
             : $$"""
               [
                 {
-                  "stepId": "11111111-1111-1111-1111-111111111111",
                   "title": "Valid step",
                   "description": "A valid step with one file intent.",
                   "fileIntents": {{fileIntents}},
@@ -405,8 +396,6 @@ public static class Milestone4Tests
         var outstandingQuestions = nullProperty == "outstandingQuestions" ? "null" : "[]";
         var json = $$"""
             {
-              "schemaVersion": 2,
-              "revision": 1,
               "summary": "Null collection plan.",
               "steps": {{steps}},
               "risks": {{risks}},
@@ -665,9 +654,13 @@ public static class Milestone4Tests
         using var schema = JsonDocument.Parse(modelRequest.Tools.Last().ArgumentsJsonSchema);
         var properties = schema.RootElement.GetProperty("properties");
         Assert.False(properties.TryGetProperty("plan", out _));
-        Assert.Equal(2, properties.GetProperty("schemaVersion").GetProperty("const").GetInt32());
+        Assert.False(properties.TryGetProperty("schemaVersion", out _));
+        Assert.False(properties.TryGetProperty("revision", out _));
         var stepSchema = properties.GetProperty("steps").GetProperty("items");
-        Assert.Equal("string", stepSchema.GetProperty("properties").GetProperty("stepId").GetProperty("type").GetString());
+        Assert.False(stepSchema.GetProperty("properties").TryGetProperty("stepId", out _));
+        Assert.Equal(2, projection.Plan?.Plan.SchemaVersion);
+        Assert.Equal(1, projection.Plan?.Plan.Revision);
+        Assert.NotEqual(default, projection.Plan?.Plan.Steps[0].StepId);
         Assert.Equal(true, modelRequest.AllowMultipleToolCalls);
         Assert.True(await dispatcher.DispatchAsync(
             new RejectPlanCommand(sessionId, runId, "test complete")));
@@ -4089,7 +4082,8 @@ public static class Milestone4Tests
         };
         var model = new QueueModelProvider(
             [initialPlan, badRevision, fixedRevision],
-            TimeSpan.FromMilliseconds(20));
+            TimeSpan.FromMilliseconds(20),
+            useJson: true);
         var budget = new RecordingBudget();
         var application = new SessionApplication(
             events,
@@ -4129,6 +4123,8 @@ public static class Milestone4Tests
         }
         while (projection?.Phase != RunPhase.AwaitingPlanApproval);
 
+        Assert.Equal(1, projection.Plan?.Plan.Revision);
+        Assert.NotEqual(initialPlan.Steps[0].StepId, projection.Plan?.Plan.Steps[0].StepId);
         Assert.True(await dispatcher.DispatchAsync(new RevisePlanCommand(
             sessionId,
             runId,
@@ -4142,10 +4138,12 @@ public static class Milestone4Tests
         Assert.DoesNotContain("Re-emit propose_plan", correctionText, StringComparison.Ordinal);
         Assert.DoesNotContain(model.Requests[2].Tools, tool =>
             string.Equals(tool.Name, "propose_plan", StringComparison.Ordinal));
+        Assert.Contains("flat plan-content JSON", correctionText, StringComparison.Ordinal);
         Assert.Equal("fixed revision", (await projections.GetAsync<SessionProjection>(
             new ProjectionKey("session", sessionId.Value.ToString("D")),
             timeout.Token))?.Plan?.Plan.Summary);
         Assert.Single(observed.OfType<ModelCorrectionAttempted>());
+        Assert.Equal(2, observed.OfType<PlanProposed>().Last().Plan?.Revision);
         Assert.True(
             budget.Accruals.Count(delta =>
                 delta.Tokens == 0
@@ -4338,12 +4336,9 @@ public static class Milestone4Tests
         return JsonSerializer.Serialize(
             new
             {
-                schemaVersion = plan.SchemaVersion,
-                plan.Revision,
                 plan.Summary,
                 steps = plan.Steps.Select(step => new
                 {
-                    stepId = step.StepId.Value.ToString("D"),
                     step.Title,
                     step.Description,
                     fileIntents = step.FileIntents.Select(intent => new
@@ -4785,10 +4780,12 @@ public static class Milestone4Tests
     {
         private readonly TimeSpan _delay;
         private readonly Queue<ImplementationPlan> _plans;
+        private readonly bool _useJson;
 
         public QueueModelProvider(
             IEnumerable<ImplementationPlan> plans,
-            TimeSpan delay = default)
+            TimeSpan delay = default,
+            bool useJson = false)
         {
             if (delay < TimeSpan.Zero)
             {
@@ -4797,6 +4794,7 @@ public static class Milestone4Tests
 
             _plans = new Queue<ImplementationPlan>(plans);
             _delay = delay;
+            _useJson = useJson;
         }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -4818,7 +4816,10 @@ public static class Milestone4Tests
                 throw new InvalidOperationException("No scripted plan remains.");
             }
 
-            yield return new ModelChunk { Output = new PlanModelOutput(plan) };
+            yield return !_useJson ? new ModelChunk { Output = new PlanModelOutput(plan) }
+                : request.Tools.Any(tool => tool.Name == "propose_plan")
+                    ? new ModelChunk { Output = new ToolRequestModelOutput("propose_plan", SerializePlanProposal(plan)) }
+                    : new ModelChunk { Text = SerializePlanProposal(plan), FinishReason = ModelFinishReason.Stop };
         }
     }
 

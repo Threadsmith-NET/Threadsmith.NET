@@ -2,6 +2,8 @@ namespace Threadsmith.Models.Anthropic;
 
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Prepares cache boundaries and conservative native capacity before credential activation.</summary>
@@ -81,7 +83,8 @@ internal static class AnthropicRequestPreparer
 
         var plan = new ModelCachePlan(breakpoints.AsReadOnly());
         var projected = request with { CacheCapabilities = capabilities, CachePlan = plan };
-        var body = AnthropicRequestMapper.CreateBody(projected, profile, compatibility);
+        var attribution = new Dictionary<JsonNode, ModelMessage>(ReferenceEqualityComparer.Instance);
+        var body = AnthropicRequestMapper.CreateBody(projected, profile, compatibility, attribution);
         var bytes = JsonSerializer.SerializeToUtf8Bytes(body);
         try
         {
@@ -99,6 +102,8 @@ internal static class AnthropicRequestPreparer
                 CachePlan = plan,
                 WireEstimate = new ModelWireEstimate
                 {
+                    Components = Attribute(body, bytes, attribution, request, framing, retained, total),
+                    EstimationBasis = "Conservative provider capacity: one token per serialized UTF-8 byte, plus framing and retained-output allowances. Separate fields have no exposed cross-field prompt order.",
                     LogicalTokens = request.WireEstimate?.LogicalTokens ?? bytes.Length,
                     WireInputTokens = (int)total,
                     StablePrefixTokens = stableBytes,
@@ -113,6 +118,76 @@ internal static class AnthropicRequestPreparer
         finally
         {
             System.Security.Cryptography.CryptographicOperations.ZeroMemory(bytes);
+        }
+    }
+
+    private static IReadOnlyList<ContextUsageComponent> Attribute(JsonObject body, byte[] bytes, Dictionary<JsonNode, ModelMessage> attribution, ModelStreamRequest request, int framing, long retained, long total)
+    {
+        using var document = JsonDocument.Parse(bytes);
+        var components = new List<ContextUsageComponent>();
+        var toolNames = ModelToolCanonicalizer.Canonicalize(request.Tools).Select(tool => tool.Name).ToArray();
+        foreach (var property in document.RootElement.EnumerateObject())
+        {
+            if (body[property.Name] is { } node)
+            {
+                Visit(node, property.Value, property.Name);
+            }
+        }
+
+        var remainder = bytes.LongLength - components.Sum(item => item.Tokens);
+        components.Add(new("wire-framing", "Provider overhead/replay", "Serialization / request settings", "Request framing", remainder));
+        components.Add(new("framing-allowance", "Provider overhead/replay", "Provider framing allowance", "Capacity allowances", framing));
+        components.Add(new("retained-allowance", "Provider overhead/replay", "Retained output allowance", "Capacity allowances", retained));
+
+        // Saturated admission estimates cannot be honestly subdivided into an unsaturated inventory.
+        return components.Sum(item => item.Tokens) == total ? components.AsReadOnly() : [];
+
+        void Visit(JsonNode node, JsonElement element, string container)
+        {
+            if (attribution.TryGetValue(node, out var message))
+            {
+                var content = message.GetModelVisibleContent();
+                components.Add(ContextUsageAttribution.Message(
+                    message,
+                    components.Count,
+                    container,
+                    Encoding.UTF8.GetByteCount(element.GetRawText()),
+                    length => JsonEncodedText.Encode(content.AsSpan(0, length)).EncodedUtf8Bytes.Length));
+            }
+            else if (container == "tools" && element.ValueKind == JsonValueKind.Array)
+            {
+                var index = 0;
+                foreach (var tool in element.EnumerateArray())
+                {
+                    components.Add(new($"tools:{index}", "Tools", toolNames[index], container, Encoding.UTF8.GetByteCount(tool.GetRawText())));
+                    index++;
+                }
+            }
+            else if (container == "output_config")
+            {
+                components.Add(new("output-config", "Output contract", "Output format / reasoning settings", container, Encoding.UTF8.GetByteCount(element.GetRawText())));
+            }
+            else if (node is JsonArray array)
+            {
+                var index = 0;
+                foreach (var child in element.EnumerateArray())
+                {
+                    if (array[index++] is { } childNode)
+                    {
+                        Visit(childNode, child, container);
+                    }
+                }
+            }
+            else if (node is JsonObject obj && container is "messages" or "system")
+            {
+                foreach (var child in element.EnumerateObject())
+                {
+                    if (obj[child.Name] is { } childNode)
+                    {
+                        Visit(childNode, child.Value, container);
+                    }
+                }
+            }
         }
     }
 }

@@ -70,7 +70,7 @@ internal sealed class CommandHelpModal : Modal
     /// <inheritdoc />
     public override void Render(ISurface surface)
     {
-        var view = ModalFrame.Create(surface, _style(PresentationTextRole.Default));
+        var view = ModalFrame.Create(surface, _style(PresentationTextRole.Default), large: true);
         if (view is null)
         {
             return;

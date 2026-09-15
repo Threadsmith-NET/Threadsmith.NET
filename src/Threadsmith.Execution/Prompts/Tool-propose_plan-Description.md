@@ -1,1 +1,1 @@
-Propose a governed implementation plan only when the user requests actual repository changes. Do not call for read-only exploration, audits, explanations, or diagnostics. Calling this tool never mutates files.
+Propose a governed implementation plan only when the user requests actual repository changes. Supply the plan content; the host assigns schema version, revision, and step IDs. Do not call for read-only exploration, audits, explanations, or diagnostics. Calling this tool never mutates files.

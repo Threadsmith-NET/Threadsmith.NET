@@ -267,7 +267,7 @@ public sealed record GetConversationStateCommand(
     bool IncludeBodies = false) : ICommand<ConversationStateSnapshot>;
 
 /// <summary>Queries the latest context inspection for a run.</summary>
-public sealed record GetContextInspectionCommand(RunId RunId) : ICommand<ContextInspectionProjection?>;
+public sealed record GetContextInspectionCommand(RunId RunId, SessionId? SessionId = null) : ICommand<ContextInspectionProjection?>;
 
 /// <summary>Requests compaction at the next safe host-owned turn boundary.</summary>
 public sealed record RequestConversationCompactionCommand(SessionId SessionId) : ICommand<bool>;

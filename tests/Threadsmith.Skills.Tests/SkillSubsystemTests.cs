@@ -97,6 +97,22 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "threadsmith-docs-help");
     }
 
+    /// <summary>Maintained plan procedures produce the same content accepted by the host's plan parser.</summary>
+    [Theory]
+    [InlineData("fix-analyzer-warnings")]
+    [InlineData("upgrade-package")]
+    public static async Task MaintainedPlanSchemasMatchHostContentContract(string skill)
+    {
+        var schemaJson = await File.ReadAllTextAsync(Path.Combine(MaintainedRoot(), skill, "schemas", "plan-output.json"), TestContext.Current.CancellationToken);
+        var validator = new BoundedJsonSchemaValidator();
+        var content = validator.Validate(validator.Compile(schemaJson), ValidPlanJson());
+        var plan = ModelOutputValidator.ParsePlan(content).Plan;
+
+        Assert.Equal(2, plan.SchemaVersion);
+        Assert.Equal(1, plan.Revision);
+        Assert.NotEqual(default, Assert.Single(plan.Steps).StepId);
+    }
+
     /// <summary>Verifies a body changed after metadata discovery fails integrity verification.</summary>
     [Fact]
     public async Task Verifier_TamperedBody_FailsClosed()
@@ -594,6 +610,7 @@ public sealed partial class SkillSubsystemTests
         // Assert
         Assert.Equal(SkillInvocationStatus.AwaitingHost, waiting.Status);
         Assert.Equal(SkillHostActionKind.ProposePlan, Assert.Single(waiting.HostActions).Kind);
+        Assert.Equal(2, ModelOutputValidator.ParsePlan(waiting.HostActions[0].PayloadJson).Plan.SchemaVersion);
         Assert.Equal("host must resolve ProposePlan", waiting.Checkpoint.NextAction);
         Assert.Equal(SkillInvocationStatus.Completed, completed.Status);
         Assert.Equal("inspect authoritative skill outcome", completed.Checkpoint.NextAction);
@@ -923,12 +940,10 @@ public sealed partial class SkillSubsystemTests
     private static string ValidPlanJson()
     {
         return """
-            {"schemaVersion":1,"plan":{"schemaVersion":2,"revision":1,
-             "summary":"Apply the existing static-member pattern.",
-             "steps":[{"stepId":{"value":"11111111-1111-1111-1111-111111111111"},
-             "title":"Fix analyzer diagnostic","description":"Inspect and fix A.cs",
+            {"summary":"Apply the existing static-member pattern.",
+             "steps":[{"title":"Fix analyzer diagnostic","description":"Inspect and fix A.cs",
              "fileIntents":[{"kind":"Modify","path":"A.cs"}],"expectedOutcome":"CA1822 is resolved",
-             "validation":["dotnet test"]}],"risks":[],"outstandingQuestions":[]}}
+             "validation":["dotnet test"]}],"risks":[],"outstandingQuestions":[]}
             """;
     }
 

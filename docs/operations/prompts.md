@@ -48,7 +48,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `System-Phase-Default.md` | `Threadsmith.Context` | `prompts/System-Phase-Default.md` | System guidance for the `Default` phase. | None |
 | `System-RequiredOutput-EvidenceCollection.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | None |
 | `System-RequiredOutput-MutationProposal.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-MutationProposal.md` | Mutation proposal fields and offered-tool versus final-JSON output guidance. | None |
-| `System-RequiredOutput-Plan.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-Plan.md` | Required-output guidance for `Plan`. | None |
+| `System-RequiredOutput-Plan.md` | `Threadsmith.Context` | `prompts/System-RequiredOutput-Plan.md` | Flat plan-content JSON guidance; the host assigns schema version, revision and step IDs. | None |
 | `System-RepositoryInstructions-None.md` | `Threadsmith.Context` | `prompts/System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | None |
 | `System-RepositoryMemoryGuidance.md` | `Threadsmith.Context` | `prompts/System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | None |
 | `System-StandingPreferenceGuidance.md` | `Threadsmith.Context` | `prompts/System-StandingPreferenceGuidance.md` | Caption for always-included standing-preference memory blocks. | None |
@@ -125,7 +125,7 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-web_search-Description.md` | `Threadsmith.Tools` | `prompts/Tool-web_search-Description.md` | Advertised description for `web_search`. | `MaximumQueryCharacters`, `MaximumFreshnessDays` |
 | `Tool-web_search-TrustBoundary.md` | `Threadsmith.Tools` | `prompts/Tool-web_search-TrustBoundary.md` | Mandatory trust boundary serialized with `web_search` results. | None |
 | `Tool-invoke_skill-Description.md` | `Threadsmith.Skills` | `prompts/Tool-invoke_skill-Description.md` | Advertised description for `invoke_skill`. | None |
-| `Tool-propose_plan-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_plan-Description.md` | Advertised description for `propose_plan`. | None |
+| `Tool-propose_plan-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_plan-Description.md` | Advertised plan-content proposal; the host owns version, revision and step identity. | None |
 | `Tool-propose_mutations-Description.md` | `Threadsmith.Execution` | `prompts/Tool-propose_mutations-Description.md` | Advertised description for `propose_mutations`. | None |
 | `Tool-delegate_agents-Description.md` | `Threadsmith.Execution` | `prompts/Tool-delegate_agents-Description.md` | Delegation tool guidance for roles, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | `AgentCountDescription` |
 | `Adapter-McpExplicitReadPolicy-Description.md` | `Threadsmith.Mcp` | `prompts/Adapter-McpExplicitReadPolicy-Description.md` | Host-owned MCP adapter prose for `McpExplicitReadPolicy-Description`. | None |
@@ -141,9 +141,9 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Correction-Tool-DuplicateInvocation.md` | `Threadsmith.Execution` | `prompts/Correction-Tool-DuplicateInvocation.md` | Corrective or retry guidance for `Tool-DuplicateInvocation`. | `ToolName` |
 | `Correction-Tool-Unavailable.md` | `Threadsmith.Execution` | `prompts/Correction-Tool-Unavailable.md` | Corrective or retry guidance for `Tool-Unavailable`. | `ToolName` |
 | `Correction-ToolPipeline-Unavailable.md` | `Threadsmith.Execution` | `prompts/Correction-ToolPipeline-Unavailable.md` | Corrective or retry guidance for `ToolPipeline-Unavailable`. | None |
-| `Correction-Plan-Schema.md` | `Threadsmith.Execution` | `prompts/Correction-Plan-Schema.md` | Corrective or retry guidance for `Plan-Schema`. | `Reason` |
+| `Correction-Plan-Schema.md` | `Threadsmith.Execution` | `prompts/Correction-Plan-Schema.md` | Field-specific plan-content correction (`Reason`); no model-authored bookkeeping fields. | `Reason` |
 | `Correction-Plan-SanityEvidence.md` | `Threadsmith.Execution` | `prompts/Correction-Plan-SanityEvidence.md` | Corrective or retry guidance for `Plan-SanityEvidence`. | `AttemptNumber`, `MaximumAttempts`, `Reason` |
-| `Correction-Plan-SanityStructuredOutput.md` | `Threadsmith.Execution` | `prompts/Correction-Plan-SanityStructuredOutput.md` | Corrective or retry guidance for `Plan-SanityStructuredOutput`. | `AttemptNumber`, `MaximumAttempts`, `Reason` |
+| `Correction-Plan-SanityStructuredOutput.md` | `Threadsmith.Execution` | `prompts/Correction-Plan-SanityStructuredOutput.md` | Revision correction using the same flat plan-content JSON shape. | `AttemptNumber`, `MaximumAttempts`, `Reason` |
 | `Correction-PlanSanity-Issue-EmptyFileIntents.md` | `Threadsmith.Execution` | `prompts/Correction-PlanSanity-Issue-EmptyFileIntents.md` | Repair instruction for missing structured file intents. | `StepTitle` |
 | `Correction-PlanSanity-Issue-RequiresDestination.md` | `Threadsmith.Execution` | `prompts/Correction-PlanSanity-Issue-RequiresDestination.md` | Repair instruction for a required destination path. | `IntentKind` |
 | `Correction-PlanSanity-Issue-ForbidsDestination.md` | `Threadsmith.Execution` | `prompts/Correction-PlanSanity-Issue-ForbidsDestination.md` | Repair instruction for a forbidden destination path. | `IntentKind` |

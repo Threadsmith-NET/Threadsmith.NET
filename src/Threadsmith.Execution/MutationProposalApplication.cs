@@ -398,16 +398,12 @@ public sealed class MutationProposalApplication :
                 "The transactional resolver returned a baseline for a different workspace.");
         }
 
-        var modelRequest = await CreateModelRequestAsync(command, baseline, additionalMessages, cancellationToken);
+        var usageRequestId = new ModelRequestUsageId(command.RunId, "mutation", 0, Guid.NewGuid());
+        var modelRequest = await CreateModelRequestAsync(command, baseline, additionalMessages, usageRequestId, cancellationToken);
         var textOutput = new StringBuilder();
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
         var proposalToolObserved = false;
-        var usageRequestId = new ModelRequestUsageId(
-            command.RunId,
-            "mutation",
-            0,
-            Guid.NewGuid());
         ModelUsage? reportedUsage = null;
         var budgetUsage = new ModelRequestBudgetUsage();
         try
@@ -692,6 +688,7 @@ public sealed class MutationProposalApplication :
         ProposeMutationSetCommand command,
         WorkspaceBaseline baseline,
         IReadOnlyList<ModelMessage> additionalMessages,
+        ModelRequestUsageId usageRequestId,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -775,13 +772,7 @@ public sealed class MutationProposalApplication :
                 },
         };
         var prepared = ModelRequestPreparation.Prepare(_model, modelRequest);
-        _sessionUsage?.ObserveRequest(command.SessionId, command.RunId, new AgentRequestStatus(
-            prepared.ResolvedProfileId,
-            prepared.ReasoningLevel,
-            prepared.WireEstimate?.WireInputTokens,
-            context.ModelResolution?.ContextWindow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
-        return prepared;
+        return _sessionUsage?.ObservePreparedRequest(command.SessionId, usageRequestId, prepared, context.ModelResolution?.ContextWindow) ?? prepared;
     }
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()

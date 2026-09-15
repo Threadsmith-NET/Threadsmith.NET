@@ -2147,7 +2147,7 @@ public static partial class Milestone1Tests
             "/clone",
             "/code_explore_inspect {on|off}",
             "/code_explore_output {structured|markdown}",
-            "/context [mode|inspect|compact]",
+            "/context [mode|inspect|map|compact]",
             "/extensions",
             "/fetch-authorize <url> [redirect ...]",
             "/help",

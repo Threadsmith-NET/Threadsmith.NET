@@ -31,19 +31,16 @@ internal sealed class AgentHeader
         }
 
         var width = surface.Size.Width;
-        var compact = width < 60;
-        var label = compact ? "Ctx" : "Context";
+        var layout = MeasureContext(width, state);
+        var label = layout.Label;
+        var tail = layout.Tail;
+        var barWidth = layout.BarWidth;
+        var rightWidth = width - layout.Left;
         var known = state.ContextTokens is >= 0 && state.ContextLimit is > 0;
         var ratio = known ? (double)state.ContextTokens.GetValueOrDefault() / state.ContextLimit.GetValueOrDefault() : 0;
-        var percentage = !known ? "?%" : ratio >= 10 ? "999+%" : (ratio * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
-        var capacity = state.ContextLimit is > 0 ? CompactCount(state.ContextLimit) : "?";
-        var tail = " " + percentage + (compact ? "/" : " of ") + capacity;
-        var barWidth = Math.Clamp(width / 8, 4, 16);
-        var rightWidth = label.Length + 1 + barWidth + tail.Length;
-        if (rightWidth >= width)
+        if (barWidth == 0)
         {
-            var summary = percentage + "/" + capacity;
-            _tail.Draw(surface, Math.Max(0, width - summary.Length), 0, summary, style);
+            _tail.Draw(surface, layout.Left, 0, tail, style);
             return;
         }
 
@@ -72,6 +69,28 @@ internal sealed class AgentHeader
 
         _tail.Draw(surface, barStart + barWidth, 0, tail, style);
     }
+
+    /// <summary>Uses the rendered context geometry for hit testing, including the compact summary.</summary>
+    internal static bool HitContext(int width, AgentHeaderState state, int x, int y) =>
+        width > 0 && y == 0 && x >= MeasureContext(width, state).Left && x < width;
+
+    private static ContextLayout MeasureContext(int width, AgentHeaderState state)
+    {
+        var compact = width < 60;
+        var label = compact ? "Ctx" : "Context";
+        var known = state.ContextTokens is >= 0 && state.ContextLimit is > 0;
+        var ratio = known ? (double)state.ContextTokens.GetValueOrDefault() / state.ContextLimit.GetValueOrDefault() : 0;
+        var percentage = !known ? "?%" : ratio >= 10 ? "999+%" : (ratio * 100).ToString("0", CultureInfo.InvariantCulture) + "%";
+        var capacity = state.ContextLimit is > 0 ? CompactCount(state.ContextLimit) : "?";
+        var tail = " " + percentage + (compact ? "/" : " of ") + capacity;
+        var barWidth = Math.Clamp(width / 8, 4, 16);
+        var rightWidth = label.Length + 1 + barWidth + tail.Length;
+        var summary = percentage + "/" + capacity;
+        return rightWidth >= width ? new(Math.Max(0, width - summary.Length), string.Empty, summary, 0)
+            : new(width - rightWidth, label, tail, barWidth);
+    }
+
+    private readonly record struct ContextLayout(int Left, string Label, string Tail, int BarWidth);
 
     /// <summary>Preserves complete metadata in F2 details when the one-line header must abbreviate it.</summary>
     internal static string FormatDetails(AgentHeaderState state)

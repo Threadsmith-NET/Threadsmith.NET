@@ -21,7 +21,7 @@ internal static class AnthropicRequestMapper
     }
 
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
-    internal static JsonObject CreateBody(ModelStreamRequest request, ModelProfile profile, AnthropicModelCompatibility compatibility)
+    internal static JsonObject CreateBody(ModelStreamRequest request, ModelProfile profile, AnthropicModelCompatibility compatibility, Dictionary<JsonNode, ModelMessage>? attribution = null)
     {
         ValidateRequest(request, profile, compatibility);
         var body = new JsonObject
@@ -54,6 +54,7 @@ internal static class AnthropicRequestMapper
 
             var block = Text(message.GetModelVisibleContent());
             system.Add(block);
+            attribution?.Add(block, message);
             sections[message.SectionId] = block;
         }
 
@@ -71,6 +72,7 @@ internal static class AnthropicRequestMapper
             {
                 var block = Text(instructions.Content);
                 system.Add(block);
+                attribution?.Add(block, new ModelMessage { Role = ModelMessageRole.System, SectionId = instructions.SectionId, Content = [new ModelContentPart { Content = instructions.Content }] });
                 sections[instructions.SectionId] = block;
             }
         }
@@ -81,7 +83,7 @@ internal static class AnthropicRequestMapper
         }
 
         var messageBlocks = new Dictionary<int, JsonObject>();
-        body["messages"] = CreateMessages(request, names, messageBlocks);
+        body["messages"] = CreateMessages(request, names, messageBlocks, attribution);
         var output = new JsonObject();
         AddThinking(body, output, request, profile, compatibility);
         if (request.ResponseFormat is { } format)
@@ -111,7 +113,7 @@ internal static class AnthropicRequestMapper
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
     internal static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
 
-    private static JsonArray CreateMessages(ModelStreamRequest request, ModelToolWireNameMap names, Dictionary<int, JsonObject> messageBlocks)
+    private static JsonArray CreateMessages(ModelStreamRequest request, ModelToolWireNameMap names, Dictionary<int, JsonObject> messageBlocks, Dictionary<JsonNode, ModelMessage>? attribution)
     {
         var messages = new JsonArray();
         var replay = request.TransientState?.Responses.ToDictionary(item => item.Binding.ModelRound) ?? [];
@@ -160,8 +162,23 @@ internal static class AnthropicRequestMapper
                             throw new ModelProviderException("Anthropic legacy continuation lost its initial user input.");
                         }
 
-                        messages.Add(payload["assistant"]?.DeepClone() as JsonObject
-                            ?? throw new ModelProviderException("Anthropic private assistant response is missing."));
+                        var assistant = payload["assistant"]?.DeepClone() as JsonObject
+                            ?? throw new ModelProviderException("Anthropic private assistant response is missing.");
+                        messages.Add(assistant);
+                        if (attribution is not null && assistant["content"] is JsonArray replayBlocks)
+                        {
+                            foreach (var replayBlock in replayBlocks.OfType<JsonObject>())
+                            {
+                                var type = replayBlock["type"]?.GetValue<string>();
+                                var visible = type is "text" or "tool_use";
+                                attribution.Add(replayBlock, new ModelMessage
+                                {
+                                    Role = visible ? ModelMessageRole.Assistant : ModelMessageRole.HostContext,
+                                    SectionId = visible ? "retained-assistant-" + type : "provider-replay",
+                                    ToolName = type == "tool_use" ? replayBlock["name"]?.GetValue<string>() : null,
+                                });
+                            }
+                        }
                     }
                     finally
                     {
@@ -206,6 +223,7 @@ internal static class AnthropicRequestMapper
             }
 
             messageBlocks[messageIndex] = block;
+            attribution?.Add(block, message);
             if (messages.LastOrDefault() is JsonObject last && last["role"]?.GetValue<string>() == role)
             {
                 var blocks = last["content"] as JsonArray ?? throw new ModelProviderException("Invalid Anthropic message content.");
@@ -229,7 +247,9 @@ internal static class AnthropicRequestMapper
 
         if (request.Messages.Count == 0)
         {
-            messages.Add(new JsonObject { ["role"] = "user", ["content"] = new JsonArray(Text(request.Input)) });
+            var input = Text(request.Input);
+            messages.Add(new JsonObject { ["role"] = "user", ["content"] = new JsonArray(input) });
+            attribution?.Add(input, new ModelMessage { Role = ModelMessageRole.User, SectionId = "legacy-input" });
         }
 
         if (messages.Count == 0 || messages[0]?["role"]?.GetValue<string>() != "user")
@@ -237,11 +257,11 @@ internal static class AnthropicRequestMapper
             throw new ModelProviderException("Anthropic requires a model-visible initial user message.");
         }
 
-        ValidateToolChronology(messages);
+        ValidateToolChronology(messages, attribution);
         return messages;
     }
 
-    private static void ValidateToolChronology(JsonArray messages)
+    private static void ValidateToolChronology(JsonArray messages, Dictionary<JsonNode, ModelMessage>? attribution)
     {
         var usedIds = new HashSet<string>(StringComparer.Ordinal);
         var pending = new List<string>();
@@ -258,8 +278,8 @@ internal static class AnthropicRequestMapper
                 }
 
                 // Correlation is authoritative; user result blocks follow the model's tool ordinal order.
-                var orderedResults = pending.Select(id => results.Single(block => block["tool_use_id"]?.GetValue<string>() == id).DeepClone()).ToArray();
-                var text = blocks.Skip(results.Length).Select(block => block?.DeepClone()).ToArray();
+                var orderedResults = pending.Select(id => Copy(results.Single(block => block["tool_use_id"]?.GetValue<string>() == id))).ToArray();
+                var text = blocks.Skip(results.Length).Select(Copy).ToArray();
                 blocks.Clear();
                 foreach (var block in orderedResults.Concat(text))
                 {
@@ -288,6 +308,17 @@ internal static class AnthropicRequestMapper
         if (pending.Count != 0)
         {
             throw new ModelProviderException("Anthropic request ends before required tool results; complete the host tool boundary first.");
+        }
+
+        JsonNode? Copy(JsonNode? node)
+        {
+            var copy = node?.DeepClone();
+            if (node is not null && copy is not null && attribution?.Remove(node, out var source) == true)
+            {
+                attribution.Add(copy, source);
+            }
+
+            return copy;
         }
     }
 

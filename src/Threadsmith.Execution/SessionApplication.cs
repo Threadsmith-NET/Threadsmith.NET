@@ -722,20 +722,18 @@ public sealed partial class SessionApplication :
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
+          "required": ["summary", "steps", "risks", "outstandingQuestions"],
           "properties": {
-            "schemaVersion": { "type": "integer", "const": 2 },
-            "revision": { "type": "integer", "minimum": 1 },
             "summary": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} },
             "steps": {
               "type": "array",
+              "minItems": 1,
               "maxItems": {{limits.MaximumSteps}},
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
+                "required": ["title", "description", "fileIntents", "expectedOutcome", "validation"],
                 "properties": {
-                  "stepId": { "type": "string", "format": "uuid" },
                   "title": { "type": "string", "maxLength": {{limits.MaximumTitleCharacters}} },
                   "description": { "type": "string", "maxLength": {{limits.MaximumDescriptionCharacters}} },
                   "fileIntents": {

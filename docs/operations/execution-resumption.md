@@ -4,7 +4,7 @@ An approved implementation plan continues in the same run. Approval authorizes t
 
 ## Normal flow
 
-1. The model proposes a structured plan through `propose_plan`.
+1. The model proposes plan content through `propose_plan`. The host supplies schema version, revision and step IDs; the model supplies the summary, ordered steps/file intents, validation expectations, risks and questions. Revisions use the same flat content shape. Do not submit the old metadata fields or a `plan` wrapper.
 2. The host runs plan sanity checks over structured schema-2 file intents, path confinement, current baseline existence, protected/secret/Git targets, generated/binary risk, lifecycle/configuration/dependency/test-deletion risk, and scope bounds.
 3. Repairable sanity failures are recorded and fed back as plan-revision evidence. Non-repairable path/trust/protected-policy failures fail closed.
 4. A passing plan is manually approved or policy-auto-approved according to `/plan-policy` / `planning:approvalPolicy`; auto-approval records policy, risk, revision, and bounded scope summary.

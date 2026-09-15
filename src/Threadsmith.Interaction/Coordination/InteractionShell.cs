@@ -768,9 +768,15 @@ public class InteractionPresenter
     /// <summary>Gets the exact context inspection for a run.</summary>
     public Task<ContextInspectionProjection?> GetContextInspectionAsync(
         RunId runId,
+        CancellationToken cancellationToken = default) => GetContextInspectionAsync(runId, null, cancellationToken);
+
+    /// <summary>Gets assembly inspection and the latest actual primary request for a session.</summary>
+    public Task<ContextInspectionProjection?> GetContextInspectionAsync(
+        RunId runId,
+        SessionId? sessionId,
         CancellationToken cancellationToken = default)
     {
-        return _dispatcher.DispatchAsync(new GetContextInspectionCommand(runId), cancellationToken);
+        return _dispatcher.DispatchAsync(new GetContextInspectionCommand(runId, sessionId), cancellationToken);
     }
 
     /// <summary>Requests safe turn-boundary conversation compaction.</summary>

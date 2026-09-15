@@ -151,12 +151,13 @@ public static class TuiKitFrontendTests
             new CommandHelpModal(Threadsmith.Interaction.Commands.InteractiveCommandCatalog.All, _ => CellStyle.Default, () => { }, () => { }),
             new CommandPaletteModal(discovery, string.Empty, () => size, _ => CellStyle.Default, () => { }, () => { }, () => { }),
         ];
-        var frameWidth = Math.Min(90, width - 4);
-        var frameHeight = Math.Min(24, height - 3);
-        var left = (width - frameWidth) / 2;
-        var top = (height - 1 - frameHeight) / 2;
         foreach (var modal in modals)
         {
+            var large = modal is CommandHelpModal;
+            var frameWidth = Math.Min(large ? 140 : 90, width - 4);
+            var frameHeight = Math.Min(large ? 40 : 24, height - 3);
+            var left = (width - frameWidth) / 2;
+            var top = (height - 1 - frameHeight) / 2;
             var cells = new CellBuffer(width, height);
             cells.Fill(new Rect(0, 0, width, height), Cell.Glyph("X", CellStyle.Default, 1));
             modal.Render(new BufferSurface(cells));

@@ -19,6 +19,7 @@ Bare `--tui` and `--tui=tuikit` launch the default retained TUIKit frontend. `--
 - Child views preserve MAIN’s draft and block every editing, paste, submit, steering, and command-discovery path.
 - `F8`: show validated links retained in the transcript; Enter copies the selected address.
 - `F12`: hand mouse selection to the terminal; press it again to restore application mouse control.
+- Double-click MAIN's `Context` meter: open `/context map` with mouse capture enabled, without consuming the draft or steering. In the flat map, arrows/PageUp/PageDown/Home/End and the wheel navigate, Tab switches ordered sources/category ranking, and Esc closes. The right summary retains aggregate category totals.
 - Arrow keys scroll the focused transcript. `Shift` plus arrow keys selects text.
 
 A leading partial slash token shows up to six autocomplete rows in catalog order. While visible, unmodified arrows/PageUp/PageDown/Home/End select a suggestion, `Tab` or `Enter` inserts it, and `Esc` dismisses only the suggestions. Completion never executes or submits a command, adds a space, or changes submission history; undo restores the previous draft in one step. Add any arguments and press Enter separately to submit. Ctrl+Enter still inserts a newline; hidden suggestions leave normal Tab indentation and editor navigation unchanged.

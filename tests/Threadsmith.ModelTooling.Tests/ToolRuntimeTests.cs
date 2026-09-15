@@ -497,6 +497,47 @@ public static partial class ToolRuntimeTests
         Assert.Contains("not pasted source/tool output", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Oversized search result hints run at the host ceiling without a corrective failure.</summary>
+    [Fact]
+    public static async Task SearchTextTool_OversizedMaximumMatches_ClampsToHostMaximum()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(repository, "one.txt"), "needle");
+            await File.WriteAllTextAsync(Path.Combine(repository, "two.txt"), "needle");
+            await File.WriteAllTextAsync(Path.Combine(repository, "three.txt"), "needle");
+            var tool = new SearchTextTool(TestPromptLoader.Instance, new ToolLimits
+            {
+                SearchDefaultMatches = 1,
+                SearchMaxMatches = 2,
+            });
+            var input = Assert.IsType<SearchTextInput>(tool.DeserializeInput(
+                "{\"query\":\"needle\",\"maximumMatches\":999}"));
+            var execution = await tool.ExecuteAsync(
+                input,
+                new ToolExecutionContext(
+                    ToolInvocationId.New(),
+                    SessionId.New(),
+                    RunId.New(),
+                    CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.TrustedRead }),
+                CancellationToken.None);
+
+            Assert.Equal(2, execution.Value.Matches.Count);
+            Assert.True(execution.Value.IsTruncated);
+            using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+            var hint = schema.RootElement.GetProperty("properties").GetProperty("maximumMatches");
+            Assert.Equal(0, hint.GetProperty("minimum").GetInt32());
+            Assert.False(hint.TryGetProperty("maximum", out _));
+            Assert.Throws<ToolArgumentValidationException>(() =>
+                tool.DeserializeInput("{\"query\":\"needle\",\"maximumMatches\":-1}"));
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Host-owned artifact discovery declares optional Git inventory use to policy and scheduling.</summary>
     [Fact]
     public static async Task CodeExplore_HostOwnedArtifactDiscovery_RequiresGitExecutablePolicy()
@@ -2243,7 +2284,8 @@ public static partial class ToolRuntimeTests
         var properties = schema.RootElement.GetProperty("properties");
 
         Assert.True(properties.TryGetProperty("command", out _));
-        Assert.True(properties.TryGetProperty("timeoutSeconds", out _));
+        Assert.True(properties.TryGetProperty("timeoutSeconds", out var timeoutSchema));
+        Assert.Equal(0, timeoutSchema.GetProperty("minimum").GetInt32());
         Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
         Assert.Equal(2, properties.EnumerateObject().Count());
         Assert.False(tool.Definition.ConversationAvailable);
@@ -2319,6 +2361,11 @@ public static partial class ToolRuntimeTests
             var tool = new RunProcessTool(
                 processManager,
                 TestPromptLoader.Instance,
+                new ToolLimits
+                {
+                    RunProcessDefaultTimeoutSeconds = 3,
+                    RunProcessMaxTimeoutSeconds = 7,
+                },
                 allowedExecutables: ["bash"],
                 requireApproval: false,
                 shellExecutable: "bash");
@@ -2327,13 +2374,14 @@ public static partial class ToolRuntimeTests
                 SessionId.New(),
                 RunId.New(),
                 CreateContext(repository));
-            var input = tool.DeserializeInput("{\"command\":\"pwd\"}");
+            var input = tool.DeserializeInput("{\"command\":\"pwd\",\"timeoutSeconds\":999}");
 
             await tool.ExecuteAsync(input, context);
 
             var request = Assert.IsType<ProcessExecutionRequest>(processManager.LastRequest);
             Assert.Equal(repository, request.WorkingDirectory);
             Assert.Equal(["-c", "pwd"], request.Arguments);
+            Assert.Equal(TimeSpan.FromSeconds(7), request.Timeout);
         }
         finally
         {
@@ -2623,6 +2671,10 @@ public static partial class ToolRuntimeTests
             await File.WriteAllLinesAsync(bigFile, Enumerable.Repeat(new string('x', 256), 8));
             var smallFile = Path.Combine(repository, "small.txt");
             await File.WriteAllLinesAsync(smallFile, ["a", "b", "c", "d"]);
+            for (var index = 0; index < 6; index++)
+            {
+                await File.WriteAllTextAsync(Path.Combine(repository, $"listed-{index}.txt"), index.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
 
             var tightLimits = new ToolLimits
             {
@@ -2651,9 +2703,20 @@ public static partial class ToolRuntimeTests
                 CancellationToken.None);
             Assert.Equal(2, readResult.Value.Lines.Count);
 
-            // Custom ListFilesMaxEntries rejects an explicit value over the configured cap.
-            Assert.Throws<ToolArgumentValidationException>(() =>
-                listTool.DeserializeInput("{\"path\":\".\",\"maximumEntries\":6}"));
+            // Custom ListFilesMaxEntries clamps an explicit value over the configured cap.
+            var listResult = await listTool.ExecuteAsync(
+                Assert.IsType<ListFilesInput>(listTool.DeserializeInput("{\"path\":\".\",\"maximumEntries\":999}")),
+                new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), context),
+                CancellationToken.None);
+            Assert.Equal(5, listResult.Value.Files.Count);
+            Assert.True(listResult.Value.IsTruncated);
+            using (var listSchema = JsonDocument.Parse(listTool.Definition.InputSchema.JsonSchema))
+            {
+                Assert.Equal(0, listSchema.RootElement.GetProperty("properties")
+                    .GetProperty("maximumEntries").GetProperty("minimum").GetInt32());
+                Assert.False(listSchema.RootElement.GetProperty("properties")
+                    .GetProperty("maximumEntries").TryGetProperty("maximum", out _));
+            }
 
             // Default tool limits (no injection) still apply the compiled 1 MiB read bound, so big.txt reads fine.
             var defaultReadTool = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
@@ -2960,6 +3023,14 @@ public static partial class ToolRuntimeTests
             Assert.Equal("csharp_script", registeredScript.Definition.Id);
             Assert.True(registeredScript.Definition.ConversationAvailable);
             Assert.Equal(ToolSideEffect.ExecutesCode, registeredScript.Definition.SideEffect);
+            using (var schema = JsonDocument.Parse(registeredScript.Definition.InputSchema.JsonSchema))
+            {
+                var kind = schema.RootElement.GetProperty("properties").GetProperty("kind");
+                Assert.Equal("expression", kind.GetProperty("default").GetString());
+                Assert.Equal(["expression", "statement"], kind.GetProperty("enum")
+                    .EnumerateArray().Select(value => value.GetString()));
+            }
+
             var execution = await registeredScript.ExecuteAsync(
                 registeredScript.DeserializeInput("{\"code\":\"6 * 7\",\"kind\":\"expression\"}"),
                 new ToolExecutionContext(

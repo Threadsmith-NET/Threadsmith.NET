@@ -9,15 +9,15 @@ internal static class ModalFrame
     internal static bool Fits(Size size) => size.Width >= 40 && size.Height >= 12;
 
     /// <summary>Clears a centered bordered popup while preserving surrounding application rows.</summary>
-    internal static BufferSurface? Create(ISurface surface, CellStyle background)
+    internal static BufferSurface? Create(ISurface surface, CellStyle background, bool large = false)
     {
         if (!Fits(surface.Size) || surface is not BufferSurface buffer)
         {
             return null;
         }
 
-        var width = Math.Min(90, surface.Size.Width - 4);
-        var height = Math.Min(24, surface.Size.Height - 3);
+        var width = Math.Min(large ? 140 : 90, surface.Size.Width - 4);
+        var height = Math.Min(large ? 40 : 24, surface.Size.Height - 3);
         var left = (surface.Size.Width - width) / 2;
         var top = (surface.Size.Height - 1 - height) / 2;
         var view = buffer.CreateView(new Rect(left, top, width, height));

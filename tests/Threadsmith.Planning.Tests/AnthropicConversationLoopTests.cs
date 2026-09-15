@@ -17,6 +17,37 @@ using Xunit;
 /// <summary>Parent-loop continuations through the public native registration and actual SDK HTTP serialization.</summary>
 public static class AnthropicConversationLoopTests
 {
+    /// <summary>Final preparation, submission, header accounting and inspection agree after multiple real tool rounds.</summary>
+    [Fact]
+    public static async Task ContextMapTracksFinalNativeContinuationAndKeepsPrivateReplaySizeOnly()
+    {
+        await using var harness = new NativeLoopHarness(
+            ToolStream([("first_tool", "deterministic_output", "{\"sequence\":1}")]),
+            ToolStream([("second_tool", "deterministic_output", "{\"sequence\":2}")]),
+            TextStream("Done."));
+        await harness.RunToCompletionAsync();
+
+        Assert.Equal(3, harness.Model.Requests.Count);
+        var status = harness.Usage.GetRequestStatus(harness.SessionId);
+        var snapshot = Assert.IsType<ContextUsageSnapshot>(status?.ContextUsage);
+        Assert.True(snapshot.DispatchStarted);
+        Assert.Equal(2, snapshot.Round);
+        Assert.Equal(harness.RunId, snapshot.RunId);
+        Assert.Equal<long?>(harness.Model.Requests[^1].WireEstimate?.WireInputTokens, snapshot.InputTokens);
+        Assert.Equal(snapshot.InputTokens, status.ContextTokens);
+        Assert.Equal(snapshot.InputTokens, snapshot.Components.Sum(item => item.Tokens));
+        Assert.True(snapshot.InputTokens > harness.Model.Requests[0].WireEstimate?.WireInputTokens);
+        Assert.Contains(snapshot.Components, item => item.Container == "system");
+        Assert.Contains(snapshot.Components, item => item.Category == "Tools" && item.Label == "deterministic_output");
+        Assert.Equal(2, snapshot.Components.Count(item => item.Label.Contains("provider-replay", StringComparison.Ordinal)));
+        var serialized = JsonSerializer.Serialize(snapshot);
+        Assert.DoesNotContain("signed-native-loop", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("private native reasoning", serialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tool evidence collected.", serialized, StringComparison.Ordinal);
+        var inspection = await new ConversationContextApplication(harness.Assembler!, harness.Usage).HandleAsync(new GetContextInspectionCommand(harness.RunId, harness.SessionId), TestContext.Current.CancellationToken);
+        Assert.Same(snapshot, inspection?.RequestUsage);
+    }
+
     /// <summary>Exercises canonical host requests against native protocol constraints.</summary>
     [Theory]
     [InlineData(false, false)]
@@ -181,14 +212,11 @@ public static class AnthropicConversationLoopTests
 
     private static string PlanJson(string summary, string path = "src/example.cs") => JsonSerializer.Serialize(new
     {
-        schemaVersion = 2,
-        revision = 1,
         summary,
         steps = new[]
         {
             new
             {
-                stepId = Guid.NewGuid().ToString("D"),
                 title = "Update file",
                 description = "Apply the reviewed change.",
                 fileIntents = new[] { new { kind = "Modify", path } },
@@ -271,6 +299,10 @@ public static class AnthropicConversationLoopTests
 
         internal RunSteeringCoordinator Steering { get; } = new();
 
+        internal SessionUsageProjection Usage { get; } = new();
+
+        internal IContextAssembler? Assembler { get; private set; }
+
         internal Action<IDomainEvent>? OnEvent { get; set; }
 
         internal bool CheckPlanSanity { get; set; }
@@ -301,6 +333,7 @@ public static class AnthropicConversationLoopTests
             var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), Events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, UnboundedBudget.Instance);
             var resolver = new ModelResolver(_catalog.ModelCatalog, new InMemoryModelPreferenceSnapshotProvider());
             var assembler = new ContextAssembler(Evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, Events, TestPromptLoader.Instance, modelResolver: resolver);
+            Assembler = assembler;
             var projections = new InMemoryProjectionStore();
             await using var project = Events.Subscribe(projections.ApplyAsync);
             var application = new SessionApplication(
@@ -316,6 +349,7 @@ public static class AnthropicConversationLoopTests
                 registry,
                 _catalog.DefaultModelId,
                 new ExecutionLimits { MaxModelRounds = 4, MaxCorrectiveTurns = 2 },
+                sessionUsage: Usage,
                 planSanityChecker: CheckPlanSanity ? new PlanSanityChecker(TestPromptLoader.Instance) : null,
                 planSanityRequestFactory: CheckPlanSanity ? (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
                 {

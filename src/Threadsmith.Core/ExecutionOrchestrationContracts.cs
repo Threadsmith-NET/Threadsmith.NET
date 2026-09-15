@@ -109,12 +109,6 @@ public sealed record MutationProposalEnvelope
 {
     /// <summary>Model-authored changes from which the host creates an identity-bound mutation set.</summary>
     public required MutationProposalSet MutationSet { get; init; }
-
-    /// <summary>Expected host-observable outcomes.</summary>
-    public IReadOnlyList<string>? ExpectedOutcomes { get; init; } = [];
-
-    /// <summary>Expected validation checks.</summary>
-    public IReadOnlyList<string>? ValidationExpectations { get; init; } = [];
 }
 
 /// <summary>Model-authored mutation-set content without host-owned execution identities.</summary>
@@ -137,9 +131,19 @@ public sealed record MutationProposalSet
 
     /// <summary>Model-supplied risk classification subject to host recomputation.</summary>
     public MutationRisk? Risk { get; init; } = MutationRisk.Medium;
+}
 
-    /// <summary>Requested validation policy subject to host validation.</summary>
-    public string? ValidationPolicy { get; init; } = "default";
+/// <summary>Model-authored lifecycle content without host-computed byte identity.</summary>
+public sealed record MutationProposalContent
+{
+    /// <summary>Complete text content.</summary>
+    public required string Text { get; init; }
+
+    /// <summary>Optional explicit encoding; new files default to UTF-8 and edits preserve their source encoding.</summary>
+    public FileTextEncoding? Encoding { get; init; }
+
+    /// <summary>Optional explicit newline normalization; new files default to LF and edits otherwise preserve supplied endings.</summary>
+    public FileNewline? Newline { get; init; }
 }
 
 /// <summary>One model-authored operation without a host-owned mutation identity.</summary>
@@ -159,10 +163,7 @@ public abstract record MutationProposalChange
 public sealed record CreateFileMutationProposal : MutationProposalChange
 {
     /// <summary>Complete content for the new file.</summary>
-    public required FileContentDescriptor Content { get; init; }
-
-    /// <summary>Lifecycle risk supplied for review and recomputed by the host.</summary>
-    public FileLifecycleRisk? LifecycleRisk { get; init; }
+    public required MutationProposalContent Content { get; init; }
 
     /// <summary>Optional project-file association.</summary>
     public string? ProjectFilePath { get; init; }
@@ -171,15 +172,6 @@ public sealed record CreateFileMutationProposal : MutationProposalChange
 /// <summary>Model-authored file deletion.</summary>
 public sealed record DeleteFileMutationProposal : MutationProposalChange
 {
-    /// <summary>Expected baseline hash.</summary>
-    public string? BaselineSha256 { get; init; }
-
-    /// <summary>Exact source identity for the deletion.</summary>
-    public required ExpectedFileIdentity ExpectedIdentity { get; init; }
-
-    /// <summary>Lifecycle risk supplied for review and recomputed by the host.</summary>
-    public FileLifecycleRisk? LifecycleRisk { get; init; }
-
     /// <summary>Optional project-file association.</summary>
     public string? ProjectFilePath { get; init; }
 }
@@ -187,14 +179,8 @@ public sealed record DeleteFileMutationProposal : MutationProposalChange
 /// <summary>Model-authored exact text replacement.</summary>
 public sealed record ReplaceTextMutationProposal : MutationProposalChange
 {
-    /// <summary>Expected baseline hash.</summary>
-    public string? BaselineSha256 { get; init; }
-
     /// <summary>Optional zero-based UTF-16 offset; required only to disambiguate repeated text or place an empty insertion.</summary>
     public int? StartOffset { get; init; }
-
-    /// <summary>Optional range length; the host derives it from exact expected text when omitted.</summary>
-    public int? Length { get; init; }
 
     /// <summary>Expected text at the replacement range.</summary>
     public required string ExpectedText { get; init; }
@@ -212,9 +198,6 @@ public sealed record ReplaceTextMutationProposal : MutationProposalChange
 /// <summary>Model-authored compiler-aware symbol rename.</summary>
 public sealed record RenameSymbolMutationProposal : MutationProposalChange
 {
-    /// <summary>Expected declaration-file baseline hash.</summary>
-    public string? BaselineSha256 { get; init; }
-
     /// <summary>Stable semantic symbol selected for rename.</summary>
     public required string RelatedSymbolId { get; init; }
 
@@ -228,20 +211,11 @@ public sealed record RenameSymbolMutationProposal : MutationProposalChange
 /// <summary>Model-authored file relocation.</summary>
 public sealed record MoveFileMutationProposal : MutationProposalChange
 {
-    /// <summary>Expected baseline hash.</summary>
-    public string? BaselineSha256 { get; init; }
-
-    /// <summary>Exact source identity for the relocation.</summary>
-    public required ExpectedFileIdentity ExpectedIdentity { get; init; }
-
     /// <summary>Slash-normalized destination for the relocation.</summary>
     public required string DestinationRelativePath { get; init; }
 
     /// <summary>Optional complete content for a move-plus-edit operation.</summary>
-    public FileContentDescriptor? Content { get; init; }
-
-    /// <summary>Lifecycle risk supplied for review and recomputed by the host.</summary>
-    public FileLifecycleRisk? LifecycleRisk { get; init; }
+    public MutationProposalContent? Content { get; init; }
 
     /// <summary>Optional project-file association.</summary>
     public string? ProjectFilePath { get; init; }

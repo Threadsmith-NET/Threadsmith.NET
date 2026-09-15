@@ -54,7 +54,7 @@ public static class ModelOutputValidator
         }
     }
 
-    /// <summary>Parses strict JSON into a validated structured plan output.</summary>
+    /// <summary>Parses plan content, assigns host metadata, and validates the resulting plan.</summary>
     public static PlanModelOutput ParsePlan(string json, PlanResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
@@ -64,12 +64,13 @@ public static class ModelOutputValidator
             var proposal = JsonSerializer.Deserialize<PlanProposalInput>(json, _planJsonOptions)
                 ?? throw new JsonException("The structured plan proposal was empty.");
             output = CreatePlanOutput(proposal);
+            Validate(output, planLimits: limits);
         }
         catch (JsonException exception)
         {
             throw CreateInvocationException(
                 MalformedInvocationFailureKind.PlanSchemaMismatch,
-                "The propose_plan arguments did not match the required plan schema.",
+                $"Check JSON field names and value types at {exception.Path ?? "$"}. The propose_plan arguments did not match the required plan schema.",
                 toolName: "propose_plan",
                 argumentsJson: json,
                 providerFamily: null,
@@ -78,20 +79,11 @@ public static class ModelOutputValidator
                 jsonException: exception,
                 innerException: exception);
         }
-
-        try
-        {
-            Validate(output, planLimits: limits);
-        }
-        catch (MalformedInvocationException)
-        {
-            throw;
-        }
         catch (Exception exception) when (exception is MalformedModelOutputException or ArgumentException)
         {
             throw CreateInvocationException(
                 MalformedInvocationFailureKind.PlanSchemaMismatch,
-                "The propose_plan arguments did not match the required plan schema.",
+                $"{exception.Message} The propose_plan arguments did not match the required plan schema.",
                 toolName: "propose_plan",
                 argumentsJson: json,
                 providerFamily: null,
@@ -213,45 +205,38 @@ public static class ModelOutputValidator
 
     private static PlanModelOutput CreatePlanOutput(PlanProposalInput proposal)
     {
-        if (proposal.Steps is null
-            || proposal.Risks is null
-            || proposal.OutstandingQuestions is null)
+        if (proposal.Steps is null)
         {
-            throw new JsonException("Plan collections cannot be null.");
+            throw new MalformedModelOutputException("steps must be a non-null array.");
         }
 
         var steps = new List<ImplementationPlanStep>(proposal.Steps.Count);
-        foreach (var step in proposal.Steps)
+        for (var index = 0; index < proposal.Steps.Count; index++)
         {
-            if (step is null || step.FileIntents is null || step.Validation is null)
-            {
-                throw new JsonException("Plan collections cannot be null.");
-            }
+            var step = proposal.Steps[index] ?? throw new MalformedModelOutputException($"steps[{index}] must be an object.");
 
-            if (!Guid.TryParseExact(step.StepId, "D", out var stepId))
+            if (step.FileIntents is null)
             {
-                throw new JsonException("Plan step ids must be UUID strings.");
+                throw new MalformedModelOutputException($"steps[{index}].fileIntents must be a non-null array.");
             }
 
             steps.Add(new ImplementationPlanStep
             {
-                StepId = new StepId(stepId),
+                StepId = StepId.New(),
                 Title = step.Title,
                 Description = step.Description,
                 FileIntents = step.FileIntents,
                 ExpectedOutcome = step.ExpectedOutcome,
-                Validation = step.Validation,
+                Validation = step.Validation ?? throw new MalformedModelOutputException($"steps[{index}].validation must be a non-null array."),
             });
         }
 
         return new PlanModelOutput(new ImplementationPlan
         {
-            SchemaVersion = proposal.SchemaVersion,
-            Revision = proposal.Revision,
             Summary = proposal.Summary,
             Steps = steps,
-            Risks = proposal.Risks,
-            OutstandingQuestions = proposal.OutstandingQuestions,
+            Risks = proposal.Risks ?? throw new MalformedModelOutputException("risks must be a non-null array."),
+            OutstandingQuestions = proposal.OutstandingQuestions ?? throw new MalformedModelOutputException("outstandingQuestions must be a non-null array."),
         });
     }
 
@@ -315,80 +300,92 @@ public static class ModelOutputValidator
     private static void ValidatePlan(ImplementationPlan plan, PlanResourceLimits limits)
     {
         ArgumentNullException.ThrowIfNull(plan);
+        limits.Validate();
         if (plan.SchemaVersion != 2)
         {
-            throw new MalformedModelOutputException(
-                $"Unsupported plan schema version {plan.SchemaVersion}; expected 2.");
+            throw new MalformedModelOutputException($"Unsupported plan schema version {plan.SchemaVersion}; expected 2.");
         }
 
-        limits.Validate();
-        var steps = plan.Steps;
-        var risks = plan.Risks;
-        var outstandingQuestions = plan.OutstandingQuestions;
-        if (plan.Revision <= 0
-            || string.IsNullOrWhiteSpace(plan.Summary)
-            || plan.Summary.Length > limits.MaximumSummaryCharacters
-            || steps is null
-            || (steps.Count < 1 || steps.Count > limits.MaximumSteps)
-            || risks is null
-            || risks.Count > limits.MaximumMetadataItems
-            || risks.Any(risk => string.IsNullOrWhiteSpace(risk) || risk.Length > limits.MaximumSummaryCharacters)
-            || outstandingQuestions is null
-            || outstandingQuestions.Count > limits.MaximumMetadataItems
-            || outstandingQuestions.Any(question =>
-                string.IsNullOrWhiteSpace(question) || question.Length > limits.MaximumSummaryCharacters))
+        if (plan.Revision <= 0)
         {
-            throw new MalformedModelOutputException(
-                "A plan requires a positive revision, summary, and steps within the configured limit.");
+            throw new MalformedModelOutputException("Plan revision must be positive.");
         }
 
+        ValidatePlanText(plan.Summary, limits.MaximumSummaryCharacters, "summary");
+        if (plan.Steps is null || plan.Steps.Count < 1 || plan.Steps.Count > limits.MaximumSteps)
+        {
+            throw new MalformedModelOutputException($"steps must contain between 1 and {limits.MaximumSteps} entries.");
+        }
+
+        ValidatePlanTextItems(plan.Risks, limits.MaximumMetadataItems, limits.MaximumSummaryCharacters, "risks");
+        ValidatePlanTextItems(plan.OutstandingQuestions, limits.MaximumMetadataItems, limits.MaximumSummaryCharacters, "outstandingQuestions");
         var stepIds = new HashSet<StepId>();
-        foreach (var step in steps)
+        for (var index = 0; index < plan.Steps.Count; index++)
         {
+            var step = plan.Steps[index];
+            var path = $"steps[{index}]";
             if (step is null)
             {
-                throw new MalformedModelOutputException(
-                    "Plan steps require unique ids, bounded text, and repository-relative file intents.");
+                throw new MalformedModelOutputException($"{path} must be an object.");
             }
 
-            var fileIntents = step.FileIntents;
-            var validation = step.Validation;
-            if (step.StepId == default
-                || !stepIds.Add(step.StepId)
-                || string.IsNullOrWhiteSpace(step.Title)
-                || step.Title.Length > limits.MaximumTitleCharacters
-                || string.IsNullOrWhiteSpace(step.Description)
-                || step.Description.Length > limits.MaximumDescriptionCharacters
-                || string.IsNullOrWhiteSpace(step.ExpectedOutcome)
-                || step.ExpectedOutcome.Length > limits.MaximumSummaryCharacters
-                || fileIntents is null
-                || fileIntents.Count > limits.MaximumMetadataItems
-                || validation is null
-                || validation.Count > limits.MaximumMetadataItems
-                || validation.Any(expectation =>
-                    string.IsNullOrWhiteSpace(expectation)
-                    || expectation.Length > limits.MaximumSummaryCharacters)
-                || fileIntents.Any(intent => IsInvalidPlanFileIntent(intent, limits)))
+            if (step.StepId == default || !stepIds.Add(step.StepId))
             {
-                throw new MalformedModelOutputException(
-                    "Plan steps require unique ids, bounded text, and repository-relative file intents.");
+                throw new MalformedModelOutputException($"{path}.stepId must be a unique nonempty host identity.");
+            }
+
+            ValidatePlanText(step.Title, limits.MaximumTitleCharacters, $"{path}.title");
+            ValidatePlanText(step.Description, limits.MaximumDescriptionCharacters, $"{path}.description");
+            ValidatePlanText(step.ExpectedOutcome, limits.MaximumSummaryCharacters, $"{path}.expectedOutcome");
+            ValidatePlanTextItems(step.Validation, limits.MaximumMetadataItems, limits.MaximumSummaryCharacters, $"{path}.validation");
+            if (step.FileIntents is null || step.FileIntents.Count > limits.MaximumMetadataItems)
+            {
+                throw new MalformedModelOutputException($"{path}.fileIntents must be an array with at most {limits.MaximumMetadataItems} entries.");
+            }
+
+            for (var intentIndex = 0; intentIndex < step.FileIntents.Count; intentIndex++)
+            {
+                var intent = step.FileIntents[intentIndex];
+                var intentPath = $"{path}.fileIntents[{intentIndex}]";
+                if (intent is null || !Enum.IsDefined(intent.Kind))
+                {
+                    throw new MalformedModelOutputException($"{intentPath}.kind must be Modify, Create, Delete, Move, or Rename.");
+                }
+
+                if (IsInvalidPlanPath(intent.Path, limits))
+                {
+                    throw new MalformedModelOutputException($"{intentPath}.path must be a nonempty repository-relative path without '..', at most {limits.MaximumPathCharacters} characters.");
+                }
+
+                var hasDestination = !string.IsNullOrWhiteSpace(intent.DestinationPath);
+                var requiresDestination = intent.Kind is PlanFileChangeKind.Move or PlanFileChangeKind.Rename;
+                if (requiresDestination != hasDestination || (hasDestination && IsInvalidPlanPath(intent.DestinationPath, limits)))
+                {
+                    throw new MalformedModelOutputException($"{intentPath}.destinationPath must be a bounded repository-relative path for Move/Rename and omitted for other kinds.");
+                }
             }
         }
     }
 
-    private static bool IsInvalidPlanFileIntent(PlanFileIntent? intent, PlanResourceLimits limits)
+    private static void ValidatePlanText(string? value, int maximumCharacters, string path)
     {
-        if (intent is null)
+        if (string.IsNullOrWhiteSpace(value) || value.Length > maximumCharacters)
         {
-            return true;
+            throw new MalformedModelOutputException($"{path} must be nonempty text with at most {maximumCharacters} characters.");
+        }
+    }
+
+    private static void ValidatePlanTextItems(IReadOnlyList<string>? values, int maximumItems, int maximumCharacters, string path)
+    {
+        if (values is null || values.Count > maximumItems)
+        {
+            throw new MalformedModelOutputException($"{path} must be an array with at most {maximumItems} entries.");
         }
 
-        var hasDestination = !string.IsNullOrWhiteSpace(intent.DestinationPath);
-        var destinationAllowed = intent.Kind is PlanFileChangeKind.Move or PlanFileChangeKind.Rename;
-        return !Enum.IsDefined(intent.Kind)
-            || IsInvalidPlanPath(intent.Path, limits)
-            || (destinationAllowed != hasDestination)
-            || (hasDestination && IsInvalidPlanPath(intent.DestinationPath ?? string.Empty, limits));
+        for (var index = 0; index < values.Count; index++)
+        {
+            ValidatePlanText(values[index], maximumCharacters, $"{path}[{index}]");
+        }
     }
 
     private static bool IsInvalidPlanPath(string? path, PlanResourceLimits limits)
@@ -531,8 +528,8 @@ public static class ModelOutputValidator
             if (mutation.Content is { } content
                 && (content.Text.Length > limits.MaximumMutationCharacters
                     || (content.Sha256 is not null && !IsSha256(content.Sha256))
-                    || !Enum.IsDefined(content.Encoding)
-                    || !Enum.IsDefined(content.Newline)))
+                    || (content.Encoding is { } encoding && !Enum.IsDefined(encoding))
+                    || (content.Newline is { } newline && !Enum.IsDefined(newline))))
             {
                 throw new MalformedModelOutputException("Lifecycle content encoding, newline, hash, or size is invalid.");
             }
@@ -546,15 +543,12 @@ public static class ModelOutputValidator
     }
 
     private sealed record PlanProposalInput(
-        int SchemaVersion,
-        int Revision,
         string Summary,
         IReadOnlyList<PlanProposalStepInput?>? Steps,
         IReadOnlyList<string>? Risks,
         IReadOnlyList<string>? OutstandingQuestions);
 
     private sealed record PlanProposalStepInput(
-        string StepId,
         string Title,
         string Description,
         IReadOnlyList<PlanFileIntent>? FileIntents,

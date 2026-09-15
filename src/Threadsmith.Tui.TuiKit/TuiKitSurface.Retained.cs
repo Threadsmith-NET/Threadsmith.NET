@@ -1,40 +1,27 @@
 namespace Threadsmith.Tui.TuiKit;
 
 using System.Diagnostics.CodeAnalysis;
+using Threadsmith.Core;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
+using TUIKit.Modals;
 
 /// <summary>Owns startup, command-help, and immediate-toggle modal lifetimes on the existing terminal runtime.</summary>
-internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface
+internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface, IContextUsageSurface
 {
     private readonly List<string> _startupPhases = [];
     private IReadOnlyList<string> _startupDetails = [];
 
     /// <inheritdoc />
-    public async Task ShowCommandHelpAsync(IReadOnlyList<InteractiveCommandDescriptor> commands, CancellationToken cancellationToken = default)
+    public Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default) =>
+        ShowReadOnlyModalAsync(new ContextUsageModal(snapshot, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()), cancellationToken);
+
+    /// <inheritdoc />
+    public Task ShowCommandHelpAsync(IReadOnlyList<InteractiveCommandDescriptor> commands, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(commands);
-        var modal = new CommandHelpModal(commands, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture());
-        Task<string?>? completion = null;
-        await EnqueueAsync(
-            () =>
-        {
-            ClosePalette();
-            completion = _app.ShowAsync<string>(modal);
-        },
-            cancellationToken);
-        try
-        {
-            _ = await (completion ?? throw new InvalidOperationException("Command help did not open.")).WaitAsync(cancellationToken);
-        }
-        finally
-        {
-            if (!_stop.IsCancellationRequested)
-            {
-                await EnqueueAsync(() => modal.RequestClose(null), _stop.Token);
-            }
-        }
+        return ShowReadOnlyModalAsync(new CommandHelpModal(commands, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()), cancellationToken);
     }
 
     /// <inheritdoc />
@@ -109,6 +96,29 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     {
         ArgumentNullException.ThrowIfNull(action);
         return SelectTogglesCoreAsync(request, change, action, cancellationToken);
+    }
+
+    private async Task ShowReadOnlyModalAsync(Modal modal, CancellationToken cancellationToken)
+    {
+        Task<string?>? completion = null;
+        await EnqueueAsync(
+            () =>
+        {
+            ClosePalette();
+            completion = _app.ShowAsync<string>(modal);
+        },
+            cancellationToken);
+        try
+        {
+            _ = await (completion ?? throw new InvalidOperationException("Read-only modal did not open.")).WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            if (!_stop.IsCancellationRequested)
+            {
+                await EnqueueAsync(() => modal.RequestClose(null), _stop.Token);
+            }
+        }
     }
 
     [SuppressMessage("Usage", "VSTHRD003", Justification = "Modal completion and UI acknowledgements are owned by the dedicated terminal loop.")]

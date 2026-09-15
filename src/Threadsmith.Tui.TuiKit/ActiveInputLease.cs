@@ -89,6 +89,9 @@ internal sealed class ActiveInputLease : IActiveRunInputLease
         }
     }
 
+    /// <summary>Admits a read-only context action without entering steering.</summary>
+    internal void InspectContext() => _signals.Writer.TryWrite(ActiveRunInputSignal.ContextMap);
+
     /// <summary>Clears a pending Escape arm after any intervening input action.</summary>
     internal void DisarmEscape()
     {

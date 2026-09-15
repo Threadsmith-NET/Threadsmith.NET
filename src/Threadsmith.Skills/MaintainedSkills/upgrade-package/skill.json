@@ -17,8 +17,8 @@
     "assets":  [
                    {
                        "path":  "instructions/assess.md",
-                       "bytes":  381,
-                       "sha256":  "deef41d2afaa13571e808df8f9ce6d25727d95a304ed09ac05a55ae7414dc408",
+                       "bytes":  453,
+                       "sha256":  "43b7c328acd3014f3de4a4f1cdb7354ff0b844c8756080d1a87e1f20e568b158",
                        "required":  true,
                        "kind":  "instructions"
                    },
@@ -38,8 +38,8 @@
                    },
                    {
                        "path":  "schemas/plan-output.json",
-                       "bytes":  2200,
-                       "sha256":  "f2be152c55a534b632b34d8438ad33d8d810772fe27bdc42ff09e5922e14c215",
+                       "bytes":  2373,
+                       "sha256":  "c3d438376a34bff38ca8338c32d5397e149822a52d6466b191dd93b78cbd060f",
                        "required":  true,
                        "kind":  "output-schema"
                    }

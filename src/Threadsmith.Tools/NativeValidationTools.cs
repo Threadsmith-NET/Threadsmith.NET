@@ -203,8 +203,39 @@ public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationT
     }
 }
 
+/// <summary>Flat model-facing diagnostic filters.</summary>
+public sealed record DiagnosticQueryInput
+{
+    /// <summary>Optional exact invocation identity.</summary>
+    public string? InvocationId { get; init; }
+
+    /// <summary>Optional owning run identity.</summary>
+    public Guid? RunId { get; init; }
+
+    /// <summary>Optional exact project.</summary>
+    public string? Project { get; init; }
+
+    /// <summary>Optional repository-relative file.</summary>
+    public string? File { get; init; }
+
+    /// <summary>Optional exact diagnostic code.</summary>
+    public string? Code { get; init; }
+
+    /// <summary>Optional severity.</summary>
+    public DiagnosticSeverity? Severity { get; init; }
+
+    /// <summary>Optional origin.</summary>
+    public DiagnosticOrigin? Origin { get; init; }
+
+    /// <summary>Optional baseline classification.</summary>
+    public DiagnosticClassification? BaselineClass { get; init; }
+
+    /// <summary>Optional opaque host-issued token for the next page.</summary>
+    public string? ContinuationToken { get; init; }
+}
+
 /// <summary>Queries normalized exploratory diagnostics.</summary>
-public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryResult>
+public sealed class DiagnosticQueryTool : Tool<DiagnosticQueryInput, DiagnosticQueryResult>
 {
     private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
@@ -215,7 +246,7 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
     {
         ArgumentNullException.ThrowIfNull(service);
         _projection = new NativeValidationModelProjection(limits);
-        _definition = NativeValidationToolDefinitions.Create<DiagnosticQuery, DiagnosticQueryResult>(
+        _definition = NativeValidationToolDefinitions.Create<DiagnosticQueryInput, DiagnosticQueryResult>(
             "diagnostic_query",
             promptLoader,
             PromptFileNames.ToolDiagnosticQueryDescription,
@@ -229,13 +260,25 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
 
     /// <inheritdoc />
     public override async Task<ToolExecution<DiagnosticQueryResult>> ExecuteAsync(
-        DiagnosticQuery input,
+        DiagnosticQueryInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        var query = new DiagnosticQuery
+        {
+            InvocationId = input.InvocationId,
+            RunId = input.RunId is { } runId ? new RunId(runId) : null,
+            Project = input.Project,
+            File = input.File,
+            Code = input.Code,
+            Severity = input.Severity,
+            Origin = input.Origin,
+            BaselineClass = input.BaselineClass,
+            ContinuationToken = input.ContinuationToken,
+        };
         var result = await _service.QueryDiagnosticsAsync(
             context.Invocation.RepositoryPath,
-            input,
+            query,
             cancellationToken);
         DiagnosticQueryItem[] allowed = [.. result.Items.Where(item => IsAllowed(item, context.Invocation))];
         var omitted = allowed.Length != result.Items.Count;
@@ -253,7 +296,7 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
     }
 
     /// <inheritdoc />
-    protected override void ValidateInput(DiagnosticQuery input)
+    protected override void ValidateInput(DiagnosticQueryInput input)
     {
         if (input.ContinuationToken is { Length: > 128 })
         {
@@ -269,7 +312,7 @@ public sealed class DiagnosticQueryTool : Tool<DiagnosticQuery, DiagnosticQueryR
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetResourcePaths(
-        DiagnosticQuery input,
+        DiagnosticQueryInput input,
         ToolInvocationContext context)
     {
         return input.File is null ? [] : [input.File];
@@ -375,8 +418,21 @@ public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscovery
     }
 }
 
+/// <summary>Flat model-facing request for one host-issued test identity.</summary>
+public sealed record TargetedTestInput
+{
+    /// <summary>Host-issued discovery identity.</summary>
+    public required string TestId { get; init; }
+
+    /// <summary>Closed build configuration.</summary>
+    public DotNetBuildConfiguration Configuration { get; init; }
+
+    /// <summary>Optional validated target framework.</summary>
+    public string? TargetFramework { get; init; }
+}
+
 /// <summary>Runs exactly one previously discovered stable test identity.</summary>
-public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestResult>
+public sealed class TargetedTestTool : Tool<TargetedTestInput, TargetedTestResult>
 {
     private readonly NativeValidationModelProjection _projection;
     private readonly ToolDefinition _definition;
@@ -387,7 +443,7 @@ public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestRes
     {
         ArgumentNullException.ThrowIfNull(service);
         _projection = new NativeValidationModelProjection(limits);
-        _definition = NativeValidationToolDefinitions.Create<TargetedTestRequest, TargetedTestResult>(
+        _definition = NativeValidationToolDefinitions.Create<TargetedTestInput, TargetedTestResult>(
             "test_run_targeted",
             promptLoader,
             PromptFileNames.ToolTestRunTargetedDescription,
@@ -401,14 +457,15 @@ public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestRes
 
     /// <inheritdoc />
     public override async Task<ToolExecution<TargetedTestResult>> ExecuteAsync(
-        TargetedTestRequest input,
+        TargetedTestInput input,
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
+        var request = CreateRequest(input);
         var result = await _service.RunTargetedTestAsync(
             context.Invocation.RepositoryPath,
             context.RunId,
-            input,
+            request,
             cancellationToken);
         return new(
             result,
@@ -418,11 +475,10 @@ public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestRes
     }
 
     /// <inheritdoc />
-    protected override void ValidateInput(TargetedTestRequest input)
+    protected override void ValidateInput(TargetedTestInput input)
     {
-        ArgumentNullException.ThrowIfNull(input.TestId);
-        ArgumentException.ThrowIfNullOrWhiteSpace(input.TestId.Value);
-        if (input.TestId.Value.Length > 128)
+        ArgumentException.ThrowIfNullOrWhiteSpace(input.TestId);
+        if (input.TestId.Length > 128)
         {
             throw new ArgumentOutOfRangeException(nameof(input), "Test identity exceeds the host limit.");
         }
@@ -430,16 +486,26 @@ public sealed class TargetedTestTool : Tool<TargetedTestRequest, TargetedTestRes
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetResourcePaths(
-        TargetedTestRequest input,
+        TargetedTestInput input,
         ToolInvocationContext context)
     {
-        return [_service.ResolveTestProjectPath(context.RepositoryPath, input.TestId)];
+        return [_service.ResolveTestProjectPath(context.RepositoryPath, CreateRequest(input).TestId)];
     }
 
     /// <inheritdoc />
-    protected override string? GetExecutable(TargetedTestRequest input)
+    protected override string? GetExecutable(TargetedTestInput input)
     {
         return "dotnet";
+    }
+
+    private static TargetedTestRequest CreateRequest(TargetedTestInput input)
+    {
+        return new TargetedTestRequest
+        {
+            TestId = new DiscoveredTestId(input.TestId),
+            Configuration = input.Configuration,
+            TargetFramework = input.TargetFramework,
+        };
     }
 }
 

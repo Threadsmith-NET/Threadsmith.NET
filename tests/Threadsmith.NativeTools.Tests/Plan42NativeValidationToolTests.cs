@@ -191,7 +191,7 @@ public sealed class Plan42NativeValidationToolTests
             TestContext.Current.CancellationToken);
         var discovery = discoveryExecution.Value;
         var resultExecution = await new TargetedTestTool(service, TestPromptLoader.Instance).ExecuteAsync(
-            new TargetedTestRequest { TestId = discovery.Tests.Single().Id },
+            new TargetedTestInput { TestId = discovery.Tests.Single().Id.Value },
             context,
             TestContext.Current.CancellationToken);
         var result = resultExecution.Value;
@@ -259,6 +259,42 @@ public sealed class Plan42NativeValidationToolTests
             repository.Path,
             new DiagnosticQuery { ContinuationToken = first.ContinuationToken },
             TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>A flat UUID run selector reaches the existing historical diagnostic index.</summary>
+    [Fact]
+    public async Task DiagnosticQueryTool_FlatRunId_SelectsHistoricalRun()
+    {
+        using var repository = new TemporaryRepository();
+        repository.Write("App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        var process = new RecordingProcessManager
+        {
+            ResultFactory = request => Successful(
+                request,
+                $"{repository.Path}\\Program.cs(1,1): warning CS0168: unused [{repository.Path}\\App.csproj]"),
+        };
+        var service = new NativeValidationToolService(process);
+        var firstRun = RunId.New();
+        var secondRun = RunId.New();
+        await service.BuildAsync(
+            repository.Path,
+            firstRun,
+            new BuildToolRequest { TargetPath = "App.csproj" },
+            TestContext.Current.CancellationToken);
+        await service.BuildAsync(
+            repository.Path,
+            secondRun,
+            new BuildToolRequest { TargetPath = "App.csproj" },
+            TestContext.Current.CancellationToken);
+        var tool = new DiagnosticQueryTool(service, TestPromptLoader.Instance);
+
+        var execution = await tool.ExecuteAsync(
+            new DiagnosticQueryInput { RunId = firstRun.Value },
+            CreateToolExecutionContext(repository.Path),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(execution.Value.Items);
+        Assert.All(execution.Value.Items, item => Assert.Equal(firstRun, item.RunId));
     }
 
     /// <summary>Verifies MTP discovery and targeted execution use runner-native filter options.</summary>
@@ -445,14 +481,31 @@ public sealed class Plan42NativeValidationToolTests
         Assert.All(tools, tool => Assert.DoesNotContain("arguments", tool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase));
         Assert.Equal(RepositoryTrustLevel.TrustedBuild, tools.Single(tool => tool.Definition.Id == "test_run_targeted").Definition.RequiredTrust);
         Assert.Equal(ToolSideEffect.ExecutesCode, tools.Single(tool => tool.Definition.Id == "dotnet_format_check").Definition.SideEffect);
-        Assert.Contains("testId", tools.Single(tool => tool.Definition.Id == "test_run_targeted").Definition.InputSchema.JsonSchema);
+        var targetedTool = tools.Single(tool => tool.Definition.Id == "test_run_targeted");
+        using (var targetedSchema = JsonDocument.Parse(targetedTool.Definition.InputSchema.JsonSchema))
+        {
+            Assert.Equal("string", targetedSchema.RootElement.GetProperty("properties")
+                .GetProperty("testId").GetProperty("type").GetString());
+        }
+
+        Assert.IsType<TargetedTestInput>(targetedTool.DeserializeInput("{\"testId\":\"issued-id\"}"));
+        Assert.Throws<ToolArgumentValidationException>(() =>
+            targetedTool.DeserializeInput("{\"testId\":{\"value\":\"issued-id\"}}"));
         Assert.All(tools, tool => Assert.DoesNotContain("timeoutSeconds", tool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain("maximumDependencies", tools[0].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("maximumAdvisories", tools[0].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
         var diagnosticSchema = tools.Single(tool => tool.Definition.Id == "diagnostic_query").Definition.InputSchema.JsonSchema;
         Assert.Contains("continuationToken", diagnosticSchema, StringComparison.Ordinal);
+        Assert.Contains("runId", diagnosticSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("pageSize", diagnosticSchema, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("\"page\"", diagnosticSchema, StringComparison.OrdinalIgnoreCase);
+        var diagnosticTool = tools.Single(tool => tool.Definition.Id == "diagnostic_query");
+        Assert.IsType<DiagnosticQueryInput>(diagnosticTool.DeserializeInput(
+            "{\"runId\":\"11111111-1111-4111-8111-111111111111\"}"));
+        Assert.Throws<ToolArgumentValidationException>(() =>
+            diagnosticTool.DeserializeInput("{\"runId\":{\"value\":\"11111111-1111-4111-8111-111111111111\"}}"));
+        Assert.Throws<ToolArgumentValidationException>(() =>
+            diagnosticTool.DeserializeInput("{\"runId\":\"not-a-uuid\"}"));
         var discoverySchema = tools.Single(tool => tool.Definition.Id == "test_discover").Definition.InputSchema.JsonSchema;
         Assert.Contains("trait", discoverySchema, StringComparison.Ordinal);
         Assert.DoesNotContain("traitName", discoverySchema, StringComparison.OrdinalIgnoreCase);

@@ -146,6 +146,8 @@ public sealed partial class Milestone19Tests
             Directory.CreateDirectory(Path.Combine(root, "src"));
             await File.WriteAllTextAsync(Path.Combine(root, "AGENTS.md"), "root-once-marker\n");
             await File.WriteAllTextAsync(Path.Combine(root, "src", "AGENTS.md"), "child-once-marker\n");
+            await File.WriteAllTextAsync(Path.Combine(root, "append1.md"), "first append <&>");
+            await File.WriteAllTextAsync(Path.Combine(root, "append2.md"), "second append");
             var sanitizer = new PassthroughSanitizer();
             await using var events = new NullEventStream();
             var store = new EvidenceStore(events, sanitizer);
@@ -162,7 +164,7 @@ public sealed partial class Milestone19Tests
                 sanitizer,
                 events,
                 TestPromptLoader.Instance,
-                options: new ContextAssemblerOptions { PromptAppendFiles = ["AGENTS.md", "./AGENTS.md"] },
+                options: new ContextAssemblerOptions { PromptAppendFiles = ["AGENTS.md", "./AGENTS.md", "append1.md", "append2.md"] },
                 instructionResolver: new RepositoryInstructionResolver(sanitizer));
             var request = new ContextAssemblyRequest
             {
@@ -180,6 +182,13 @@ public sealed partial class Milestone19Tests
             Assert.Equal(1, text.Split("child-once-marker", StringSplitOptions.None).Length - 1);
             Assert.Single(nested.Inspection.PromptAssets, item => item.Source == "AGENTS.md");
             Assert.Single(nested.Inspection.PromptAssets, item => item.Source == "src/AGENTS.md");
+            var instructions = Assert.Single(messages, item => item.SectionId == "repository-instructions");
+            Assert.Equal(["AGENTS.md", "src/AGENTS.md", "append1.md", "append2.md"], instructions.Sources.Select(item => item.Label));
+            Assert.Equal(["Repository instructions", "Repository instructions", "Appended prompts", "Appended prompts"], instructions.Sources.Select(item => item.Category));
+            Assert.Equal(nested.WireEstimate!.WireInputTokens, nested.WireEstimate.Components.Sum(item => item.Tokens));
+            var attributed = Assert.Single(nested.WireEstimate.Components, item => item.Label.Contains("repository-instructions", StringComparison.Ordinal));
+            Assert.Equal(attributed.Tokens, attributed.Children.Sum(item => item.Tokens));
+            Assert.Equal(2, attributed.Children.Count(item => item.Category == "Appended prompts"));
             Assert.True(Assert.Single(rootOnly.Inspection.Evidence, item => item.EvidenceId == childRead.EvidenceId).Included);
             Assert.DoesNotContain(rootOnly.Inspection.PromptAssets, item => item.Source == "src/AGENTS.md");
         }

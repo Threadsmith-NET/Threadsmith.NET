@@ -3,6 +3,7 @@ namespace Threadsmith.Tui.TuiKit;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Agents;
+using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Models;
 using TUIKit;
@@ -83,6 +84,13 @@ internal sealed partial class TuiKitSurface
 
     private void RouteMouse(MouseEvent mouse)
     {
+        if (_app.MouseCaptureEnabled && !_startupBlocked && ModalFrame.Fits(_backend.Size) && _app.Modals.Top is IMouseAware modal)
+        {
+            _mouseOwner = null;
+            modal.HandleMouse(mouse);
+            return;
+        }
+
         if (_app.Modals.IsActive || _startupBlocked || !_app.MouseCaptureEnabled || !ModalFrame.Fits(_backend.Size))
         {
             _mouseOwner = null;
@@ -145,9 +153,9 @@ internal sealed partial class TuiKitSurface
         var usage = (child is null ? _status?.AgentUsage : child.Usage) ?? new SessionUsageSnapshot(0, 0, false, HasObservation: false);
         var model = (child is null ? _status?.Model : child.Model) ?? "Model unknown";
         var provider = child is null ? _status?.ProviderName : child.ProviderName;
-        var reasoning = child?.Reasoning ?? _status?.AgentRequest?.Reasoning ?? _status?.Reasoning ?? default;
-        var context = child is not null ? child.ContextTokens : _status?.AgentRequest is { } request ? request.ContextTokens : _status?.ContextTokens;
-        var limit = child is not null ? child.ContextLimit : _status?.AgentRequest is { } admitted ? admitted.ContextLimit : _status?.ContextLimit;
+        var reasoning = child?.Reasoning ?? _status?.Reasoning ?? default;
+        var context = child is not null ? child.ContextTokens : _status?.ContextTokens;
+        var limit = child is not null ? child.ContextLimit : _status?.ContextLimit;
         return new AgentHeaderState(child?.Label ?? "MAIN", model, provider, reasoning, context, limit, usage, _status?.IsPostResume == true);
     }
 
@@ -169,6 +177,23 @@ internal sealed partial class TuiKitSurface
         public bool HandleMouse(MouseEvent mouse)
         {
             var region = _owner._app.Layout?.FindById("transcript")?.ContentRect(_owner._backend.Size) ?? default;
+            var header = WorkspaceLayout.OutputHeader(new Size(region.Width, region.Height));
+            if (ReferenceEquals(_owner._agents.Selected, _owner._agents.Main)
+                && mouse.Kind == MouseEventKind.Press && mouse.Button == MouseButton.Left && mouse.ClickCount == 2
+                && AgentHeader.HitContext(header.Width, _owner.GetAgentHeaderState(), mouse.X - header.Left, mouse.Y - header.Top))
+            {
+                if (_owner._read is not null && ReferenceEquals(_owner._composer, _owner._ordinary))
+                {
+                    _owner._read.TrySetResult(new InteractionInput(true, string.Empty, _owner._stop.Token, InteractionInputKind.ContextMap));
+                }
+                else if (_owner._read is null)
+                {
+                    _owner._activeInput?.InspectContext();
+                }
+
+                return true;
+            }
+
             var content = WorkspaceLayout.OutputContent(new Size(region.Width, region.Height));
             if (mouse.Y < content.Top || mouse.Y >= content.Bottom || mouse.X < content.Left || mouse.X >= content.Right)
             {

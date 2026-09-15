@@ -1,6 +1,6 @@
 # Context Policy
 
-Threadsmith.NET assembles each model request from explicit state. The order is stable host policy, ordered project-context append assets, phase instructions, task and acceptance criteria, governed run state, selected evidence, tool schemas, and the required output schema. Conversation history is never replayed.
+Threadsmith.NET assembles each model request from explicit state and bounded conversation continuity. The canonical message order is stable host policy, phase policy, the applicable repository instruction/append bundle, additional prefix instructions, recent complete exchanges, included repository memories/preferences, governed task/state/evidence/output requirements, current user input, and admitted continuation messages. Native tool definitions and provider instruction/schema fields remain separate where the transport supports them. Adapters preserve chronological message/block order within their actual fields; no cross-field hidden prompt order is assumed. See [ADR-41](adr-41-canonical-cache-optimized-model-requests.md) and [request-order operations](../operations/cache-optimized-context.md#request-order). `/context map` reports final prepared request accounting, while `/context inspect` retains assembly and reduction diagnostics.
 
 ## Evidence by phase
 

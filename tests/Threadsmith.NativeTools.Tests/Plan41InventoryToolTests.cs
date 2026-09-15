@@ -390,7 +390,7 @@ public sealed class Plan41InventoryToolTests
         var tool = new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance);
 
         var execution = await tool.ExecuteAsync(
-            new GitDiffRequest { IncludePatch = includePatch },
+            new GitDiffInput { IncludePatch = includePatch },
             context);
 
         Assert.Contains(execution.Value.Entries, entry => entry.Path == "tracked.txt");
@@ -403,6 +403,28 @@ public sealed class Plan41InventoryToolTests
         using var projection = JsonDocument.Parse(execution.ModelResultContent);
         Assert.NotEmpty(projection.RootElement.GetProperty("changedPaths").EnumerateArray());
         Assert.Equal(1, projection.RootElement.GetProperty("omittedPaths").GetInt32());
+    }
+
+    /// <summary>One model path retains the established scalar Git diff and show behavior.</summary>
+    [Fact]
+    public async Task GitTools_OneModelPath_UsesExistingSingleFileBehavior()
+    {
+        await using var repository = await TestRepository.CreateAsync();
+        await File.AppendAllTextAsync(Path.Combine(repository.Path, "tracked.txt"), "changed\n");
+        await File.WriteAllTextAsync(Path.Combine(repository.Path, "other.txt"), "other\n");
+        var context = CreateExecutionContext(repository.Path);
+
+        var diff = await new GitDiffTool(new GitQueryService(), TestPromptLoader.Instance).ExecuteAsync(
+            new GitDiffInput { Paths = ["tracked.txt"] },
+            context);
+        var show = await new GitShowTool(new GitQueryService(), TestPromptLoader.Instance).ExecuteAsync(
+            new GitShowInput { Revision = "HEAD", Paths = ["tracked.txt"] },
+            context);
+
+        Assert.NotEmpty(diff.Value.Entries);
+        Assert.All(diff.Value.Entries, entry => Assert.Equal("tracked.txt", entry.Path));
+        Assert.Contains("initial", show.Value.Content, StringComparison.Ordinal);
+        Assert.Empty(show.Value.Files);
     }
 
     /// <summary>Verifies commit-show patches and branch paths honor descendant policy.</summary>
@@ -425,7 +447,7 @@ public sealed class Plan41InventoryToolTests
             prohibitedPaths: ["secret/**"]);
 
         var show = await new GitShowTool(new GitQueryService(), TestPromptLoader.Instance).ExecuteAsync(
-            new GitShowRequest { Revision = "feature" },
+            new GitShowInput { Revision = "feature" },
             context);
         var comparison = await new GitBranchComparisonTool(
             new GitQueryService(),
@@ -563,15 +585,32 @@ public sealed class Plan41InventoryToolTests
         Assert.DoesNotContain("maximumCharacters", tools[2].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("maximumLines", tools[3].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("maximumPaths", tools[4].Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase);
+        using (var diffSchema = JsonDocument.Parse(tools[0].Definition.InputSchema.JsonSchema))
+        using (var showSchema = JsonDocument.Parse(tools[2].Definition.InputSchema.JsonSchema))
+        {
+            var diffPaths = diffSchema.RootElement.GetProperty("properties").GetProperty("paths");
+            Assert.Equal(64, diffPaths.GetProperty("maxItems").GetInt32());
+            Assert.Equal(1, diffPaths.GetProperty("items").GetProperty("minLength").GetInt32());
+            Assert.False(diffSchema.RootElement.GetProperty("properties").TryGetProperty("path", out _));
+            var showPaths = showSchema.RootElement.GetProperty("properties").GetProperty("paths");
+            Assert.Equal(64, showPaths.GetProperty("maxItems").GetInt32());
+            Assert.Equal(1, showPaths.GetProperty("items").GetProperty("minLength").GetInt32());
+            Assert.False(showSchema.RootElement.GetProperty("properties").TryGetProperty("path", out _));
+        }
+
+        Assert.Throws<ToolArgumentValidationException>(() =>
+            tools[0].DeserializeInput("{\"path\":\"tracked.txt\"}"));
+        Assert.Throws<ToolArgumentValidationException>(() =>
+            tools[2].DeserializeInput("{\"revision\":\"HEAD\",\"path\":\"tracked.txt\"}"));
         Assert.DoesNotContain(
             "exitCode",
             JsonSerializer.Serialize(new GitStatusOutput("main", [], false)),
             StringComparison.OrdinalIgnoreCase);
         Assert.All(tools, tool => Assert.Equal("git", tool.GetExecutable(tool switch
         {
-            GitDiffTool => new GitDiffRequest(),
+            GitDiffTool => new GitDiffInput(),
             GitLogTool => new GitLogRequest(),
-            GitShowTool => new GitShowRequest { Revision = "HEAD" },
+            GitShowTool => new GitShowInput { Revision = "HEAD" },
             GitBlameTool => new GitBlameRequest { Path = "tracked.txt" },
             GitBranchComparisonTool => new GitBranchComparisonRequest
             {
@@ -583,7 +622,7 @@ public sealed class Plan41InventoryToolTests
 
         var denied = new DefaultPolicyEngine().Evaluate(
             tools[0],
-            new GitDiffRequest(),
+            new GitDiffInput(),
             CreateInvocationContext(Path.GetTempPath()));
         Assert.False(denied.IsAllowed);
         Assert.Contains("not allow-listed", denied.Reason, StringComparison.Ordinal);

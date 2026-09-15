@@ -113,42 +113,105 @@ $planOutput = @'
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "plan"],
+  "required": [
+    "summary",
+    "steps",
+    "risks",
+    "outstandingQuestions"
+  ],
   "properties": {
-    "schemaVersion": { "type": "integer", "minimum": 1, "maximum": 1 },
-    "plan": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["schemaVersion", "revision", "summary", "steps", "risks", "outstandingQuestions"],
-      "properties": {
-        "schemaVersion": { "type": "integer", "minimum": 2, "maximum": 2 },
-        "revision": { "type": "integer", "minimum": 1 },
-        "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
-        "steps": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 32,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["stepId", "title", "description", "fileIntents", "expectedOutcome", "validation"],
-            "properties": {
-              "stepId": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["value"],
-                "properties": { "value": { "type": "string", "minLength": 36, "maxLength": 36 } }
-              },
-              "title": { "type": "string", "minLength": 1, "maxLength": 160 },
-              "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
-              "fileIntents": { "type": "array", "maxItems": 64, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "path"], "properties": { "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] }, "path": { "type": "string", "maxLength": 512 }, "destinationPath": { "type": "string", "maxLength": 512 } } } },
-              "expectedOutcome": { "type": "string", "minLength": 1, "maxLength": 1000 },
-              "validation": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 512 } }
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "title",
+          "description",
+          "fileIntents",
+          "expectedOutcome",
+          "validation"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "fileIntents": {
+            "type": "array",
+            "maxItems": 64,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "kind",
+                "path"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "Modify",
+                    "Create",
+                    "Delete",
+                    "Move",
+                    "Rename"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                "destinationPath": {
+                  "type": "string",
+                  "maxLength": 512
+                }
+              }
+            }
+          },
+          "expectedOutcome": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000
+          },
+          "validation": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "string",
+              "maxLength": 512
             }
           }
-        },
-        "risks": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 1000 } },
-        "outstandingQuestions": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 1000 } }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "maxLength": 1000
+      }
+    },
+    "outstandingQuestions": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "string",
+        "maxLength": 1000
       }
     }
   }
@@ -175,7 +238,7 @@ New-MaintainedSkill -Folder 'fix-analyzer-warnings' -Id 'fix-analyzer-warnings' 
         [ordered]@{ stepId='propose-plan'; kind='proposePlan'; dependsOn=@('analyze'); instructionAsset=$null; inputSchemaAsset=$null; outputSchemaAsset='schemas/host-result.json'; maximumIterations=1; hostAction='proposePlan' }
     ) -Files @{
         'instructions/analyze.md' = @'
-Inspect only the supplied analyzer diagnostics and authorized repository scope. Confirm each diagnostic against current source and project configuration. Prefer existing patterns and the smallest coherent fix. Do not mutate files. Return exact schema-versioned propose_plan tool arguments with affected paths and meaningful build/test validation.
+Inspect only the supplied analyzer diagnostics and authorized repository scope. Confirm each diagnostic against current source and project configuration. Prefer existing patterns and the smallest coherent fix. Do not mutate files. Return flat propose_plan content with affected paths and meaningful build/test validation. The host assigns schema version, revision, and step IDs; omit those fields and any plan wrapper.
 '@
         'schemas/input.json' = @'
 {
@@ -201,7 +264,7 @@ New-MaintainedSkill -Folder 'upgrade-package' -Id 'upgrade-package' -DisplayName
         [ordered]@{ stepId='propose-plan'; kind='proposePlan'; dependsOn=@('assess'); instructionAsset=$null; inputSchemaAsset=$null; outputSchemaAsset='schemas/host-result.json'; maximumIterations=1; hostAction='proposePlan' }
     ) -Files @{
         'instructions/assess.md' = @'
-Inspect central package management, all direct uses, relevant release constraints supplied by the user, and existing validation patterns. Do not edit project files or run package-manager mutation commands. Return exact schema-versioned propose_plan tool arguments for a phased upgrade including compatibility risks, affected projects, rollback, build, and focused test validation.
+Inspect central package management, all direct uses, relevant release constraints supplied by the user, and existing validation patterns. Do not edit project files or run package-manager mutation commands. Return flat propose_plan content for a phased upgrade including compatibility risks, affected projects, rollback, build, and focused test validation. The host assigns schema version, revision, and step IDs; omit those fields and any plan wrapper.
 '@
         'schemas/input.json' = @'
 {

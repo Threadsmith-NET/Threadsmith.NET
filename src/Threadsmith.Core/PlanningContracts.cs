@@ -326,6 +326,10 @@ public sealed record VisibleSourceFrontierInspectionProjection(
 /// <summary>Inspectable record of one governed context assembly.</summary>
 public sealed record ContextInspectionProjection
 {
+    /// <summary>Latest actual request accounting; transient and never part of durable assembly events.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public ContextUsageSnapshot? RequestUsage { get; init; }
+
     /// <summary>Owning run.</summary>
     public required RunId RunId { get; init; }
 

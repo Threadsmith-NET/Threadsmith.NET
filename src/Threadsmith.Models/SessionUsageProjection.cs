@@ -43,11 +43,60 @@ public sealed record SessionUsageSnapshot(
 /// <summary>Aggregates provider-neutral usage once per host-owned request identity.</summary>
 public sealed class SessionUsageProjection
 {
+    private readonly int _maximumContextSnapshots;
     private readonly Lock _gate = new();
     private readonly Dictionary<SessionId, HashSet<RunId>> _children = [];
     private readonly Dictionary<(SessionId Session, RunId Run), AgentRequestStatus> _requests = [];
     private readonly Dictionary<SessionId, AgentRequestStatus> _rootRequests = [];
     private readonly Dictionary<(SessionId Session, RunId? Child), ModelRequestUsageSnapshot> _latestUsage = [];
+
+    /// <summary>Initializes a new instance of the <see cref="SessionUsageProjection"/> class with bounded transient request detail.</summary>
+    public SessionUsageProjection(int maximumContextSnapshots = 256)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumContextSnapshots);
+        _maximumContextSnapshots = maximumContextSnapshots;
+    }
+
+    /// <summary>Publishes final preparation and composes the existing transport-submission observer.</summary>
+    public ModelStreamRequest ObservePreparedRequest(SessionId sessionId, ModelRequestUsageId identity, ModelStreamRequest request, long? contextWindow)
+    {
+        ArgumentNullException.ThrowIfNull(identity);
+        ArgumentNullException.ThrowIfNull(request);
+        var estimate = request.WireEstimate;
+        var snapshot = estimate?.Components.Count is > 0
+            && estimate.Components.Sum(item => item.Tokens) == estimate.WireInputTokens
+            ? new ContextUsageSnapshot
+            {
+                RunId = identity.RunId,
+                InvocationId = identity.InvocationId,
+                Stage = identity.Stage,
+                Round = identity.Round,
+                ModelProfileId = request.ResolvedProfileId,
+                CapturedAt = DateTimeOffset.UtcNow,
+                InputTokens = estimate.WireInputTokens,
+                ContextWindow = contextWindow,
+                OutputReserve = estimate.OutputReserveTokens,
+                EstimationBasis = estimate.EstimationBasis,
+                Components = estimate.Components,
+            }
+            : null;
+        ObserveRequest(sessionId, identity.RunId, new AgentRequestStatus(request.ResolvedProfileId, request.ReasoningLevel, estimate?.WireInputTokens, contextWindow, System.Diagnostics.Stopwatch.GetTimestamp()) { ContextUsage = snapshot });
+        return request with
+        {
+            SubmissionObserver = () =>
+            {
+                request.SubmissionObserver?.Invoke();
+                lock (_gate)
+                {
+                    var status = GetRequestStatus(sessionId, IsChild(sessionId, identity.RunId) ? identity.RunId : null);
+                    if (status?.ContextUsage is { } current && current.InvocationId == identity.InvocationId)
+                    {
+                        ObserveRequest(sessionId, identity.RunId, status with { ContextUsage = current with { DispatchStarted = true } });
+                    }
+                }
+            },
+        };
+    }
 
     /// <summary>Registers explicit child ownership before requests, including child compaction.</summary>
     public void RegisterChild(SessionId sessionId, RunId runId)
@@ -75,7 +124,16 @@ public sealed class SessionUsageProjection
             }
             else
             {
+                var addsDetail = status.ContextUsage is not null && _rootRequests.GetValueOrDefault(sessionId)?.ContextUsage is null;
                 _rootRequests[sessionId] = status;
+                if (addsDetail && _rootRequests.Count > _maximumContextSnapshots)
+                {
+                    var detailed = _rootRequests.Where(pair => pair.Value.ContextUsage is not null).ToArray();
+                    foreach (var expired in detailed.OrderBy(pair => pair.Value.Timestamp).Take(detailed.Length - _maximumContextSnapshots))
+                    {
+                        _rootRequests[expired.Key] = expired.Value with { ContextUsage = null };
+                    }
+                }
             }
         }
     }

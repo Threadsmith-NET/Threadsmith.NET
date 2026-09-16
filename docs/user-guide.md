@@ -1265,8 +1265,9 @@ Instruction and append paths must remain inside the repository, avoid prohibited
 
 ## Themes and session status
 
-The default `system` theme inherits native terminal foreground/background. Other built-ins are:
+The default `MarkdownFriendlyDark` theme uses a dark workspace palette with distinct Markdown styling. Other built-ins are:
 
+- `system`, which inherits native terminal foreground/background;
 - `forge-dark`;
 - `ocean`;
 - `high-contrast`.

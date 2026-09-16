@@ -1,9 +1,10 @@
 # TUI Themes
 
-Threadsmith uses semantic terminal roles rather than hard-coded screen colors. The default `system` theme inherits the terminal foreground and background. Every built-in theme also leaves ordinary transcript and composer backgrounds at the console default; explicit backgrounds are reserved for actual highlights. No built-in theme automatically inverts role colors. Set `invert: true` explicitly in a custom theme when reverse video is desired, including for `SessionStatus`, `TitleBarRole`, and `AgentSelectedTabRole`. The composer prompt and transient `THINKING` indicator have distinct foreground roles without backgrounds. `NO_COLOR`, redirected output, and limited terminals suppress styling while preserving text and markers.
+Threadsmith uses semantic terminal roles rather than hard-coded screen colors. The default `MarkdownFriendlyDark` theme uses explicit dark workspace backgrounds and distinct Markdown styling. The other built-in themes leave ordinary transcript and composer backgrounds at the console default; `system` inherits the terminal foreground and background. No built-in theme automatically inverts role colors. Set `invert: true` explicitly in a custom theme when reverse video is desired, including for `SessionStatus`, `TitleBarRole`, and `AgentSelectedTabRole`. The composer prompt and transient `THINKING` indicator have distinct foreground roles. `NO_COLOR`, redirected output, and limited terminals suppress styling while preserving text and markers.
 
 ## Built-in themes
 
+- `MarkdownFriendlyDark` — default dark workspace and Markdown palette.
 - `system` — terminal-native colors.
 - `forge-dark` — restrained dark palette.
 - `ocean` — blue/cyan palette.

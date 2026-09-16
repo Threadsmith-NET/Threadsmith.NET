@@ -301,6 +301,49 @@ public sealed class Plan44FileLifecycleMutationTests
         Assert.Contains("+after", preview.UnifiedDiff, StringComparison.Ordinal);
     }
 
+    /// <summary>Move-plus-edit omission preserves the captured source encoding, BOM, and submitted endings.</summary>
+    [Fact]
+    public async Task MovePlusEdit_OmittedFormatting_PreservesSourceEncodingAndSubmittedEndings()
+    {
+        byte[] original = [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes("before\r\n")];
+        const string edited = "after\r\nmixed\n";
+        await using var repository = await LifecycleRepository.CreateAsync(new Dictionary<string, byte[]>
+        {
+            ["src/Before.cs"] = original,
+        });
+        await using var events = new DomainEventStream();
+        await using var workspace = await TransactionalWorkspace.CreateAsync(
+            repository.Baseline,
+            events,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var move = repository.Move("src/Before.cs", "src/After.cs") with
+        {
+            Content = new FileContentDescriptor
+            {
+                Text = edited,
+                Encoding = null,
+                Newline = null,
+            },
+        };
+        var set = repository.CreateSet([move]);
+        var staged = await workspace.StageAsync(set, TestContext.Current.CancellationToken);
+
+        await workspace.CommitAsync(
+            set.MutationSetId,
+            new MutationApproval
+            {
+                Level = MutationApprovalLevel.EntireSet,
+                ApprovalId = staged.ApprovalId,
+            },
+            TestContext.Current.CancellationToken);
+
+        byte[] expected = [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes(edited)];
+        var actual = await File.ReadAllBytesAsync(
+            repository.PathOf("src/After.cs"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(expected, actual);
+    }
+
     /// <summary>Reconciliation distinguishes untouched staging from an unexpected external identity.</summary>
     [Fact]
     public async Task LifecycleReconciliation_NotStartedThenExternalEdit_ReportsConflict()

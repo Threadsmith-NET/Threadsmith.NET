@@ -869,6 +869,32 @@ public static class AgentWorkspaceTests
         Assert.Empty(sink.Agents);
     }
 
+    /// <summary>MAIN renders the current reasoning selection while context retains the previous request estimate.</summary>
+    [Fact]
+    public static async Task MainHeaderUsesCurrentReasoningInsteadOfPreviousRequest()
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        using var backend = new HeadlessBackend(200, 35);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        await surface.RunAsync(
+            async token =>
+            {
+                await surface.PresentSessionStatusAsync(
+                    new Threadsmith.Interaction.Sessions.SessionStatusSnapshot("repository", "repo", "Current model", ReasoningLevel.High, 2500, 10000, new SessionUsageSnapshot(0, 0, false))
+                    {
+                        ProviderName = "Current provider",
+                        AgentRequest = new AgentRequestStatus(null, ReasoningLevel.Low, 2500, 10000, 1),
+                    },
+                    token);
+                await surface.PresentAsync(Text(string.Empty), token);
+                var output = backend.TakeOutput();
+                Assert.Contains("(Current provider) Current model (high)", output, StringComparison.Ordinal);
+                Assert.Contains("25% of 10K", output, StringComparison.Ordinal);
+                Assert.DoesNotContain("Current model (low)", output, StringComparison.Ordinal);
+            },
+            timeout.Token);
+    }
+
     /// <summary>The actual renderer preserves the final conflict digit beside its bottom-right workaround.</summary>
     [Fact]
     public static async Task ComposedNarrowFooterKeepsTheLastCounter()

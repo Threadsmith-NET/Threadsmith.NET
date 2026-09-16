@@ -1,6 +1,5 @@
 namespace Threadsmith.Skills;
 
-using System.Diagnostics;
 using System.Text;
 using Threadsmith.Core;
 using Threadsmith.Models;
@@ -191,15 +190,14 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 });
             try
             {
-                transientState.ValidateHistory(modelRequest);
                 var usageRequestId = new ModelRequestUsageId(plan.Request.RunId, "skill-procedure", round, Guid.NewGuid());
+                modelRequest = _sessionUsage?.ObservePreparedRequest(
+                    plan.Request.SessionId,
+                    usageRequestId,
+                    modelRequest,
+                    profile?.ContextWindow) ?? modelRequest;
+                transientState.ValidateHistory(modelRequest);
                 ModelUsage? reportedUsage = null;
-                _sessionUsage?.ObserveRequest(plan.Request.SessionId, plan.Request.RunId, new AgentRequestStatus(
-                    modelRequest.ResolvedProfileId,
-                    modelRequest.ReasoningLevel,
-                    wireEstimate.WireInputTokens,
-                    profile?.ContextWindow,
-                    Stopwatch.GetTimestamp()));
                 try
                 {
                     await foreach (var chunk in models.StreamAsync(

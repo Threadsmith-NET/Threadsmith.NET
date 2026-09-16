@@ -1,7 +1,15 @@
 namespace Threadsmith.Interaction.Contracts;
 
+using Threadsmith.Core;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Presentation;
+
+/// <summary>Optional retained presentation of a frozen, size-only request snapshot.</summary>
+public interface IContextUsageSurface
+{
+    /// <summary>Shows request usage, or the shared unavailable reason, until dismissed.</summary>
+    Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default);
+}
 
 /// <summary>Optional display of independently timed concurrent tool invocations.</summary>
 public interface IInteractionToolActivitySurface

@@ -41,6 +41,7 @@ internal static class RepositoryMemoryDispatch
         {
             if (Interlocked.Exchange(ref submitted, 1) == 0)
             {
+                request.SubmissionObserver?.Invoke();
                 receipt = RecordAsync();
             }
         }

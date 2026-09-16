@@ -69,10 +69,10 @@ public sealed record FileContentDescriptor
     public required string Text { get; init; }
 
     /// <summary>Encoding used when the file is written.</summary>
-    public FileTextEncoding Encoding { get; init; } = FileTextEncoding.Utf8;
+    public FileTextEncoding? Encoding { get; init; } = FileTextEncoding.Utf8;
 
     /// <summary>Newline convention used when the file is written.</summary>
-    public FileNewline Newline { get; init; } = FileNewline.Lf;
+    public FileNewline? Newline { get; init; } = FileNewline.Lf;
 
     /// <summary>SHA-256 of the encoded content when supplied by the proposal source.</summary>
     public string? Sha256 { get; init; }

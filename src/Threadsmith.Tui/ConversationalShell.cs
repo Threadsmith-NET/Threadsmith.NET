@@ -115,7 +115,7 @@ public sealed class ConversationalShell
         ArgumentNullException.ThrowIfNull(surface);
         var effectiveThemes = themePreferences ?? new SessionThemePreferences(
             new ConfiguredThemeCatalog(BuiltInThemes.Create()),
-            "system");
+            BuiltInThemes.DefaultThemeId);
         var effectiveDisplayOptions = displayOptions ?? new TuiDisplayOptions();
         var themeCommands = new ThemeCommandContribution(
             effectiveThemes,

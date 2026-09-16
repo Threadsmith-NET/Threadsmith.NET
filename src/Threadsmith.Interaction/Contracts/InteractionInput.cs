@@ -11,6 +11,9 @@ public enum InteractionInputKind
 
     /// <summary>Background output yielded and reopened an empty composer.</summary>
     IdleOutputYield,
+
+    /// <summary>The user requested inspection through a context-meter gesture.</summary>
+    ContextMap,
 }
 
 /// <summary>Identifies the semantic purpose of a composer read.</summary>

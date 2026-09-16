@@ -2147,7 +2147,7 @@ public static partial class Milestone1Tests
             "/clone",
             "/code_explore_inspect {on|off}",
             "/code_explore_output {structured|markdown}",
-            "/context [mode|inspect|compact]",
+            "/context [mode|inspect|map|compact]",
             "/extensions",
             "/fetch-authorize <url> [redirect ...]",
             "/help",
@@ -2581,14 +2581,14 @@ public static partial class Milestone1Tests
     {
         var themes = BuiltInThemes.Create();
 
-        Assert.Equal(["system", "forge-dark", "ocean", "high-contrast"], themes.Select(theme => theme.Theme.Id));
+        Assert.Equal(["system", "forge-dark", "ocean", "high-contrast", "MarkdownFriendlyDark"], themes.Select(theme => theme.Theme.Id));
         Assert.All(Enum.GetValues<PresentationTextRole>(), role =>
         {
             var style = new TuiThemeResolver(themes[0].Theme).Resolve(role);
             Assert.Null(style.Foreground);
             Assert.Null(style.Background);
         });
-        foreach (var theme in themes.Skip(1))
+        foreach (var theme in themes.Where(theme => theme.Theme.Id is "forge-dark" or "ocean" or "high-contrast"))
         {
             var resolver = new TuiThemeResolver(theme.Theme);
             Assert.Null(resolver.Resolve(PresentationTextRole.Default).Background);
@@ -2610,6 +2610,16 @@ public static partial class Milestone1Tests
                 .Resolve(role)
                 .Decorations.GetValueOrDefault().HasFlag(TuiTextDecoration.Invert))));
         Assert.True(new TuiThemeResolver(themes[3].Theme).Resolve(PresentationTextRole.Error).Decorations?.HasFlag(TuiTextDecoration.Underline));
+        var defaultTheme = Assert.Single(themes, theme => theme.Theme.Id == BuiltInThemes.DefaultThemeId);
+        var defaultResolver = new TuiThemeResolver(defaultTheme.Theme);
+        Assert.Equal("#82D1B9", defaultResolver.Resolve(PresentationTextRole.Default).Foreground?.Value);
+        Assert.Equal("#242121", defaultResolver.Resolve(PresentationTextRole.Default).Background?.Value);
+        Assert.Equal("#000000", defaultResolver.Resolve(PresentationTextRole.OutputStreamPaneRole).Background?.Value);
+        Assert.Equal(TuiTextDecoration.Dim | TuiTextDecoration.Italic, defaultResolver.Resolve(PresentationTextRole.MarkdownQuote).Decorations);
+
+        (var defaultCatalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration: null);
+        var defaultPreferences = new SessionThemePreferences(defaultCatalog, defaultId);
+        Assert.Equal(BuiltInThemes.DefaultThemeId, defaultPreferences.ActiveTheme.Theme.Id);
     }
 
     /// <summary>Configured themes append in order and replace matching built-ins as whole entries.</summary>
@@ -2633,7 +2643,7 @@ public static partial class Milestone1Tests
         (var catalog, var defaultId) = TuiThemeConfigurationLoader.Load(configuration);
         var preferences = new SessionThemePreferences(catalog, defaultId);
 
-        Assert.Equal(["system", "forge-dark", "ocean", "high-contrast", "project-blue"], catalog.Themes.Select(theme => theme.Theme.Id));
+        Assert.Equal(["system", "forge-dark", "ocean", "high-contrast", "MarkdownFriendlyDark", "project-blue"], catalog.Themes.Select(theme => theme.Theme.Id));
         Assert.Equal("Replaced Forge", catalog.Themes[1].Name);
         Assert.Equal("project-blue", preferences.ActiveTheme.Theme.Id);
         Assert.Single(catalog.Warnings);
@@ -2699,7 +2709,7 @@ public static partial class Milestone1Tests
             ["tui:themes:0:name"] = "bad\u001bname",
         }).Build();
         (var controlCatalog, var controlDefaultId) = TuiThemeConfigurationLoader.Load(controls);
-        Assert.Equal("system", controlDefaultId);
+        Assert.Equal(BuiltInThemes.DefaultThemeId, controlDefaultId);
         Assert.DoesNotContain('\u001b', Assert.Single(controlCatalog.Warnings));
 
         IConfiguration invalidColor = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -2708,7 +2718,7 @@ public static partial class Milestone1Tests
             ["tui:themes:0:styles:Brand:foreground"] = "chartreuse",
         }).Build();
         (var colorCatalog, var colorDefaultId) = TuiThemeConfigurationLoader.Load(invalidColor);
-        Assert.Equal("system", colorDefaultId);
+        Assert.Equal(BuiltInThemes.DefaultThemeId, colorDefaultId);
         Assert.Contains("Unsupported theme color", Assert.Single(colorCatalog.Warnings), StringComparison.Ordinal);
 
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());

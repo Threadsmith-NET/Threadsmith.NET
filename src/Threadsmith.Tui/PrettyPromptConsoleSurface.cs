@@ -236,7 +236,7 @@ internal sealed class PrettyPromptConsoleSurface : IConsoleSurface
             Environment.GetEnvironmentVariable("NO_COLOR"),
             Environment.GetEnvironmentVariable("TERM"));
         _suppressStyles = suppressionReason is not null;
-        var activeTheme = initialTheme ?? BuiltInThemes.Create()[0];
+        var activeTheme = initialTheme ?? BuiltInThemes.CreateDefault();
         _themeResolver = new TuiThemeResolver(activeTheme.Theme, _suppressStyles);
         _footerSeparator = activeTheme.Ui.FooterSeparator;
         Debug.WriteLine(

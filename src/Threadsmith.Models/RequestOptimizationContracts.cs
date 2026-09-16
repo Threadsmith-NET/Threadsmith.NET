@@ -56,6 +56,10 @@ public sealed record ModelContentPart
 /// <summary>One immutable chronological provider-neutral model message.</summary>
 public sealed record ModelMessage
 {
+    /// <summary>Host-only source ranges in the final visible text, excluded from serialization and request identity.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<ModelContextSource> Sources { get; init; } = [];
+
     /// <summary>Message role.</summary>
     public ModelMessageRole Role { get; init; }
 
@@ -155,6 +159,14 @@ public sealed record ModelRequestLayout
 /// <summary>Provider-neutral exact wire-capacity estimate.</summary>
 public sealed record ModelWireEstimate
 {
+    /// <summary>Complete additive size-only attribution in this estimator's units.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<ContextUsageComponent> Components { get; init; } = [];
+
+    /// <summary>Human-readable capacity estimation basis.</summary>
+    [JsonIgnore]
+    public string EstimationBasis { get; init; } = "Four characters per estimated token, rounded per message field, plus framing. Separate fields have no exposed cross-field prompt order.";
+
     /// <summary>Logical unique content tokens.</summary>
     public int LogicalTokens { get; init; }
 
@@ -190,6 +202,9 @@ public sealed record ModelWireEstimate
 /// <summary>Immutable wire-token estimate for one canonical tool inventory.</summary>
 public readonly record struct ModelWireToolEstimate
 {
+    /// <summary>Ordered individual definitions measured with the same inventory rounding.</summary>
+    public IReadOnlyList<ContextUsageComponent>? Components { get; init; }
+
     /// <summary>Estimated native tool-schema tokens.</summary>
     public int NativeToolTokens { get; init; }
 
@@ -396,11 +411,14 @@ public static class ModelToolCanonicalizer
     /// <summary>Renders a single deterministic textual fallback inventory.</summary>
     public static string RenderText(
         IReadOnlyList<ModelToolDefinition> definitions,
-        IPromptLoader prompts)
+        IPromptLoader prompts) => RenderText(definitions, prompts, out _);
+
+    /// <summary>Renders the same inventory while retaining source ranges for already-admitted tools.</summary>
+    public static string RenderText(IReadOnlyList<ModelToolDefinition> definitions, IPromptLoader prompts, out IReadOnlyList<ModelContextSource> sources)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(prompts);
-        return string.Join('\n', definitions.Select(definition =>
+        var parts = definitions.Select(definition =>
             prompts.Render(
                 PromptFileNames.SystemToolInventoryTextFallback,
                 new Dictionary<string, string>(StringComparer.Ordinal)
@@ -408,7 +426,15 @@ public static class ModelToolCanonicalizer
                     ["ToolId"] = System.Security.SecurityElement.Escape(definition.Name),
                     ["Description"] = System.Security.SecurityElement.Escape(definition.Description),
                     ["Schema"] = System.Security.SecurityElement.Escape(definition.ArgumentsJsonSchema),
-                })));
+                })).ToArray();
+        var position = 0;
+        sources = Array.AsReadOnly(definitions.Select((definition, index) =>
+        {
+            var source = new ModelContextSource("Tools", definition.Name, position, parts[index].Length);
+            position += parts[index].Length + 1;
+            return source;
+        }).ToArray());
+        return string.Join('\n', parts);
     }
 
     private static string CanonicalizeSchema(string toolName, string schemaJson)
@@ -524,19 +550,38 @@ public static class ModelWireEstimator
     {
         ArgumentNullException.ThrowIfNull(tools);
         var textToolTokens = 0;
+        var components = new List<ContextUsageComponent>();
+        var nativeTokens = 0;
         if (toolTransportMode == ToolTransportMode.Text)
         {
             var textPrompts = prompts
                 ?? throw new InvalidOperationException("Text tool transport requires the deployed prompt catalog.");
             textToolTokens = EstimateCharacters(ModelToolCanonicalizer.RenderText(tools, textPrompts).Length);
+            components.Add(new("text-tool-allowance", "Provider overhead/replay", "Text tool capacity allowance", "Capacity allowances", textToolTokens));
+        }
+        else
+        {
+            var serialized = JsonSerializer.Serialize(tools);
+            nativeTokens = EstimateCharacters(serialized.Length);
+            using var document = JsonDocument.Parse(serialized);
+            var characters = 1;
+            var index = 0;
+            foreach (var element in document.RootElement.EnumerateArray())
+            {
+                var before = EstimateCharacters(characters);
+                characters += element.GetRawText().Length + (index == 0 ? 0 : 1);
+                components.Add(new($"tools:{index}", "Tools", tools[index].Name, "Native tools", EstimateCharacters(characters) - before));
+                index++;
+            }
+
+            components.Add(new("tools:framing", "Provider overhead/replay", "Tool inventory framing", "Native tools", nativeTokens - components.Sum(item => item.Tokens)));
         }
 
         return new ModelWireToolEstimate
         {
-            NativeToolTokens = toolTransportMode == ToolTransportMode.Native
-                ? EstimateCharacters(JsonSerializer.Serialize(tools).Length)
-                : 0,
+            NativeToolTokens = nativeTokens,
             TextToolTokens = textToolTokens,
+            Components = components.AsReadOnly(),
         };
     }
 
@@ -580,6 +625,7 @@ public static class ModelWireEstimator
         }
 
         var sections = new Dictionary<string, int>(StringComparer.Ordinal);
+        var components = new List<ContextUsageComponent>();
         var logicalTokens = 0;
         var stablePrefixTokens = 0;
         var providerInstructionTokens = providerInstructions is null
@@ -590,6 +636,7 @@ public static class ModelWireEstimator
             sections[providerInstructions.SectionId] = providerInstructionTokens;
             logicalTokens = providerInstructionTokens;
             stablePrefixTokens = checked(providerInstructionTokens + 3);
+            components.Add(new("provider-instructions", "System prompt", providerInstructions.SectionId, "Provider instructions", providerInstructionTokens));
         }
 
         for (var index = 0; index < messages.Count; index++)
@@ -603,6 +650,7 @@ public static class ModelWireEstimator
                 ? checked(current + tokens)
                 : tokens;
             logicalTokens = checked(logicalTokens + tokens);
+            components.Add(ContextUsageAttribution.Message(message, index, "Messages", tokens, length => EstimateCharacters(length)));
             if (index < stablePrefixMessageCount)
             {
                 stablePrefixTokens = checked(stablePrefixTokens + tokens + 3);
@@ -615,8 +663,17 @@ public static class ModelWireEstimator
             + tools.NativeToolTokens
             + tools.TextToolTokens
             + framingTokens);
+        components.AddRange(tools.Components ?? []);
+        var unattributedTools = (long)tools.NativeToolTokens + tools.TextToolTokens - (tools.Components?.Sum(item => item.Tokens) ?? 0);
+        if (unattributedTools > 0)
+        {
+            components.Add(new("tools:unallocated", "Tools", "Tool inventory (individual sizes unavailable)", "Tools", unattributedTools));
+        }
+
+        components.Add(new("framing", "Provider overhead/replay", "Message / request framing", "Capacity allowances", framingTokens));
         return new ModelWireEstimate
         {
+            Components = components.AsReadOnly(),
             LogicalTokens = logicalTokens,
             WireInputTokens = wireInputTokens,
             StablePrefixTokens = stablePrefixTokens,

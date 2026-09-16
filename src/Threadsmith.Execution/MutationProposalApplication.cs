@@ -23,21 +23,11 @@ public sealed class MutationProposalApplication :
             "content": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["text", "encoding", "newline"],
+              "required": ["text"],
               "properties": {
                 "text": { "type": "string" },
                 "encoding": { "type": "string", "enum": ["Utf8", "Utf8Bom"] },
-                "newline": { "type": "string", "enum": ["Lf", "CrLf"] },
-                "sha256": { "type": "string" }
-              }
-            },
-            "expectedIdentity": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["sha256", "byteLength"],
-              "properties": {
-                "sha256": { "type": "string" },
-                "byteLength": { "type": "integer", "minimum": 0 }
+                "newline": { "type": "string", "enum": ["Lf", "CrLf"] }
               }
             },
             "createFile": {
@@ -48,20 +38,16 @@ public sealed class MutationProposalApplication :
                 "type": { "type": "string", "const": "CreateFile" },
                 "relativePath": { "type": "string" },
                 "content": { "$ref": "#/$defs/content" },
-                "lifecycleRisk": { "type": "string", "enum": ["Additive", "Relocation", "Destructive", "ProjectSystem"] },
                 "projectFilePath": { "type": "string" }
               }
             },
             "deleteFile": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["type", "relativePath", "expectedIdentity"],
+              "required": ["type", "relativePath"],
               "properties": {
                 "type": { "type": "string", "const": "DeleteFile" },
                 "relativePath": { "type": "string" },
-                "baselineSha256": { "type": "string" },
-                "expectedIdentity": { "$ref": "#/$defs/expectedIdentity" },
-                "lifecycleRisk": { "type": "string", "enum": ["Additive", "Relocation", "Destructive", "ProjectSystem"] },
                 "projectFilePath": { "type": "string" }
               }
             },
@@ -72,9 +58,7 @@ public sealed class MutationProposalApplication :
               "properties": {
                 "type": { "type": "string", "const": "ReplaceText" },
                 "relativePath": { "type": "string" },
-                "baselineSha256": { "type": "string" },
                 "startOffset": { "type": ["integer", "null"], "minimum": 0 },
-                "length": { "type": ["integer", "null"], "minimum": 0 },
                 "expectedText": { "type": "string" },
                 "replacementText": { "type": "string" },
                 "relatedSymbolId": { "type": "string" },
@@ -88,7 +72,6 @@ public sealed class MutationProposalApplication :
               "properties": {
                 "type": { "type": "string", "const": "RenameSymbol" },
                 "relativePath": { "type": "string" },
-                "baselineSha256": { "type": "string" },
                 "relatedSymbolId": { "type": "string" },
                 "replacementText": { "type": "string" },
                 "projectFilePath": { "type": "string" }
@@ -97,15 +80,12 @@ public sealed class MutationProposalApplication :
             "moveFile": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["type", "relativePath", "destinationRelativePath", "expectedIdentity"],
+              "required": ["type", "relativePath", "destinationRelativePath"],
               "properties": {
                 "type": { "type": "string", "const": "MoveFile" },
                 "relativePath": { "type": "string" },
-                "baselineSha256": { "type": "string" },
-                "expectedIdentity": { "$ref": "#/$defs/expectedIdentity" },
                 "destinationRelativePath": { "type": "string" },
                 "content": { "$ref": "#/$defs/content" },
-                "lifecycleRisk": { "type": "string", "enum": ["Additive", "Relocation", "Destructive", "ProjectSystem"] },
                 "projectFilePath": { "type": "string" }
               }
             }
@@ -134,12 +114,9 @@ public sealed class MutationProposalApplication :
                 "affectedProjects": { "type": "array", "items": { "type": "string" } },
                 "expectedDiagnosticsResolved": { "type": "array", "items": { "type": "string" } },
                 "expectedTests": { "type": "array", "items": { "type": "string" } },
-                "risk": { "type": "string", "enum": ["Low", "Medium", "High"] },
-                "validationPolicy": { "type": "string" }
+                "risk": { "type": "string", "enum": ["Low", "Medium", "High"] }
               }
-            },
-            "expectedOutcomes": { "type": "array", "items": { "type": "string" } },
-            "validationExpectations": { "type": "array", "items": { "type": "string" } }
+            }
           }
         }
         """;
@@ -398,16 +375,12 @@ public sealed class MutationProposalApplication :
                 "The transactional resolver returned a baseline for a different workspace.");
         }
 
-        var modelRequest = await CreateModelRequestAsync(command, baseline, additionalMessages, cancellationToken);
+        var usageRequestId = new ModelRequestUsageId(command.RunId, "mutation", 0, Guid.NewGuid());
+        var modelRequest = await CreateModelRequestAsync(command, baseline, additionalMessages, usageRequestId, cancellationToken);
         var textOutput = new StringBuilder();
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
         var proposalToolObserved = false;
-        var usageRequestId = new ModelRequestUsageId(
-            command.RunId,
-            "mutation",
-            0,
-            Guid.NewGuid());
         ModelUsage? reportedUsage = null;
         var budgetUsage = new ModelRequestBudgetUsage();
         try
@@ -558,19 +531,11 @@ public sealed class MutationProposalApplication :
             }
             catch (Exception exception) when (exception is JsonException or NotSupportedException)
             {
-                // Older providers return the complete host-identity shape. Preserve its strict parser and identity checks.
-                try
-                {
-                    structured = ModelOutputValidator.ParseMutationSet(textOutput.ToString().Trim(), _workspaceLimits);
-                }
-                catch (MalformedModelOutputException fallbackException)
-                {
-                    throw CreateRepairableMutationFailure(
-                        ModelCorrectionCategory.MutationProposal,
-                        MalformedInvocationFailureKind.MutationSchemaMismatch,
-                        "The mutation proposal did not match the required structured mutation schema.",
-                        fallbackException);
-                }
+                throw CreateRepairableMutationFailure(
+                    ModelCorrectionCategory.MutationProposal,
+                    MalformedInvocationFailureKind.MutationSchemaMismatch,
+                    "The mutation proposal did not match the required structured mutation schema.",
+                    exception);
             }
         }
 
@@ -580,8 +545,10 @@ public sealed class MutationProposalApplication :
             var hostOwned = CreateHostOwnedMutationSet(
                 envelope.MutationSet,
                 command,
-                baseline);
+                baseline,
+                CreateWorkspacePathComparer(workspace));
             FailIfMutationPathPolicyViolation(hostOwned);
+            FailIfMutationSourceMissingFromBaseline(hostOwned);
             hostOwned = await ResolveSemanticRenameMutationsAsync(
                 hostOwned,
                 command,
@@ -692,6 +659,7 @@ public sealed class MutationProposalApplication :
         ProposeMutationSetCommand command,
         WorkspaceBaseline baseline,
         IReadOnlyList<ModelMessage> additionalMessages,
+        ModelRequestUsageId usageRequestId,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -775,13 +743,7 @@ public sealed class MutationProposalApplication :
                 },
         };
         var prepared = ModelRequestPreparation.Prepare(_model, modelRequest);
-        _sessionUsage?.ObserveRequest(command.SessionId, command.RunId, new AgentRequestStatus(
-            prepared.ResolvedProfileId,
-            prepared.ReasoningLevel,
-            prepared.WireEstimate?.WireInputTokens,
-            context.ModelResolution?.ContextWindow,
-            System.Diagnostics.Stopwatch.GetTimestamp()));
-        return prepared;
+        return _sessionUsage?.ObservePreparedRequest(command.SessionId, usageRequestId, prepared, context.ModelResolution?.ContextWindow) ?? prepared;
     }
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()
@@ -1631,8 +1593,12 @@ public sealed class MutationProposalApplication :
     private static MutationSet CreateHostOwnedMutationSet(
         MutationProposalSet proposal,
         ProposeMutationSetCommand command,
-        WorkspaceBaseline baseline)
+        WorkspaceBaseline baseline,
+        StringComparer pathComparer)
     {
+        var baselineFiles = baseline.Files.ToDictionary(
+            item => NormalizeProposalPath(item.RelativePath),
+            pathComparer);
         return new MutationSet
         {
             MutationSetId = MutationSetId.New(),
@@ -1641,28 +1607,40 @@ public sealed class MutationProposalApplication :
             WorkspaceId = command.WorkspaceId,
             BaselineCapturedAt = baseline.CapturedAt,
             BaselineRevision = baseline.GitRevision,
-            Mutations = proposal.Mutations.Select(CreateHostOwnedMutation).ToArray(),
+            Mutations = proposal.Mutations
+                .Select(change => CreateHostOwnedMutation(change, baselineFiles))
+                .ToArray(),
             Rationale = proposal.Rationale,
             AffectedProjects = NullAsEmpty(proposal.AffectedProjects),
             ExpectedDiagnosticsResolved = NullAsEmpty(proposal.ExpectedDiagnosticsResolved),
             ExpectedTests = NullAsEmpty(proposal.ExpectedTests),
             Risk = proposal.Risk ?? MutationRisk.Medium,
-            ValidationPolicy = proposal.ValidationPolicy ?? "default",
+            ValidationPolicy = "default",
         };
     }
 
-    private static Mutation CreateHostOwnedMutation(MutationProposalChange change)
+    private static Mutation CreateHostOwnedMutation(
+        MutationProposalChange change,
+        IReadOnlyDictionary<string, WorkspaceFileHash> baselineFiles)
     {
         ArgumentNullException.ThrowIfNull(change);
+        var relativePath = NormalizeProposalPath(change.RelativePath);
+        var baselineFile = baselineFiles.GetValueOrDefault(relativePath);
+        var expectedIdentity = baselineFile is null
+            ? null
+            : new ExpectedFileIdentity
+            {
+                Sha256 = baselineFile.Sha256,
+                ByteLength = baselineFile.Length,
+            };
         return change switch
         {
             CreateFileMutationProposal create => new Mutation
             {
                 MutationId = MutationId.New(),
                 Type = MutationType.CreateFile,
-                RelativePath = create.RelativePath,
-                Content = create.Content,
-                LifecycleRisk = create.LifecycleRisk,
+                RelativePath = relativePath,
+                Content = CreateContent(create.Content, newFile: true),
                 ProjectFilePath = create.ProjectFilePath,
                 ReplacementText = create.Content?.Text ?? string.Empty,
             },
@@ -1670,21 +1648,20 @@ public sealed class MutationProposalApplication :
             {
                 MutationId = MutationId.New(),
                 Type = MutationType.DeleteFile,
-                RelativePath = delete.RelativePath,
-                BaselineSha256 = delete.BaselineSha256,
-                ExpectedIdentity = delete.ExpectedIdentity,
-                LifecycleRisk = delete.LifecycleRisk,
+                RelativePath = relativePath,
+                BaselineSha256 = baselineFile?.Sha256,
+                ExpectedIdentity = expectedIdentity,
                 ProjectFilePath = delete.ProjectFilePath,
             },
             ReplaceTextMutationProposal replace => new Mutation
             {
                 MutationId = MutationId.New(),
                 Type = MutationType.ReplaceText,
-                RelativePath = replace.RelativePath,
-                BaselineSha256 = replace.BaselineSha256,
+                RelativePath = relativePath,
+                BaselineSha256 = baselineFile?.Sha256,
                 ProjectFilePath = replace.ProjectFilePath,
                 StartOffset = replace.StartOffset ?? -1,
-                Length = replace.Length ?? replace.ExpectedText.Length,
+                Length = replace.ExpectedText.Length,
                 ExpectedText = replace.ExpectedText,
                 ReplacementText = replace.ReplacementText,
                 RelatedSymbolId = replace.RelatedSymbolId,
@@ -1693,8 +1670,8 @@ public sealed class MutationProposalApplication :
             {
                 MutationId = MutationId.New(),
                 Type = MutationType.RenameSymbol,
-                RelativePath = rename.RelativePath,
-                BaselineSha256 = rename.BaselineSha256,
+                RelativePath = relativePath,
+                BaselineSha256 = baselineFile?.Sha256,
                 ProjectFilePath = rename.ProjectFilePath,
                 ReplacementText = rename.ReplacementText,
                 RelatedSymbolId = rename.RelatedSymbolId,
@@ -1703,12 +1680,11 @@ public sealed class MutationProposalApplication :
             {
                 MutationId = MutationId.New(),
                 Type = MutationType.MoveFile,
-                RelativePath = move.RelativePath,
-                BaselineSha256 = move.BaselineSha256,
-                ExpectedIdentity = move.ExpectedIdentity,
+                RelativePath = relativePath,
+                BaselineSha256 = baselineFile?.Sha256,
+                ExpectedIdentity = expectedIdentity,
                 DestinationRelativePath = move.DestinationRelativePath,
-                Content = move.Content,
-                LifecycleRisk = move.LifecycleRisk,
+                Content = move.Content is null ? null : CreateContent(move.Content, newFile: false),
                 ProjectFilePath = move.ProjectFilePath,
             },
             _ => throw CreateRepairableMutationFailure(
@@ -1718,9 +1694,34 @@ public sealed class MutationProposalApplication :
         };
     }
 
+    private static FileContentDescriptor CreateContent(MutationProposalContent content, bool newFile)
+    {
+        ArgumentNullException.ThrowIfNull(content);
+        return new FileContentDescriptor
+        {
+            Text = content.Text,
+            Encoding = content.Encoding ?? (newFile ? FileTextEncoding.Utf8 : null),
+            Newline = content.Newline ?? (newFile ? FileNewline.Lf : null),
+        };
+    }
+
     private static IReadOnlyList<string> NullAsEmpty(IReadOnlyList<string>? values)
     {
         return values ?? [];
+    }
+
+    private static void FailIfMutationSourceMissingFromBaseline(MutationSet mutationSet)
+    {
+        var missing = mutationSet.Mutations.FirstOrDefault(mutation =>
+            mutation.Type != MutationType.CreateFile
+            && mutation.BaselineSha256 is null);
+        if (missing is not null)
+        {
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                $"Mutation source '{missing.RelativePath}' was not present in the immutable baseline.");
+        }
     }
 
     private void ValidateEnvelope(MutationProposalEnvelope envelope)
@@ -1736,23 +1737,37 @@ public sealed class MutationProposalApplication :
                 $"The mutation proposal requires a rationale and 1..{_workspaceLimits.MaximumMutations} operation-specific mutations.");
         }
 
+        var missingContentText = envelope.MutationSet.Mutations.FirstOrDefault(change => change switch
+        {
+            CreateFileMutationProposal create => create.Content is not null && create.Content.Text is null,
+            MoveFileMutationProposal move => move.Content is not null && move.Content.Text is null,
+            _ => false,
+        });
+        if (missingContentText is not null)
+        {
+            var operationName = missingContentText is CreateFileMutationProposal
+                ? "CreateFile"
+                : "MoveFile";
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                $"{operationName} content.text is required.");
+        }
+
         var invalidChange = envelope.MutationSet.Mutations.FirstOrDefault(change => change switch
         {
             CreateFileMutationProposal create => string.IsNullOrWhiteSpace(create.RelativePath)
                 || create.Content is null,
-            DeleteFileMutationProposal delete => string.IsNullOrWhiteSpace(delete.RelativePath)
-                || delete.ExpectedIdentity is null,
+            DeleteFileMutationProposal delete => string.IsNullOrWhiteSpace(delete.RelativePath),
             ReplaceTextMutationProposal replace => string.IsNullOrWhiteSpace(replace.RelativePath)
                 || replace.ExpectedText is null
                 || replace.ReplacementText is null
-                || replace.StartOffset is < 0
-                || replace.Length is < 0,
+                || replace.StartOffset is < 0,
             RenameSymbolMutationProposal rename => string.IsNullOrWhiteSpace(rename.RelativePath)
                 || string.IsNullOrWhiteSpace(rename.RelatedSymbolId)
                 || string.IsNullOrWhiteSpace(rename.ReplacementText),
             MoveFileMutationProposal move => string.IsNullOrWhiteSpace(move.RelativePath)
-                || string.IsNullOrWhiteSpace(move.DestinationRelativePath)
-                || move.ExpectedIdentity is null,
+                || string.IsNullOrWhiteSpace(move.DestinationRelativePath),
             _ => true,
         });
         if (invalidChange is not null)
@@ -1761,15 +1776,6 @@ public sealed class MutationProposalApplication :
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
                 "A mutation operation omitted a required operation-specific field.");
-        }
-
-        if (NullAsEmpty(envelope.ExpectedOutcomes).Any(string.IsNullOrWhiteSpace)
-            || NullAsEmpty(envelope.ValidationExpectations).Any(string.IsNullOrWhiteSpace))
-        {
-            throw CreateRepairableMutationFailure(
-                ModelCorrectionCategory.MutationProposal,
-                MalformedInvocationFailureKind.MutationSchemaMismatch,
-                "Mutation proposal outcomes and validation expectations cannot contain empty values.");
         }
     }
 

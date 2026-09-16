@@ -222,9 +222,34 @@ public sealed class AnthropicRequestMapperTests
         Assert.NotNull(body["messages"]?.AsArray().Last()?["content"]?.AsArray().Last()?["cache_control"]);
         Assert.Equal(AnthropicRequestMapper.Digest(body), prepared.WireDigest);
         Assert.True(prepared.WireEstimate.WireInputTokens >= JsonSerializer.SerializeToUtf8Bytes(body).Length);
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
+        Assert.Contains(prepared.WireEstimate.Components, item => item.Label == request.Tools[0].Name && item.Category == "Tools");
         var uncached = AnthropicRequestMapper.CreateBody(projected, TestAnthropic.Profile(), compatibility with { PromptCachingEnabled = false });
         RemoveCacheControls(body);
         Assert.True(JsonNode.DeepEquals(body, uncached));
+    }
+
+    /// <summary>Escaped per-source byte sizes reconcile without modifying the native body or digest.</summary>
+    [Fact]
+    public void PreparationAccountsEscapedSourceBytesWithoutChangingNativePayload()
+    {
+        const string first = "<agents>中文\"\\</agents>";
+        const string second = "<append>second & \"text\"</append>";
+        var message = TestAnthropic.Message(ModelMessageRole.Developer, "repository-instructions", first + second);
+        var request = TestAnthropic.Request() with { Messages = [message, .. TestAnthropic.Request().Messages] };
+        var original = AnthropicRequestPreparer.Prepare(request, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
+        var sourced = request with
+        {
+            Messages = [message with { Sources = [new("Repository instructions", "AGENTS.md", 0, first.Length), new("Appended prompts", "append.md", first.Length, second.Length)] }, .. TestAnthropic.Request().Messages],
+        };
+        var prepared = AnthropicRequestPreparer.Prepare(sourced, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
+        Assert.Equal(original.WireDigest, prepared.WireDigest);
+        Assert.Equal(original.WireEstimate.WireInputTokens, prepared.WireEstimate.WireInputTokens);
+        var instructions = prepared.WireEstimate.Components[0];
+        Assert.Equal(instructions.Tokens, instructions.Children.Sum(item => item.Tokens));
+        Assert.Equal(JsonEncodedText.Encode(first).EncodedUtf8Bytes.Length, instructions.Children.Single(item => item.Label == "AGENTS.md").Tokens);
+        Assert.Equal(JsonEncodedText.Encode(second).EncodedUtf8Bytes.Length, instructions.Children.Single(item => item.Label == "append.md").Tokens);
+        Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
     }
 
     /// <summary>Exact thinking/text/tool replay remains in chronological position despite sanitized host text and a display toggle.</summary>

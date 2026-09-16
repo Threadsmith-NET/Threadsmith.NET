@@ -120,6 +120,9 @@ internal interface IThemePreferenceStore
 /// <summary>Defines the compiled theme collection.</summary>
 internal static class BuiltInThemes
 {
+    /// <summary>Gets the built-in theme selected when no theme is configured.</summary>
+    internal const string DefaultThemeId = "MarkdownFriendlyDark";
+
     /// <summary>Creates the ordered built-in theme collection.</summary>
     internal static IReadOnlyList<ConfiguredTheme> Create()
     {
@@ -128,7 +131,58 @@ internal static class BuiltInThemes
         Create("forge-dark", "Forge Dark", "#D0D0D0", "#5FAFFF", "brightmagenta", "brightcyan", "brightgreen", "brightred"),
         Create("ocean", "Ocean", "#C6E7FF", "brightcyan", "#FF9FD6", "#5FAFFF", "#67E480", "#FF6B81"),
         Create("high-contrast", "High Contrast", "brightwhite", "brightcyan", "brightyellow", "brightmagenta", "brightgreen", "brightred", accessible: true),
+        CreateMarkdownFriendlyDark(),
     ];
+    }
+
+    /// <summary>Creates the default built-in theme.</summary>
+    internal static ConfiguredTheme CreateDefault() => CreateMarkdownFriendlyDark();
+
+    private static ConfiguredTheme CreateMarkdownFriendlyDark()
+    {
+        KeyValuePair<PresentationTextRole, TuiTextStyle>[] styles =
+        [
+            new(PresentationTextRole.Default, new TuiTextStyle(TuiColor.Parse("#82D1B9"), TuiColor.Parse("#242121"))),
+            new(PresentationTextRole.TitleBarRole, new TuiTextStyle(TuiColor.Parse("white"), TuiColor.Parse("#242121"), TuiTextDecoration.Bold)),
+            new(PresentationTextRole.AgentTabHeaderRole, new TuiTextStyle(TuiColor.Parse("white"), TuiColor.Parse("#242121"))),
+            new(PresentationTextRole.AgentSelectedTabRole, new TuiTextStyle(TuiColor.Parse("brightwhite"), TuiColor.Parse("#000000"), TuiTextDecoration.Bold)),
+            new(PresentationTextRole.AgentNotSelectedTabRole, new TuiTextStyle(TuiColor.Parse("black"), TuiColor.Parse("grey"), TuiTextDecoration.Dim)),
+            new(PresentationTextRole.ComposerBackgroundPaneRole, new TuiTextStyle(Background: TuiColor.Parse("black"))),
+            new(PresentationTextRole.OutputStreamPaneRole, new TuiTextStyle(Background: TuiColor.Parse("#000000"))),
+            new(PresentationTextRole.Brand, new TuiTextStyle(TuiColor.Parse("brightcyan"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.Muted, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.None)),
+            new(PresentationTextRole.DiffContext, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.None)),
+            new(PresentationTextRole.Status, new TuiTextStyle(TuiColor.Parse("cyan"))),
+            new(PresentationTextRole.SessionStatus, new TuiTextStyle(TuiColor.Parse("white"), TuiColor.Parse("#000000"))),
+            new(PresentationTextRole.Hyperlink, new TuiTextStyle(TuiColor.Parse("brightblue"), Decorations: TuiTextDecoration.Underline)),
+            new(PresentationTextRole.ToolSuccess, new TuiTextStyle(TuiColor.Parse("brightgreen"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.ToolFailure, new TuiTextStyle(TuiColor.Parse("brightred"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.Success, new TuiTextStyle(TuiColor.Parse("brightgreen"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.Warning, new TuiTextStyle(TuiColor.Parse("brightyellow"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.Error, new TuiTextStyle(TuiColor.Parse("brightred"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.SelectionPrompt, new TuiTextStyle(TuiColor.Parse("brightcyan"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.SelectionItem, new TuiTextStyle(TuiColor.Parse("#D4D4D4"))),
+            new(PresentationTextRole.SelectionHighlight, new TuiTextStyle(TuiColor.Parse("black"), TuiColor.Parse("brightcyan"), TuiTextDecoration.Bold)),
+            new(PresentationTextRole.UserPrompt, new TuiTextStyle(TuiColor.Parse("brightcyan"))),
+            new(PresentationTextRole.ComposerPrompt, new TuiTextStyle(TuiColor.Parse("brightcyan"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.ThinkingIndicator, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.Italic)),
+            new(PresentationTextRole.Reasoning, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.Italic)),
+            new(PresentationTextRole.DiffAdded, new TuiTextStyle(TuiColor.Parse("brightgreen"))),
+            new(PresentationTextRole.DiffRemoved, new TuiTextStyle(TuiColor.Parse("brightred"))),
+            new(PresentationTextRole.MarkdownHeading, new TuiTextStyle(TuiColor.Parse("brightcyan"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.MarkdownStrong, new TuiTextStyle(TuiColor.Parse("brightwhite"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.MarkdownEmphasis, new TuiTextStyle(TuiColor.Parse("cyan"), Decorations: TuiTextDecoration.Italic)),
+            new(PresentationTextRole.MarkdownStrikethrough, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.Strikethrough)),
+            new(PresentationTextRole.MarkdownCode, new TuiTextStyle(TuiColor.Parse("grey"))),
+            new(PresentationTextRole.MarkdownQuote, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.Dim | TuiTextDecoration.Italic)),
+            new(PresentationTextRole.MarkdownListMarker, new TuiTextStyle(TuiColor.Parse("brightcyan"), Decorations: TuiTextDecoration.Bold)),
+            new(PresentationTextRole.MarkdownTableBorder, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.Dim)),
+        ];
+        return new ConfiguredTheme(
+            "Markdown Friendly Dark",
+            new TuiTheme(DefaultThemeId, styles),
+            TuiThemeUi.Default,
+            true);
     }
 
     private static ConfiguredTheme Create(

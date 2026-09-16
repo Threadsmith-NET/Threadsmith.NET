@@ -51,16 +51,18 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
     public ListFilesTool(IPromptLoader promptLoader, ToolLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
-        _definition = ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
-            "list_files",
-            promptLoader.Get(PromptFileNames.ToolListFilesDescription),
-            ToolCategory.RepositoryInspection,
-            RepositoryTrustLevel.UntrustedInspection,
-            ApprovalLevel.None,
-            ToolSideEffect.ReadOnly,
-            TimeSpan.FromSeconds(10),
-            128 * 1024);
         _limits = limits ?? ToolLimits.Default;
+        _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
+            ToolDefinitionFactory.Create<ListFilesInput, ListFilesOutput>(
+                "list_files",
+                promptLoader.Get(PromptFileNames.ToolListFilesDescription),
+                ToolCategory.RepositoryInspection,
+                RepositoryTrustLevel.UntrustedInspection,
+                ApprovalLevel.None,
+                ToolSideEffect.ReadOnly,
+                TimeSpan.FromSeconds(10),
+                128 * 1024),
+            "maximumEntries");
     }
 
     /// <inheritdoc />
@@ -125,10 +127,10 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
     protected override void ValidateInput(ListFilesInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Path);
-        if (input.MaximumEntries < 0 || input.MaximumEntries > _limits.ListFilesMaxEntries)
+        if (input.MaximumEntries < 0)
         {
             throw new ToolArgumentValidationException(
-                $"maximumEntries must be between 0 and {_limits.ListFilesMaxEntries} (0 uses the host default).");
+                "maximumEntries must be nonnegative (0 uses the host default; larger values are clamped to the host maximum).");
         }
     }
 
@@ -142,7 +144,9 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 
     private int ResolveMaximumEntries(ListFilesInput input)
     {
-        return input.MaximumEntries > 0 ? input.MaximumEntries : _limits.ListFilesDefaultEntries;
+        return input.MaximumEntries > 0
+            ? Math.Min(input.MaximumEntries, _limits.ListFilesMaxEntries)
+            : Math.Min(_limits.ListFilesDefaultEntries, _limits.ListFilesMaxEntries);
     }
 }
 
@@ -457,19 +461,21 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
         ArgumentException.ThrowIfNullOrWhiteSpace(ripgrepExecutable);
-        _definition = ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
-            "search",
-            promptLoader.Render(PromptFileNames.ToolSearchDescription, new Dictionary<string, string>
-            {
-                ["MaximumQueryCharacters"] = (limits ?? ToolLimits.Default).SearchMaximumQueryCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            }),
-            ToolCategory.FileSearch,
-            RepositoryTrustLevel.TrustedRead,
-            ApprovalLevel.None,
-            ToolSideEffect.ReadOnly,
-            TimeSpan.FromSeconds(30),
-            256 * 1024);
         _limits = limits ?? ToolLimits.Default;
+        _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
+            ToolDefinitionFactory.Create<SearchTextInput, SearchTextOutput>(
+                "search",
+                promptLoader.Render(PromptFileNames.ToolSearchDescription, new Dictionary<string, string>
+                {
+                    ["MaximumQueryCharacters"] = _limits.SearchMaximumQueryCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                }),
+                ToolCategory.FileSearch,
+                RepositoryTrustLevel.TrustedRead,
+                ApprovalLevel.None,
+                ToolSideEffect.ReadOnly,
+                TimeSpan.FromSeconds(30),
+                256 * 1024),
+            "maximumMatches");
         _prompts = promptLoader;
         _processManager = processManager;
         _ripgrepExecutable = ripgrepExecutable;
@@ -608,7 +614,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Query);
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Glob);
-        if (input.Query.Length > _limits.SearchMaximumQueryCharacters || input.MaximumMatches < 0 || input.MaximumMatches > _limits.SearchMaxMatches)
+        if (input.Query.Length > _limits.SearchMaximumQueryCharacters || input.MaximumMatches < 0)
         {
             throw new ToolArgumentValidationException(
                 _prompts.Render(
@@ -644,7 +650,9 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 
     private int ResolveMaximumMatches(SearchTextInput input)
     {
-        return input.MaximumMatches > 0 ? input.MaximumMatches : _limits.SearchDefaultMatches;
+        return input.MaximumMatches > 0
+            ? Math.Min(input.MaximumMatches, _limits.SearchMaxMatches)
+            : Math.Min(_limits.SearchDefaultMatches, _limits.SearchMaxMatches);
     }
 
     private async Task<RipgrepSearchAttempt> TryExecuteRipgrepAsync(
@@ -1650,23 +1658,25 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             && (allowedExecutables?.Contains(
                 shellBasename,
                 StringComparer.OrdinalIgnoreCase) ?? false);
-        _definition = ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
-            "run_process",
-            promptLoader.Render(
-                PromptFileNames.ToolRunProcessDescription,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["ShellLanguage"] = GetShellLanguage(_shellExecutable),
-                }),
-            ToolCategory.ProcessExecution,
-            RepositoryTrustLevel.TrustedBuild,
-            requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
-            ToolSideEffect.ExecutesCode,
-            TimeSpan.FromSeconds(_limits.RunProcessMaxTimeoutSeconds),
-            256 * 1024) with
-        {
-            ConversationAvailable = shellAllowed && !requireApproval,
-        };
+        _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
+            ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
+                "run_process",
+                promptLoader.Render(
+                    PromptFileNames.ToolRunProcessDescription,
+                    new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["ShellLanguage"] = GetShellLanguage(_shellExecutable),
+                    }),
+                ToolCategory.ProcessExecution,
+                RepositoryTrustLevel.TrustedBuild,
+                requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
+                ToolSideEffect.ExecutesCode,
+                TimeSpan.FromSeconds(_limits.RunProcessMaxTimeoutSeconds),
+                256 * 1024) with
+            {
+                ConversationAvailable = shellAllowed && !requireApproval,
+            },
+            "timeoutSeconds");
     }
 
     /// <inheritdoc />
@@ -1720,10 +1730,10 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Command);
         if (input.Command.Length > 32 * 1024
             || input.Command.Contains('\0', StringComparison.Ordinal)
-            || input.TimeoutSeconds < 0 || input.TimeoutSeconds > _limits.RunProcessMaxTimeoutSeconds)
+            || input.TimeoutSeconds < 0)
         {
             throw new ToolArgumentValidationException(
-                $"Shell command or timeout exceeds the declared bounds (command must be at most 32768 characters; timeout must be between 0 and {_limits.RunProcessMaxTimeoutSeconds}; 0 uses the host default).");
+                "command must be at most 32768 characters without nulls, and timeoutSeconds must be nonnegative; 0 uses the host default and larger values are clamped to the host maximum.");
         }
     }
 
@@ -1786,7 +1796,9 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
 
     private int ResolveTimeoutSeconds(RunProcessInput input)
     {
-        return input.TimeoutSeconds > 0 ? input.TimeoutSeconds : _limits.RunProcessDefaultTimeoutSeconds;
+        return input.TimeoutSeconds > 0
+            ? Math.Min(input.TimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds)
+            : Math.Min(_limits.RunProcessDefaultTimeoutSeconds, _limits.RunProcessMaxTimeoutSeconds);
     }
 }
 
@@ -1859,6 +1871,68 @@ internal static class ToolDefinitionFactory
             MaximumOutputBytes = maximumOutputBytes,
             RequiresWorkspace = category == ToolCategory.SemanticSearch,
             Scheduling = CreateSchedulingDescriptor(category, sideEffect),
+        };
+    }
+
+    /// <summary>Adds a nonnegative minimum to one generated integer hint.</summary>
+    internal static ToolDefinition WithNonNegativeIntegerHint(ToolDefinition definition, string propertyName)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no object input schema.");
+        var property = schema["properties"]?[propertyName]?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no '{propertyName}' input property.");
+        property["minimum"] = 0;
+        return definition with
+        {
+            InputSchema = definition.InputSchema with { JsonSchema = schema.ToJsonString() },
+        };
+    }
+
+    /// <summary>Constrains one generated string property to closed model-facing values.</summary>
+    internal static ToolDefinition WithStringEnum(
+        ToolDefinition definition,
+        string propertyName,
+        string defaultValue,
+        params string[] values)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(defaultValue);
+        var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no object input schema.");
+        var property = schema["properties"]?[propertyName]?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no '{propertyName}' input property.");
+        property["type"] = "string";
+        property["enum"] = new JsonArray(values.Select(value => JsonValue.Create(value)).ToArray());
+        property["default"] = defaultValue;
+        return definition with
+        {
+            InputSchema = definition.InputSchema with { JsonSchema = schema.ToJsonString() },
+        };
+    }
+
+    /// <summary>Adds bounded nonempty-string constraints to one generated array property.</summary>
+    internal static ToolDefinition WithStringArrayBounds(
+        ToolDefinition definition,
+        string propertyName,
+        int maximumItems)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumItems);
+        var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no object input schema.");
+        var property = schema["properties"]?[propertyName]?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no '{propertyName}' input property.");
+        property["maxItems"] = maximumItems;
+        var item = property["items"]?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no string items schema for '{propertyName}'.");
+        item["minLength"] = 1;
+        return definition with
+        {
+            InputSchema = definition.InputSchema with { JsonSchema = schema.ToJsonString() },
         };
     }
 

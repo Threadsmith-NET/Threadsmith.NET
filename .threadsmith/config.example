@@ -46,7 +46,8 @@
   },
 
   // ── Interactive terminal themes and status (M7.1 plans 25–26) ─────────
-  // Built-ins: system, forge-dark, ocean, high-contrast. Configured themes
+  // Built-ins: MarkdownFriendlyDark (default), system, forge-dark, ocean,
+  // high-contrast. Configured themes
   // replace a matching id as a whole or append in declared order. Theme data
   // is bounded presentation data and cannot contain terminal control sequences.
   "tui": {
@@ -71,7 +72,7 @@
     // Set false to retain terminal-safe source chunk cadence.
     "renderMarkdown": true,
     // Interactive /theme selection writes this key to ordinary user configuration.
-    "defaultTheme": "system",
+    "defaultTheme": "MarkdownFriendlyDark",
     "footer": {
       // Fixed repository footer in TUIKit; composer-adjacent status in the original frontend.
       "enabled": true

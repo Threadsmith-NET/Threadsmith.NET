@@ -498,7 +498,7 @@ internal static class TuiThemeConfigurationLoader
         }
 
         var catalog = new ConfiguredThemeCatalog(themes, warnings);
-        var requestedDefault = configuration?["tui:defaultTheme"] ?? "system";
+        var requestedDefault = configuration?["tui:defaultTheme"] ?? BuiltInThemes.DefaultThemeId;
         if (!catalog.TryGet(requestedDefault, out _))
         {
             warnings.Add($"Unknown default theme '{SafeId(requestedDefault)}'; using system.");

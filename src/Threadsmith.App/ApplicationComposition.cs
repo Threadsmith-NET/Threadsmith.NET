@@ -337,7 +337,7 @@ internal static class ApplicationComposition
                 host.PromptLoader),
             activeTurnCompactionPolicy,
             host.PromptLoader);
-        var conversationContextApplication = new ConversationContextApplication(contextAssembler);
+        var conversationContextApplication = new ConversationContextApplication(contextAssembler, usage);
         TransactionalWorkspaceCoordinator? mutationCoordinator = null;
         var executionRouter = new ExecutionOrchestratorRouter();
         var approvalPolicy = new MutationApprovalPolicyService(

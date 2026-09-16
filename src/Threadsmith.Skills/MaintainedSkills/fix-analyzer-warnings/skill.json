@@ -87,15 +87,8 @@
                    "toolCalls":  24,
                    "mutations":  16,
                    "validationAttempts":  4,
-                   "delegatedChildren":  8,
-                   "parallelChildren":  4,
-                   "worktrees":  2,
-                   "reviewerFindings":  128,
                    "wallTime":  "00:20:00"
                },
-    "agents":  [
-
-               ],
     "workflow":  {
                      "schemaVersion":  1,
                      "workflowId":  "fix-analyzer-warnings",

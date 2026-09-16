@@ -79,16 +79,6 @@ The available `review` input fields are:
 
 There is no `prUrl` field in this input schema. Supply a PR link in natural language or in `instructions`, along with enough information to identify the target.
 
-### The `review-pr` alternative
-
-`Maintained:review-pr@1.0.0` uses the same lead prompt and specialist roles, but accepts an explicit change summary, paths, and optional focus areas. Verify and enable that package separately if using it:
-
-```text
-/skills use Maintained:review-pr@1.0.0 {"changeSummary":"Rotate raw model logs at startup and on /new, preserving previous sessions with numbered archives.","paths":["src/Threadsmith.Models/ModelExchangeLogging.cs","src/Threadsmith.Execution/SessionLifecycleApplication.cs","src/Threadsmith.App/ModelComposition.cs","tests/Threadsmith.ModelTooling.Tests/JsonlModelExchangeLogTests.cs"],"focus":["correctness","tests","architecture"]}
-```
-
-Despite its name, `review-pr` takes a change description and paths, not a PR URL.
-
 ## Invoke through natural language
 
 You do not need to write JSON in conversation. With `invoke_skill` available and the package enabled, ask the model to use the exact skill and describe the target. The model constructs the input and calls the normal skill tool.
@@ -167,7 +157,7 @@ The behavior above describes the current shipped prompts. The lead's instruction
 
 | Purpose | Source file |
 | --- | --- |
-| Lead for both `review` and `review-pr` | `src/Threadsmith.Skills/Prompts/Skill-Review.md` |
+| Lead | `src/Threadsmith.Skills/Prompts/Skill-Review.md` |
 | Security | `src/Threadsmith.Execution/Prompts/System-ChildAgent-SecurityReviewer.md` |
 | Tests | `src/Threadsmith.Execution/Prompts/System-ChildAgent-TestReviewer.md` |
 | Performance | `src/Threadsmith.Execution/Prompts/System-ChildAgent-PerformanceReviewer.md` |

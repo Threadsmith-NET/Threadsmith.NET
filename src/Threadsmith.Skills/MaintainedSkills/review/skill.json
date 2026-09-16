@@ -57,13 +57,8 @@
     "toolCalls": 128,
     "mutations": 1,
     "validationAttempts": 0,
-    "delegatedChildren": 4,
-    "parallelChildren": 4,
-    "worktrees": 0,
-    "reviewerFindings": 128,
     "wallTime": "00:20:00"
   },
-  "agents": [],
   "workflow": {
     "schemaVersion": 1,
     "workflowId": "review",

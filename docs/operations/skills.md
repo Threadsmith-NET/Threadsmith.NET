@@ -94,7 +94,7 @@ Each actual model request owns its advertised registration and scope snapshot th
 
 - `fix-analyzer-warnings` — verifies supplied diagnostics and proposes a bounded remediation plan; it never adds blanket suppression or edits directly.
 - `upgrade-package` — assesses a Central Package Management upgrade and proposes compatibility, rollback, build, and test steps; it never restores or accesses the network implicitly.
-- `review-pr` — gathers change evidence, requests specialists, and synthesizes their responses through the ordinary model procedure and available tools.
+- `review` — gathers change evidence, calls the ordinary `delegate_agents` tool for five prompted specialists, and synthesizes their responses through the model procedure.
 - `threadsmith-docs-help` — answers natural Threadsmith usage and authoring questions from the packaged `ThreadsmithDocs` bundle. It receives only `search` and `read_file`, both rebound to that bundle, and returns bounded local citations or an explicit documentation gap. The host strictly validates bundle confinement and cited path/range existence. It canonicalizes headings when available, opportunistically expands recognizable snippet elisions, and normalizes status/citation consistency. Presentation-level model choices do not fail an otherwise valid cited answer.
 
 They use the same manifest, hash, schema, content loader, model/tool, workflow, persistence, and event pipeline as third-party packages.
@@ -115,7 +115,7 @@ Events and persisted records contain immutable identity/digest, scope/source, ve
 
 For a walkthrough with Threadsmith examples, specialist responsibilities, and report sections, see the [code review user guide](../code-review.md).
 
-`/skills use Maintained:review@1.0.0 {"mode":"remoteBranch","repository":"https://example.org/team/repo.git","branch":"feature","baseBranch":"main"}` invokes the selected TUI model. Current-branch and special-instruction inputs remain supported, as do optional paths and requirements documents. `review-pr` keeps its changeSummary/paths/focus input and uses the same lead prompt.
+`/skills use Maintained:review@1.0.0 {"mode":"remoteBranch","repository":"https://example.org/team/repo.git","branch":"feature","baseBranch":"main"}` invokes the selected TUI model. Current-branch and special-instruction inputs remain supported, as do optional paths and requirements documents.
 
 Edit `prompts/Skill-Review.md` to change acquisition, delegation, structured response guidance, synthesis and delivery. Edit `prompts/System-ChildAgent-{SecurityReviewer,TestReviewer,PerformanceReviewer,ArchitectureReviewer,BugReviewer}.md` to change role focus. Restart after editing: the normal prompt cache loads at startup.
 

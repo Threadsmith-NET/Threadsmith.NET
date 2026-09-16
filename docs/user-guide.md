@@ -1517,7 +1517,6 @@ Maintained packages are enabled after their shipped integrity verifies:
 - `fix-analyzer-warnings` — investigates supplied analyzer diagnostics and proposes a governed remediation plan;
 - `upgrade-package` — assesses one Central Package Management upgrade and proposes compatibility/rollback/validation steps;
 - `review` — reviews branch changes or a focused request with security, test, performance, bug, and architecture specialists, then synthesizes a Markdown report;
-- `review-pr` — uses the same review prompt with an explicit change summary, paths, and focus areas;
 - `threadsmith-docs-help` — answers Threadsmith product and authoring questions from the installed local documentation bundle with exact path, heading, line, and snippet citations.
 
 For a natural question such as “How do I compact context?”, the model prefers `threadsmith-docs-help` when `invoke_skill`, the maintained package, current trust, and a compatible model are available. The skill can use only existing `search` and `read_file` capabilities rebound to `ThreadsmithDocs`; it cannot inspect the opened repository, access the network or secrets, execute processes, or mutate anything. If the shipped docs are missing or do not answer the question, it returns `partial` or `unavailable` and states the gap instead of guessing. Shipped documentation is evidence, not policy, and cannot override current host behavior, user instructions, approvals, or repository instructions.
@@ -1589,52 +1588,11 @@ Examples:
 2. For inexpensive analyzer planning, leave `allowedProfiles` empty and configure a compatible default or lower-cost `Planning`/`CodeEdit` model.
 3. For a large review, raise the model's configured context window only when the provider really supports it; a skill cannot override the provider profile or its host-level context ceiling.
 
-### Skills that propose subagents
+### Skills that use subagents
 
-A custom skill may declare bounded Plan-38 role templates and emit only `ProposeDelegation` or `RequestReviews`. It cannot create tasks, choose concurrency dynamically, recurse into another delegation layer, or start children itself. This abbreviated authoring fragment declares two eligible reviewers:
+A native skill procedure can call the ordinary `delegate_agents` tool when that tool is required or inherited and enabled for the invocation. The procedure prompt supplies the requested roles, tasks, context, and assignment count. Skill manifests do not declare agent templates, child counts, concurrency, worktrees, or reviewer-finding limits.
 
-```json
-{
-  "budget": {
-    "delegatedChildren": 2,
-    "parallelChildren": 2,
-    "worktrees": 0,
-    "reviewerFindings": 32
-  },
-  "agents": [
-    {
-      "role": "SecurityReviewer",
-      "maximumChildren": 1,
-      "outputSchemaPath": "schemas/reviewer-output.json",
-      "budget": { "modelTokens": 12000, "toolCalls": 12, "evidenceItems": 32, "files": 64, "bytes": 4194304, "mutations": 0, "processes": 0, "builds": 0, "tests": 0, "corrections": 0, "wallTime": "00:05:00" }
-    },
-    {
-      "role": "TestReviewer",
-      "maximumChildren": 1,
-      "outputSchemaPath": "schemas/reviewer-output.json",
-      "budget": { "modelTokens": 12000, "toolCalls": 12, "evidenceItems": 32, "files": 64, "bytes": 4194304, "mutations": 0, "processes": 0, "builds": 0, "tests": 0, "corrections": 0, "wallTime": "00:05:00" }
-    }
-  ],
-  "workflow": {
-    "schemaVersion": 1,
-    "workflowId": "review-with-specialists",
-    "steps": [
-      { "stepId": "scope", "kind": "invokeProcedure", "dependsOn": [], "instructionAsset": "instructions/scope.md", "inputSchemaAsset": "schemas/input.json", "outputSchemaAsset": "schemas/delegation-request.json", "maximumIterations": 1 },
-      { "stepId": "request-reviews", "kind": "requestReviews", "dependsOn": [ "scope" ], "outputSchemaAsset": "schemas/delegation-result.json", "maximumIterations": 1 }
-    ]
-  }
-}
-```
-
-The complete manifest must still declare and hash every referenced asset and satisfy aggregate package/host budgets; see [Declarative skill authoring](skill-authoring.md). At runtime:
-
-1. `/skills use` runs the bounded `scope` procedure with the selected skill model.
-2. The workflow pauses and displays the complete typed `ProposeDelegation` payload.
-3. The host validates that request against the delegation policy: current trust, sensitivity, approved plan where mutation is involved, eligible roles, one-level depth, paths, tools, models, deadlines, child/aggregate budgets, and non-overlap all still apply.
-4. Only an accepted host request creates a delegation ID, which the TUI prints immediately. Use bare `/agents` to list observed delegation and assignment IDs, inspect with `/agents <delegation-id>`, and cancel with `/agents <delegation-id> cancel` or `cancel-child <assignment-id>`.
-5. After the delegation reaches its authoritative structured join, the adapter supplies that real result through `/skills continue <invocation-id> <delegation-result-json>`. The next workflow step receives only the schema-valid structured result—not raw child transcripts or hidden reasoning.
-
-Model selection is hierarchical. The skill model selected above prepares the proposal; each accepted child receives a host-selected model/reasoning choice constrained by the parent, repository policy, role template, sensitivity, and remaining aggregate budget. A package preference can narrow candidates but cannot force an incompatible model, elevate a child, or bypass the parent ledger. Assignments using the isolated-worker APIs additionally require an approved plan, host-proven non-overlapping ownership, isolated worktrees, parent restaging, a fresh aggregate diff decision, and aggregate validation.
+The host validates every `delegate_agents` call through the same policy used by conversation turns. Trusted `agents:delegation:maximumAgents` configuration caps assignments in one call, while the global and per-parent concurrency settings control how many admitted children run simultaneously. Trust, sensitivity, one-level depth, tool access, model routing, cancellation, and child resource limits remain host-owned. Model selection is hierarchical: each accepted child receives a host-selected model and reasoning choice constrained by the parent and repository policy. A skill cannot force an incompatible model, elevate a child, or bypass the parent ledger.
 
 ### Package lifecycle example
 

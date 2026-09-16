@@ -9,9 +9,7 @@ public sealed partial class SkillSubsystemTests
     /// <summary>Verification alone publishes maintained enablement without changing external policy.</summary>
     [Theory]
     [InlineData("review", false)]
-    [InlineData("review-pr", false)]
     [InlineData("review", true)]
-    [InlineData("review-pr", true)]
     public async Task CompatibleCatalog_VerifyMaintained_UpdatesListAndInspect(string skillId, bool disabled)
     {
         // Arrange: include the same native package at another scope and a Claude candidate.

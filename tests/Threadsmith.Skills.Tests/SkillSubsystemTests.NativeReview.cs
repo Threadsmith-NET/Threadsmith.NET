@@ -12,11 +12,11 @@ using Xunit;
 public sealed partial class SkillSubsystemTests
 {
     /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
-    [Theory]
-    [InlineData("review", "{}")]
-    [InlineData("review-pr", "{\"changeSummary\":\"Inspect change\",\"paths\":[\"tracked.txt\"]}")]
-    public async Task NativeReview_FailedResponseResumesThroughSelectedModel(string selector, string input)
+    [Fact]
+    public async Task NativeReview_FailedResponseResumesThroughSelectedModel()
     {
+        const string selector = "review";
+        const string input = "{}";
         var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
         await catalog.RefreshAsync();
         var verifier = new SkillPackageVerifier(new SkillTrustPolicySnapshot());
@@ -26,6 +26,7 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(SkillWorkflowStepKind.InvokeProcedure, step.Kind);
         Assert.Equal(PromptFileNames.SkillReview, step.PromptFile);
         Assert.Null(step.InstructionAsset);
+        Assert.Contains("delegate_agents", candidate.Metadata.Requirements.RequiredTools);
         var selected = ModelProfileId.New();
         var current = selected;
         var other = ModelProfileId.New();
@@ -74,6 +75,11 @@ public sealed partial class SkillSubsystemTests
             Assert.Equal(selected, item.ResolvedProfileId);
             Assert.Equal(ReasoningLevel.Medium, item.ReasoningLevel);
             Assert.Contains("Call delegate_agents", item.Input, StringComparison.Ordinal);
+            Assert.Contains("SecurityReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("TestReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("PerformanceReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("BugReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("ArchitectureReviewer", item.Input, StringComparison.Ordinal);
         });
     }
 

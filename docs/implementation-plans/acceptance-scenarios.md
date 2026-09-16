@@ -179,7 +179,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 6. User reviews the exact staged diff under the current mutation policy. The host applies authorized changes transactionally, builds affected projects, runs explained selected tests, and records authoritative results.
 7. Cancel and restart at a durable workflow boundary, then explicitly resume.
 8. Repeat with a tampered package, unsigned/unallowlisted digest, incompatible model, disabled required tool, insufficient trust, excessive schema/body, path traversal, prompt instructions claiming approval, and a revoked package between steps.
-9. Invoke maintained `upgrade-package` and `review-pr` workflows against deterministic fixtures; authorize `review-pr` to propose delegated security, test, performance, and architecture reviewers, and verify the skill cannot create/schedule children itself.
+9. Invoke maintained `upgrade-package` and `review` workflows against deterministic fixtures; let the `review` procedure call the ordinary `delegate_agents` tool for its five prompted specialists, and verify trusted `agents:delegation:maximumAgents` configuration remains authoritative.
 
 **Verifies:** centralized tool and trust policy, governed context and structured plans, extension-versus-skill isolation, durable provenance/restoration, mutation policy/model compatibility, transactional execution/checkpointing, governed parallel-agent requests, and scoped metadata-first verified skills/workflows. No skill content grants capabilities, creates agents directly, or bypasses planning, scheduling/integration, exact-diff approval, transactions, validation, cancellation, or authoritative evidence.
 

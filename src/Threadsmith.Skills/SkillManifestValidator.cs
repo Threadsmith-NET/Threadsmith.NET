@@ -3,7 +3,7 @@ namespace Threadsmith.Skills;
 using System.Text.RegularExpressions;
 using Threadsmith.Core;
 
-/// <summary>Validates bounded declarative requirements, budgets, workflows, and agent templates.</summary>
+/// <summary>Validates bounded declarative requirements, budgets, and workflows.</summary>
 internal static partial class SkillManifestValidator
 {
     private static readonly HashSet<string> ProhibitedDirectTools = new(StringComparer.OrdinalIgnoreCase)
@@ -88,11 +88,6 @@ internal static partial class SkillManifestValidator
             || budget.ToolCalls < 0
             || budget.Mutations < 0
             || budget.ValidationAttempts < 0
-            || budget.DelegatedChildren < 0
-            || budget.ParallelChildren < 0
-            || budget.ParallelChildren > budget.DelegatedChildren
-            || budget.Worktrees < 0
-            || budget.ReviewerFindings < 0
             || budget.WallTime <= TimeSpan.Zero
             || budget.WallTime.TotalMilliseconds > uint.MaxValue - 1d)
         {
@@ -179,37 +174,6 @@ internal static partial class SkillManifestValidator
         if (iterations > budget.WorkflowSteps || modelTurns > budget.ModelTurns)
         {
             throw new InvalidDataException("Skill workflow iterations exceed the declared aggregate budget.");
-        }
-    }
-
-    /// <summary>Validates bounded Plan-38 templates against package assets and budgets.</summary>
-    internal static void ValidateAgents(
-        IReadOnlyList<SkillAgentTemplate> agents,
-        IReadOnlyList<SkillAssetMetadata> assets,
-        SkillBudget budget)
-    {
-        ArgumentNullException.ThrowIfNull(agents);
-        if (agents.Sum(item => (long)item.MaximumChildren) > budget.DelegatedChildren)
-        {
-            throw new InvalidDataException("Skill agent templates exceed the delegation budget.");
-        }
-
-        var paths = assets.Select(item => item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var agent in agents)
-        {
-            if (agent.MaximumChildren < 1 || !paths.Contains(agent.OutputSchemaPath))
-            {
-                throw new InvalidDataException("Skill agent template is invalid or references a missing schema.");
-            }
-
-            var child = agent.Budget;
-            if (child.ModelTokens < 0 || child.ToolCalls < 0 || child.EvidenceItems < 0
-                || child.Files < 0 || child.Bytes < 0 || child.Mutations < 0
-                || child.Processes < 0 || child.Builds < 0 || child.Tests < 0
-                || child.Corrections < 0 || child.WallTime <= TimeSpan.Zero)
-            {
-                throw new InvalidDataException("Skill agent budget must be finite and non-negative.");
-            }
         }
     }
 

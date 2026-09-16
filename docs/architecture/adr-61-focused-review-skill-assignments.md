@@ -4,7 +4,7 @@ Status: Amended; the original private-review workflow is retired.
 
 ## Decision
 
-The maintained `review` and `review-pr` packages are ordinary native model procedures. Their editable `prompts/Skill-Review.md` directs evidence gathering with advertised tools, five specialist assignments through `delegate_agents`, structured response guidance, model synthesis and delivery through `write_file` or the window.
+The maintained `review` package is an ordinary native model procedure. Its editable `prompts/Skill-Review.md` directs evidence gathering with advertised tools, five specialist assignments through `delegate_agents`, structured response guidance, model synthesis and delivery through `write_file` or the window.
 
 The root uses the selected session model and reasoning frozen at invocation. Children use ordinary role configuration, falling back to that parent selection. Native model calls capture the same request-lifetime tool registrations as conversations and release them after tool execution/child joining. Host trust, tool enablement, approvals, scheduling and cancellation remain authoritative.
 

@@ -70,6 +70,29 @@ public sealed partial class SkillSubsystemTests
         Assert.False(candidate.Enabled);
     }
 
+    /// <summary>Removed per-skill agent settings are rejected instead of being silently ignored.</summary>
+    [Theory]
+    [InlineData("agents")]
+    [InlineData("delegatedChildren")]
+    public async Task CatalogRefresh_RejectsRemovedAgentConfiguration(string property)
+    {
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var manifestPath = Path.Combine(package.PackageRoot, "skill.json");
+        var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
+        if (property == "agents")
+        {
+            manifest[property] = new JsonArray();
+        }
+        else
+        {
+            manifest["budget"]!.AsObject()[property] = 5;
+        }
+
+        await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+
+        await Assert.ThrowsAsync<JsonException>(() => package.CreateCatalog(SkillScope.User).RefreshAsync());
+    }
+
     /// <summary>Verifies all maintained packages discover and integrity-verify.</summary>
     [Fact]
     public async Task MaintainedCatalog_ContainsVerifiedWorkflows()
@@ -88,12 +111,12 @@ public sealed partial class SkillSubsystemTests
         ];
 
         // Assert
-        Assert.Equal(5, verified.Length);
+        Assert.Equal(4, verified.Length);
         Assert.All(verified, item => Assert.Equal(SkillVerificationState.Maintained, item.Verification));
         Assert.All(verified, item => Assert.True(item.Enabled));
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "fix-analyzer-warnings");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "upgrade-package");
-        Assert.Contains(verified, item => item.Metadata.SkillId.Value == "review-pr");
+        Assert.Contains(verified, item => item.Metadata.SkillId.Value == "review");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "threadsmith-docs-help");
     }
 
@@ -732,7 +755,7 @@ public sealed partial class SkillSubsystemTests
         var source = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
         var discovered = (await source.RefreshAsync()).Candidates.Single(item =>
-            item.Metadata.SkillId.Value == "review-pr");
+            item.Metadata.SkillId.Value == "review");
         var first = discovered with
         {
             Metadata = discovered.Metadata with { Version = "1.0.0" },
@@ -779,7 +802,7 @@ public sealed partial class SkillSubsystemTests
                 InvocationId = SkillInvocationId.New(),
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
-                Selector = "review-pr",
+                Selector = "review",
                 InputJson = "{}",
                 Trust = RepositoryTrustLevel.TrustedRead,
                 Phase = RunPhase.EvidenceCollection,

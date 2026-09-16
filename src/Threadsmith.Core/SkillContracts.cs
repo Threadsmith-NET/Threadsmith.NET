@@ -260,36 +260,8 @@ public sealed record SkillBudget
     /// <summary>Maximum validation attempts.</summary>
     public int ValidationAttempts { get; init; } = 4;
 
-    /// <summary>Maximum delegated children.</summary>
-    public int DelegatedChildren { get; init; } = 8;
-
-    /// <summary>Maximum parallel children.</summary>
-    public int ParallelChildren { get; init; } = 4;
-
-    /// <summary>Maximum managed worktrees.</summary>
-    public int Worktrees { get; init; } = 2;
-
-    /// <summary>Maximum reviewer findings.</summary>
-    public int ReviewerFindings { get; init; } = 128;
-
     /// <summary>Maximum wall-clock duration.</summary>
     public TimeSpan WallTime { get; init; } = TimeSpan.FromMinutes(20);
-}
-
-/// <summary>Optional bounded Plan-38 role template declared by a skill.</summary>
-public sealed record SkillAgentTemplate
-{
-    /// <summary>Eligible child role.</summary>
-    public required AgentRole Role { get; init; }
-
-    /// <summary>Maximum children with this role.</summary>
-    public int MaximumChildren { get; init; } = 1;
-
-    /// <summary>Structured result schema asset path.</summary>
-    public required string OutputSchemaPath { get; init; }
-
-    /// <summary>Role-specific resource ceiling.</summary>
-    public AgentResourceBudget Budget { get; init; } = new();
 }
 
 /// <summary>One node in a bounded declarative acyclic workflow.</summary>
@@ -380,9 +352,6 @@ public sealed record SkillManifestMetadata
 
     /// <summary>Package resource ceilings.</summary>
     public SkillBudget Budget { get; init; } = new();
-
-    /// <summary>Optional child-role templates.</summary>
-    public IReadOnlyList<SkillAgentTemplate> Agents { get; init; } = [];
 
     /// <summary>Declarative workflow graph.</summary>
     public required SkillWorkflowDefinition Workflow { get; init; }

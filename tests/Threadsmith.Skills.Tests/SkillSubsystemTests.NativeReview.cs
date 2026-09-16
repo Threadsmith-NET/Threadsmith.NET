@@ -11,7 +11,7 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
-    /// <summary>Review is one ordinary procedure; failure diagnostics survive and explicit retry uses the frozen model.</summary>
+    /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
     [Theory]
     [InlineData("review", "{}")]
     [InlineData("review-pr", "{\"changeSummary\":\"Inspect change\",\"paths\":[\"tracked.txt\"]}")]
@@ -63,6 +63,12 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(20, counters.InputTokens);
         Assert.Equal(4, counters.OutputTokens);
         Assert.False(counters.HasUnknownUsage);
+        var requestStatus = usage.GetRequestStatus(request.SessionId);
+        var contextUsage = Assert.IsType<ContextUsageSnapshot>(requestStatus?.ContextUsage);
+        var requestEstimate = Assert.IsType<ModelWireEstimate>(model.Requests[^1].WireEstimate);
+        Assert.Equal("skill-procedure", contextUsage.Stage);
+        Assert.Equal((long)requestEstimate.WireInputTokens, contextUsage.InputTokens);
+        Assert.Equal(contextUsage.InputTokens, contextUsage.Components.Sum(item => item.Tokens));
         Assert.All(model.Requests, item =>
         {
             Assert.Equal(selected, item.ResolvedProfileId);

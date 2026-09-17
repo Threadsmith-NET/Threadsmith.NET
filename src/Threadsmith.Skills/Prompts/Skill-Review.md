@@ -55,10 +55,15 @@ Note that the the ArchitectureReviewer may include one or more mermaid architecu
 "AI code reviews can be a useful code-quality tool, but should be considered advisory and not authoritative. They are best used in conjunction with human reviews." 
 6. **Persist or Stream report**  Inspect whether the invoking repository already has an .inbox directory. When it exists and write_file
 is available, save the full Markdown there with a unique review-<timestamp>.md name using write_file
-with explicit content. Do not use useLastResponse: it refers to a previous archived response. Otherwise
-return the full Markdown to the window. If saving fails, return the report to the window and explain
-the failure; never claim a file was saved without a successful tool result.
+with explicit content. Do not use useLastResponse: it refers to a previous archived response. If the
+write succeeds, the final declared output must use delivery "artifact", include artifact.path and
+artifact.bytesWritten from the write_file result, and keep response concise; do not include the full
+Markdown report body in response when delivery is "artifact". Otherwise, including when .inbox does not
+exist or saving fails, return the full Markdown report in response with delivery "inline"; when saving
+failed, include the save failure in the Markdown. Never claim a file was saved without a successful
+write_file result.
 7. **Return the declared output JSON** succeeded is false when the review could not be performed (including
-all specialists failing), otherwise true. response is the full Markdown when displaying it in the
-window, or a concise verdict, coverage/failure summary and Markdown link to the successfully saved
-report. Finding defects does not itself mean the review execution failed.
+all specialists failing), otherwise true. For delivery "inline", response is the full Markdown report
+for display in the window. For delivery "artifact", response is only a concise verdict,
+coverage/failure summary and Markdown link to the successfully saved report, and artifact contains the
+saved path and byte count. Finding defects does not itself mean the review execution failed.

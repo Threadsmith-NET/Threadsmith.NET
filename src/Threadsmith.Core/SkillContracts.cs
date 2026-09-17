@@ -592,6 +592,28 @@ public sealed record SkillHostActionProposal
     public required string PayloadJson { get; init; }
 }
 
+/// <summary>One externally visible side effect produced by a skill-owned tool call.</summary>
+public sealed record SkillSideEffectRecord
+{
+    /// <summary>Stable side-effect kind.</summary>
+    public required string Kind { get; init; }
+
+    /// <summary>Tool that produced the side effect.</summary>
+    public required string ToolId { get; init; }
+
+    /// <summary>Tool invocation that produced the side effect when known.</summary>
+    public ToolInvocationId? ToolInvocationId { get; init; }
+
+    /// <summary>Repository-relative or absolute path associated with the side effect, when any.</summary>
+    public string? Path { get; init; }
+
+    /// <summary>Produced byte count, when any.</summary>
+    public long? BytesWritten { get; init; }
+
+    /// <summary>When the host observed the side effect.</summary>
+    public required DateTimeOffset RecordedAt { get; init; }
+}
+
 /// <summary>One durable completed or waiting workflow step.</summary>
 public sealed record SkillWorkflowStepResult
 {
@@ -627,6 +649,9 @@ public sealed record SkillWorkflowStepResult
 
     /// <summary>Artifact references retained by the host.</summary>
     public IReadOnlyList<ExecutionArtifactReference> Artifacts { get; init; } = [];
+
+    /// <summary>Externally visible side effects produced while executing this step.</summary>
+    public IReadOnlyList<SkillSideEffectRecord> SideEffects { get; init; } = [];
 
     /// <summary>When the step reached this state.</summary>
     public required DateTimeOffset RecordedAt { get; init; }
@@ -900,7 +925,8 @@ public sealed class SkillCheckpointConflictException : InvalidOperationException
 public sealed record SkillProcedureResult(
     string OutputJson,
     int ModelTurns,
-    int ToolCalls);
+    int ToolCalls,
+    IReadOnlyList<SkillSideEffectRecord>? SideEffects = null);
 
 /// <summary>Runs one bounded procedure model turn and returns schema-targeted JSON.</summary>
 public interface ISkillProcedureRunner

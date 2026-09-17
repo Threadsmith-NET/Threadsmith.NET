@@ -383,6 +383,9 @@ public sealed partial class SkillSubsystemTests
         }
 
         var input = Assert.IsType<InspectSkillInput>(tool.DeserializeInput("{\"selector\":\"review\"}"));
+        Assert.Equal("inspect review", tool.GetActivityDetail(input));
+        Assert.Equal("search review", tool.GetActivityDetail(new InspectSkillInput { Query = "review" }));
+        Assert.Equal("list enabled verified skills", tool.GetActivityDetail(new InspectSkillInput()));
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), PermissionContext());

@@ -301,6 +301,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
 
         var latest = checkpoint;
+        SkillWorkflowStep? interruptedStep = null;
+        var interruptedIteration = 0;
         try
         {
             var running = checkpoint with
@@ -333,6 +335,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 var remainingToolCalls = plan.EffectiveBudget.ToolCalls
                     - current.Steps.Sum(item => item.ToolCalls);
                 var input = ResolveStepInput(step, current);
+                interruptedStep = step;
+                interruptedIteration = iteration;
                 var result = await ExecuteStepAsync(
                     candidate,
                     plan,
@@ -343,6 +347,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                     remainingModelTurns,
                     remainingToolCalls,
                     source.Token);
+                interruptedStep = null;
+                interruptedIteration = 0;
                 current = current with
                 {
                     Steps = [.. current.Steps, result],
@@ -384,18 +390,42 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             await PublishCompletionAsync(completed, reason, CancellationToken.None);
             return CreateResult(completed, reason);
         }
-        catch (OperationCanceledException) when (source.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (source.IsCancellationRequested)
         {
+            var interruptedSideEffects = SkillProcedureInterruption.GetSideEffects(exception);
+            var cancelledSteps = latest.Steps;
+            if (interruptedStep is not null
+                && interruptedSideEffects.Count > 0
+                && !cancelledSteps.Any(item => string.Equals(item.StepId, interruptedStep.StepId, StringComparison.Ordinal)
+                    && item.Iteration == interruptedIteration))
+            {
+                cancelledSteps =
+                [
+                    .. cancelledSteps,
+                    new SkillWorkflowStepResult
+                    {
+                        StepId = interruptedStep.StepId,
+                        Kind = interruptedStep.Kind,
+                        Iteration = interruptedIteration,
+                        Succeeded = false,
+                        SideEffects = interruptedSideEffects,
+                        RecordedAt = DateTimeOffset.UtcNow,
+                    },
+                ];
+            }
+
             var cancelled = latest with
             {
+                Steps = cancelledSteps,
                 Status = SkillInvocationStatus.Cancelled,
                 NextAction = GetPromptValue(
                     PromptFileNames.SkillWorkflowNextActionResumeAfterCompletePackageHostPolicyRevalidation),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
+            var reason = CreateInterruptedReason(cancelled);
             await SaveAsync(cancelled, VersionOf(latest), CancellationToken.None);
-            await PublishCompletionAsync(cancelled, "workflow cancelled", CancellationToken.None);
-            throw;
+            await PublishCompletionAsync(cancelled, reason, CancellationToken.None);
+            return CreateResult(cancelled, reason);
         }
         catch (SkillCheckpointConflictException)
         {
@@ -500,6 +530,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 ContentTokens = content.Sum(item => item.EstimatedTokens),
                 ModelTurns = procedure.ModelTurns,
                 ToolCalls = procedure.ToolCalls,
+                SideEffects = procedure.SideEffects ?? [],
                 RecordedAt = DateTimeOffset.UtcNow,
             };
         }
@@ -813,6 +844,25 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 checkpoint.Status,
                 reason),
             cancellationToken);
+    }
+
+    private static string CreateInterruptedReason(SkillWorkflowCheckpoint checkpoint)
+    {
+        var sideEffects = checkpoint.Steps.SelectMany(item => item.SideEffects).ToArray();
+        if (sideEffects.Length == 0)
+        {
+            return "workflow timed out or was cancelled before completion; operation state is unknown";
+        }
+
+        var artifacts = sideEffects
+            .Where(item => item.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(item.Path))
+            .Select(item => item.Path ?? string.Empty)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return artifacts.Length == 0
+            ? "workflow timed out or was cancelled after producing side effects"
+            : $"workflow timed out or was cancelled after writing artifact {string.Join(", ", artifacts)}";
     }
 
     private static SkillWorkflowStep FindNextStep(

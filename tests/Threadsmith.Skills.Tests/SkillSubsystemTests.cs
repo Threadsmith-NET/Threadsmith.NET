@@ -424,6 +424,7 @@ public sealed partial class SkillSubsystemTests
         // Act
         var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
             "{\"selector\":\"test-skill\",\"input\":{\"scope\":\"current\"}}"));
+        Assert.Equal("invoke test-skill", tool.GetActivityDetail(input));
         var execution = await tool.ExecuteAsync(
             input,
             context);
@@ -490,6 +491,37 @@ public sealed partial class SkillSubsystemTests
         };
 
         Assert.Throws<ArgumentOutOfRangeException>(limits.Validate);
+    }
+
+    /// <summary>Duplicate invoke_skill retries return the existing invocation state instead of launching replacement work.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_DuplicateRetry_ReusesExistingInvocationResult()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new CapturingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+
+        var first = await tool.ExecuteAsync(input, context);
+        var duplicate = await tool.ExecuteAsync(input, context);
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
+        Assert.Contains("Do not run a replacement review workflow", duplicate.Value.Reason, StringComparison.Ordinal);
+        Assert.Contains("Do not run a replacement review workflow", duplicate.ModelResultContent, StringComparison.Ordinal);
     }
 
     /// <summary>A stringified structured input receives provider-neutral corrective guidance.</summary>
@@ -1271,6 +1303,8 @@ public sealed partial class SkillSubsystemTests
 
         public string ResultReason { get; init; } = "test complete";
 
+        public int Executions { get; private set; }
+
         internal SkillInvocationRequest? Request { get; private set; }
 
         public Task<SkillInvocationResult> InvokeAsync(
@@ -1278,6 +1312,7 @@ public sealed partial class SkillSubsystemTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Executions++;
             Request = request;
             var package = PackageIdentity();
             var checkpoint = new SkillWorkflowCheckpoint

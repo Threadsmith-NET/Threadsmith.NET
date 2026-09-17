@@ -219,6 +219,33 @@ public sealed class PrFetchTests
         Assert.True(pages[^1].DeliveryComplete);
     }
 
+    /// <summary>Visible activity detail distinguishes PR fetch pagination without exposing cursor values.</summary>
+    [Fact]
+    public async Task ActivityDetailShowsKindAndPaginationState()
+    {
+        using var handler = new PrHandler(false) { MultipleFilePages = true };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new TestSecrets(), Options(false), false);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var context = Context(scope);
+        var input = Input(false) with { Kind = PrFetchKind.Inventory };
+
+        var startedDetail = tool.GetActivityDetail(input);
+        Assert.Contains("account · inventory · first page", startedDetail, StringComparison.Ordinal);
+
+        var first = await tool.ExecuteAsync(input, context);
+        Assert.Contains("account · inventory · metadata · first page", first.TransientActivityDetail, StringComparison.Ordinal);
+        Assert.Contains("cursor returned", first.TransientActivityDetail, StringComparison.Ordinal);
+        Assert.Contains("acquisition pending", first.TransientActivityDetail, StringComparison.Ordinal);
+
+        var nextInput = input with { Cursor = first.Value.Cursor };
+        Assert.Contains("account · inventory · continuation", tool.GetActivityDetail(nextInput), StringComparison.Ordinal);
+
+        var next = await tool.ExecuteAsync(nextInput, context);
+        Assert.Contains("continuation", next.TransientActivityDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain(first.Value.Cursor ?? string.Empty, next.TransientActivityDetail, StringComparison.Ordinal);
+    }
+
     /// <summary>Redirects must be validated before credentials can reach a different authority.</summary>
     [Fact]
     public async Task CrossOriginRedirectFailsBeforeSecondRequest()

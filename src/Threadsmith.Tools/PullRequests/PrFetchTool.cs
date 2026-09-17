@@ -87,7 +87,8 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
         return new ToolExecution<PrFetchOutput>(
             result,
             [new ToolProvenanceSource("pull-request-untrusted", target.Url, $"snapshot={result.SnapshotId:N};source={result.Metadata.SourceCommit};destination={result.Metadata.DestinationCommit}")],
-            false);
+            IsTruncated: false,
+            TransientActivityDetail: FormatCompletedActivityDetail(result));
     }
 
     /// <inheritdoc />
@@ -110,7 +111,29 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
         => [ResolveProvider(input).Provider.ApiHost];
 
     /// <inheritdoc />
-    protected override string? DescribeActivity(PrFetchInput input) => $"{ResolveProvider(input).Id}: {input.Url}";
+    protected override string? DescribeActivity(PrFetchInput input)
+    {
+        var resolved = ResolveProvider(input);
+        return FormatStartedActivityDetail(resolved.Id, resolved.Target.Url, input);
+    }
+
+    private static string FormatStartedActivityDetail(string providerId, string url, PrFetchInput input)
+    {
+        var pageState = input.Cursor is null ? "first page" : "continuation";
+        var refreshState = input.Refresh ? " · refresh" : string.Empty;
+        return $"{providerId} · {FormatKind(input.Kind)} · {pageState}{refreshState} · {url}";
+    }
+
+    private static string FormatCompletedActivityDetail(PrFetchOutput result)
+    {
+        var pageState = result.IsContinuation ? "continuation" : "first page";
+        var cursorState = result.Cursor is null ? "no cursor" : "cursor returned";
+        var acquisitionState = result.AcquisitionComplete ? "acquisition complete" : "acquisition pending";
+        var deliveryState = result.DeliveryComplete ? "delivery complete" : "delivery pending";
+        return $"{result.Provider} · {FormatKind(result.Kind)} · {result.Page.Kind} · {pageState} · {cursorState} · {acquisitionState} · {deliveryState} · {result.Metadata.Url}";
+    }
+
+    private static string FormatKind(PrFetchKind kind) => kind.ToString().ToLowerInvariant();
 
     private (string Id, PullRequestProviderOptions Account, IPullRequestProvider Provider, PullRequestTarget Target) ResolveProvider(PrFetchInput input)
     {

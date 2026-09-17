@@ -166,6 +166,19 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
         }
     }
 
+    /// <inheritdoc />
+    protected override string? DescribeActivity(InspectSkillInput input)
+    {
+        if (input.Selector is not null)
+        {
+            return $"inspect {input.Selector}";
+        }
+
+        return input.Query is null
+            ? "list enabled verified skills"
+            : $"search {input.Query}";
+    }
+
     private static bool IsEnabledAndVerified(SkillCatalogCandidate candidate)
         => candidate.Enabled && candidate.Verification is (SkillVerificationState.Maintained
             or SkillVerificationState.SignedTrusted

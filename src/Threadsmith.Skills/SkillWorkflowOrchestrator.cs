@@ -643,36 +643,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         SessionId sessionId,
         CancellationToken cancellationToken)
     {
-        SkillCatalogCandidate candidate;
-        if (selector.IndexOfAny([':', '@', '+']) < 0)
-        {
-            var pin = await _state.GetPinAsync(
-                new SkillId(selector),
-                cancellationToken);
-            if (pin is null)
-            {
-                candidate = await ResolveCatalogAsync(selector, cancellationToken);
-            }
-            else
-            {
-                SkillCatalogCandidate[] matches =
-                [
-                    .. _catalog.Snapshot.Candidates.Where(item => item.Identity == pin),
-                ];
-                candidate = matches.Length switch
-                {
-                    0 => throw new KeyNotFoundException("The pinned skill package is no longer installed."),
-                    1 => matches[0],
-                    _ => throw new InvalidOperationException(
-                        "The pinned skill package exists in multiple scopes; invoke a scope-qualified selector."),
-                };
-            }
-        }
-        else
-        {
-            candidate = await ResolveCatalogAsync(selector, cancellationToken);
-        }
-
+        var candidate = await SkillInvocationSelection.ResolveAsync(_catalog, _state, selector, cancellationToken);
         return await VerifyResolvedAsync(candidate, sessionId, cancellationToken);
     }
 
@@ -724,20 +695,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             return SkillCanonicalJson.CanonicalizeValue(valueJson);
         }
 
-        var asset = candidate.Metadata.Assets.Single(item =>
-            string.Equals(item.Path, schemaAssetPath, StringComparison.OrdinalIgnoreCase));
-        var path = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
-        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
-        if (bytes.LongLength != asset.Bytes
-            || !string.Equals(
-                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)),
-                asset.Sha256,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidDataException("Skill schema changed after package verification.");
-        }
-
-        var schemaJson = new System.Text.UTF8Encoding(false, true).GetString(bytes);
+        var schemaJson = await SkillSchemaAssets.ReadAsync(candidate, schemaAssetPath, cancellationToken);
         var schema = _schemas.Compile(schemaJson);
         return _schemas.Validate(schema, valueJson);
     }

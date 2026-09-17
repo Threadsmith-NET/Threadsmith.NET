@@ -54,7 +54,7 @@ To include working changes, say so in `instructions`. Specify the intended base 
 /skills use Maintained:review@1.0.0 {"mode":"remoteBranch","repository":"https://github.com/Threadsmith-NET/Threadsmith.NET.git","branch":"feature/plan-108-focused-review-skills","baseBranch":"main"}
 ```
 
-The shipped prompt tells the lead to use a PR diff when available, reuse suitable local refs, or fetch just the two branch tips with depth 1 and no tags. It requests a direct comparison of the two trees, without fetching history to find a merge base. Acquisition uses the ordinary enabled tools and their configured repository access.
+The shipped prompt tells the lead to use a PR diff when available. Otherwise it reuses suitable local refs or fetches the two requested refs and enough targeted history to resolve their merge base. The review covers changes introduced on the target branch since that merge base. If the merge base cannot be resolved, the review stops instead of substituting a direct comparison of the two branch-tip trees, which could misclassify newer base-branch work as a target-branch change. Acquisition uses the ordinary enabled tools and their configured repository access.
 
 ### Review specific behavior against documentation
 

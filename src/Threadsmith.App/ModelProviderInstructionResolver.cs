@@ -6,11 +6,8 @@ using Threadsmith.Models;
 /// <summary>Resolves exact deployed provider instructions for one configured model profile.</summary>
 internal sealed class ModelProviderInstructionResolver : IModelProviderInstructionResolver
 {
-    private const string OpenAiCodexProvider = "openai-codex";
-    private const string OpenAiCodexSection = "provider-openai-codex-instructions";
-
     private readonly ConfiguredModelCatalog _catalog;
-    private readonly ModelProviderInstructions _openAiCodexInstructions;
+    private readonly IPromptLoader _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="ModelProviderInstructionResolver"/> class.</summary>
     internal ModelProviderInstructionResolver(
@@ -20,19 +17,19 @@ internal sealed class ModelProviderInstructionResolver : IModelProviderInstructi
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(prompts);
         _catalog = catalog;
-        _openAiCodexInstructions = new ModelProviderInstructions
-        {
-            SectionId = OpenAiCodexSection,
-            Content = prompts.Get(PromptFileNames.ProviderOpenAiCodexInstructions),
-        };
+        _prompts = prompts;
     }
 
     /// <inheritdoc />
     public ModelProviderInstructions? Resolve(ModelProfileId profileId)
     {
-        var profile = _catalog.Get(profileId);
-        return string.Equals(profile.Provider, OpenAiCodexProvider, StringComparison.Ordinal)
-            ? _openAiCodexInstructions
-            : null;
+        var asset = _catalog.Get(profileId).ProviderInstructionAsset;
+        return asset is null
+            ? null
+            : new ModelProviderInstructions
+            {
+                SectionId = asset.SectionId,
+                Content = _prompts.Get(asset.PromptFileName),
+            };
     }
 }

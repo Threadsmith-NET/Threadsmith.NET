@@ -27,25 +27,16 @@ public sealed partial class AgentRoleOutputTests
     }
 
     /// <summary>Technical tool errors use the same host feedback for every role without prescribing a reply shape.</summary>
-    [Theory]
-    [InlineData(AgentRole.Explorer)]
-    [InlineData(AgentRole.Implementer)]
-    [InlineData(AgentRole.SecurityReviewer)]
-    [InlineData(AgentRole.TestReviewer)]
-    [InlineData(AgentRole.PerformanceReviewer)]
-    [InlineData(AgentRole.ArchitectureReviewer)]
-    [InlineData(AgentRole.BugReviewer)]
-    public static void ToolFeedback_DoesNotConstrainAnswerFormat(AgentRole role)
+    [Fact]
+    public static void ToolFeedback_DoesNotConstrainAnswerFormat()
     {
         const string reason = "read_file: path is required.";
         var prompts = TestPromptLoader.Instance;
-        var feedback = new ChildAgentPrompt(prompts, role).CreateCorrectionMessage(reason);
+        var feedback = new CorrectiveMessageFactory(prompts).CreateDeveloperMessage(
+            new MalformedInvocationDiagnostic { Kind = MalformedInvocationFailureKind.ArgumentSchemaMismatch, SafeMessage = reason }, 1, 3);
 
         Assert.Equal(ModelMessageRole.Developer, feedback.Role);
-        Assert.Equal("child-tool-error", feedback.SectionId);
-        Assert.Equal(
-            prompts.Get(PromptFileNames.CorrectionToolBatchValidationUnavailable) + Environment.NewLine + reason,
-            feedback.GetModelVisibleContent());
+        Assert.Contains(reason, feedback.GetModelVisibleContent(), StringComparison.Ordinal);
         AssertNoAnswerContract(feedback.GetModelVisibleContent());
     }
 

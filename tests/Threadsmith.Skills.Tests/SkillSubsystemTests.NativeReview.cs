@@ -11,12 +11,23 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>Remote reviews scope findings to target-branch changes rather than unrelated base evolution.</summary>
+    [Fact]
+    public void NativeReview_RemoteBranchUsesMergeBaseDelta()
+    {
+        var prompt = TestPromptLoader.Instance.Get(PromptFileNames.SkillReview);
+
+        Assert.Contains("git diff <base-ref>...<target-ref>", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not fall back to a direct two-tip tree comparison", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compare the two trees directly", prompt, StringComparison.Ordinal);
+    }
+
     /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
     [Fact]
     public async Task NativeReview_FailedResponseResumesThroughSelectedModel()
     {
         const string selector = "review";
-        const string input = "{}";
+        const string input = """{"mode":"specialInstructions","instructions":"Review https://example.test/pull-requests/729"}""";
         var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
         await catalog.RefreshAsync();
         var verifier = new SkillPackageVerifier(new SkillTrustPolicySnapshot());
@@ -72,6 +83,7 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(contextUsage.InputTokens, contextUsage.Components.Sum(item => item.Tokens));
         Assert.All(model.Requests, item =>
         {
+            Assert.Contains("https://example.test/pull-requests/729", item.Input, StringComparison.Ordinal);
             Assert.Equal(selected, item.ResolvedProfileId);
             Assert.Equal(ReasoningLevel.Medium, item.ReasoningLevel);
             Assert.Contains("Call delegate_agents", item.Input, StringComparison.Ordinal);

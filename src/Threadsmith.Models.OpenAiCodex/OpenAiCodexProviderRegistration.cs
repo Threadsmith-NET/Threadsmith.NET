@@ -1,5 +1,6 @@
 namespace Threadsmith.Models.OpenAiCodex;
 
+using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Protected typed configuration for Threadsmith's native Codex provider.</summary>
@@ -29,6 +30,13 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
 
     /// <inheritdoc />
     public string TypeDiscriminator => "openai-codex";
+
+    /// <inheritdoc />
+    public ModelProviderInstructionAsset? ProviderInstructionAsset { get; } = new ModelProviderInstructionAsset
+    {
+        SectionId = "provider-openai-codex-instructions",
+        PromptFileName = PromptFileNames.ProviderOpenAiCodexInstructions,
+    };
 
     /// <inheritdoc />
     public Type ProviderConfigurationType => typeof(OpenAiCodexProviderConfiguration);

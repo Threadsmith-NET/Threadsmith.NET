@@ -4,6 +4,7 @@ using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
+using Threadsmith.Interaction.Runs;
 using Threadsmith.Models;
 using Threadsmith.Tui;
 using Xunit;
@@ -58,6 +59,89 @@ public static partial class Milestone1Tests
         Assert.Equal(1, handler.Calls);
         Assert.DoesNotContain(" - starting", surface.Text, StringComparison.Ordinal);
         Assert.Equal(1, surface.Text.Split("SKILLS:", StringSplitOptions.None).Length - 1);
+    }
+
+    /// <summary>Provider failures in manual skill operations remain visible and leave the command loop usable.</summary>
+    [Theory]
+    [InlineData("use", true)]
+    [InlineData("continue", true)]
+    [InlineData("resume", true)]
+    [InlineData("use", false)]
+    [InlineData("continue", false)]
+    [InlineData("resume", false)]
+    public static async Task SkillInvocationProgress_ProviderFailureReturnsToPrompt(string operation, bool malformed)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var id = SkillInvocationId.New();
+        var command = operation switch
+        {
+            "use" => "/skills use Maintained:review@1.0.0 {}",
+            "continue" => $"/skills continue {id.Value:D} {{}}",
+            _ => $"/skills resume {id.Value:D}",
+        };
+        var surface = new SkillProgressSurface([command, "/help", "/quit"]);
+        var handler = new PendingSkillHandler
+        {
+            Failure = malformed
+                ? new MalformedModelOutputException("Anthropic message ended with an unclosed content block.")
+                : new ModelProviderException("Provider request failed."),
+        };
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [handler]);
+        handler.Events = harness.EventStream;
+        handler.Session = () => harness.Events.OfType<SessionCreated>().Single().SessionId;
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+
+        var run = coordinator.RunAsync(cancellationToken: timeout.Token);
+        await handler.Started.Task.WaitAsync(timeout.Token);
+        await surface.Started.Task.WaitAsync(timeout.Token);
+        handler.Release.SetResult();
+        await run.WaitAsync(timeout.Token);
+
+        Assert.False(surface.Active);
+        Assert.Equal(1, handler.Calls);
+        Assert.Equal(3, surface.ComposerRequests.Count);
+        Assert.Contains("/help", surface.Text, StringComparison.Ordinal);
+        var error = Assert.Single(
+            surface.Batches.SelectMany(batch => batch.Items)
+                .OfType<PresentationTextItem>().SelectMany(item => item.Segments),
+            segment => segment.Text.StartsWith("Skill command failed:", StringComparison.Ordinal));
+        Assert.Contains(handler.Failure.Message, error.Text, StringComparison.Ordinal);
+        Assert.Equal(PresentationTextRole.Warning, error.Role);
+    }
+
+    /// <summary>Every foreground skill invocation routes the shared Escape chord into workflow cancellation.</summary>
+    [Theory]
+    [InlineData("use")]
+    [InlineData("continue")]
+    [InlineData("resume")]
+    public static async Task SkillInvocationProgress_EscapeChordCancelsAndReturnsToPrompt(string operation)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var id = SkillInvocationId.New();
+        var command = operation switch
+        {
+            "use" => "/skills use Maintained:review@1.0.0 {}",
+            "continue" => $"/skills continue {id.Value:D} {{}}",
+            _ => $"/skills resume {id.Value:D}",
+        };
+        var surface = new SkillProgressSurface([command, "/help", "/quit"], supportsActiveInput: true);
+        var handler = new PendingSkillHandler();
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [handler]);
+        handler.Events = harness.EventStream;
+        handler.Session = () => harness.Events.OfType<SessionCreated>().Single().SessionId;
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+
+        var run = coordinator.RunAsync(cancellationToken: timeout.Token);
+        await handler.Started.Task.WaitAsync(timeout.Token);
+        await surface.ActiveInputStarted.Task.WaitAsync(timeout.Token);
+        surface.RequestCancellation();
+        await handler.CancellationObserved.Task.WaitAsync(timeout.Token);
+        await run.WaitAsync(timeout.Token);
+
+        Assert.Equal(1, handler.Calls);
+        Assert.Equal(3, surface.ComposerRequests.Count);
+        Assert.Contains("Skill command cancelled.", surface.Text, StringComparison.Ordinal);
+        Assert.Contains("/help", surface.Text, StringComparison.Ordinal);
     }
 
     /// <summary>The legacy frontend remains free to show host prompts during a running skill.</summary>
@@ -129,23 +213,33 @@ public static partial class Milestone1Tests
 
     private sealed class SkillProgressSurface : RecordingInteractionSurface, IInteractionSurface, IInteractionToolActivitySurface
     {
-        internal SkillProgressSurface(IEnumerable<string> inputs)
+        private readonly bool _supportsActiveInput;
+        private TestActiveRunInputLease? _activeInput;
+
+        internal SkillProgressSurface(IEnumerable<string> inputs, bool supportsActiveInput = false)
             : base(inputs)
         {
+            _supportsActiveInput = supportsActiveInput;
+            Capabilities = new(
+                SupportsActiveRunInput: supportsActiveInput,
+                SupportsRetainedActivity: true,
+                SupportsRetainedRunHints: supportsActiveInput);
         }
 
-        public new InteractionSurfaceCapabilities Capabilities { get; } = new(SupportsRetainedActivity: true);
+        public new InteractionSurfaceCapabilities Capabilities { get; }
 
-        internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public IActiveRunInputLease? BeginActiveRunInput(TimeProvider timeProvider)
+        {
+            ArgumentNullException.ThrowIfNull(timeProvider);
+            if (!_supportsActiveInput)
+            {
+                return null;
+            }
 
-        internal TaskCompletionSource Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        internal bool Active { get; private set; }
-
-        internal InteractionActivity? Activity { get; private set; }
-
-        internal string Text => string.Concat(Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>()
-            .SelectMany(item => item.Segments).Select(segment => segment.Text));
+            _activeInput = new TestActiveRunInputLease();
+            ActiveInputStarted.TrySetResult();
+            return _activeInput;
+        }
 
         public Task PresentToolActivitiesAsync(IReadOnlyList<InteractionActivity> activities, CancellationToken cancellationToken = default)
         {
@@ -162,6 +256,48 @@ public static partial class Milestone1Tests
 
             return Task.CompletedTask;
         }
+
+        internal TaskCompletionSource ActiveInputStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal bool Active { get; private set; }
+
+        internal InteractionActivity? Activity { get; private set; }
+
+        internal string Text => string.Concat(Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>()
+            .SelectMany(item => item.Segments).Select(segment => segment.Text));
+
+        internal void RequestCancellation()
+        {
+            Assert.NotNull(_activeInput);
+            _activeInput.RequestCancellation();
+        }
+    }
+
+    private sealed class TestActiveRunInputLease : IActiveRunInputLease
+    {
+        private readonly CancellationTokenSource _disposed = new();
+        private readonly System.Threading.Channels.Channel<ActiveRunInputSignal> _signals =
+            System.Threading.Channels.Channel.CreateUnbounded<ActiveRunInputSignal>();
+
+        public async Task<ActiveRunInputSignal> ReadAsync(CancellationToken cancellationToken = default)
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _disposed.Token);
+            return await _signals.Reader.ReadAsync(linked.Token);
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            await _disposed.CancelAsync();
+            _signals.Writer.TryComplete();
+            _disposed.Dispose();
+        }
+
+        internal void RequestCancellation() =>
+            _signals.Writer.TryWrite(ActiveRunInputSignal.CancellationRequested);
     }
 
     private sealed class PendingSkillHandler :
@@ -175,6 +311,8 @@ public static partial class Milestone1Tests
 
         internal bool Fail { get; init; }
 
+        internal Exception? Failure { get; init; }
+
         internal bool HoldCancellationCleanup { get; init; }
 
         internal bool CleanupFinished { get; private set; }
@@ -182,6 +320,8 @@ public static partial class Milestone1Tests
         internal TaskCompletionSource CleanupStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal TaskCompletionSource CleanupRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal Action<SkillInvocationId>? OnDispatch { get; init; }
 
@@ -214,11 +354,23 @@ public static partial class Milestone1Tests
             {
                 await Release.Task.WaitAsync(cancellationToken);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && HoldCancellationCleanup)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                CleanupStarted.SetResult();
-                await CleanupRelease.Task.WaitAsync(TimeSpan.FromSeconds(8), CancellationToken.None);
-                CleanupFinished = true;
+                CancellationObserved.TrySetResult();
+                if (HoldCancellationCleanup)
+                {
+                    CleanupStarted.SetResult();
+                    await CleanupRelease.Task.WaitAsync(TimeSpan.FromSeconds(8), CancellationToken.None);
+                    CleanupFinished = true;
+                }
+
+                await Events.PublishAsync(
+                    started with
+                    {
+                        OccurredAt = DateTimeOffset.UtcNow,
+                        Status = SkillInvocationStatus.Cancelled,
+                    },
+                    CancellationToken.None);
                 throw;
             }
 
@@ -231,9 +383,14 @@ public static partial class Milestone1Tests
                 started with
             {
                 OccurredAt = DateTimeOffset.UtcNow,
-                Status = Fail ? SkillInvocationStatus.Failed : SkillInvocationStatus.Completed,
+                Status = Fail || Failure is not null ? SkillInvocationStatus.Failed : SkillInvocationStatus.Completed,
             },
                 cancellationToken);
+            if (Failure is not null)
+            {
+                throw Failure;
+            }
+
             if (Fail)
             {
                 throw new InvalidOperationException("acquisition failed");

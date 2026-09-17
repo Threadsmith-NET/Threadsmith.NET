@@ -46,7 +46,7 @@ public sealed class AnthropicCatalogTests
         var provider = Hydrate(Model() with
         {
             MaximumInputTokens = 150000,
-            MaximumOutputTokens = 32000,
+            MaximumOutputTokens = 64000,
             Capabilities = new AnthropicDiscoveredCapabilities
             {
                 StructuredOutputs = false,
@@ -55,8 +55,8 @@ public sealed class AnthropicCatalogTests
         });
         var model = Assert.IsType<AnthropicModelConfiguration>(Assert.Single(provider.Models));
         Assert.Equal(150000, model.ContextWindow);
-        Assert.Equal(32000, model.MaximumOutputTokens);
-        Assert.Equal(8192, model.RequestOutputTokenReserve);
+        Assert.Equal(64000, model.MaximumOutputTokens);
+        Assert.Equal(32768, model.RequestOutputTokenReserve);
         Assert.False(model.Capabilities.StructuredOutput);
         Assert.DoesNotContain(new ReasoningLevel("max"), model.SupportedReasoningLevels);
         Assert.DoesNotContain(new ReasoningLevel("xhigh"), model.SupportedReasoningLevels);
@@ -402,7 +402,7 @@ public sealed class AnthropicCatalogTests
 
     private static AnthropicDiscoveredModel Model(string id = "claude-opus-5")
     {
-        return new AnthropicDiscoveredModel { ModelId = id, DisplayName = "Claude fixture", MaximumInputTokens = 200000, MaximumOutputTokens = 32000 };
+        return new AnthropicDiscoveredModel { ModelId = id, DisplayName = "Claude fixture", MaximumInputTokens = 200000, MaximumOutputTokens = 64000 };
     }
 
     private static AnthropicProviderConfiguration Hydrate(params AnthropicDiscoveredModel[] models)
@@ -445,7 +445,7 @@ public sealed class AnthropicCatalogTests
                 created_at = "2026-07-24T00:00:00Z",
                 display_name = "Claude fixture",
                 max_input_tokens = 200000,
-                max_tokens = 32000,
+                max_tokens = 64000,
                 capabilities = new
                 {
                     structured_outputs = new { supported = false },

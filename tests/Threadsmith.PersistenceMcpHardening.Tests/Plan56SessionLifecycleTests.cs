@@ -858,6 +858,8 @@ public static partial class Plan56SessionLifecycleTests
 
         public string TypeDiscriminator => "test";
 
+        public ModelProviderInstructionAsset? ProviderInstructionAsset => null;
+
         public IModelProvider CreateProvider(ModelProviderActivationContext context)
         {
             return new UnusedModelProvider();

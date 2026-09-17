@@ -183,6 +183,10 @@ public sealed partial class Milestone19Tests
             Assert.Single(nested.Inspection.PromptAssets, item => item.Source == "AGENTS.md");
             Assert.Single(nested.Inspection.PromptAssets, item => item.Source == "src/AGENTS.md");
             var instructions = Assert.Single(messages, item => item.SectionId == "repository-instructions");
+            var layout = Assert.IsType<ModelRequestLayout>(nested.Layout);
+            Assert.Equal(
+                ["host-policy", "repository-instructions", "phase-policy"],
+                messages.Take(layout.StablePrefixMessageCount).Select(message => message.SectionId));
             Assert.Equal(["AGENTS.md", "src/AGENTS.md", "append1.md", "append2.md"], instructions.Sources.Select(item => item.Label));
             Assert.Equal(["Repository instructions", "Repository instructions", "Appended prompts", "Appended prompts"], instructions.Sources.Select(item => item.Category));
             Assert.Equal(nested.WireEstimate!.WireInputTokens, nested.WireEstimate.Components.Sum(item => item.Tokens));

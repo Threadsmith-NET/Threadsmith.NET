@@ -1540,7 +1540,19 @@ A successful analyzer procedure returns flat `propose_plan` content without sche
 
 Accepting the proposed plan still does not apply edits. The normal approval, implementation, exact-diff policy, transaction, build/test validation, and correction flow follows.
 
-The conversational equivalent is to ask the model to use an exact selector and provide the typed input, for example: `Use Maintained:fix-analyzer-warnings@1.0.0 with diagnostics [...] and scope [...]`. During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. Tool availability and caller context continue to apply to nested skill invocations; an invocation cannot grant tools unavailable to its caller.
+For conversational use, describe the task naturally, for example: `Use a review skill to review this PR: <URL>`. Users do not need to prepare JSON or spell the skill name exactly. The model uses the same `inspect_skill` tool for discovery and detailed inspection:
+
+| Arguments | Result |
+|---|---|
+| `{}` | List enabled, verified native and Claude-compatible skills. |
+| `{"query":"review"}` | Search enabled, verified skill names and descriptions with a short case-insensitive substring. |
+| `{"selector":"review"}` | Verify one selected skill and return its input schema. |
+
+`selector` and `query` are mutually exclusive. Listing and search return metadata only: name, selector, description, scope, and last known availability. They use the same application listing path as `/skills`: maintained packages and previously authorized packages have their availability restored and verified before filtering. This can read package content for verification, but returns no instruction bodies or schemas and does not enable or grant trust to other discovered packages. Only enabled skills with verified catalog state are included; disabled, unverified, invalid, and revoked skills are excluded. Cached `Enabled` status does not guarantee current compatibility. Very large results remain subject to normal tool-output limits; the model should narrow a truncated list with a query. Discovery results carry no input schemas. The model chooses a clear match or asks the user when several skills plausibly match, then inspects its returned selector before calling `invoke_skill`.
+
+Detailed inspection returns one skill with its verified input schema and exact selector, plus guidance to preserve the task and ask for required information missing from the conversation. Skills without a declared input schema, including Claude-compatible skills, return `{}` and guidance to pass the complete task and relevant context as a JSON string. Detailed inspection does not execute a skill or include its instruction body in the caller's context; disabled or unverified packages are rejected. The skill procedure does not automatically receive the parent conversation.
+
+During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. Tool availability and caller context continue to apply to nested skill invocations; an invocation cannot grant tools unavailable to its caller. Inspection is model guidance, not a new runtime prerequisite; direct `/skills use` invocations still accept JSON.
 
 Assess a Central Package Management upgrade without implicitly restoring packages or accessing the network:
 

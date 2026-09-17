@@ -41,7 +41,7 @@ Each request has `task`, `context`, `toolAccess`, and an optional `role`. Omitti
 
 | Role | Instruction focus |
 |---|---|
-| `explorer` | Investigate relevant code, behavior, and contracts. This is the default. |
+| `explorer` | Answer concrete codebase questions: locate implementations, trace execution or data flow, identify relevant files and contracts, or gather evidence for planning. Return source references and uncertainties. This is the default; use implementer for changes and specialist reviewers for their review tasks. |
 | `implementer` | Carry out the assigned implementation using available tools, or propose changes when execution is unavailable. |
 | `securityReviewer` | Review security risks and possible mitigations. |
 | `testReviewer` | Review test coverage and useful assertions. |
@@ -50,6 +50,12 @@ Each request has `task`, `context`, `toolAccess`, and an optional `role`. Omitti
 | `bugReviewer` | Compare implementation with requirements and acceptance criteria; find functional bugs and regressions. |
 
 Pass ticket details, including Jira acceptance criteria, in the ordinary delegation `task` and `context` fields. The lead can retrieve those details with its enabled tools; BugReviewer uses the same child execution path and model-selection fallback as the other roles.
+
+Children use the shared tool-call history to reject an identical tool name and argument payload, including duplicate siblings in one batch. Rejected batches return correlated error responses to the same child model before any call in the batch executes. Children reuse the parent conversation's corrective-turn state and message factory, including `execution:maxCorrectiveTurns`; accepted tool batches reset the consecutive correction count. Ordinary tool execution failures also return to the model as tool results. A single duplicate does not terminate the child when correction attempts remain. Duplicate protection stays active when operational budgets are disabled and survives context compaction. Rejected batches are not recorded, so the child can correct and resubmit them. Each child has its own history and correction state; cancellation and exhausted correction/resource limits retain their normal terminal behavior.
+
+Parent and child system messages also load the same `System-RepositoryInspection.md` asset for semantic-tool selection, evidence reuse, batching, and completion guidance. Both execution paths use the same semantic-first admission policy for broad active-workspace C# searches. Known-file reads and scoped searches remain directly available. Semantic tools describe the active workspace; reviews of another Git revision use ref-based evidence unless that workspace matches the target. The policy does not redirect Git process calls to semantic tools.
+
+For change reviews, that shared asset anchors all reviewer roles to the changed files and applicable requirements. Reviewers read diffs with enough target context, reuse evidence, and follow dependencies only to answer concrete questions. They distinguish introduced or worsened defects from pre-existing observations and finish after assessing assigned coverage, stating unresolved limits. The maintained review prompt retains five specialists and its existing report format. TestReviewer owns test/build execution; PerformanceReviewer can identify relevant measurements without starting overlapping runs. Ordinary Git through `run_process` remains available under existing permissions; inspection does not authorize repository scratch files.
 
 Each role is a system-prompt amendment combined with its selected model and eligible tools, not an output template. A child may return any final body, including plain text, JSON, whitespace, or an empty response. No role fields, citation GUIDs, or response-format repair are required. Reviewers can run tests or save results when the corresponding tools and permissions are inherited. A proposed check or a claim that checks passed is not host verification that those checks ran; inspect the actual tool results.
 

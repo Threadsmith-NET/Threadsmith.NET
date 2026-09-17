@@ -4,10 +4,68 @@ using System.Globalization;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
+using Threadsmith.Interaction.Runs;
 
 /// <summary>Manages skill verification and availability through existing shared command authority.</summary>
 public sealed partial class InteractionCoordinator
 {
+    private async Task<T?> RunCancellableSkillOperationAsync<T>(
+        Func<CancellationToken, Task<T>> execute,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        ArgumentNullException.ThrowIfNull(execute);
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var activeInput = _surface.BeginActiveRunInput(_timeProvider);
+        var activeInputTask = activeInput?.ReadAsync(operation.Token);
+        try
+        {
+            if (activeInput is not null && !_surface.Surface.Capabilities.SupportsRetainedRunHints)
+            {
+                await _surface.WriteAsync(
+                    "ESC-ESC to cancel\n",
+                    PresentationTextRole.Status,
+                    operation.Token);
+            }
+
+            var operationTask = execute(operation.Token);
+            while (!operationTask.IsCompleted && activeInputTask is not null)
+            {
+                var completed = await Task.WhenAny(operationTask, activeInputTask);
+                if (completed == operationTask)
+                {
+                    break;
+                }
+
+                var signal = await activeInputTask;
+                if (signal == ActiveRunInputSignal.CancellationRequested)
+                {
+                    await operation.CancelAsync();
+                    break;
+                }
+
+                activeInputTask = activeInput!.ReadAsync(operation.Token);
+            }
+
+            try
+            {
+                return await operationTask;
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                await _surface.WriteAsync(
+                    "Skill command cancelled.\n",
+                    PresentationTextRole.Status,
+                    CancellationToken.None);
+                return null;
+            }
+        }
+        finally
+        {
+            await DisposeActiveRunInputAsync(activeInput, activeInputTask);
+        }
+    }
+
     private async Task ManageSkillsAsync(InteractionController controller, CancellationToken cancellationToken)
     {
         var catalog = await controller.ListSkillsAsync(new SkillCatalogQuery { MaximumResults = int.MaxValue }, cancellationToken);

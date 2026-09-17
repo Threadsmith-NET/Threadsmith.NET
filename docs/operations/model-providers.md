@@ -83,7 +83,7 @@ The Codex endpoint does not support `max_output_tokens`. Threadsmith uses the re
 
 The separately compiled `openai-codex` provider uses native Responses and an independent Threadsmith OAuth grant. Authenticate with `threadsmith --codex-login` for headless device flow, `threadsmith --tui --codex-login` for browser PKCE, or `threadsmith [--tui] /auth openai-codex [login|status|logout]`. Status and logout also have `--codex-status` and `--codex-logout` forms.
 
-The native Responses `instructions` value comes from the deployed `prompts/Provider-OpenAiCodex-Instructions.md` asset. The host attaches that exact text to the provider-neutral request before context reduction and capacity admission, counts it as a dedicated provider-instruction contribution, and maps the same value to the wire once. Enlarging it therefore reduces the remaining context budget; if instructions plus fixed framing, tools, and the output reserve cannot fit, the request fails before network I/O. Restart Threadsmith after editing the asset. Ordinary logs expose only bounded instruction character/token metadata, while explicitly enabled `--raw-model-log` output intentionally contains the complete provider-visible instruction. See [deployed prompt assets](prompts.md).
+The native Codex provider registration declares the deployed `prompts/Provider-OpenAiCodex-Instructions.md` asset and its stable section identity. The effective catalog carries that declaration onto every projected Codex profile, and the shared resolver loads it without recognizing provider names or prompt filenames. The host attaches the exact text to the provider-neutral request before context reduction and capacity admission, counts it as a dedicated provider-instruction contribution, and the Codex adapter maps the same value to the native Responses `instructions` field once. Enlarging it therefore reduces the remaining context budget; if instructions plus fixed framing, tools, and the output reserve cannot fit, the request fails before network I/O. Restart Threadsmith after editing the asset. Ordinary logs expose only bounded instruction character/token metadata, while explicitly enabled `--raw-model-log` output intentionally contains the complete provider-visible instruction. See [deployed prompt assets](prompts.md).
 
 After login, Threadsmith calls the protected Codex `/models?client_version=...` resource and projects every distinct returned model. The product has no fixed Codex model list and never reads Pi credentials, configuration, or catalogs. Profile GUIDs are deterministic from provider/model identity. A bounded credential-free metadata snapshot is stored in the user `.threadsmith` directory; the next process start composes it alongside unrelated configured providers only while a valid Threadsmith grant exists. Logout clears both the grant and snapshot.
 
@@ -104,7 +104,7 @@ Add this provider entry to the `providers` array in `~/.threadsmith/providers.js
   "secretKeyReference": "secrets:models:anthropic",
   "models": [],
   "defaults": {
-    "requestOutputTokenReserve": 8192,
+    "requestOutputTokenReserve": 32768,
     "defaultReasoningLevel": "high",
     "timeoutSeconds": 120,
     "retryMaxAttempts": 3,
@@ -122,6 +122,8 @@ At startup, enabled trusted descriptors are hydrated from bounded Models API dis
 Thinking effort and display are independent. `/reasoning` selects only the discovered profile's supported levels; a profile may support selectable effort without supporting `none`. `/thinking on|off` controls summarized thinking display on the next request, including the next tool continuation. Headless calls use `--thinking on|off`. Display defaults to off and changing it does not reissue an in-flight request or change the reasoning effort. Signed thinking and redacted blocks needed for tool continuation remain private, bounded process memory even when display is off. They are disposed at the end of the active loop and are excluded from raw-model logs, ordinary diagnostics, events, checkpoints, and restored sessions.
 
 The host preserves native tool-call IDs and ordered assistant blocks through every tool round. Tools execute only after a complete response. Active signed tool continuations are not compacted or reconstructed from durable history; if the required continuation cannot fit, the request fails with capacity guidance. Ordinary completed conversation history remains available after restart.
+
+If a message-level update arrives while a content block is still open, the failure reports the block type, zero-based index, and recognized stop reason. Reported terminal usage is retained in the existing usage diagnostics before the response is rejected; missing terminal counts remain estimates. Unknown stop reasons are labeled unrecognized. Block contents, thinking, signatures, and tool arguments are excluded from the error, and no tool calls from the incomplete response are released.
 
 Before admission and dispatch, the adapter prepares the same native body, including strict tool schemas, system blocks, replay, and explicit five-minute cache breakpoints. The initial local estimator conservatively counts UTF-8 bytes plus framing; signed output also retains provider-reported output-token cost. This can admit less context than a calibrated tokenizer. Cache writes are priced conservatively for admission; actual usage distinguishes uncached input, cache writes, cache reads, and output. A missing cache hit is reported as such. The host owns the single deadline and bounded retry policy, and never retries after response content has been observed.
 
@@ -183,7 +185,7 @@ For the `primary` provider and profile shown above in the user provider catalog,
 }
 ```
 
-Use your configured provider ID and profile GUID. One profile may serve several roles when it supports their workloads. Explorers use `general`, implementers use `codeEdit`, and the four reviewers use `review`. The example provider above permits `general` and `review`; an implementer needs a compatible `codeEdit` profile.
+Use your configured provider ID and profile GUID. One profile may serve several roles when it supports their workloads. Explorers use `general`, implementers use `codeEdit`, and the five reviewers use `review`. To use the same model for all reviewers, configure all five role keys, including `bugReviewer`; an omitted role inherits or falls back rather than copying another reviewer's mapping. The example provider above permits `general` and `review`; an implementer needs a compatible `codeEdit` profile.
 
 | Field | Requirement |
 |---|---|

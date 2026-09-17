@@ -149,11 +149,6 @@ internal sealed class AnthropicStreamAdapter
 
         if (item.TryPickDelta(out _))
         {
-            if (_openBlock is not null)
-            {
-                throw new MalformedModelOutputException("Anthropic message ended with an unclosed content block.");
-            }
-
             var delta = RequiredProperty(root, "delta", JsonValueKind.Object);
             if (delta.TryGetProperty("stop_reason", out var reason) && reason.ValueKind != JsonValueKind.Null)
             {
@@ -166,6 +161,21 @@ internal sealed class AnthropicStreamAdapter
             }
 
             UpdateUsage(root, _stopReason is not null);
+            if (_openBlock is { } index)
+            {
+                // Retain terminal metadata before rejecting the sequence so failure accounting uses reported usage.
+                // Only known protocol labels belong in diagnostics; never include content or arbitrary provider text.
+                var stopReason = _stopReason switch
+                {
+                    null => "not supplied",
+                    "end_turn" or "stop_sequence" or "tool_use" or "max_tokens"
+                        or "model_context_window_exceeded" or "pause_turn" or "refusal" => _stopReason,
+                    _ => "unrecognized",
+                };
+                throw new MalformedModelOutputException(FormattableString.Invariant(
+                    $"Anthropic message ended with an unclosed content block (type: {_blocks[index].Type}, index: {index}, stop reason: {stopReason}). No tools were released."));
+            }
+
             return [];
         }
 

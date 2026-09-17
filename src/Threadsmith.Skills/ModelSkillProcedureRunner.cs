@@ -1,6 +1,8 @@
 namespace Threadsmith.Skills;
 
+using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Telemetry;
@@ -95,6 +97,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         var maximumRounds = Math.Max(1, plan.EffectiveBudget.ModelTurns);
         var maximumToolCalls = plan.EffectiveBudget.ToolCalls;
         var toolCalls = 0;
+        var corrections = 0;
         var prompt = BuildPrompt(plan, step, iteration, content, inputJson);
         var messages = new List<ModelMessage>
         {
@@ -107,7 +110,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         };
         using var transientState = new ModelRequestTransientState();
 
-        var seenCalls = new HashSet<string>(StringComparer.Ordinal);
+        var seenCalls = new ToolCallHistory();
         for (var round = 0; round < maximumRounds; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -128,7 +131,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 StringComparer.OrdinalIgnoreCase);
             var modelTools = BuildToolDefinitions(available.Registrations);
             var text = new StringBuilder();
-            ToolRequestModelOutput? toolRequest = null;
+            var toolRequests = new List<ToolRequestModelOutput>();
             var outputReserveTokens = profile?.EffectiveRequestOutputTokenReserve ?? 0;
             var canonicalModelTools = ModelToolCanonicalizer.Canonicalize(modelTools);
             var wireEstimate = ModelWireEstimator.Estimate(
@@ -164,7 +167,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         : profile?.DefaultReasoningLevel ?? ReasoningLevel.None,
                     MaximumOutputTokens = profile?.EffectiveRequestOutputTokenReserve,
                     Tools = canonicalModelTools,
-                    AllowMultipleToolCalls = false,
+                    AllowMultipleToolCalls = true,
                     Messages = messages.ToArray(),
                     WireEstimate = wireEstimate,
                     ProviderInstructions = providerInstructions,
@@ -226,12 +229,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
                         if (chunk.Output is ToolRequestModelOutput requested)
                         {
-                            if (toolRequest is not null)
+                            if (toolRequests.Count >= maximumToolCalls - toolCalls)
                             {
-                                throw new InvalidDataException("Skill procedure returned multiple tools despite its single-call policy.");
+                                throw new InvalidOperationException("Skill procedure tool-call budget is exhausted.");
                             }
 
-                            toolRequest = requested;
+                            toolRequests.Add(requested);
                         }
                         else if (chunk.Output is not null)
                         {
@@ -248,9 +251,10 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     }
                 }
 
-                if (toolRequest is null)
+                if (toolRequests.Count == 0)
                 {
-                    var output = JsonOutputSanitizer.SanitizeJsonOrText(text.ToString(), _sanitizer).Trim();
+                    var output = NormalizeDeclaredJsonOutput(text.ToString());
+                    output = JsonOutputSanitizer.SanitizeJsonOrText(output, _sanitizer).Trim();
                     if (string.IsNullOrWhiteSpace(output))
                     {
                         throw new InvalidDataException("Skill procedure returned empty output.");
@@ -270,23 +274,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     return new SkillProcedureResult(output, round + 1, toolCalls);
                 }
 
-                if (!plan.AvailableToolIds.Contains(toolRequest.ToolName, StringComparer.OrdinalIgnoreCase))
-                {
-                    throw new UnauthorizedAccessException("Skill procedure requested an undeclared tool.");
-                }
-
-                toolCalls++;
-                if (toolCalls > maximumToolCalls)
-                {
-                    throw new InvalidOperationException("Skill procedure tool-call budget is exhausted.");
-                }
-
-                var callKey = $"{toolRequest.ToolName}\n{SkillCanonicalJson.CanonicalizeValue(toolRequest.ArgumentsJson)}";
-                if (!seenCalls.Add(callKey))
-                {
-                    throw new InvalidOperationException("Skill procedure repeated an identical tool request.");
-                }
-
                 var context = (await CreateToolContextAsync(plan, cancellationToken)) with
                 {
                     RequestedBy = "model",
@@ -294,67 +281,132 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     ModelProfileId = modelRequest.ResolvedProfileId,
                     ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
                 };
-                if (!modelTools.Any(tool => tool.Name.Equals(toolRequest.ToolName, StringComparison.OrdinalIgnoreCase)))
+                var batch = new List<ToolBatchRequest>(toolRequests.Count);
+                for (var ordinal = 0; ordinal < toolRequests.Count; ordinal++)
                 {
-                    context = context with { DenyAllTools = true };
+                    var toolRequest = toolRequests[ordinal];
+                    if (!plan.AvailableToolIds.Contains(toolRequest.ToolName, StringComparer.OrdinalIgnoreCase))
+                    {
+                        throw new UnauthorizedAccessException("Skill procedure requested an undeclared tool.");
+                    }
+
+                    var callContext = modelTools.Any(tool => tool.Name.Equals(toolRequest.ToolName, StringComparison.OrdinalIgnoreCase))
+                        ? context
+                        : context with { DenyAllTools = true };
+                    registrations.TryGetValue(toolRequest.ToolName, out var registration);
+                    batch.Add(new ToolBatchRequest(
+                        ordinal,
+                        $"skill-{plan.Request.InvocationId.Value:N}-{round}-{ordinal}",
+                        new ToolInvocationRequest
+                        {
+                            SessionId = plan.Request.SessionId,
+                            RunId = plan.Request.RunId,
+                            Phase = plan.Request.Phase,
+                            ToolId = toolRequest.ToolName,
+                            ExpectedRegistration = registration,
+                            ArgumentsJson = toolRequest.ArgumentsJson,
+                            Context = callContext,
+                        }));
                 }
 
-                registrations.TryGetValue(toolRequest.ToolName, out var registration);
-                var result = await _toolPipeline.InvokeAsync(
-                    new ToolInvocationRequest
+                var preflight = _toolPipeline.PreflightBatch(batch);
+                string? failureSummary = null;
+                IReadOnlyList<ToolBatchResult> results = [];
+
+                // Rejected requests still consume the existing budget, just as ordinary failed tool calls do.
+                toolCalls += batch.Count;
+                if (!preflight.Succeeded || preflight.Preparation is null)
+                {
+                    corrections++;
+                    failureSummary = preflight.FailedOrdinal is { } failedOrdinal && preflight.FailedToolId is { } failedTool
+                        ? _prompts.Render(
+                            PromptFileNames.CorrectionToolBatchPreflightFailed,
+                            new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["Ordinal"] = (failedOrdinal + 1).ToString(CultureInfo.InvariantCulture),
+                                ["Tool"] = failedTool,
+                                ["Reason"] = preflight.SafeReason ?? _prompts.Get(PromptFileNames.CorrectionToolBatchPreflightReason),
+                            })
+                        : _prompts.Get(PromptFileNames.CorrectionToolBatchPreflightReason);
+                }
+                else
+                {
+                    var batchCalls = new ToolCallHistory(seenCalls);
+                    foreach (var toolRequest in toolRequests)
                     {
-                        SessionId = plan.Request.SessionId,
-                        RunId = plan.Request.RunId,
-                        Phase = plan.Request.Phase,
-                        ToolId = toolRequest.ToolName,
-                        ExpectedRegistration = registration,
-                        ArgumentsJson = toolRequest.ArgumentsJson,
-                        Context = context,
-                    },
-                    cancellationToken);
-                var boundedResult = result.ModelResultContent ?? result.ResultJson
-                    ?? SkillCanonicalJson.CanonicalizeValue(
-                        System.Text.Json.JsonSerializer.Serialize(new
+                        if (!batchCalls.TryAdd(toolRequest.ToolName, SkillCanonicalJson.CanonicalizeValue(toolRequest.ArgumentsJson)))
                         {
-                            error = result.ErrorClassification.ToString(),
-                            message = result.Error,
-                        }));
-                var toolCallId = $"skill-{plan.Request.InvocationId.Value:N}-{round}-0";
-                messages.Add(new ModelMessage
+                            throw new InvalidOperationException("Skill procedure repeated an identical tool request.");
+                        }
+                    }
+
+                    // Only accepted batches enter duplicate tracking; rejected siblings can be resubmitted unchanged.
+                    seenCalls = batchCalls;
+                    results = await _toolPipeline.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);
+                }
+
+                var resultsByOrdinal = results.ToDictionary(result => result.Ordinal, result => result.Result);
+                foreach (var batchRequest in batch)
                 {
-                    Role = ModelMessageRole.Assistant,
-                    SectionId = "skill-tool-call",
-                    ToolCallId = toolCallId,
-                    ToolName = toolRequest.ToolName,
-                    ModelRound = round,
-                    Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = toolRequest.ArgumentsJson }],
-                });
-                messages.Add(new ModelMessage
-                {
-                    Role = ModelMessageRole.Tool,
-                    SectionId = "skill-tool-result",
-                    ToolCallId = toolCallId,
-                    ToolName = toolRequest.ToolName,
-                    ModelRound = round,
-                    IsError = !result.Succeeded,
-                    Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = boundedResult }],
-                });
+                    var toolRequest = toolRequests[batchRequest.Ordinal];
+                    resultsByOrdinal.TryGetValue(batchRequest.Ordinal, out var result);
+                    var boundedResult = failureSummary is not null
+                        ? _prompts.Render(
+                            preflight.FailedOrdinal is null || preflight.FailedOrdinal == batchRequest.Ordinal
+                                ? PromptFileNames.CorrectionToolBatchRejected
+                                : PromptFileNames.CorrectionToolBatchSiblingRejected,
+                            new Dictionary<string, string>(StringComparer.Ordinal)
+                            {
+                                ["AttemptNumber"] = corrections.ToString(CultureInfo.InvariantCulture),
+                                ["MaximumAttempts"] = Math.Min(maximumRounds, maximumToolCalls).ToString(CultureInfo.InvariantCulture),
+                                ["FailureSummary"] = failureSummary,
+                            })
+                        : (result ?? throw new InvalidOperationException("The tool batch did not return every result.")).ModelResultContent ?? result.ResultJson
+                        ?? SkillCanonicalJson.CanonicalizeValue(
+                            System.Text.Json.JsonSerializer.Serialize(new
+                            {
+                                error = result.ErrorClassification.ToString(),
+                                message = result.Error,
+                            }));
+                    var toolCallId = batchRequest.CorrelationId;
+                    messages.Add(new ModelMessage
+                    {
+                        Role = ModelMessageRole.Assistant,
+                        SectionId = "skill-tool-call",
+                        ToolCallId = toolCallId,
+                        ToolName = toolRequest.ToolName,
+                        ModelRound = round,
+                        Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = toolRequest.ArgumentsJson }],
+                    });
+                    messages.Add(new ModelMessage
+                    {
+                        Role = ModelMessageRole.Tool,
+                        SectionId = "skill-tool-result",
+                        ToolCallId = toolCallId,
+                        ToolName = toolRequest.ToolName,
+                        ModelRound = round,
+                        IsError = result is null || !result.Succeeded,
+                        Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = boundedResult }],
+                    });
+                    if (transientState.HasResponses)
+                    {
+                        transientState.BindToolCall(round, batchRequest.Ordinal, toolCallId);
+                    }
+
+                    // Legacy input needs result text; structured messages retain the same model round for all siblings.
+                    prompt += _prompts.Render(
+                        PromptFileNames.SkillProcedureContinuation,
+                        new Dictionary<string, string>(StringComparer.Ordinal)
+                        {
+                            ["ToolName"] = toolRequest.ToolName,
+                            ["ToolResult"] = boundedResult,
+                        });
+                }
+
                 if (transientState.HasResponses)
                 {
-                    transientState.BindToolCall(round, 0, toolCallId);
                     transientState.SealRound(round, messages.ToArray());
                 }
-
-                var continuation = _prompts.Render(
-                    PromptFileNames.SkillProcedureContinuation,
-                    new Dictionary<string, string>(StringComparer.Ordinal)
-                    {
-                        ["ToolName"] = toolRequest.ToolName,
-                        ["ToolResult"] = boundedResult,
-                    });
-
-                // Legacy input needs the result text; structured messages already contain its tool response.
-                prompt += continuation;
             }
             finally
             {
@@ -363,6 +415,37 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         }
 
         throw new InvalidOperationException("Skill procedure model-turn budget is exhausted.");
+    }
+
+    private static string NormalizeDeclaredJsonOutput(string output)
+    {
+        var trimmed = output.Trim();
+        var openingEnd = trimmed.IndexOf('\n');
+        var closingStart = trimmed.LastIndexOf('\n');
+        if (openingEnd < 0 || closingStart <= openingEnd)
+        {
+            return trimmed;
+        }
+
+        var opening = trimmed[..openingEnd].Trim();
+        var closing = trimmed[(closingStart + 1)..].Trim();
+        if ((!opening.Equals("```json", StringComparison.OrdinalIgnoreCase)
+                && !opening.Equals("```", StringComparison.Ordinal))
+            || !closing.Equals("```", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        var candidate = trimmed[(openingEnd + 1)..closingStart].Trim();
+        try
+        {
+            using var jsonDocument = JsonDocument.Parse(candidate);
+            return candidate;
+        }
+        catch (JsonException)
+        {
+            return trimmed;
+        }
     }
 
     private static IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IEnumerable<ToolRegistration> registrations)

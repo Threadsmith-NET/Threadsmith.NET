@@ -518,7 +518,7 @@ public sealed partial class SkillSubsystemTests
         Assert.True(modelRequest.Input.Length > request.HostBudget.ContentTokens * 8);
         var tool = Assert.Single(modelRequest.Tools, definition => definition.Name == "code_explore");
         Assert.True(tool.PreferStrictArguments);
-        Assert.False(modelRequest.AllowMultipleToolCalls);
+        Assert.True(modelRequest.AllowMultipleToolCalls);
     }
 
     /// <summary>Verifies required procedure assets cannot be silently dropped under context pressure.</summary>
@@ -809,6 +809,19 @@ public sealed partial class SkillSubsystemTests
                 HostBudget = new SkillBudget(),
             }));
         Assert.Equal(pinned.Identity, compatibility.Candidate?.Identity);
+        var application = new SkillApplication(
+            catalog,
+            new PassThroughVerifier(),
+            new FixedSkillTrustPolicyProvider(new SkillTrustPolicySnapshot()),
+            compatibility,
+            orchestrator,
+            state,
+            new SkillPackageInstaller(Path.Combine(root, "store"), Path.Combine(root, "quarantine")));
+        var inspector = new InspectSkillTool(application, application, TestPromptLoader.Instance, new BoundedJsonSchemaValidator());
+        var inspection = await inspector.ExecuteAsync(
+            new InspectSkillInput { Selector = "review" },
+            new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), PermissionContext()));
+        Assert.Equal(SkillPolicyIdentity.FormatSelector(pinned), Assert.Single(inspection.Value.Skills).Selector);
     }
 
     /// <summary>Verifies migration 5 and durable pins/checkpoints round-trip.</summary>
@@ -1068,6 +1081,8 @@ public sealed partial class SkillSubsystemTests
     {
         public IReadOnlyList<ModelProfileId> Profiles { get; init; } = [];
 
+        public IReadOnlyList<string> InheritedTools { get; init; } = [];
+
         private readonly ModelProfileId _profileId = ModelProfileId.New();
 
         public SkillCompatibilityResult Evaluate(
@@ -1078,6 +1093,7 @@ public sealed partial class SkillSubsystemTests
             {
                 IsCompatible = true,
                 CompatibleModels = Profiles.Count > 0 ? Profiles : [_profileId],
+                InheritedTools = InheritedTools,
             };
         }
     }
@@ -1271,6 +1287,8 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class CapturingSkillToolModelProvider : IModelProvider
     {
+        public string Output { get; init; } = "{\"summary\":\"ok\"}";
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -1280,7 +1298,7 @@ public sealed partial class SkillSubsystemTests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            yield return new ModelChunk { Text = "{\"summary\":\"ok\"}" };
+            yield return new ModelChunk { Text = Output };
         }
     }
 

@@ -150,6 +150,59 @@ public sealed class AnthropicStreamFixtureTests
         Assert.Null(error.InnerException);
     }
 
+    /// <summary>Unclosed blocks retain safe terminal diagnostics and usage without releasing even earlier complete tools.</summary>
+    [Theory]
+    [InlineData("thinking", "max_tokens")]
+    [InlineData("tool_use", "max_tokens")]
+    [InlineData("tool_use", "tool_use")]
+    [InlineData("text", "end_turn")]
+    [InlineData("thinking", null)]
+    [InlineData("tool_use", "SECRET_STOP_REASON_CANARY")]
+    public async Task StreamAsync_UnclosedBlock_PreservesTerminalMetadataWithoutReleasingTools(string blockType, string? stopReason)
+    {
+        object block = blockType switch
+        {
+            "thinking" => new { type = blockType, thinking = "SECRET_THINKING_CANARY", signature = "SECRET_SIGNATURE_CANARY" },
+            "tool_use" => new { type = blockType, id = "wire_open", name = "lookup", input = new { value = "SECRET_ARGUMENT_CANARY" } },
+            _ => new { type = blockType, text = "SECRET_TEXT_CANARY" },
+        };
+        var fixture = TestAnthropic.Start(new { input_tokens = 100, cache_creation_input_tokens = 200, cache_read_input_tokens = 300, output_tokens = 10 })
+            + TestAnthropic.Block(0, new { type = "tool_use", id = "wire_complete", name = "lookup", input = new { } })
+            + TestAnthropic.Close(0)
+            + TestAnthropic.Block(1, block)
+            + TestAnthropic.Event("message_delta", new
+            {
+                type = "message_delta",
+                delta = new { stop_reason = stopReason, stop_sequence = (string?)null },
+                usage = new { output_tokens = 25 },
+            });
+        var handler = new TestAnthropicHandler(fixture);
+        using var client = new HttpClient(handler);
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(thinking: true), "test-key", TestAnthropic.Compatibility(thinking: true));
+        var chunks = new List<ModelChunk>();
+
+        var error = await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(TestAnthropic.Request(thinking: true) with { Tools = [TestAnthropic.Tool()] }))
+            {
+                chunks.Add(chunk);
+            }
+        });
+
+        Assert.Contains($"type: {blockType}, index: 1", error.Message, StringComparison.Ordinal);
+        var expectedReason = stopReason is null ? "not supplied" : stopReason.StartsWith("SECRET", StringComparison.Ordinal) ? "unrecognized" : stopReason;
+        Assert.Contains($"stop reason: {expectedReason}", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("SECRET", error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(chunks, chunk => chunk.Output is not null || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null);
+        var usage = Assert.Single(chunks, chunk => chunk.Usage is not null).Usage!;
+        Assert.Equal(600, usage.InputTokens);
+        Assert.Equal(stopReason is null ? TestAnthropic.Profile().EffectiveRequestOutputTokenReserve : 25, usage.OutputTokens);
+        Assert.Equal(stopReason is null, usage.IsEstimate);
+        Assert.Equal(200, usage.Cache?.CacheWriteTokens);
+        Assert.Equal(300, usage.Cache?.CacheReadTokens);
+        Assert.Single(handler.Requests);
+    }
+
     /// <summary>Rejects out-of-order blocks, mismatched deltas, unknown semantics, and duplicate tool identities.</summary>
     [Theory]
     [InlineData("index")]
@@ -283,4 +336,3 @@ public sealed class AnthropicStreamFixtureTests
 
     private static AnthropicModelProvider Provider(HttpClient client) => new(client, TestAnthropic.Profile(), "test-key", TestAnthropic.Compatibility());
 }
-

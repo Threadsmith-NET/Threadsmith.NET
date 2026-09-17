@@ -3643,20 +3643,27 @@ public sealed partial class InteractionCoordinator
                 case "use":
                     (var selector, var input) = ParseSkillUse(remainder);
                     var invocationId = SkillInvocationId.New();
-                    var invoked = await controller.InvokeSkillAsync(
-                        new SkillInvocationRequest
-                        {
-                            InvocationId = invocationId,
-                            UseDefaultBudget = true,
-                            SessionId = sessionId,
-                            RunId = RunId.New(),
-                            Selector = selector,
-                            InputJson = input,
-                            Trust = trust,
-                            Phase = RunPhase.EvidenceCollection,
-                            HostBudget = new SkillBudget(),
-                        },
+                    var invoked = await RunCancellableSkillOperationAsync(
+                        token => controller.InvokeSkillAsync(
+                            new SkillInvocationRequest
+                            {
+                                InvocationId = invocationId,
+                                UseDefaultBudget = true,
+                                SessionId = sessionId,
+                                RunId = RunId.New(),
+                                Selector = selector,
+                                InputJson = input,
+                                Trust = trust,
+                                Phase = RunPhase.EvidenceCollection,
+                                HostBudget = new SkillBudget(),
+                            },
+                            token),
                         cancellationToken);
+                    if (invoked is null)
+                    {
+                        return;
+                    }
+
                     var invocationRole = invoked.Status == SkillInvocationStatus.Failed
                         ? PresentationTextRole.Warning
                         : PresentationTextRole.Status;
@@ -3668,7 +3675,14 @@ public sealed partial class InteractionCoordinator
 
                 case "continue":
                     (var continueId, var hostResult) = ParseSkillContinuation(remainder);
-                    var continued = await controller.ContinueSkillAsync(continueId, hostResult, cancellationToken);
+                    var continued = await RunCancellableSkillOperationAsync(
+                        token => controller.ContinueSkillAsync(continueId, hostResult, token),
+                        cancellationToken);
+                    if (continued is null)
+                    {
+                        return;
+                    }
+
                     await _surface.WriteAsync(
                         FormatSkillInvocation(continued),
                         PresentationTextRole.Status,
@@ -3681,7 +3695,14 @@ public sealed partial class InteractionCoordinator
                         throw new ArgumentException("Skill resume requires an invocation GUID.");
                     }
 
-                    var resumed = await controller.ResumeSkillAsync(new SkillInvocationId(resumeId), cancellationToken);
+                    var resumed = await RunCancellableSkillOperationAsync(
+                        token => controller.ResumeSkillAsync(new SkillInvocationId(resumeId), token),
+                        cancellationToken);
+                    if (resumed is null)
+                    {
+                        return;
+                    }
+
                     await _surface.WriteAsync(
                         FormatSkillInvocation(resumed),
                         PresentationTextRole.Status,
@@ -3733,12 +3754,7 @@ public sealed partial class InteractionCoordinator
                     return;
             }
         }
-        catch (Exception exception) when (exception is ArgumentException
-            or InvalidDataException
-            or InvalidOperationException
-            or KeyNotFoundException
-            or UnauthorizedAccessException
-            or NotSupportedException)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             await _surface.WriteAsync(
                 $"Skill command failed: {exception.Message}\n",

@@ -60,6 +60,9 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
     public string TypeDiscriminator => "openai-compatible";
 
     /// <inheritdoc />
+    public ModelProviderInstructionAsset? ProviderInstructionAsset => null;
+
+    /// <inheritdoc />
     public Type ProviderConfigurationType => typeof(OpenAiCompatibleProviderConfiguration);
 
     /// <inheritdoc />

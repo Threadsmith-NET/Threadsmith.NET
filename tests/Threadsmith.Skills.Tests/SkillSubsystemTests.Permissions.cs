@@ -39,6 +39,8 @@ public sealed partial class SkillSubsystemTests
         await using var events = new DomainEventStream();
         var runner = CreatePermissionRunner(PermissionContext, original, model, events, registry: registry);
         await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
+        var error = Assert.Single(model.Requests[1].Messages, message => message.IsError == true);
+        Assert.Contains("no longer matches", error.GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Equal(0, original.Executions);
         Assert.Equal(0, replacement.Executions);
     }
@@ -58,9 +60,9 @@ public sealed partial class SkillSubsystemTests
         Assert.DoesNotContain("audit-only-content", model.Requests[1].Input, StringComparison.Ordinal);
     }
 
-    /// <summary>The host rejects a multiple-call response before executing any skill tool.</summary>
+    /// <summary>The host rejects a batch exceeding the remaining tool budget before executing any tool.</summary>
     [Fact]
-    public async Task SkillProcedure_MultipleCalls_RejectsEntireResponseBeforeEffects()
+    public async Task SkillProcedure_OverBudgetBatch_RejectsEntireResponseBeforeEffects()
     {
         var context = PermissionContext();
         var tool = new PermissionProbeTool();
@@ -68,7 +70,8 @@ public sealed partial class SkillSubsystemTests
         await using var events = new DomainEventStream();
         var runner = CreatePermissionRunner(() => context, tool, model, events);
 
-        await Assert.ThrowsAsync<InvalidDataException>(() => runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}"));
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}"));
+        Assert.Contains("budget", error.Message, StringComparison.Ordinal);
 
         Assert.Equal(0, tool.Executions);
         Assert.Single(model.Requests);

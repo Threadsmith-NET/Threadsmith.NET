@@ -3612,7 +3612,7 @@ public static class Milestone4Tests
                 StringComparison.Ordinal);
             Assert.True(policyPosition < appendPosition && appendPosition < phasePosition);
             Assert.Contains(
-                $"<system_policy>{TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)}</system_policy>",
+                $"<system_policy>{TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)}{Environment.NewLine}{TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)}</system_policy>",
                 assembled.ModelInput,
                 StringComparison.Ordinal);
             Assert.Equal(2, assembled.ModelInput.Split("<project_context ").Length - 1);
@@ -4157,7 +4157,8 @@ public static class Milestone4Tests
     [Fact]
     public static void StableSystemPolicy_RequiresSemanticFirstToolSelection()
     {
-        var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt);
+        var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
+            + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
 
         Assert.Contains(
             "For repository-wide C# symbol discovery and compiler-backed relationships, use an applicable semantic tool first",

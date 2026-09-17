@@ -647,6 +647,32 @@ public static partial class AppBootstrapTests
         Assert.Null(models.PreferredProfileId);
     }
 
+    /// <summary>Provider instruction resolution follows profile metadata rather than a central provider-name switch.</summary>
+    [Fact]
+    public static void ProviderInstructions_ResolveProviderOwnedAssetForAnyProviderFamily()
+    {
+        var prompts = TestPromptLoader.Instance.WithPrompt(
+            PromptFileNames.ProviderOpenAiCodexInstructions,
+            "provider-owned instructions");
+        var profile = CreateCompactionProfile() with
+        {
+            Provider = "future-provider",
+            ProviderInstructionAsset = new ModelProviderInstructionAsset
+            {
+                SectionId = "future-provider-instructions",
+                PromptFileName = PromptFileNames.ProviderOpenAiCodexInstructions,
+            },
+        };
+        var resolver = new ModelProviderInstructionResolver(
+            new ConfiguredModelCatalog([profile]),
+            prompts);
+
+        var resolved = resolver.Resolve(profile.Id);
+
+        Assert.Equal("future-provider-instructions", resolved?.SectionId);
+        Assert.Equal("provider-owned instructions", resolved?.Content);
+    }
+
     /// <summary>A trusted compaction profile resolves independently under the summary workload contract.</summary>
     [Theory]
     [InlineData(null, "none")]

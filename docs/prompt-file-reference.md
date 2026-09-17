@@ -18,7 +18,7 @@ Ordinary delegated children receive a common host-policy message plus a role-spe
 
 The child task asset distinguishes its workspace fingerprint from a Git revision. The delegation description distinguishes concurrent children in one `agents` array from sequential tool invocations. Child policy excludes process/code-execution tools; permitted inspection tools can still use their declared executable dependencies. These are descriptions of existing behavior, not additional permissions or scheduling controls.
 
-The `read_file`, `search`, and `code_explore` description assets and `System-SystemPrompt.md` allow direct known-file inspection and a choice between relevant ranges and whole-file reads. Semantic tools remain the first choice for repository-wide C# discovery and compiler-backed relationships. This is retrieval guidance, not an expansion of tool permissions.
+The `read_file`, `search`, and `code_explore` description assets and the shared `System-RepositoryInspection.md` allow direct known-file inspection and a choice between relevant ranges and whole-file reads. Parent and child agents receive the same semantic-tool selection, batching, evidence reuse, and completion guidance. Semantic tools remain the first choice for repository-wide C# discovery and compiler-backed relationships when their workspace matches the reviewed revision; another revision requires ref-based evidence. This is retrieval guidance, not an expansion of tool permissions.
 
 The `Tool-code_explore-OmissionsSection.md` `Items` value also includes unresolved requested filenames and permitted ambiguity alternatives, so missing file coverage is visible in the default Markdown output.
 
@@ -35,14 +35,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 27 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| System and phase prompts | 28 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 194 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 197 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 14 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
-| Provider prompts | 1 | Provider-specific instructions attached after provider-neutral request assembly. |
+| Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **306** | Complete deployed catalog. |
+| **Total** | **310** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -64,7 +64,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | `System-ChildAgent-TestReviewer.md` | TestReviewer role amendment for useful coverage observations and improvements. | `None` |
 | `System-ChildAgent-PerformanceReviewer.md` | PerformanceReviewer role amendment distinguishing measured behavior from plausible risks. | `None` |
 | `System-ChildAgent-ArchitectureReviewer.md` | ArchitectureReviewer role amendment informed by repository design and applicable documents. | `None` |
-| `System-ChildAgent-BugReviewer.md` | BugReviewer role amendment for functional correctness against supplied requirements and acceptance criteria. | `None` |
+| `System-ChildAgent-BugReviewer.md` | BugReviewer role amendment for functional correctness against supplied requirements and acceptance criteria, with evidence reuse and completion guidance. | `None` |
 
 #### `GovernedRequestState` family
 
@@ -110,7 +110,8 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-SystemPrompt.md` | System framing for `SystemPrompt`. | `None` |
+| `System-SystemPrompt.md` | Main-agent host authority, planning, skill routing, and artifact guidance. | `None` |
+| `System-RepositoryInspection.md` | Shared parent/child inspection, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
 
 #### `ToolInventory` family
 
@@ -287,18 +288,18 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-Tool-DuplicateInvocation.md` | Corrective or retry guidance for `Tool-DuplicateInvocation`. | [`ToolName`](#placeholder-toolname) |
+| `Correction-Tool-DuplicateInvocation.md` | Duplicate-call reason for parent corrections and child execution failures. | [`ToolName`](#placeholder-toolname) |
 | `Correction-Tool-Unavailable.md` | Corrective or retry guidance for `Tool-Unavailable`. | [`ToolName`](#placeholder-toolname) |
 
 #### `ToolBatch` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-ToolBatch-PreflightFailed.md` | Corrective or retry guidance for `ToolBatch-PreflightFailed`. | [`Ordinal`](#placeholder-ordinal), [`Tool`](#placeholder-tool), [`Reason`](#placeholder-reason) |
+| `Correction-ToolBatch-PreflightFailed.md` | Preflight failure summary shared by conversation, child-agent, and skill tool-batch corrections. | [`Ordinal`](#placeholder-ordinal), [`Tool`](#placeholder-tool), [`Reason`](#placeholder-reason) |
 | `Correction-ToolBatch-PreflightReason.md` | Fixed fallback reason when tool-batch preflight fails without a safe diagnostic. | `None` |
 | `Correction-ToolBatch-PreparationMissing.md` | Corrective or retry guidance for `ToolBatch-PreparationMissing`. | `None` |
-| `Correction-ToolBatch-Rejected.md` | Corrective or retry guidance for `ToolBatch-Rejected`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`FailureSummary`](#placeholder-failuresummary) |
-| `Correction-ToolBatch-SiblingRejected.md` | Corrective or retry guidance for `ToolBatch-SiblingRejected`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`FailureSummary`](#placeholder-failuresummary) |
+| `Correction-ToolBatch-Rejected.md` | Rejected-call guidance shared by conversation, child-agent, and skill tool-batch corrections. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`FailureSummary`](#placeholder-failuresummary) |
+| `Correction-ToolBatch-SiblingRejected.md` | Unexecuted-sibling guidance shared by conversation, child-agent, and skill tool-batch corrections. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`FailureSummary`](#placeholder-failuresummary) |
 | `Correction-ToolBatch-ValidationUnavailable.md` | Fixed validation fallback in a tool-batch preflight correction. | `None` |
 
 #### `ToolPipeline` family
@@ -503,7 +504,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
-| `Tool-delegate_agents-Description.md` | Delegation tool guidance for roles, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
+| `Tool-delegate_agents-Description.md` | Delegation tool guidance for role selection including concrete Explorer tasks, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
 | `Tool-delegate_agents-FindingUncertainty.md` | Conditional uncertainty block in a joined delegation finding. | [`Uncertainty`](#placeholder-uncertainty) |
@@ -611,6 +612,14 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 |---|---|---|
 | `Tool-invoke_skill-Description.md` | Advertised description for `invoke_skill`. | `None` |
 
+#### `inspect_skill` family
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Tool-inspect_skill-Description.md` | Advertised discovery of enabled, verified skills and detailed inspection guidance before invocation. | `None` |
+| `Tool-inspect_skill-DiscoveryGuidance.md` | Discovery result guidance for selecting an enabled, verified skill and inspecting its input contract. | `None` |
+| `Tool-inspect_skill-Guidance.md` | Inspection result guidance for preparing input and asking for missing required information. | `None` |
+
 #### `list_files` family
 
 | File | What Threadsmith uses it for | Placeholders |
@@ -706,7 +715,7 @@ Governed skill discovery, compatibility, workflow, checkpoint, and procedure mes
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Skill-Review.md` | Lead review acquisition, delegation, synthesis and delivery through enabled tools. | `None` |
+| `Skill-Review.md` | Lead review acquisition, change-focused specialist delegation, synthesis and delivery while preserving the active checkout and report format. | `None` |
 
 Both maintained review packages load this file from the normal prompt cache. The existing `System-ChildAgent-*Reviewer.md` files supply role focus. The selected root model and reasoning are frozen at invocation; role configuration overrides the inherited selection for children. There is no private review workflow.
 
@@ -735,7 +744,7 @@ Both maintained review packages load this file from the normal prompt cache. The
 
 ### Provider prompts
 
-Provider-specific instructions attached after provider-neutral request assembly.
+Provider-specific instructions are cataloged host assets declared by compiled provider registrations. The effective catalog carries a declaration onto the provider's projected profiles, a shared resolver loads it without recognizing provider names or filenames, and the selected adapter maps the contribution to its wire format.
 
 #### `OpenAiCodex` family
 

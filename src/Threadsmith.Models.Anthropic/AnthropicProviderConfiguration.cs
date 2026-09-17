@@ -177,7 +177,7 @@ public static class AnthropicProfileIdentifiers
 public sealed record AnthropicModelDefaults
 {
     /// <summary>Per-request output reserve, validated rather than clamped.</summary>
-    public int RequestOutputTokenReserve { get; init; } = 8192;
+    public int RequestOutputTokenReserve { get; init; } = 32768;
 
     /// <summary>Requested default effort; omission selects reviewed high when available.</summary>
     public ReasoningLevel? DefaultReasoningLevel { get; init; }

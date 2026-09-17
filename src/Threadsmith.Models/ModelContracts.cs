@@ -32,6 +32,16 @@ public sealed record ModelProviderInstructions
     public required string Content { get; init; }
 }
 
+/// <summary>Provider-owned declaration of a deployed instruction asset.</summary>
+public sealed record ModelProviderInstructionAsset
+{
+    /// <summary>Stable section identity used for capacity and request inspection.</summary>
+    public required string SectionId { get; init; }
+
+    /// <summary>Declared prompt filename loaded through the host prompt catalog.</summary>
+    public required string PromptFileName { get; init; }
+}
+
 /// <summary>Resolves an optional compiled provider instruction contribution for a selected profile.</summary>
 public interface IModelProviderInstructionResolver
 {

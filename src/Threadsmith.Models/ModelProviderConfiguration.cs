@@ -173,6 +173,9 @@ public interface IModelProviderRegistration
     /// <summary>Allowlisted JSON discriminator.</summary>
     string TypeDiscriminator { get; }
 
+    /// <summary>Optional deployed instruction asset contributed by this provider.</summary>
+    ModelProviderInstructionAsset? ProviderInstructionAsset { get; }
+
     /// <summary>Concrete provider configuration record type.</summary>
     Type ProviderConfigurationType { get; }
 
@@ -344,7 +347,12 @@ public sealed class EffectiveModelProviderCatalog : IModelRequestPreparationReso
                 continue;
             }
 
-            var profiles = registration.CreateProfiles(provider);
+            var profiles = registration.CreateProfiles(provider)
+                .Select(profile => profile with
+                {
+                    ProviderInstructionAsset = registration.ProviderInstructionAsset,
+                })
+                .ToArray();
             var models = provider.Models
                 .Where(model => model.Enabled)
                 .ToDictionary(model => model.Id);

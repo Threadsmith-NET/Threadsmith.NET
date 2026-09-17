@@ -950,6 +950,9 @@ public sealed record ListSkillsCommand(SkillCatalogQuery Query)
 /// <summary>Inspects one explicitly selected skill.</summary>
 public sealed record GetSkillCommand(string Selector) : ICommand<SkillCatalogCandidate>;
 
+/// <summary>Resolves and verifies a skill for invocation inspection, honoring existing pins.</summary>
+public sealed record InspectSkillCommand(string Selector) : ICommand<SkillCatalogCandidate>;
+
 /// <summary>Evaluates current compatibility without loading package bodies.</summary>
 public sealed record GetSkillCompatibilityCommand(
     string Selector,

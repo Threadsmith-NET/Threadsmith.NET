@@ -552,12 +552,15 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
+            var serializationCancellationToken = execution.Failure?.Classification == ToolErrorClassification.Cancelled
+                ? CancellationToken.None
+                : timeoutCancellation.Token;
             await using var resultStream = new MemoryStream();
             await JsonSerializer.SerializeAsync(
                 resultStream,
                 execution.Value,
                 execution.Value.GetType(),
-                cancellationToken: timeoutCancellation.Token);
+                cancellationToken: serializationCancellationToken);
             if (resultStream.Length > tool.Definition.MaximumOutputBytes)
             {
                 return await CompleteFailureAsync(

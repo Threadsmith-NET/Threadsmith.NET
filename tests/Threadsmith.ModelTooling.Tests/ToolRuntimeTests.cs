@@ -483,6 +483,53 @@ public static partial class ToolRuntimeTests
         }
     }
 
+    /// <summary>A tool can return structured cancellation details after observing caller cancellation.</summary>
+    [Fact]
+    public static async Task Pipeline_CancelledToolResult_PreservesReturnedPayload()
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            await using var events = new DomainEventStream();
+            var observed = new List<IDomainEvent>();
+            await using var subscription = events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
+            var tool = new CancellationResultTool();
+            var pipeline = CreatePipeline(events, [tool]);
+            using var cancellation = new CancellationTokenSource();
+            var pending = pipeline.InvokeAsync(
+                new ToolInvocationRequest
+                {
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    ToolId = "cancelled_result",
+                    ArgumentsJson = "{}",
+                    Context = CreateContext(repository),
+                },
+                cancellation.Token);
+            await tool.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await cancellation.CancelAsync();
+
+            var result = await pending;
+
+            Assert.False(result.Succeeded);
+            Assert.Equal(ToolErrorClassification.Cancelled, result.ErrorClassification);
+            Assert.Contains("artifact.md", result.ResultJson, StringComparison.Ordinal);
+            Assert.Contains("cancelled after writing artifact", result.Error, StringComparison.Ordinal);
+            var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
+            Assert.False(completed.Succeeded);
+            Assert.Equal(OperationActivityOutcome.Cancelled, completed.Outcome);
+            Assert.Contains("artifact.md", completed.ResultJson, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>Search guidance rejects pasted source-sized queries with actionable bounded-query text.</summary>
     [Fact]
     public static void SearchTextTool_QueryTooLong_DocumentsConciseQueryRequirement()
@@ -4595,6 +4642,10 @@ public static partial class ToolRuntimeTests
 
     private sealed record CountingOutput(string Value);
 
+    private sealed record CancellationResultInput;
+
+    private sealed record CancellationResultOutput(string Artifact);
+
     private sealed class ParallelToolGate
     {
         private readonly int _expected;
@@ -4881,6 +4932,53 @@ public static partial class ToolRuntimeTests
         protected override void ValidateInput(CountingInput input)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(input.Value);
+        }
+    }
+
+    private sealed class CancellationResultTool : Tool<CancellationResultInput, CancellationResultOutput>
+    {
+        private static readonly ToolDefinition _definition = new()
+        {
+            Id = "cancelled_result",
+            Version = "1.0",
+            Description = "Returns a structured cancellation result.",
+            Category = ToolCategory.RepositoryInspection,
+            InputSchema = new ToolSchema(nameof(CancellationResultInput), 1, "{\"type\":\"object\"}"),
+            OutputSchema = new ToolSchema(nameof(CancellationResultOutput), 1, "{\"type\":\"object\"}"),
+            Timeout = TimeSpan.FromSeconds(10),
+            MaximumOutputBytes = 1024,
+            SupportsCancellation = true,
+        };
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ToolDefinition Definition => _definition;
+
+        public override async Task<ToolExecution<CancellationResultOutput>> ExecuteAsync(
+            CancellationResultInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return new ToolExecution<CancellationResultOutput>(
+                    new CancellationResultOutput("artifact.md"),
+                    [],
+                    Failure: new ToolExecutionFailure(
+                        ToolErrorClassification.Cancelled,
+                        "cancelled after writing artifact.md"));
+            }
+
+            throw new InvalidOperationException("The cancellation test tool was not cancelled.");
+        }
+
+        protected override void ValidateInput(CancellationResultInput input)
+        {
         }
     }
 }

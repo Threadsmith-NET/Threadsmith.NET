@@ -4,6 +4,7 @@ using System.IO.Enumeration;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Threadsmith.Core;
+using Threadsmith.Tools;
 
 /// <summary>Retrieves provider-authoritative PR evidence through ordinary governed tool execution.</summary>
 public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
@@ -82,8 +83,17 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
             target.Url,
             input.Kind,
             Hosts = invocation.AllowedNetworkHosts.Order(StringComparer.OrdinalIgnoreCase),
+            ApprovedRoots = invocation.ApprovedRoots.Order(StringComparer.OrdinalIgnoreCase),
+            ProhibitedPaths = invocation.ProhibitedPaths.Order(StringComparer.OrdinalIgnoreCase),
         })));
-        var result = await cache.ReadAsync(key, providerId, input, target, provider, account, cancellationToken);
+        if (input.Kind == PrFetchKind.Diff && IsPathScopeRestricted(invocation))
+        {
+            throw new UnauthorizedAccessException("PR diff content cannot be fetched when approved roots or prohibited paths restrict the caller's repository scope.");
+        }
+
+        var result = Confine(
+            await cache.ReadAsync(key, providerId, input, target, provider, account, cancellationToken),
+            invocation);
         return new ToolExecution<PrFetchOutput>(
             result,
             [new ToolProvenanceSource("pull-request-untrusted", target.Url, $"snapshot={result.SnapshotId:N};source={result.Metadata.SourceCommit};destination={result.Metadata.DestinationCommit}")],
@@ -134,6 +144,68 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
     }
 
     private static string FormatKind(PrFetchKind kind) => kind.ToString().ToLowerInvariant();
+
+    private static PrFetchOutput Confine(PrFetchOutput result, ToolInvocationContext context)
+    {
+        if (!IsPathScopeRestricted(context) || result.Page.Files.Count == 0)
+        {
+            return result;
+        }
+
+        var files = result.Page.Files.Where(file => IsAllowed(file, context)).ToArray();
+        if (files.Length == result.Page.Files.Count)
+        {
+            return result;
+        }
+
+        return result with
+        {
+            Page = result.Page with
+            {
+                Files = files,
+                Limitations =
+                [
+                    .. result.Page.Limitations,
+                    "Some PR file entries were omitted because they are outside the caller's approved repository path scope.",
+                ],
+            },
+        };
+    }
+
+    private static bool IsAllowed(PullRequestFile file, ToolInvocationContext context)
+    {
+        return IsAllowed(file.Path, context)
+            && (file.PreviousPath is null || IsAllowed(file.PreviousPath, context));
+    }
+
+    private static bool IsAllowed(string path, ToolInvocationContext context)
+    {
+        try
+        {
+            _ = ToolPathRules.NormalizeAndValidate(path, context, inspectFileSystem: false);
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsPathScopeRestricted(ToolInvocationContext context)
+    {
+        if (context.ProhibitedPaths.Count > 0)
+        {
+            return true;
+        }
+
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
+        return !context.ApprovedRoots.Any(root =>
+            Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot))
+                .Equals(repositoryRoot, comparison));
+    }
 
     private (string Id, PullRequestProviderOptions Account, IPullRequestProvider Provider, PullRequestTarget Target) ResolveProvider(PrFetchInput input)
     {

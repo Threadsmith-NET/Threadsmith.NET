@@ -1231,6 +1231,13 @@ public sealed class SemanticRefreshCoordinator :
         }
 
         var inventory = _backend.GetRefreshInventory(binding.Request.WorkspaceId);
+        if (inventory.SourceDocuments.Contains(path))
+        {
+            return !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
+                binding.Request.RepositoryPath,
+                path);
+        }
+
         if (inventory.AdditionalDocuments.Contains(path)
             || inventory.AnalyzerConfigDocuments.Contains(path))
         {
@@ -1240,11 +1247,6 @@ public sealed class SemanticRefreshCoordinator :
         if (SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, path))
         {
             return false;
-        }
-
-        if (inventory.SourceDocuments.Contains(path))
-        {
-            return true;
         }
 
         if (inventory.FullReloadInputs.Contains(path)
@@ -2306,6 +2308,7 @@ public sealed class SemanticRefreshCoordinator :
         var isAnalyzerConfigDocument = inventory.AnalyzerConfigDocuments.Contains(path);
         var isFullReloadInput = inventory.FullReloadInputs.Contains(path);
         if (SemanticRefreshPathPolicy.IsIgnoredPath(repositoryPath, path)
+            && !(isSourceDocument && !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(repositoryPath, path))
             && !isAdditionalDocument
             && !isAnalyzerConfigDocument)
         {

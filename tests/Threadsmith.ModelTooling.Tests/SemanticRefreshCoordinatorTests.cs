@@ -279,6 +279,35 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(0, backend.RefreshCount);
     }
 
+    /// <summary>A loaded source document under an artifact-named source folder still refreshes.</summary>
+    [Fact]
+    public static async Task ObserveChangeAsync_SourceDocumentUnderArtifactsRefreshes()
+    {
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var sourceDirectory = Path.Combine(repository.Root, "src", "Artifacts");
+        Directory.CreateDirectory(sourceDirectory);
+        var sourcePath = Path.Combine(sourceDirectory, "ArtifactFactory.cs");
+        await File.WriteAllTextAsync(sourcePath, "public class ArtifactFactory { }");
+        backend.AddSourceDocument(repository.WorkspaceId, sourcePath);
+        await using var coordinator = CreateCoordinator(backend, events);
+        await coordinator.BindAsync(repository.CreateRequest());
+
+        await File.WriteAllTextAsync(sourcePath, "public class ArtifactFactoryChanged { }");
+        await coordinator.ObserveChangeAsync(new SemanticFileChange(
+            repository.SessionId,
+            sourcePath,
+            SemanticFileChangeKind.Changed));
+        var result = await coordinator.EnsureCurrentAsync(
+            repository.SessionId,
+            SemanticRefreshReason.UserAdmission);
+
+        Assert.True(result.WasRefreshed);
+        Assert.Equal(SemanticRefreshMode.Incremental, result.Mode);
+        Assert.Equal(1, backend.RefreshCount);
+    }
+
     /// <summary>The shared semantic refresh path policy recognizes nested generated-output paths.</summary>
     [Fact]
     public static void SemanticRefreshPathPolicy_IgnoresNestedBuildOutputPaths()

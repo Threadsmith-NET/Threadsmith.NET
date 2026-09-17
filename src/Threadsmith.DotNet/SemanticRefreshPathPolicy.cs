@@ -49,4 +49,31 @@ internal static class SemanticRefreshPathPolicy
             || segment.Equals("obj", StringComparison.OrdinalIgnoreCase)
             || segment.Equals("TestResults", StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>Returns whether a known source document is generated build-output churn.</summary>
+    public static bool IsIgnoredGeneratedSourceDocument(string repositoryPath, string path)
+    {
+        string normalized;
+        try
+        {
+            normalized = Path.GetRelativePath(repositoryPath, path).Replace('\\', '/');
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or IOException
+            or NotSupportedException)
+        {
+            return true;
+        }
+
+        return Path.GetFileName(path).EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+            && normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Any(IsBuildOutputDirectorySegment);
+    }
+
+    private static bool IsBuildOutputDirectorySegment(string segment)
+    {
+        return segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("obj", StringComparison.OrdinalIgnoreCase)
+            || segment.Equals("TestResults", StringComparison.OrdinalIgnoreCase);
+    }
 }

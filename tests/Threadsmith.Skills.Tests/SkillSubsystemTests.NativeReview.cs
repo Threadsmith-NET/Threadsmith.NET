@@ -125,7 +125,7 @@ public sealed partial class SkillSubsystemTests
             new CompatibleEvaluator { Profiles = [selected] },
             new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
             new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner("{\"succeeded\":true,\"response\":\"Review complete\"}"),
+            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Review complete\"}"),
             TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(new SkillInvocationHostContext
@@ -148,6 +148,44 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(
             "{\"mode\":\"pullRequest\",\"url\":\"https://example.test/pull-requests/733\"}",
             result.Checkpoint.InputJson);
+    }
+
+    /// <summary>Artifact delivery must include the artifact metadata needed by the parent invocation.</summary>
+    [Fact]
+    public async Task NativeReview_ArtifactDeliveryRequiresArtifactMetadata()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Review saved\"}"),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        }));
+
+        Assert.Contains("missing required property 'artifact'", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>An unavailable selected provider cannot silently dispatch work through a different root model.</summary>
@@ -266,8 +304,8 @@ public sealed partial class SkillSubsystemTests
             {
                 Usage = new ModelUsage(10, 2),
                 Text = Requests.Count == 1
-                ? "{\"succeeded\":false,\"response\":\"# Review unavailable\\nAll specialists failed.\"}"
-                : "{\"succeeded\":true,\"response\":\"# Review complete\\nNo supported issue.\"}",
+                ? "{\"succeeded\":false,\"delivery\":\"inline\",\"response\":\"# Review unavailable\\nAll specialists failed.\"}"
+                : "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"# Review complete\\nNo supported issue.\"}",
             };
         }
     }

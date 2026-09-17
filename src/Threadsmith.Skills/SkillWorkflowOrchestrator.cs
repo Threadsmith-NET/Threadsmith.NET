@@ -219,6 +219,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             definition.OutputSchemaAsset,
             hostResultJson,
             cancellationToken);
+        validated = ValidateArtifactDeliveryContract(validated);
         SkillWorkflowStepResult[] steps =
         [
             .. checkpoint.Steps.Select(item => item == waiting
@@ -513,11 +514,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
             }
 
-            var validated = await ValidateAgainstAssetAsync(
+            var validated = ValidateArtifactDeliveryContract(await ValidateAgainstAssetAsync(
                 candidate,
                 step.OutputSchemaAsset,
                 procedure.OutputJson,
-                cancellationToken);
+                cancellationToken));
             using var output = System.Text.Json.JsonDocument.Parse(validated);
             return new SkillWorkflowStepResult
             {
@@ -748,6 +749,21 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             return _schemas.Validate(schema, embeddedJson);
         }
+    }
+
+    private static string ValidateArtifactDeliveryContract(string valueJson)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(valueJson);
+        if (document.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
+            && document.RootElement.TryGetProperty("delivery", out var delivery)
+            && delivery.ValueKind == System.Text.Json.JsonValueKind.String
+            && string.Equals(delivery.GetString(), "artifact", StringComparison.Ordinal)
+            && !document.RootElement.TryGetProperty("artifact", out _))
+        {
+            throw new InvalidDataException("Skill value declares artifact delivery but is missing required property 'artifact'.");
+        }
+
+        return valueJson;
     }
 
     private static bool IsRootTypeMismatch(InvalidDataException exception)

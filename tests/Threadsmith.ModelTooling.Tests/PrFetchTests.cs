@@ -334,7 +334,7 @@ public sealed class PrFetchTests
         Assert.Equal(resolutions, secrets.Calls);
     }
 
-    /// <summary>Provider scope excludes base-only files and is shared across descendant run identities.</summary>
+    /// <summary>Provider scope excludes base-only files and is shared only across matching authorization scopes.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -362,23 +362,45 @@ public sealed class PrFetchTests
         var requests = handler.Requests;
         var resolutions = secrets.Calls;
 
-        var child = parent with
+        var sameScopeChild = parent with
+        {
+            RunId = RunId.New(),
+            ToolInvocationId = ToolInvocationId.New(),
+        };
+        var repeated = await tool.ExecuteAsync(Input(bitbucket), sameScopeChild);
+        Assert.True(repeated.Value.CacheHit);
+        Assert.Equal(first.SnapshotId, repeated.Value.SnapshotId);
+        Assert.Equal(requests, handler.Requests);
+        Assert.Equal(resolutions, secrets.Calls);
+
+        var restrictedChild = parent with
         {
             RunId = RunId.New(),
             ToolInvocationId = ToolInvocationId.New(),
             Invocation = parent.Invocation with { ApprovedRoots = ["src"], ProhibitedPaths = ["local-only.secret"] },
         };
-        var repeated = await tool.ExecuteAsync(Input(bitbucket), child);
-        Assert.True(repeated.Value.CacheHit);
-        Assert.Equal(first.SnapshotId, repeated.Value.SnapshotId);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(Input(bitbucket), restrictedChild));
         Assert.Equal(requests, handler.Requests);
         Assert.Equal(resolutions, secrets.Calls);
+
+        var disjointChild = restrictedChild with
+        {
+            Invocation = restrictedChild.Invocation with { ApprovedRoots = ["docs"], ProhibitedPaths = [] },
+        };
+        var scopedInventory = await ReadAllAsync(
+            tool,
+            input with { Kind = PrFetchKind.Inventory },
+            disjointChild);
+        Assert.Empty(scopedInventory.SelectMany(page => page.Page.Files));
+        Assert.Contains(
+            scopedInventory.SelectMany(page => page.Page.Limitations),
+            limitation => limitation.Contains("outside the caller's approved repository path scope", StringComparison.Ordinal));
         Assert.Equal(SecretProviderTrust.UserOwned, secrets.MinimumTrust);
         Assert.DoesNotContain("test-credential", tool.Definition.Description, StringComparison.Ordinal);
 
         var refreshed = await tool.ExecuteAsync(input with { Refresh = true }, parent);
         Assert.NotEqual(first.SnapshotId, refreshed.Value.SnapshotId);
-        await Assert.ThrowsAsync<ArgumentException>(() => tool.ExecuteAsync(input with { Cursor = first.Cursor }, child));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input with { Cursor = first.Cursor }, restrictedChild));
         await ReadAllAsync(tool, input, parent);
         Assert.True(handler.Requests > requests);
     }

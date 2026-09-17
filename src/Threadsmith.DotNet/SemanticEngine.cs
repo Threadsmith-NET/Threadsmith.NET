@@ -1859,7 +1859,7 @@ public sealed class SemanticEngine : ISemanticEngine
             return false;
         }
 
-        return !SemanticRefreshPathPolicy.IsIgnoredPath(
+        return !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
             request.RepositoryPath,
             Path.GetFullPath(path ?? string.Empty));
     }

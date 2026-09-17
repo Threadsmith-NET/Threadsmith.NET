@@ -86,13 +86,16 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
             ApprovedRoots = invocation.ApprovedRoots.Order(StringComparer.OrdinalIgnoreCase),
             ProhibitedPaths = invocation.ProhibitedPaths.Order(StringComparer.OrdinalIgnoreCase),
         })));
-        if (input.Kind == PrFetchKind.Diff && IsPathScopeRestricted(invocation))
-        {
-            throw new UnauthorizedAccessException("PR diff content cannot be fetched when approved roots or prohibited paths restrict the caller's repository scope.");
-        }
-
         var result = Confine(
-            await cache.ReadAsync(key, providerId, input, target, provider, account, cancellationToken),
+            await cache.ReadAsync(
+                key,
+                providerId,
+                input,
+                target,
+                provider,
+                account,
+                IsPathScopeRestricted(invocation) ? file => IsAllowed(file, invocation) : null,
+                cancellationToken),
             invocation);
         return new ToolExecution<PrFetchOutput>(
             result,

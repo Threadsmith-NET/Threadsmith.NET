@@ -524,6 +524,45 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains("Do not run a replacement review workflow", duplicate.ModelResultContent, StringComparison.Ordinal);
     }
 
+    /// <summary>Selector aliases resolve to one package-scoped duplicate key before workflow execution.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_DuplicateRetry_CanonicalizesSelectorAliases()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var catalog = package.CreateCatalog(SkillScope.Maintained);
+        var candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
+        var workflows = new CapturingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(
+            workflows,
+            TestPromptLoader.Instance,
+            catalog: catalog,
+            state: new InMemorySkillStateStore());
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var firstInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+        var exactSelector = $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}";
+        var aliasInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            JsonSerializer.Serialize(new { selector = exactSelector, input = new { mode = "pullRequest" } })));
+
+        var first = await tool.ExecuteAsync(firstInput, context);
+        var duplicate = await tool.ExecuteAsync(aliasInput, context);
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
+    }
+
     /// <summary>A stringified structured input receives provider-neutral corrective guidance.</summary>
     [Fact]
     public async Task InvokeSkillTool_StringifiedObjectFailureExplainsNativeJsonShape()

@@ -56,7 +56,7 @@ public sealed class GitHubPullRequestProvider : PullRequestProvider
             foreach (var result in FilePages(
                 files.EnumerateArray().Select(file => new PullRequestFile(
                     Text(file, "filename"),
-                    Text(file, "previous_filename"),
+                    OptionalText(file, "previous_filename"),
                     Text(file, "status"),
                     file.TryGetProperty("patch", out _) ? null : "File-list patch omitted; inspect raw diff for coverage or binary markers.")),
                 []))

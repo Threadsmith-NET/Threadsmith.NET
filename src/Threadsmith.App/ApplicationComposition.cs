@@ -847,7 +847,12 @@ internal static class ApplicationComposition
                     Path.Combine(userProfile, ".threadsmith", "skill-quarantine"),
                     LoadSkillInstallerLimits(host.Configuration, host.TrustedConfiguration),
                     skillCatalogOptions));
-            var invokeSkillTool = new InvokeSkillTool(skillWorkflow, host.PromptLoader, skillRuntimeLimits);
+            var invokeSkillTool = new InvokeSkillTool(
+                skillWorkflow,
+                host.PromptLoader,
+                skillRuntimeLimits,
+                compatibleSkillCatalog,
+                persistence.SkillStateStore);
             var inspectSkillTool = new InspectSkillTool(skillApplication, skillApplication, host.PromptLoader, skillSchemas, skillRuntimeLimits);
             tools.ToolRegistry.RegisterOrReplace(
                 invokeSkillTool,

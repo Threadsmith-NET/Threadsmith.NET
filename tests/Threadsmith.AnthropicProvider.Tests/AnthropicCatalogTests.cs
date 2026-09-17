@@ -65,6 +65,17 @@ public sealed class AnthropicCatalogTests
         Assert.True(model.Cost.CalculateAdmission(1000, 1000) > model.Cost.Calculate(1000, 1000));
     }
 
+    /// <summary>Checks the preferred output reserve is capped to a lower discovered output ceiling.</summary>
+    [Fact]
+    public void HydrationCapsPreferredReserveToDiscoveredOutputLimit()
+    {
+        var provider = Hydrate(Model() with { MaximumOutputTokens = 32000 });
+        var model = Assert.IsType<AnthropicModelConfiguration>(Assert.Single(provider.Models));
+
+        Assert.Equal(32000, model.MaximumOutputTokens);
+        Assert.Equal(32000, model.RequestOutputTokenReserve);
+    }
+
     /// <summary>Checks missing metadata uses exact reviewed fallback and unknown model is excluded.</summary>
     [Fact]
     public void MissingMetadataUsesExactReviewedFallbackAndUnknownModelIsExcluded()

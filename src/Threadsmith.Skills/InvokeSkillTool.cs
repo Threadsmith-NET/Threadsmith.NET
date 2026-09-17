@@ -51,15 +51,24 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
 
     private readonly ToolDefinition _definition;
     private readonly SkillRuntimeLimits _limits;
+    private readonly ISkillCatalog? _catalog;
+    private readonly ISkillStateStore? _state;
     private readonly ISkillWorkflowOrchestrator _workflows;
 
     /// <summary>Initializes a new instance of the <see cref="InvokeSkillTool"/> class.</summary>
-    public InvokeSkillTool(ISkillWorkflowOrchestrator workflows, IPromptLoader prompts, SkillRuntimeLimits? limits = null)
+    public InvokeSkillTool(
+        ISkillWorkflowOrchestrator workflows,
+        IPromptLoader prompts,
+        SkillRuntimeLimits? limits = null,
+        ISkillCatalog? catalog = null,
+        ISkillStateStore? state = null)
     {
         ArgumentNullException.ThrowIfNull(workflows);
         ArgumentNullException.ThrowIfNull(prompts);
         _limits = limits ?? new();
         _limits.Validate();
+        _catalog = catalog;
+        _state = state;
         _workflows = workflows;
         _definition = CreateDefinition(prompts, _limits);
     }
@@ -78,10 +87,11 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             SkillInvocationOperationState.OperationScopeKey,
             static () => new SkillInvocationOperationState());
         var invocationId = SkillInvocationId.New();
+        var selectorKey = await ResolveSelectorKeyAsync(input.Selector, cancellationToken);
         var operationKey = new SkillInvocationOperationKey(
             context.SessionId,
             context.RunId,
-            input.Selector,
+            selectorKey,
             inputJson);
         if (operationState is not null
             && !operationState.TryStart(operationKey, invocationId, out var existing))
@@ -129,6 +139,21 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
 
     /// <inheritdoc />
     protected override string? DescribeActivity(InvokeSkillInput input) => $"invoke {input.Selector}";
+
+    private async Task<string> ResolveSelectorKeyAsync(string selector, CancellationToken cancellationToken)
+    {
+        if (_catalog is null || _state is null)
+        {
+            return selector;
+        }
+
+        var candidate = await SkillInvocationSelection.ResolveAsync(
+            _catalog,
+            _state,
+            selector,
+            cancellationToken);
+        return SkillPolicyIdentity.FormatSelector(candidate);
+    }
 
     private static ToolExecution<InvokeSkillOutput> CreateDuplicateExecution(SkillInvocationOperationEntry existing)
     {

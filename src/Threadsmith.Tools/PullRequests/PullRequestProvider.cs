@@ -159,6 +159,13 @@ public abstract class PullRequestProvider : IPullRequestProvider
         return root.ValueKind == JsonValueKind.String ? root.GetString() ?? string.Empty : string.Empty;
     }
 
+    /// <summary>Gets bounded optional text from a JSON path.</summary>
+    protected static string? OptionalText(JsonElement root, params string[] path)
+    {
+        var text = Text(root, path);
+        return text.Length == 0 ? null : text;
+    }
+
     /// <summary>Captures a bounded model-facing metadata projection and an exact metadata revision digest.</summary>
     protected static PullRequestMetadata Metadata(PullRequestTarget target, JsonElement root, string title, string description, string state, string sourceRepository, string sourceCommit, string destinationRepository, string destinationCommit, int? expectedFiles)
     {

@@ -379,9 +379,11 @@ public sealed class PrFetchTests
             ToolInvocationId = ToolInvocationId.New(),
             Invocation = parent.Invocation with { ApprovedRoots = ["src"], ProhibitedPaths = ["local-only.secret"] },
         };
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(Input(bitbucket), restrictedChild));
-        Assert.Equal(requests, handler.Requests);
-        Assert.Equal(resolutions, secrets.Calls);
+        var restrictedPages = await ReadAllAsync(tool, input, restrictedChild);
+        Assert.NotEqual(first.SnapshotId, restrictedPages[0].SnapshotId);
+        Assert.Contains("+new", string.Concat(restrictedPages.Select(page => page.Page.Diff)), StringComparison.Ordinal);
+        requests = handler.Requests;
+        resolutions = secrets.Calls;
 
         var disjointChild = restrictedChild with
         {
@@ -400,9 +402,41 @@ public sealed class PrFetchTests
 
         var refreshed = await tool.ExecuteAsync(input with { Refresh = true }, parent);
         Assert.NotEqual(first.SnapshotId, refreshed.Value.SnapshotId);
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(input with { Cursor = first.Cursor }, restrictedChild));
+        await Assert.ThrowsAsync<ArgumentException>(() => tool.ExecuteAsync(input with { Cursor = first.Cursor }, restrictedChild));
         await ReadAllAsync(tool, input, parent);
         Assert.True(handler.Requests > requests);
+    }
+
+    /// <summary>Raw diff is denied only when the provider inventory identifies a prohibited changed file.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DiffWithScopedPolicy_DeniesOnlyAffectedPullRequestPaths(bool bitbucket)
+    {
+        using var handler = new PrHandler(bitbucket)
+        {
+            ChangedPath = ".env",
+            DiffText = "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-old\n+new\n",
+        };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new TestSecrets(), Options(bitbucket), bitbucket);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var baseContext = Context(scope);
+        var context = baseContext with
+        {
+            Invocation = baseContext.Invocation with { ProhibitedPaths = [".env"] },
+        };
+
+        var first = await tool.ExecuteAsync(Input(bitbucket), context);
+        var inventory = await tool.ExecuteAsync(Input(bitbucket) with { Cursor = first.Value.Cursor }, context);
+        Assert.Empty(inventory.Value.Page.Files);
+        Assert.Contains(
+            inventory.Value.Page.Limitations,
+            limitation => limitation.Contains("outside the caller's approved repository path scope", StringComparison.Ordinal));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            tool.ExecuteAsync(Input(bitbucket) with { Cursor = inventory.Value.Cursor }, context));
+        Assert.Contains("outside the caller's approved repository path scope", error.Message, StringComparison.Ordinal);
     }
 
     /// <summary>A cancelled waiter cannot cancel another reader's acquisition.</summary>
@@ -685,6 +719,8 @@ public sealed class PrFetchTests
 
         public string ExpectedCredential { get; init; } = "test-credential";
 
+        public string ChangedPath { get; init; } = "src/changed.cs";
+
         public string DiffText { get; init; } = "diff --git a/src/changed.cs b/src/changed.cs\n--- a/src/changed.cs\n+++ b/src/changed.cs\n@@ -1 +1 @@\n-old\n+new\n";
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -704,7 +740,7 @@ public sealed class PrFetchTests
                     return Json(JsonSerializer.Serialize(Enumerable.Range(second ? 20 : 0, second ? 1 : 20).Select(index => new { filename = $"src/{index}.cs", status = "modified", patch = "+new" })));
                 }
 
-                return Json("[{\"filename\":\"src/changed.cs\",\"status\":\"modified\",\"patch\":\"@@ -1 +1 @@\\n-old\\n+new\"}]");
+                return Json(JsonSerializer.Serialize(new[] { new { filename = ChangedPath, status = "modified", patch = "@@ -1 +1 @@\n-old\n+new" } }));
             }
 
             if (uri.AbsolutePath.EndsWith("/diffstat", StringComparison.Ordinal))
@@ -715,7 +751,11 @@ public sealed class PrFetchTests
                     return Json(JsonSerializer.Serialize(new { size = 2, values = new[] { new { status = "modified", @new = new { path = second ? "src/second.cs" : "src/first.cs" } } }, next = second ? null : "https://api.bitbucket.org/2.0/repositories/org/repo/pullrequests/1/diffstat?page=2" }));
                 }
 
-                return Json("{\"size\":1,\"values\":[{\"status\":\"modified\",\"new\":{\"path\":\"src/changed.cs\"},\"old\":{\"path\":\"src/changed.cs\"}}]}");
+                return Json(JsonSerializer.Serialize(new
+                {
+                    size = 1,
+                    values = new[] { new { status = "modified", @new = new { path = ChangedPath }, old = new { path = ChangedPath } } },
+                }));
             }
 
             if (RedirectDiff && uri.AbsolutePath.EndsWith("/diff", StringComparison.Ordinal))

@@ -22,7 +22,15 @@ internal sealed class PrFetchCache : IAsyncDisposable
     }
 
     /// <summary>Returns an acquired page or joins its scoped acquisition without transferring cancellation ownership.</summary>
-    public async Task<PrFetchOutput> ReadAsync(string key, string providerId, PrFetchInput input, PullRequestTarget target, IPullRequestProvider provider, PullRequestProviderOptions account, CancellationToken cancellationToken)
+    public async Task<PrFetchOutput> ReadAsync(
+        string key,
+        string providerId,
+        PrFetchInput input,
+        PullRequestTarget target,
+        IPullRequestProvider provider,
+        PullRequestProviderOptions account,
+        Func<PullRequestFile, bool>? isFileAllowed,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _ownerCancellation.ThrowIfCancellationRequested();
@@ -66,7 +74,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
                 _entries[key] = entry;
 
                 // Owned by the scope and observed by readers; failures are converted into entry state.
-                entry.Work = ProduceAsync(key, entry, target, provider, account, input.Kind);
+                entry.Work = ProduceAsync(key, entry, target, provider, account, input.Kind, isFileAllowed);
             }
             else
             {
@@ -144,7 +152,14 @@ internal sealed class PrFetchCache : IAsyncDisposable
         }
     }
 
-    private async Task ProduceAsync(string key, Entry entry, PullRequestTarget target, IPullRequestProvider provider, PullRequestProviderOptions account, PrFetchKind kind)
+    private async Task ProduceAsync(
+        string key,
+        Entry entry,
+        PullRequestTarget target,
+        IPullRequestProvider provider,
+        PullRequestProviderOptions account,
+        PrFetchKind kind,
+        Func<PullRequestFile, bool>? isFileAllowed)
     {
         // Leave the cache lock before invoking provider code, including synchronous test handlers.
         await Task.Yield();
@@ -183,6 +198,18 @@ internal sealed class PrFetchCache : IAsyncDisposable
             var files = 0;
             await foreach (var page in provider.ReadPagesAsync(target, account, kind, token))
             {
+                if (page.Files.Count > 0 && isFileAllowed is not null
+                    && page.Files.Any(file => !isFileAllowed(file)))
+                {
+                    entry.HasDisallowedFiles = true;
+                }
+
+                if (kind == PrFetchKind.Diff && page.Kind == "diff" && entry.HasDisallowedFiles)
+                {
+                    throw new UnauthorizedAccessException(
+                        "PR diff content cannot be fetched because one or more changed files are outside the caller's approved repository path scope.");
+                }
+
                 files += page.Files.Count;
                 Publish(page);
                 await WaitForDemandAsync();
@@ -210,7 +237,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
             {
                 entry.Failure = exception is OperationCanceledException
                     ? "The owning operation, refresh, or acquisition deadline cancelled retrieval."
-                    : exception is InvalidDataException or HttpRequestException or SecretResolutionException
+                    : exception is InvalidDataException or HttpRequestException or SecretResolutionException or UnauthorizedAccessException
                         ? exception.Message
                         : "The provider could not return valid PR evidence.";
                 entry.Changed.TrySetResult();
@@ -308,5 +335,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
         public string? Failure { get; set; }
 
         public bool Finished { get; set; }
+
+        public bool HasDisallowedFiles { get; set; }
     }
 }

@@ -518,6 +518,23 @@ public static class PublicIpAddressPolicy
         }
     }
 
+    /// <summary>Connects to a validated public address without a second DNS lookup.</summary>
+    public static async ValueTask<Stream> ConnectAsync(IPAddress address, int port, CancellationToken cancellationToken)
+    {
+        EnsureAllPublic([address]);
+        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(address, port), cancellationToken);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
+
     private static readonly (uint Network, uint Mask)[] Ipv4Denied =
     [
         Cidr(0, 0, 0, 0, 8), Cidr(10, 0, 0, 0, 8), Cidr(100, 64, 0, 0, 10),
@@ -645,20 +662,7 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
             Credentials = null,
             PreAuthenticate = false,
             ConnectTimeout = TimeSpan.FromSeconds(10),
-            ConnectCallback = async (context, token) =>
-            {
-                var socket = new Socket(selected.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-                try
-                {
-                    await socket.ConnectAsync(new IPEndPoint(selected, context.DnsEndPoint.Port), token);
-                    return new NetworkStream(socket, ownsSocket: true);
-                }
-                catch
-                {
-                    socket.Dispose();
-                    throw;
-                }
-            },
+            ConnectCallback = (context, token) => PublicIpAddressPolicy.ConnectAsync(selected, context.DnsEndPoint.Port, token),
         };
         return new HttpClient(handler, disposeHandler: true) { Timeout = Timeout.InfiniteTimeSpan };
     }

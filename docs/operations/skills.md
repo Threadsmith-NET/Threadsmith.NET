@@ -1,5 +1,7 @@
 # Governed skills and reusable workflows
 
+The maintained `review` skill supports `mode: "pullRequest"`, `url`, and an optional configured `provider` ID. The host selects the account using configured URL patterns; the model asks for an account only when the tool reports ambiguity. Natural-language invocation and `/skills use` follow the same procedure and five reviewer roles. PR mode requests `kind:"inventory"` for the lead handoff, then specialists request `kind:"diff"` only when their assigned review questions need changed-line evidence. Ordinary changed-file requests also use `kind:"inventory"`. See [provider setup, cache and refresh](pr-fetch.md) and [review examples](../code-review.md#review-a-pull-request). PR mode requires the enabled `pr_fetch` tool and its ordinary network/Secrets permissions; it does not fall back to branch comparison.
+
 Threadsmith skills are host-owned declarative procedure packages. Skills are untrusted data, not executable plugins, scripts, autonomous agents, or direct tools. They can request only closed host actions, and every tool, plan, mutation, delegation, approval, transaction, validation, cancellation, and completion boundary remains owned by Threadsmith.
 
 ## Catalog scopes and discovery
@@ -31,7 +33,7 @@ Threadsmith also discovers bounded frontmatter from `<repo>/.claude/skills/<name
 
 `/skills verify claude:<scope>:<name>` activates only that candidate, confines and hashes every eligible file, and reports the exact immutable digest without enabling it. `/skills enable` repeats that verification, then writes the exact digest/publisher/source decision to the same repository-excluding `%USERPROFILE%\.threadsmith\skill-policy.json` used by native packages. `/skills disable` records an exact deny. A source byte/path change creates a different identity and blocks old exact selectors and resume checkpoints.
 
-`/skills use`, headless invocation, and `invoke_skill` project the selected snapshot into a single bounded `invokeProcedure` workflow. Instructions and host-selected text resources are sanitized and token-bounded; executable/binary resources remain digest inputs but inert. Mapped tools are optional advisory requirements and still pass through current registry, repository, trust, phase, consent, and central tool-pipeline policy. Unsupported hooks, fork/agent requirements, dynamic shell injection, and unmapped behavior never gain authority.
+`/skills use`, headless invocation, and `invoke_skill` project the selected snapshot into a single bounded `invokeProcedure` workflow. Model-driven `invoke_skill.input` carries the native JSON value matching the inspected schema; object and array inputs are never quoted JSON documents. Schemaless Claude-compatible skills use a bounded task string. Instructions and host-selected text resources are sanitized and token-bounded; executable/binary resources remain digest inputs but inert. Mapped tools are optional advisory requirements and still pass through current registry, repository, trust, phase, consent, and central tool-pipeline policy. Unsupported hooks, fork/agent requirements, dynamic shell injection, and unmapped behavior never gain authority.
 
 ## Trust, verification, and enablement
 

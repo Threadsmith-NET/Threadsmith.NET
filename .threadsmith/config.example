@@ -382,6 +382,20 @@
     // Relative folders are under the active repo. Absolute folders may be anywhere
     // on the machine (for example "C:/Reports"). No globs; [] disables all writes.
     "writeFile": { "allowedFolders": [ ".inbox" ] },
+    // Accounts belong in user/machine config. See docs/operations/pr-fetch.md.
+    // Repo config may only narrow. Enable the configured tool through /tools.
+    // User account example: "work": { "type": "bitbucketCloud", "enabled": true,
+    //   "urlPatterns": ["https://bitbucket.org/*/*/pull-requests/*"],
+    //   "authentication": { "mode": "none" } }
+    // urlPatterns routes URL-only calls; omit for adapter defaults. See PR docs for authentication.
+    "prFetch": {
+      "providers": {},
+      "maximumResponseBytes": 16777216,
+      "maximumCacheBytes": 33554432,
+      "maximumFilePages": 200,
+      "timeoutSeconds": 120,
+      "pageCharacters": 8192
+    },
     "readFile": {
       "maxBytes": 1048576,
       "defaultLines": 2000,

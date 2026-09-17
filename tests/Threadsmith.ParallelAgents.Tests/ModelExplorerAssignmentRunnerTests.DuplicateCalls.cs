@@ -11,6 +11,71 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
+    /// <summary>Opted-in repeated child calls retain inherited ownership and ordinary evidence accounting.</summary>
+    [Fact]
+    public async Task RunAsync_AllowedDuplicatesReuseInheritedOperationScope()
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var tool = new InspectMetadataTool(allowDuplicates: true);
+        var registry = new ToolRegistry([tool]);
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
+        var plan = CreatePlan(assignment);
+        var call = new ToolRequestModelOutput(tool.Definition.Id, "{}");
+        var provider = new ToolBatchSequenceProvider([[call], [call], []]);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var parent = CreateParentContext(plan, [tool.Definition.Id]);
+        parent = parent with { Invocation = parent.Invocation with { OperationScope = scope } };
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            parent,
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        var outcome = await runner.RunAsync(plan, assignment);
+        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Equal(0, outcome.Usage.Corrections);
+        Assert.Equal(2, evidence.Snapshot(plan.Provenance.SessionId).Count);
+        Assert.Same(scope, tool.LastInvocationContext?.OperationScope);
+    }
+
+    /// <summary>Opt-in reuse does not permit identical sibling calls in one child response.</summary>
+    [Fact]
+    public async Task RunAsync_AllowedDuplicatesStillRejectSameBatchSiblings()
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var tool = new InspectMetadataTool(allowDuplicates: true);
+        var registry = new ToolRegistry([tool]);
+        var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
+        var plan = CreatePlan(assignment);
+        var call = new ToolRequestModelOutput(tool.Definition.Id, "{}");
+        var provider = new ToolBatchSequenceProvider([[call, call], [call], []]);
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, [tool.Definition.Id]),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        var outcome = await runner.RunAsync(plan, assignment);
+
+        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Equal(1, outcome.Usage.Corrections);
+        Assert.Single(evidence.Snapshot(plan.Provenance.SessionId));
+        Assert.Contains(provider.Requests[1].Messages, message => message.IsError == true
+            && message.GetModelVisibleContent().Contains("already called with these arguments", StringComparison.Ordinal));
+    }
+
     /// <summary>Children share the parent's configured consecutive correction limit and reset it after accepted tools.</summary>
     [Theory]
     [InlineData(false)]

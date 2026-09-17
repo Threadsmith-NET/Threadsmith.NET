@@ -833,7 +833,8 @@ internal static class ApplicationComposition
                     };
                 },
                 host.Events,
-                conversationToolSnapshots);
+                conversationToolSnapshots,
+                skillRuntimeLimits);
             var skillApplication = new SkillApplication(
                 compatibleSkillCatalog,
                 skillVerifier,

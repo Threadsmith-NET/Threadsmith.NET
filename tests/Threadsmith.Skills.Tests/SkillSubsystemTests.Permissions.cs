@@ -11,6 +11,68 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>Direct procedures release their resources; nested procedures retain the caller's owner.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SkillProcedure_OperationScopeFollowsCallerOwnership(bool inherited)
+    {
+        await using var parentScope = new ToolOperationScope(CancellationToken.None);
+        var context = PermissionContext() with { OperationScope = inherited ? parentScope : null };
+        var tool = new PermissionProbeTool();
+        var model = new PermissionModelProvider();
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(() => context, tool, model, events);
+        await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
+
+        Assert.NotNull(tool.LastOperationScope);
+        if (inherited)
+        {
+            Assert.Same(parentScope, tool.LastOperationScope);
+            Assert.False(parentScope.CancellationToken.IsCancellationRequested);
+        }
+        else
+        {
+            Assert.Throws<ObjectDisposedException>(() => tool.LastOperationScope.CancellationToken);
+        }
+    }
+
+    /// <summary>Identical batch siblings are rejected even when later repeated calls are permitted.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SkillProcedure_SameBatchDuplicatesAreRejectedRegardlessMetadata(bool allowDuplicates)
+    {
+        var tool = new PermissionProbeTool(allowDuplicates);
+        var model = new PermissionModelProvider { DuplicateToolCall = true };
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
+        var plan = PermissionPlan() with { EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 2 } };
+        await runner.RunAsync(plan, PermissionStep(), 1, [], "{}");
+
+        Assert.Equal(0, tool.Executions);
+        Assert.Equal(2, model.Requests.Count);
+        Assert.Contains(model.Requests[1].Messages, message => message.IsError == true);
+    }
+
+    /// <summary>Duplicate metadata continues to govern calls made in separate model responses.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SkillProcedure_DuplicateMetadataControlsLaterResponses(bool allowDuplicates)
+    {
+        var tool = new PermissionProbeTool(allowDuplicates);
+        var model = new PermissionModelProvider { RepeatToolCallNextRound = true };
+        await using var events = new DomainEventStream();
+        var runner = CreatePermissionRunner(PermissionContext, tool, model, events);
+        var plan = PermissionPlan() with { EffectiveBudget = new SkillBudget { ModelTurns = 3, ToolCalls = 2 } };
+        await runner.RunAsync(plan, PermissionStep(), 1, [], "{}");
+
+        Assert.Equal(allowDuplicates ? 2 : 1, tool.Executions);
+        Assert.Equal(3, model.Requests.Count);
+        Assert.Equal(!allowDuplicates, model.Requests[2].Messages.Any(message => message.IsError == true));
+    }
+
     /// <summary>Redaction preserves the schema-valid framing of a native skill answer.</summary>
     [Fact]
     public async Task SkillProcedure_SanitizesStructuredOutputWithoutChangingJsonFraming()
@@ -322,6 +384,8 @@ public sealed partial class SkillSubsystemTests
 
         public bool DuplicateToolCall { get; init; }
 
+        public bool RepeatToolCallNextRound { get; init; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public Action? BeforeToolRequest { get; init; }
@@ -333,11 +397,15 @@ public sealed partial class SkillSubsystemTests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            if (Requests.Count == 1)
+            if (Requests.Count == 1 || (Requests.Count == 2 && RepeatToolCallNextRound))
             {
-                BeforeToolRequest?.Invoke();
+                if (Requests.Count == 1)
+                {
+                    BeforeToolRequest?.Invoke();
+                }
+
                 yield return new ModelChunk { Output = new ToolRequestModelOutput("permission_probe", "{}") };
-                if (DuplicateToolCall)
+                if (DuplicateToolCall && Requests.Count == 1)
                 {
                     yield return new ModelChunk { Output = new ToolRequestModelOutput("permission_probe", "{}") };
                 }
@@ -355,11 +423,18 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class PermissionProbeTool : Tool<PermissionProbeInput, PermissionProbeOutput>
     {
+        public PermissionProbeTool(bool allowDuplicates = false)
+        {
+            Definition = Definition with { AllowDuplicateInvocations = allowDuplicates };
+        }
+
         public string? ModelResultContent { get; init; }
 
         public ToolExecutionFailure? Failure { get; init; }
 
         public int Executions { get; private set; }
+
+        public ToolOperationScope? LastOperationScope { get; private set; }
 
         public override ToolDefinition Definition { get; } = new()
         {
@@ -378,6 +453,7 @@ public sealed partial class SkillSubsystemTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Executions++;
+            LastOperationScope = context.Invocation.OperationScope;
             return Task.FromResult(new ToolExecution<PermissionProbeOutput>(new PermissionProbeOutput(), [], ModelResultContent: ModelResultContent, Failure: Failure));
         }
 

@@ -79,7 +79,7 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
             SideEffect = ToolSideEffect.ReadOnly,
             Idempotency = ToolIdempotency.Idempotent,
             SupportsCancellation = true,
-            Timeout = TimeSpan.FromMinutes(1),
+            Timeout = TimeSpan.FromSeconds(_limits.InspectSkillTimeoutSeconds),
             MaximumOutputBytes = 256 * 1024,
         };
     }

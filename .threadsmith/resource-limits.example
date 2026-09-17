@@ -287,7 +287,10 @@
     "runtimeLimits": {
       "maximumInputCharacters": 1048576,
       "maximumSelectorCharacters": 1024,
-      "maximumModelOutputCharacters": 1048576
+      "maximumModelOutputCharacters": 1048576,
+      "inspectSkillTimeoutSeconds": 60,
+      "invokeSkillTimeoutSeconds": 1200,
+      "workflowDisposeTimeoutSeconds": 30
     }
   },
   "tools": {

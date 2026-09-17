@@ -301,6 +301,7 @@ public sealed partial class SkillSubsystemTests
         var exact = skill.GetProperty("selector").GetString()!;
         Assert.True((await application.HandleAsync(new VerifySkillCommand(exact))).Enabled);
         Assert.Contains("Ask the user for any missing, required information", root.GetProperty("guidance").GetString(), StringComparison.Ordinal);
+        Assert.Contains("native JSON value", root.GetProperty("guidance").GetString(), StringComparison.Ordinal);
         Assert.DoesNotContain("Private instruction body", result.ResultJson, StringComparison.Ordinal);
         var schema = skill.GetProperty("inputSchema");
         if (claude)
@@ -310,6 +311,8 @@ public sealed partial class SkillSubsystemTests
         }
         else
         {
+            Assert.Contains("must be an object", root.GetProperty("guidance").GetString(), StringComparison.Ordinal);
+            Assert.Contains("not a quoted or JSON-encoded object string", root.GetProperty("guidance").GetString(), StringComparison.Ordinal);
             using var expected = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(package.PackageRoot, "schemas", "input.json")));
             Assert.True(JsonElement.DeepEquals(expected.RootElement, schema));
             var validator = new BoundedJsonSchemaValidator();

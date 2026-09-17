@@ -1498,11 +1498,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         private readonly IReadOnlyList<ToolProvenanceSource> _sources;
 
         /// <summary>Initializes a new instance of the <see cref="InspectMetadataTool"/> class.</summary>
-        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null, bool subagentAvailable = true, string toolId = "inspect_metadata")
+        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null, bool subagentAvailable = true, string toolId = "inspect_metadata", bool allowDuplicates = false)
         {
             _modelResultContent = modelResultContent;
             _sources = sources ?? [new ToolProvenanceSource("file", "src/Test.cs")];
-            Definition = Definition with { Id = toolId, MaximumOutputBytes = maximumOutputBytes, SubagentAvailable = subagentAvailable };
+            Definition = Definition with { Id = toolId, MaximumOutputBytes = maximumOutputBytes, SubagentAvailable = subagentAvailable, AllowDuplicateInvocations = allowDuplicates };
         }
 
         public ToolInvocationContext? LastInvocationContext { get; private set; }

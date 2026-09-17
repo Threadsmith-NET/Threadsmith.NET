@@ -433,9 +433,11 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(RunPhase.ChangePlanning, workflows.Request.Phase);
         Assert.Equal("{\"scope\":\"current\"}", workflows.Request.InputJson);
         Assert.Contains(
-            "\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]}",
+            "\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]",
             tool.Definition.InputSchema.JsonSchema,
             StringComparison.Ordinal);
+        Assert.Contains("Pass the native JSON value", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.Contains("never pass a quoted or JSON-encoded object string", tool.Definition.Description, StringComparison.Ordinal);
         Assert.DoesNotContain("inputJson", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("invocationId", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("payloadJson", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
@@ -449,6 +451,77 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains("\"output\":{\"summary\":\"done\"}", execution.ModelResultContent, StringComparison.Ordinal);
         Assert.DoesNotContain("invocationId", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("digest", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Skill tool runtime deadlines come from the shared skill runtime limits.</summary>
+    [Fact]
+    public static void SkillRuntimeLimits_ControlModelVisibleToolTimeouts()
+    {
+        var workflows = new CapturingWorkflowOrchestrator();
+        var invoke = new InvokeSkillTool(
+            workflows,
+            TestPromptLoader.Instance,
+            new SkillRuntimeLimits { InvokeSkillTimeoutSeconds = 37 });
+        var inspection = new NoopSkillInspectionHandlers();
+        var inspect = new InspectSkillTool(
+            inspection,
+            inspection,
+            TestPromptLoader.Instance,
+            new BoundedJsonSchemaValidator(),
+            new SkillRuntimeLimits { InspectSkillTimeoutSeconds = 11 });
+
+        Assert.Equal(TimeSpan.FromSeconds(37), invoke.Definition.Timeout);
+        Assert.Equal(TimeSpan.FromSeconds(11), inspect.Definition.Timeout);
+    }
+
+    /// <summary>Configured skill runtime timeout values must be positive.</summary>
+    [Theory]
+    [InlineData("inspect")]
+    [InlineData("invoke")]
+    [InlineData("dispose")]
+    public static void SkillRuntimeLimits_RejectsNonPositiveTimeouts(string field)
+    {
+        var limits = field switch
+        {
+            "inspect" => new SkillRuntimeLimits { InspectSkillTimeoutSeconds = 0 },
+            "invoke" => new SkillRuntimeLimits { InvokeSkillTimeoutSeconds = 0 },
+            "dispose" => new SkillRuntimeLimits { WorkflowDisposeTimeoutSeconds = 0 },
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(limits.Validate);
+    }
+
+    /// <summary>A stringified structured input receives provider-neutral corrective guidance.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_StringifiedObjectFailureExplainsNativeJsonShape()
+    {
+        var workflows = new CapturingWorkflowOrchestrator
+        {
+            ResultStatus = SkillInvocationStatus.Failed,
+            ResultReason = "Skill value at $ does not match type 'object'.",
+        };
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+            });
+        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
+
+        var execution = await tool.ExecuteAsync(input, context);
+
+        Assert.Contains("input was a JSON string", execution.Value.Reason, StringComparison.Ordinal);
+        Assert.Contains("native JSON value", execution.Value.Reason, StringComparison.Ordinal);
+        Assert.Contains("do not quote or JSON-encode", execution.Failure?.Message, StringComparison.Ordinal);
+        using var modelOutput = JsonDocument.Parse(execution.ModelResultContent!);
+        Assert.Equal(execution.Value.Reason, modelOutput.RootElement.GetProperty("reason").GetString());
     }
 
     /// <summary>Verifies content budgets stay asset-only while procedure tool metadata is preserved.</summary>
@@ -1196,6 +1269,8 @@ public sealed partial class SkillSubsystemTests
     {
         public SkillInvocationStatus ResultStatus { get; init; } = SkillInvocationStatus.Completed;
 
+        public string ResultReason { get; init; } = "test complete";
+
         internal SkillInvocationRequest? Request { get; private set; }
 
         public Task<SkillInvocationResult> InvokeAsync(
@@ -1236,7 +1311,7 @@ public sealed partial class SkillSubsystemTests
                         PayloadJson = "{\"question\":\"continue?\"}",
                     },
                 ],
-                Reason = "test complete",
+                Reason = ResultReason,
                 Checkpoint = checkpoint,
             });
         }
@@ -1261,6 +1336,25 @@ public sealed partial class SkillSubsystemTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(false);
+        }
+    }
+
+    private sealed class NoopSkillInspectionHandlers :
+        ICommandHandler<InspectSkillCommand, SkillCatalogCandidate>,
+        ICommandHandler<ListSkillsCommand, IReadOnlyList<SkillCatalogCandidate>>
+    {
+        public Task<SkillCatalogCandidate> HandleAsync(
+            InspectSkillCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillCatalogCandidate>(new NotSupportedException());
+        }
+
+        public Task<IReadOnlyList<SkillCatalogCandidate>> HandleAsync(
+            ListSkillsCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<IReadOnlyList<SkillCatalogCandidate>>(new NotSupportedException());
         }
     }
 

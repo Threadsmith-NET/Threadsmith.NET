@@ -23,6 +23,8 @@ public sealed partial class SessionApplication
         var maximumPlanningToolRounds = _limits.MaxPlanningToolRounds;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var invocationContext = await CreateToolInvocationContextAsync(registration, cancellationToken);
+        await using var operationScope = new ToolOperationScope(cancellationToken);
+        invocationContext = invocationContext is null ? null : invocationContext with { OperationScope = operationScope };
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
         using var loopState = new ConversationLoopState(
             _limits.MaxStructuredOutputCharacters,
@@ -455,7 +457,10 @@ public sealed partial class SessionApplication
             context,
             usageRequestId,
             modelRequest,
-            loopState.LastGroupSequence);
+            loopState.LastGroupSequence)
+        {
+            ToolRegistrations = conversationTools.Registrations,
+        };
     }
 
     private async Task<(SessionModelPreferenceSnapshot? Preference, ContextAssemblyResult Context)>
@@ -1322,7 +1327,8 @@ public sealed partial class SessionApplication
                 return true;
             }
 
-            if (!observedToolCalls.TryAdd(call.ToolName, call.ArgumentsJson))
+            var definition = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)).Tool.Definition;
+            if (!observedToolCalls.TryAdd(definition, call.ArgumentsJson))
             {
                 diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
                     MalformedInvocationFailureKind.PhaseInvalidTool,
@@ -2474,7 +2480,10 @@ public sealed partial class SessionApplication
         ContextAssemblyResult? Context,
         ModelRequestUsageId UsageRequestId,
         ModelStreamRequest ModelRequest,
-        long DeliveredThroughGroupSequence);
+        long DeliveredThroughGroupSequence)
+    {
+        public IReadOnlyList<ToolRegistration> ToolRegistrations { get; init; } = [];
+    }
 
     private sealed record ConversationRoundOutcome(
         ImplementationPlan? Plan,

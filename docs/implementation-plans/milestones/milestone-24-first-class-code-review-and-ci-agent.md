@@ -3,6 +3,8 @@
 **Status:** See the [authoritative milestone index](../milestones.md).
 **Objective:** Turn existing review skills, advisory agents, Git/semantic evidence, hooks, and validation into a deterministic introduced-change review product with finding lifecycle, CI/SARIF output, merge-gate policy, and optional provider retrieval/publication.
 
+**Acquisition amendment:** Plan 110 independently supplies the advisory skill's read-only `pr_fetch` tool. Retrieval may use that built-in capability as well as extensions/MCP; publication remains extension/MCP-owned. Its transient acquisition cache is not this milestone's review store, coordinator or gate. No milestone completion is implied.
+
 **Deliverables:**
 - One `IReviewCoordinator` shared by `/review`, headless/CI, skills, agents, hooks, persistence, and provider adapters.
 - Immutable authoritative working-tree/local-range/change-set/external-PR base/head/merge-base snapshots with canonical rename-aware patches and exact line/symbol provenance.

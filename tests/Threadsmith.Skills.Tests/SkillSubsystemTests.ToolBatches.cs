@@ -193,9 +193,10 @@ public sealed partial class SkillSubsystemTests
         }
         else if (failure == "duplicate")
         {
-            Assert.IsType<InvalidOperationException>(error);
-            Assert.Contains("identical", error.Message, StringComparison.Ordinal);
-            Assert.Single(model.Requests);
+            Assert.Null(error);
+            Assert.Equal(2, model.Requests.Count);
+            Assert.Contains(model.Requests[1].Messages, message => message.IsError == true
+                && message.GetModelVisibleContent().Contains("already called", StringComparison.Ordinal));
         }
         else
         {

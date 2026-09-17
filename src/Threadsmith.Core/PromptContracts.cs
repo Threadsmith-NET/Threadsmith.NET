@@ -374,6 +374,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolWebSearchDescription prompt asset.</summary>
     public const string ToolWebSearchDescription = "Tool-web_search-Description.md";
 
+    /// <summary>Gets the configured-provider PR retrieval tool description.</summary>
+    public const string ToolPrFetchDescription = "Tool-pr_fetch-Description.md";
+
     /// <summary>Gets the stable filename for the ToolWebSearchTrustBoundary prompt asset.</summary>
     public const string ToolWebSearchTrustBoundary = "Tool-web_search-TrustBoundary.md";
 
@@ -1141,6 +1144,7 @@ public static class PromptFileNames
         ToolWebFetchDirectAuthorizationUnavailable,
         ToolWebFetchTrustBoundary,
         ToolWebSearchDescription,
+        ToolPrFetchDescription,
         ToolWebSearchTrustBoundary,
         ToolInvokeSkillDescription,
         ToolInspectSkillDescription,
@@ -1769,6 +1773,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ToolWriteFileDescription] = Set("MaximumContentBytes"),
                     [PromptFileNames.ToolMemoriesDescription] = Set("MaximumTextCharacters"),
                     [PromptFileNames.ToolWebSearchDescription] = Set("MaximumQueryCharacters", "MaximumFreshnessDays"),
+                    [PromptFileNames.ToolPrFetchDescription] = Set("Providers"),
                     [PromptFileNames.CorrectionRunProcessUnsupportedShell] = Set("ShellExecutable"),
                     [PromptFileNames.ToolWebFetchDirectAuthorizationUnavailable] = Set(
                         "Origin",

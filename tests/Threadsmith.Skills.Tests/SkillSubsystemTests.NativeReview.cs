@@ -22,6 +22,20 @@ public sealed partial class SkillSubsystemTests
         Assert.DoesNotContain("Compare the two trees directly", prompt, StringComparison.Ordinal);
     }
 
+    /// <summary>PR reviews gather inventory before delegation instead of making the lead ingest every diff page.</summary>
+    [Fact]
+    public void NativeReview_PullRequestUsesInventoryBeforeDelegation()
+    {
+        var prompt = TestPromptLoader.Instance.Get(PromptFileNames.SkillReview);
+
+        Assert.Contains("Start with kind:\"inventory\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not call kind:\"diff\" before delegation", prompt, StringComparison.Ordinal);
+        Assert.Contains("specialists to call pr_fetch", prompt, StringComparison.Ordinal);
+        Assert.Contains("kind:\"diff\" only when their assignment needs patch evidence", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Always set kind:\"diff\"", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("follow its cursors with kind:\"diff\" through the complete page before delegating", prompt, StringComparison.Ordinal);
+    }
+
     /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
     [Fact]
     public async Task NativeReview_FailedResponseResumesThroughSelectedModel()
@@ -93,6 +107,47 @@ public sealed partial class SkillSubsystemTests
             Assert.Contains("BugReviewer", item.Input, StringComparison.Ordinal);
             Assert.Contains("ArchitectureReviewer", item.Input, StringComparison.Ordinal);
         });
+    }
+
+    /// <summary>A stringified review input object is unwrapped and validated through the same skill schema.</summary>
+    [Fact]
+    public async Task NativeReview_StringifiedObjectInput_IsCanonicalizedAsObject()
+    {
+        const string input = "\"{\\\"mode\\\":\\\"pullRequest\\\",\\\"url\\\":\\\"https://example.test/pull-requests/733\\\"}\"";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner("{\"succeeded\":true,\"response\":\"Review complete\"}"),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var result = await workflow.InvokeAsync(PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        });
+
+        Assert.Equal(SkillInvocationStatus.Completed, result.Status);
+        Assert.Equal(
+            "{\"mode\":\"pullRequest\",\"url\":\"https://example.test/pull-requests/733\"}",
+            result.Checkpoint.InputJson);
     }
 
     /// <summary>An unavailable selected provider cannot silently dispatch work through a different root model.</summary>

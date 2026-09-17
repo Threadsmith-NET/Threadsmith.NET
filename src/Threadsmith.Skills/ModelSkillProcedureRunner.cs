@@ -109,12 +109,15 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
             },
         };
         using var transientState = new ModelRequestTransientState();
+        var initialContext = await CreateToolContextAsync(plan, cancellationToken);
+        await using var ownedScope = initialContext.OperationScope is null ? new ToolOperationScope(cancellationToken) : null;
+        var operationScope = initialContext.OperationScope ?? ownedScope;
 
         var seenCalls = new ToolCallHistory();
         for (var round = 0; round < maximumRounds; round++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var modelContext = await CreateToolContextAsync(plan, cancellationToken);
+            var modelContext = (await CreateToolContextAsync(plan, cancellationToken)) with { OperationScope = operationScope };
             var callerRegistrations = plan.Request.CallerToolSnapshotId is { } callerSnapshot
                 ? _snapshots.Resolve(callerSnapshot, plan.Request.SessionId, plan.Request.RunId)
                 : null;
@@ -276,6 +279,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
                 var context = (await CreateToolContextAsync(plan, cancellationToken)) with
                 {
+                    OperationScope = operationScope,
                     RequestedBy = "model",
                     ModelVisibleToolSnapshotId = snapshotId,
                     ModelProfileId = modelRequest.ResolvedProfileId,
@@ -334,15 +338,26 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     var batchCalls = new ToolCallHistory(seenCalls);
                     foreach (var toolRequest in toolRequests)
                     {
-                        if (!batchCalls.TryAdd(toolRequest.ToolName, SkillCanonicalJson.CanonicalizeValue(toolRequest.ArgumentsJson)))
+                        var arguments = SkillCanonicalJson.CanonicalizeValue(toolRequest.ArgumentsJson);
+                        var accepted = registrations.TryGetValue(toolRequest.ToolName, out var advertised)
+                            ? batchCalls.TryAdd(advertised.Tool.Definition, arguments)
+                            : batchCalls.TryAdd(toolRequest.ToolName, arguments);
+                        if (!accepted)
                         {
-                            throw new InvalidOperationException("Skill procedure repeated an identical tool request.");
+                            corrections++;
+                            failureSummary = _prompts.Render(
+                                PromptFileNames.CorrectionToolDuplicateInvocation,
+                                new Dictionary<string, string>(StringComparer.Ordinal) { ["ToolName"] = toolRequest.ToolName });
+                            break;
                         }
                     }
 
                     // Only accepted batches enter duplicate tracking; rejected siblings can be resubmitted unchanged.
-                    seenCalls = batchCalls;
-                    results = await _toolPipeline.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);
+                    if (failureSummary is null)
+                    {
+                        seenCalls = batchCalls;
+                        results = await _toolPipeline.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);
+                    }
                 }
 
                 var resultsByOrdinal = results.ToDictionary(result => result.Ordinal, result => result.Result);

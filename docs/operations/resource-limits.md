@@ -403,6 +403,9 @@ Trusted machine/user/environment configuration. Implementation: `src/Threadsmith
 | `maximumInputCharacters` | `1048576` | Maximum invocation input JSON characters. |
 | `maximumSelectorCharacters` | `1024` | Maximum invocation selector characters. |
 | `maximumModelOutputCharacters` | `1048576` | Maximum accumulated model procedure output characters. |
+| `inspectSkillTimeoutSeconds` | `60` | Maximum `inspect_skill` tool runtime in seconds. |
+| `invokeSkillTimeoutSeconds` | `1200` | Maximum `invoke_skill` tool runtime in seconds. |
+| `workflowDisposeTimeoutSeconds` | `30` | Maximum skill workflow disposal wait in seconds. |
 
 ### `tools:config:memories`
 

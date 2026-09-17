@@ -2798,9 +2798,12 @@ public static class Milestone4Tests
         }
     }
 
-    /// <summary>A repeated tool call with identical arguments is not re-invoked; the model is told to stop repeating.</summary>
-    [Fact]
-    public static async Task DuplicateToolCall_IsNotReInvoked()
+    /// <summary>Duplicate metadata permits later responses but never identical siblings in one response.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public static async Task DuplicateToolCall_RespectsToolMetadata(bool allowDuplicates, bool duplicateWithinResponse)
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-m4-dup-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -2813,7 +2816,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            var registry = new ToolRegistry([new ListFilesTool(TestPromptLoader.Instance)]);
+            var registry = new ToolRegistry([new DuplicatePolicyListTool(allowDuplicates)]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
                 new DefaultPolicyEngine(),
@@ -2822,7 +2825,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new DuplicateToolThenPlanModelProvider(CreatePlan("dedup plan", 1));
+            var model = new DuplicateToolThenPlanModelProvider(CreatePlan("dedup plan", 1), duplicateWithinResponse);
             var application = new SessionApplication(
                 events,
                 model,
@@ -2860,16 +2863,15 @@ public static class Milestone4Tests
             while (projection?.Phase != RunPhase.AwaitingPlanApproval);
 
             var snapshot = evidence.Snapshot(sessionId);
-            Assert.Single(snapshot, item => item.Kind == EvidenceKind.ToolResult);
+            Assert.Equal(duplicateWithinResponse ? 0 : allowDuplicates ? 2 : 1, snapshot.Count(item => item.Kind == EvidenceKind.ToolResult));
             Assert.DoesNotContain(snapshot, item => item.Kind == EvidenceKind.Failure);
-            Assert.Equal(3, model.Requests.Count);
-            Assert.Contains(
-                model.Requests[2].Messages,
-                message => message.Role == ModelMessageRole.Tool
+            Assert.Equal(duplicateWithinResponse ? 2 : 3, model.Requests.Count);
+            var finalRequest = model.Requests[^1];
+            Assert.Equal(duplicateWithinResponse || !allowDuplicates, finalRequest.Messages.Any(message => message.Role == ModelMessageRole.Tool
                     && string.Equals(message.ToolName, "list_files", StringComparison.Ordinal)
                     && message.Content.Any(part => part.Content.Contains(
                         "already called",
-                        StringComparison.Ordinal)));
+                        StringComparison.Ordinal))));
             Assert.True(await dispatcher.DispatchAsync(new ApprovePlanCommand(sessionId, runId)));
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
         }
@@ -5125,13 +5127,32 @@ public static class Milestone4Tests
         }
     }
 
+    private sealed class DuplicatePolicyListTool : Tool<ListFilesInput, ListFilesOutput>
+    {
+        private readonly ListFilesTool _inner = new(TestPromptLoader.Instance);
+
+        public DuplicatePolicyListTool(bool allowDuplicates)
+        {
+            Definition = _inner.Definition with { AllowDuplicateInvocations = allowDuplicates };
+        }
+
+        public override ToolDefinition Definition { get; }
+
+        public override Task<ToolExecution<ListFilesOutput>> ExecuteAsync(ListFilesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
+            => _inner.ExecuteAsync(input, context, cancellationToken);
+
+        protected override void ValidateInput(ListFilesInput input) => ArgumentNullException.ThrowIfNull(input);
+    }
+
     private sealed class DuplicateToolThenPlanModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
+        private readonly bool _duplicateWithinResponse;
 
-        public DuplicateToolThenPlanModelProvider(ImplementationPlan plan)
+        public DuplicateToolThenPlanModelProvider(ImplementationPlan plan, bool duplicateWithinResponse = false)
         {
             _plan = plan;
+            _duplicateWithinResponse = duplicateWithinResponse;
         }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -5143,7 +5164,7 @@ public static class Milestone4Tests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            if (Requests.Count <= 2)
+            if ((_duplicateWithinResponse && Requests.Count == 1) || (!_duplicateWithinResponse && Requests.Count <= 2))
             {
                 yield return new ModelChunk
                 {
@@ -5152,6 +5173,17 @@ public static class Milestone4Tests
                         "{\"path\":\".\",\"maximumEntries\":10}"),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };
+                if (_duplicateWithinResponse)
+                {
+                    yield return new ModelChunk
+                    {
+                        Output = new ToolRequestModelOutput(
+                            "list_files",
+                            "{\"path\":\".\",\"maximumEntries\":10}"),
+                        FinishReason = ModelFinishReason.ToolCalls,
+                    };
+                }
+
                 yield break;
             }
 

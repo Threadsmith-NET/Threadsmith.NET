@@ -6,6 +6,7 @@
       "type": "string",
       "enum": [
         "currentBranchChanges",
+        "pullRequest",
         "remoteBranch",
         "specialInstructions"
       ]
@@ -13,6 +14,14 @@
     "baseBranch": {
       "type": "string",
       "maxLength": 256
+    },
+    "url": {
+      "type": "string",
+      "maxLength": 2048
+    },
+    "provider": {
+      "type": "string",
+      "maxLength": 80
     },
     "repository": {
       "type": "string",

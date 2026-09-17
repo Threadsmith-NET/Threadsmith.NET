@@ -865,7 +865,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
 
             return new SemanticRefreshInventory(
-                GetTextDocumentPaths(
+                GetRefreshSourceDocumentPaths(
                     _solution.Projects.SelectMany(project => project.Documents),
                     _lastRequest),
                 GetTextDocumentPaths(
@@ -898,10 +898,12 @@ public sealed class SemanticEngine : ISemanticEngine
         var documents = new List<SemanticDocumentRefresh>();
         foreach (var document in solution.Projects
             .SelectMany(project => project.Documents
+                .Where(document => IsSemanticSourceRefreshPathAllowed(document.FilePath, request))
                 .Cast<TextDocument>()
-                .Concat(project.AdditionalDocuments)
-            .Concat(project.AnalyzerConfigDocuments))
-            .Where(document => IsSemanticInputPathAllowed(document.FilePath, request))
+                .Concat(project.AdditionalDocuments
+                    .Where(document => IsSemanticInputPathAllowed(document.FilePath, request)))
+                .Concat(project.AnalyzerConfigDocuments
+                    .Where(document => IsSemanticInputPathAllowed(document.FilePath, request))))
             .GroupBy(
                 document => Path.GetFullPath(document.FilePath ?? string.Empty),
                 StringComparerForCurrentPlatform())
@@ -1456,6 +1458,17 @@ public sealed class SemanticEngine : ISemanticEngine
             .ToHashSet(StringComparerForCurrentPlatform());
     }
 
+    private static IReadOnlySet<string> GetRefreshSourceDocumentPaths(
+        IEnumerable<TextDocument> documents,
+        SemanticLoadRequest request)
+    {
+        return documents
+            .Select(document => document.FilePath)
+            .Where(path => IsSemanticSourceRefreshPathAllowed(path, request))
+            .Select(path => Path.GetFullPath(path ?? string.Empty))
+            .ToHashSet(StringComparerForCurrentPlatform());
+    }
+
     private static IReadOnlySet<string> GetReferencePaths(
         Solution solution,
         SemanticLoadRequest request)
@@ -1835,6 +1848,20 @@ public sealed class SemanticEngine : ISemanticEngine
         return !RepositoryPathPolicy.IsProhibited(
             relativePath,
             request.ProhibitedPaths ?? []);
+    }
+
+    private static bool IsSemanticSourceRefreshPathAllowed(
+        string? path,
+        SemanticLoadRequest request)
+    {
+        if (!IsSemanticInputPathAllowed(path, request))
+        {
+            return false;
+        }
+
+        return !SemanticRefreshPathPolicy.IsIgnoredPath(
+            request.RepositoryPath,
+            Path.GetFullPath(path ?? string.Empty));
     }
 
     private static SemanticProjectInfo ReadProjectInfo(string projectPath)

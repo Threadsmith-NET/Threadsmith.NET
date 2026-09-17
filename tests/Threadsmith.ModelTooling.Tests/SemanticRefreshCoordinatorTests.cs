@@ -244,6 +244,61 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(refreshCount, backend.RefreshCount);
     }
 
+    /// <summary>Generated C# source beneath build-output directories does not cause semantic refresh churn.</summary>
+    [Fact]
+    public static async Task ObserveChangeAsync_IgnoresGeneratedSourceDocumentUnderBuildOutput()
+    {
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var generatedDirectory = Path.Combine(
+            repository.Root,
+            "src",
+            "Example",
+            "obj",
+            "Debug",
+            "net10.0");
+        Directory.CreateDirectory(generatedDirectory);
+        var generatedSourcePath = Path.Combine(generatedDirectory, "Generated.g.cs");
+        await File.WriteAllTextAsync(generatedSourcePath, "public class Generated { }");
+        backend.AddSourceDocument(repository.WorkspaceId, generatedSourcePath);
+        await using var coordinator = CreateCoordinator(backend, events);
+        await coordinator.BindAsync(repository.CreateRequest());
+
+        await File.WriteAllTextAsync(generatedSourcePath, "public class GeneratedChanged { }");
+        await coordinator.ObserveChangeAsync(new SemanticFileChange(
+            repository.SessionId,
+            generatedSourcePath,
+            SemanticFileChangeKind.Changed));
+        var result = await coordinator.EnsureCurrentAsync(
+            repository.SessionId,
+            SemanticRefreshReason.UserAdmission);
+
+        Assert.False(result.WasRefreshed);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+        Assert.Equal(0, backend.RefreshCount);
+    }
+
+    /// <summary>The shared semantic refresh path policy recognizes nested generated-output paths.</summary>
+    [Fact]
+    public static void SemanticRefreshPathPolicy_IgnoresNestedBuildOutputPaths()
+    {
+        using var repository = new TemporaryRepository();
+        var generatedSourcePath = Path.Combine(
+            repository.Root,
+            "container",
+            "source",
+            "AI.Inference.Fusion.Tests",
+            "obj",
+            "Debug",
+            "net8.0",
+            "Generated.g.cs");
+
+        Assert.True(SemanticRefreshPathPolicy.IsIgnoredPath(
+            repository.Root,
+            generatedSourcePath));
+    }
+
     /// <summary>Ignored build and editor churn during watcher handoff causes no follow-up refresh.</summary>
     [Fact]
     public static async Task ObserveFileSystemWatcherError_IgnoresBuildAndTemporaryChurnDuringRestart()
@@ -2053,7 +2108,7 @@ public static class SemanticRefreshCoordinatorTests
     {
         private readonly Lock _gate = new();
         private readonly List<SemanticRefreshMode> _modes = [];
-        private readonly Dictionary<WorkspaceId, string> _sourcePaths = [];
+        private readonly Dictionary<WorkspaceId, HashSet<string>> _sourcePaths = [];
         private readonly Dictionary<WorkspaceId, HashSet<string>> _additionalPaths = [];
         private readonly Dictionary<WorkspaceId, HashSet<string>> _analyzerConfigPaths = [];
         private readonly Queue<RefreshBarrier> _barriers = [];
@@ -2085,7 +2140,7 @@ public static class SemanticRefreshCoordinatorTests
 
         public void AddWorkspace(WorkspaceId workspaceId, string sourcePath)
         {
-            _sourcePaths.Add(workspaceId, sourcePath);
+            _sourcePaths.Add(workspaceId, new HashSet<string>([sourcePath], PathComparer));
             _additionalPaths.Add(workspaceId, new HashSet<string>(PathComparer));
             _analyzerConfigPaths.Add(workspaceId, new HashSet<string>(PathComparer));
             _fullReloadInputPaths.Add(workspaceId, new HashSet<string>(PathComparer));
@@ -2093,6 +2148,12 @@ public static class SemanticRefreshCoordinatorTests
             {
                 [sourcePath] = File.ReadAllText(sourcePath),
             });
+        }
+
+        public void AddSourceDocument(WorkspaceId workspaceId, string path)
+        {
+            _sourcePaths[workspaceId].Add(path);
+            _loadedTexts[workspaceId][path] = File.ReadAllText(path);
         }
 
         public void AddAdditionalDocument(WorkspaceId workspaceId, string path)
@@ -2150,7 +2211,7 @@ public static class SemanticRefreshCoordinatorTests
             }
 
             return new SemanticRefreshInventory(
-                new HashSet<string>([_sourcePaths[workspaceId]], PathComparer),
+                new HashSet<string>(_sourcePaths[workspaceId], PathComparer),
                 new HashSet<string>(_additionalPaths[workspaceId], PathComparer),
                 new HashSet<string>(_analyzerConfigPaths[workspaceId], PathComparer),
                 new HashSet<string>(_fullReloadInputPaths[workspaceId], PathComparer));
@@ -2206,7 +2267,7 @@ public static class SemanticRefreshCoordinatorTests
                 if (mode == SemanticRefreshMode.Full)
                 {
                     var textDocumentPaths = new HashSet<string>(
-                        [_sourcePaths[workspaceId]],
+                        _sourcePaths[workspaceId],
                         PathComparer);
                     textDocumentPaths.UnionWith(_additionalPaths[workspaceId]);
                     textDocumentPaths.UnionWith(_analyzerConfigPaths[workspaceId]);

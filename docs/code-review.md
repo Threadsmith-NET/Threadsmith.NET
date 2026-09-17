@@ -48,6 +48,16 @@ Compare committed changes on the current branch with `main`:
 
 To include working changes, say so in `instructions`. Specify the intended base explicitly when it matters.
 
+### Review a pull request
+
+Configure a GitHub.com or Bitbucket Cloud account and enable `pr_fetch` as described in [PR retrieval](operations/pr-fetch.md). Supply the PR link in conversation, or invoke:
+
+```text
+/skills use Maintained:review@1.0.0 {"mode":"pullRequest","url":"https://bitbucket.org/workspace/repository/pull-requests/123"}
+```
+
+The lead obtains the provider's PR metadata and complete changed-file inventory with `kind:"inventory"` before delegation. Specialists fetch `kind:"diff"` pages only when their assigned review questions need patch evidence, and they verify returned PR metadata against the handoff. The review reports binary, omitted or incomplete coverage and does not substitute a branch comparison if retrieval fails. The five specialists, report sections and delivery remain the same. Natural language uses these same inputs; the model asks for an account when ambiguous.
+
 ### Review a remote branch
 
 ```text
@@ -70,14 +80,15 @@ The available `review` input fields are:
 
 | Field | Purpose |
 | --- | --- |
-| `mode` | `currentBranchChanges`, `remoteBranch`, or `specialInstructions`. |
+| `mode` | `currentBranchChanges`, `remoteBranch`, `pullRequest`, or `specialInstructions`. |
+| `url`, `provider` | Required PR web URL and optional configured account ID for `pullRequest`; the tool selects the matching account from configured URL patterns. |
 | `baseBranch` | The comparison base. |
 | `repository`, `branch` | The remote repository and source branch. |
 | `instructions` | Review goals, situational instructions, and whether to include working changes. |
 | `paths` | Repository-relative paths to focus on. |
 | `requirementsDocumentPath`, `requirementsSource` | A requirements file and whether it comes from `workspace` or `reviewTarget`. |
 
-There is no `prUrl` field in this input schema. Supply a PR link in natural language or in `instructions`, along with enough information to identify the target.
+Use `url` for a PR link; there is no `prUrl` field. Normally omit `provider`; the tool reports ambiguity if multiple configured accounts match, so the model can ask which account to use.
 
 ## Invoke through natural language
 

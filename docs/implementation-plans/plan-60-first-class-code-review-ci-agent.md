@@ -1,5 +1,7 @@
 # Plan 60 — First-class Code Review and CI Agent
 
+**Acquisition amendment (Plan 110):** PR retrieval may also use the ordinary built-in `pr_fetch` tool and compiled adapters in `Threadsmith.Tools`, with existing Secrets/policy and a transient operation cache. References below to extension/MCP-only retrieval are broadened to include that tool. Publication remains an explicit extension/MCP capability. Plan 110 serves the existing advisory skill independently; it does not deliver this plan's coordinator, review persistence or CI gates.
+
 **Delivery track:** M24 — First-class Code Review and CI Agent
 
 **Prerequisites:** plans 08, 10–13, 18, 20, 27, 30, 33–35, 37–44, 49, 51–57, and 59

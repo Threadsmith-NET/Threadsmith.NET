@@ -15,8 +15,8 @@
   "assets": [
     {
       "path": "schemas/input.json",
-      "bytes": 908,
-      "sha256": "fb69f9883facd75e2be6c66517456e465b90c3853e976d06e06bad5a9a4245d0",
+      "bytes": 1070,
+      "sha256": "aaf2d3966e8c18c54a1a30dff79703164c918a06ee4d764c7c790b1f3ed8607e",
       "required": true,
       "kind": "schema"
     },

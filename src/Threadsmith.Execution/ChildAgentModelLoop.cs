@@ -696,7 +696,7 @@ internal sealed class ChildAgentModelLoop
                     requests.Count));
             }
 
-            if (!pendingCalls.TryAdd(request.ToolName, request.ArgumentsJson))
+            if (!pendingCalls.TryAdd(resolvedRegistrations[ordinal].Tool.Definition, request.ArgumentsJson))
             {
                 throw new MalformedInvocationException(CorrectiveMessageFactory.CreateToolBatchDiagnostic(
                     MalformedInvocationFailureKind.PhaseInvalidTool,

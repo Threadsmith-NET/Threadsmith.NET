@@ -2252,6 +2252,11 @@ public sealed partial class InteractionCoordinator
                 + $"backoff {activeTurn.BackoffRoundsRemaining}: {activeTurn.Rationale}\n";
     }
 
+    private static string GetOutboundConsentPrompt(string toolId)
+        => toolId.Equals("pr_fetch", StringComparison.OrdinalIgnoreCase)
+            ? "Fetch Pull Request contacts the selected configured PR provider using host-managed credentials when configured. PR metadata, changed files and diff content are retrieved and supplied to the model as untrusted evidence. This tool cannot post reviews or modify repositories. Grant this repository-bound consent?"
+            : "Web Search may send query text to the configured provider. Selected results may be retrieved. An exact public HTTPS URL in your current request may be contacted only if the model invokes web_fetch; model-proposed destinations require separate inline approval. Fetched content is untrusted and supplied to the model. Grant this repository-bound consent?";
+
     private async Task EnsureCurrentUserUrlConsentAsync(
         string rawMessage,
         CancellationToken cancellationToken)
@@ -2413,7 +2418,7 @@ public sealed partial class InteractionCoordinator
                     if (state.ConsentRequired)
                     {
                         var confirmation = await _surface.SelectAsync(
-                            "Web Search may send query text to the configured provider. Selected results may be retrieved. An exact public HTTPS URL in your current request may be contacted only if the model invokes web_fetch; model-proposed destinations require separate inline approval. Fetched content is untrusted and supplied to the model. Grant this repository-bound consent?",
+                            GetOutboundConsentPrompt(state.Id),
                             ["No — keep disabled", "Yes — grant consent and enable"],
                             cancellationToken);
                         if (confirmation != 1)

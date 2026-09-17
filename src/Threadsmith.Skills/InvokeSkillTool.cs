@@ -53,7 +53,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         _limits = limits ?? new();
         _limits.Validate();
         _workflows = workflows;
-        _definition = CreateDefinition(prompts);
+        _definition = CreateDefinition(prompts, _limits);
     }
 
     /// <inheritdoc />
@@ -84,13 +84,14 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 HostBudget = new SkillBudget(),
             },
             cancellationToken);
+        var reason = ExplainInputShapeFailure(result.Reason, input.Input.ValueKind);
         var output = new InvokeSkillOutput(
             result.InvocationId.Value.ToString("D"),
             result.Package.SkillId.Value,
             result.Package.Version,
             result.Package.Digest.Value,
             result.Status.ToString(),
-            result.Reason,
+            reason,
             result.Checkpoint.NextAction,
             result.HostActions.Select(action => new InvokeSkillHostActionOutput(
                 action.Kind.ToString(),
@@ -101,7 +102,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             result.Package.SkillId.Value,
             result.Package.Version,
             result.Status.ToString(),
-            result.Reason,
+            reason,
             result.Checkpoint.NextAction,
             result.HostActions.Select(action => new InvokeSkillModelHostAction(
                 action.Kind.ToString(),
@@ -110,8 +111,8 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             ParseOptionalPayload(result.OutputJson));
         var failure = result.Status switch
         {
-            SkillInvocationStatus.Failed => new ToolExecutionFailure(ToolErrorClassification.ExecutionFailure, result.Reason),
-            SkillInvocationStatus.Cancelled => new ToolExecutionFailure(ToolErrorClassification.Cancelled, result.Reason),
+            SkillInvocationStatus.Failed => new ToolExecutionFailure(ToolErrorClassification.ExecutionFailure, reason),
+            SkillInvocationStatus.Cancelled => new ToolExecutionFailure(ToolErrorClassification.Cancelled, reason),
             _ => null,
         };
         return new ToolExecution<InvokeSkillOutput>(
@@ -140,7 +141,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         }
     }
 
-    private static ToolDefinition CreateDefinition(IPromptLoader prompts)
+    private static ToolDefinition CreateDefinition(IPromptLoader prompts, SkillRuntimeLimits limits)
     {
         return new ToolDefinition
         {
@@ -154,7 +155,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             InputSchema = new ToolSchema(
                 nameof(InvokeSkillInput),
                 1,
-                "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"selector\",\"input\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]}}}"),
+                "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"selector\",\"input\"],\"properties\":{\"selector\":{\"type\":\"string\"},\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"],\"description\":\"Pass the native JSON value whose root type matches the inputSchema returned by inspect_skill. For an object schema, pass an object directly and never a quoted or JSON-encoded object string. Use a string only for a string root schema or inputSchema {}.\"}}}"),
             OutputSchema = new ToolSchema(
                 nameof(InvokeSkillOutput),
                 1,
@@ -170,9 +171,17 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 ClaimResolverId = "invoke-skill-session-v1",
                 MaximumSourceConcurrency = int.MaxValue,
             },
-            Timeout = TimeSpan.FromMinutes(20),
+            Timeout = TimeSpan.FromSeconds(limits.InvokeSkillTimeoutSeconds),
             MaximumOutputBytes = 64 * 1024,
         };
+    }
+
+    private static string ExplainInputShapeFailure(string reason, JsonValueKind inputKind)
+    {
+        return inputKind == JsonValueKind.String
+            && reason.Contains("does not match type", StringComparison.Ordinal)
+            ? reason + " invoke_skill.input was a JSON string. Pass a native JSON value whose root type matches the inspected inputSchema; do not quote or JSON-encode an object or array."
+            : reason;
     }
 
     private static JsonElement ParsePayload(string payloadJson)

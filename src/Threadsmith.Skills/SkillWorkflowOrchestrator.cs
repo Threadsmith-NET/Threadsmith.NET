@@ -1,6 +1,7 @@
 namespace Threadsmith.Skills;
 
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Tools;
 
@@ -14,6 +15,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private readonly IDomainEventStream _events;
     private readonly IPromptLoader _prompts;
     private readonly ISkillPackageVerifier _verifier;
+    private readonly SkillRuntimeLimits _limits;
     private readonly ISkillProcedureRunner _runner;
     private readonly BoundedJsonSchemaValidator _schemas;
     private readonly ISkillStateStore _state;
@@ -32,7 +34,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         ISkillStateStore state,
         Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> hostContext,
         IDomainEventStream events,
-        IConversationToolSnapshotStore? snapshots = null)
+        IConversationToolSnapshotStore? snapshots = null,
+        SkillRuntimeLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -55,6 +58,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         _hostContext = hostContext;
         _events = events;
         _snapshots = snapshots;
+        _limits = limits ?? new();
+        _limits.Validate();
     }
 
     /// <inheritdoc />
@@ -243,7 +248,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             await source.CancelAsync();
         }
 
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(_limits.WorkflowDisposeTimeoutSeconds);
         while (!_active.IsEmpty && DateTimeOffset.UtcNow < deadline)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10));
@@ -697,7 +702,61 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
 
         var schemaJson = await SkillSchemaAssets.ReadAsync(candidate, schemaAssetPath, cancellationToken);
         var schema = _schemas.Compile(schemaJson);
-        return _schemas.Validate(schema, valueJson);
+        return ValidateSchemaInput(schema, valueJson);
+    }
+
+    private string ValidateSchemaInput(SkillCompiledSchema schema, string valueJson)
+    {
+        try
+        {
+            return _schemas.Validate(schema, valueJson);
+        }
+        catch (InvalidDataException exception) when (
+            IsRootTypeMismatch(exception)
+            && TryGetStringifiedJsonValue(valueJson, out var embeddedJson))
+        {
+            return _schemas.Validate(schema, embeddedJson);
+        }
+    }
+
+    private static bool IsRootTypeMismatch(InvalidDataException exception)
+    {
+        return exception.Message.Contains("Skill value at $ does not match type", StringComparison.Ordinal);
+    }
+
+    private static bool TryGetStringifiedJsonValue(string valueJson, out string embeddedJson)
+    {
+        embeddedJson = string.Empty;
+        try
+        {
+            using var valueDocument = JsonDocument.Parse(valueJson, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+            });
+            if (valueDocument.RootElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var text = valueDocument.RootElement.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            using var embeddedDocument = JsonDocument.Parse(text, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+            });
+            embeddedJson = text;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private async Task<SkillWorkflowCheckpoint> GetRequiredCheckpointAsync(

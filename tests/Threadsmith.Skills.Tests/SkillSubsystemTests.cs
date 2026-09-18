@@ -594,6 +594,68 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
     }
 
+    /// <summary>Equivalent stringified and native inputs share the duplicate key while the first invocation is still running.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_RunningInvocationUsesNormalizedStructuredInputKey()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new BlockingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var stringifiedInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
+        var nativeInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+
+        var firstTask = tool.ExecuteAsync(stringifiedInput, context);
+        await workflows.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var duplicate = await tool.ExecuteAsync(nativeInput, context);
+        workflows.Release.TrySetResult();
+        var first = await firstTask;
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("Running", duplicate.Value.Status);
+    }
+
+    /// <summary>Startup cancellation clears a duplicate entry when no checkpoint or side effect exists.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_StartupCancellationDoesNotLeaveRunningDuplicate()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new CancelOnceWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tool.ExecuteAsync(input, context));
+        var retry = await tool.ExecuteAsync(input, context);
+
+        Assert.Equal(2, workflows.Executions);
+        Assert.Equal("Completed", retry.Value.Status);
+    }
+
     /// <summary>A stringified structured input receives provider-neutral corrective guidance.</summary>
     [Fact]
     public async Task InvokeSkillTool_StringifiedObjectFailureExplainsNativeJsonShape()
@@ -1442,6 +1504,121 @@ public sealed partial class SkillSubsystemTests
         {
             return Task.FromResult(false);
         }
+    }
+
+    private sealed class BlockingWorkflowOrchestrator : ISkillWorkflowOrchestrator
+    {
+        public int Executions { get; private set; }
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<SkillInvocationResult> InvokeAsync(
+            SkillInvocationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Executions++;
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return CreateSkillResult(request, SkillInvocationStatus.Completed, "test complete");
+        }
+
+        public Task<SkillInvocationResult> ResumeAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<SkillInvocationResult> ContinueAsync(
+            SkillInvocationId invocationId,
+            string hostResultJson,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<bool> CancelAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(false);
+        }
+    }
+
+    private sealed class CancelOnceWorkflowOrchestrator : ISkillWorkflowOrchestrator
+    {
+        public int Executions { get; private set; }
+
+        public Task<SkillInvocationResult> InvokeAsync(
+            SkillInvocationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Executions++;
+            if (Executions == 1)
+            {
+                return Task.FromCanceled<SkillInvocationResult>(new CancellationToken(true));
+            }
+
+            return Task.FromResult(CreateSkillResult(request, SkillInvocationStatus.Completed, "test complete"));
+        }
+
+        public Task<SkillInvocationResult> ResumeAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<SkillInvocationResult> ContinueAsync(
+            SkillInvocationId invocationId,
+            string hostResultJson,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<bool> CancelAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(false);
+        }
+    }
+
+    private static SkillInvocationResult CreateSkillResult(
+        SkillInvocationRequest request,
+        SkillInvocationStatus status,
+        string reason)
+    {
+        var package = PackageIdentity();
+        var checkpoint = new SkillWorkflowCheckpoint
+        {
+            WorkflowId = SkillWorkflowId.New(),
+            InvocationId = request.InvocationId,
+            SessionId = request.SessionId,
+            RunId = request.RunId,
+            WorkspaceId = request.WorkspaceId,
+            Package = package,
+            InputJson = request.InputJson,
+            Trust = request.Trust,
+            Phase = request.Phase,
+            EffectiveBudget = request.HostBudget,
+            Status = status,
+            NextAction = "test complete",
+            RecordedAt = DateTimeOffset.UtcNow,
+        };
+        return new SkillInvocationResult
+        {
+            InvocationId = request.InvocationId,
+            Package = package,
+            Status = status,
+            OutputJson = "{\"summary\":\"done\"}",
+            Reason = reason,
+            Checkpoint = checkpoint,
+        };
     }
 
     private sealed class NoopSkillInspectionHandlers :

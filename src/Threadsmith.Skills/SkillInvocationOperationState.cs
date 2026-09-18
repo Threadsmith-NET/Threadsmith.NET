@@ -24,7 +24,6 @@ internal sealed class SkillInvocationOperationState : IAsyncDisposable
         if (entry.Result is null)
         {
             entry = entry with { SideEffects = SnapshotSideEffects(entry.InvocationId) };
-            _invocations[key] = entry;
         }
 
         return true;
@@ -43,7 +42,6 @@ internal sealed class SkillInvocationOperationState : IAsyncDisposable
         if (entry.InvocationId != invocationId && entry.Result is null)
         {
             entry = entry with { SideEffects = SnapshotSideEffects(entry.InvocationId) };
-            _invocations[key] = entry;
         }
 
         return entry.InvocationId == invocationId;
@@ -67,11 +65,13 @@ internal sealed class SkillInvocationOperationState : IAsyncDisposable
                 DateTimeOffset.UtcNow,
                 result,
                 sideEffects),
-            (_, existing) => existing with
-            {
-                Result = result,
-                SideEffects = sideEffects,
-            });
+            (_, existing) => existing.InvocationId == result.InvocationId
+                ? existing with
+                {
+                    Result = result,
+                    SideEffects = sideEffects,
+                }
+                : existing);
     }
 
     /// <summary>Removes a failed start entry when it produced no observed side effects.</summary>
@@ -88,11 +88,12 @@ internal sealed class SkillInvocationOperationState : IAsyncDisposable
         var sideEffects = SnapshotSideEffects(invocationId);
         if (sideEffects.Count == 0)
         {
-            _invocations.TryRemove(key, out _);
+            ((ICollection<KeyValuePair<SkillInvocationOperationKey, SkillInvocationOperationEntry>>)_invocations)
+                .Remove(new KeyValuePair<SkillInvocationOperationKey, SkillInvocationOperationEntry>(key, entry));
             return;
         }
 
-        _invocations[key] = entry with { SideEffects = sideEffects };
+        _invocations.TryUpdate(key, entry with { SideEffects = sideEffects }, entry);
     }
 
     /// <summary>Records one externally visible side effect for the owning skill invocation.</summary>

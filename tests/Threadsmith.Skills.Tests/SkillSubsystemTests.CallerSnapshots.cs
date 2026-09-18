@@ -151,7 +151,7 @@ public sealed partial class SkillSubsystemTests
                 },
             },
         };
-        var model = new PermissionModelProvider { FinalText = "{\"succeeded\":true,\"response\":\"Host continuation completed.\"}" };
+        var model = new PermissionModelProvider { FinalText = "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Host continuation completed.\"}" };
         var sanitizer = new SecretOutputSanitizer();
         await using var events = new DomainEventStream();
         var pipeline = new ToolInvocationPipeline(

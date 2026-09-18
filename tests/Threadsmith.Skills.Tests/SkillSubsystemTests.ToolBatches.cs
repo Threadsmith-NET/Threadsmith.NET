@@ -387,7 +387,7 @@ public sealed partial class SkillSubsystemTests
                     throw FinalException;
                 }
 
-                yield return new ModelChunk { Text = "{\"succeeded\":true,\"response\":\"Fixture complete\"}" };
+                yield return new ModelChunk { Text = "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Fixture complete\"}" };
             }
         }
     }

@@ -87,6 +87,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             && !string.Equals(normalized, inputJson, StringComparison.Ordinal)
                 ? normalized
                 : null;
+        var operationInputJson = normalizedInputJson ?? inputJson;
         var operationState = context.Invocation.OperationScope?.GetOrCreate(
             SkillInvocationOperationState.OperationScopeKey,
             static () => new SkillInvocationOperationState());
@@ -96,9 +97,10 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             context.SessionId,
             context.RunId,
             selectorKey,
-            inputJson);
+            operationInputJson);
         if (operationState is not null
-            && TryGetDuplicateEntry(operationState, operationKey, normalizedInputJson, out var existingEntry))
+            && operationState.TryGet(operationKey, out var existingEntry)
+            && existingEntry is not null)
         {
             return CreateDuplicateExecution(existingEntry);
         }
@@ -131,7 +133,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 },
                 cancellationToken);
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception)
         {
             if (operationState is not null
                 && !await TryCompleteFromCheckpointAsync(operationState, operationKey, invocationId))
@@ -269,31 +271,6 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         {
             operationState.Complete(operationKey with { CanonicalInputJson = result.Checkpoint.InputJson }, result);
         }
-    }
-
-    private static bool TryGetDuplicateEntry(
-        SkillInvocationOperationState operationState,
-        SkillInvocationOperationKey operationKey,
-        string? normalizedInputJson,
-        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out SkillInvocationOperationEntry? entry)
-    {
-        if (operationState.TryGet(operationKey, out var directEntry)
-            && directEntry is not null)
-        {
-            entry = directEntry;
-            return true;
-        }
-
-        if (normalizedInputJson is not null
-            && operationState.TryGet(operationKey with { CanonicalInputJson = normalizedInputJson }, out var normalizedEntry)
-            && normalizedEntry is not null)
-        {
-            entry = normalizedEntry;
-            return true;
-        }
-
-        entry = null;
-        return false;
     }
 
     private static SkillInvocationResult CreateResultFromCheckpoint(

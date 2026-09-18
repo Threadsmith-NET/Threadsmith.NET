@@ -467,6 +467,35 @@ public sealed class PrFetchTests
         Assert.Equal(0, handler.DiffRequests);
     }
 
+    /// <summary>Scoped diff acquisition validates the second revision before exposing buffered raw diff pages.</summary>
+    [Fact]
+    public async Task ScopedDiffWithRevisionMovement_DoesNotReturnBufferedRawDiff()
+    {
+        using var handler = new PrHandler(false)
+        {
+            ChangeRevisionAfterMetadataRequests = 3,
+            DiffText = "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-old\n+secret\n",
+        };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new TestSecrets(), Options(false), false);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var baseContext = Context(scope);
+        var context = baseContext with
+        {
+            Invocation = baseContext.Invocation with { ApprovedRoots = ["src"] },
+        };
+
+        var first = await tool.ExecuteAsync(Input(false), context);
+        var inventory = await tool.ExecuteAsync(Input(false) with { Cursor = first.Value.Cursor }, context);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            tool.ExecuteAsync(Input(false) with { Cursor = inventory.Value.Cursor }, context));
+
+        Assert.Contains("changed during acquisition", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", JsonSerializer.Serialize(first.Value), StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", JsonSerializer.Serialize(inventory.Value), StringComparison.Ordinal);
+        Assert.Equal(1, handler.DiffRequests);
+    }
+
     /// <summary>A cancelled waiter cannot cancel another reader's acquisition.</summary>
     [Fact]
     public async Task ConcurrentReadersShareFetch_OneWaiterCancellationDoesNotCancelOwner()
@@ -737,6 +766,8 @@ public sealed class PrFetchTests
 
         public bool ChangeRevision { get; set; }
 
+        public int? ChangeRevisionAfterMetadataRequests { get; init; }
+
         public bool Cancelled { get; private set; }
 
         public bool MultipleFilePages { get; init; }
@@ -820,7 +851,10 @@ public sealed class PrFetchTests
                 }
             }
 
-            var revision = ChangeRevision && count > 1 ? "moved" : "head";
+            var revision = (ChangeRevision && count > 1)
+                || (ChangeRevisionAfterMetadataRequests is { } threshold && count >= threshold)
+                    ? "moved"
+                    : "head";
             var changedFiles = ChangedFilesOverride ?? (MultipleFilePages ? 21 : 1);
             return _bitbucket
                 ? Json("""{"title":"PR","description":"desc","state":"OPEN","source":{"commit":{"hash":"HEAD"},"repository":{"full_name":"org/repo"}},"destination":{"commit":{"hash":"base-with-unrelated-terraform"},"repository":{"full_name":"org/repo"}}} """.Replace("HEAD", revision, StringComparison.Ordinal))

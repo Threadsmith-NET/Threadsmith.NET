@@ -249,21 +249,42 @@ internal sealed class PrFetchCache : IAsyncDisposable
 
             if (scopedDiff)
             {
+                var diffPages = new List<PullRequestPage>();
+                var diffFiles = 0;
                 await foreach (var page in provider.ReadPagesAsync(target, account, PrFetchKind.Diff, token))
                 {
-                    if (!page.Kind.Equals("diff", StringComparison.Ordinal))
+                    if (page.Files.Count > 0)
                     {
-                        continue;
+                        diffFiles += page.Files.Count;
+                        if (isFileAllowed is not null && page.Files.Any(file => !isFileAllowed(file)))
+                        {
+                            entry.HasDisallowedFiles = true;
+                            throw new UnauthorizedAccessException(
+                                "PR diff content cannot be fetched because one or more changed files are outside the caller's approved repository path scope.");
+                        }
                     }
 
-                    Publish(page);
-                    await WaitForDemandAsync();
+                    if (page.Kind.Equals("diff", StringComparison.Ordinal))
+                    {
+                        diffPages.Add(page);
+                    }
                 }
 
                 var afterDiff = await provider.GetMetadataAsync(target, account, token);
                 if (metadata.Revision != afterDiff.Revision)
                 {
                     throw new InvalidDataException("The PR changed during acquisition; discard all pages of this snapshot and refresh.");
+                }
+
+                if (metadata.ExpectedFiles is { } expectedAfterDiff && diffFiles > 0 && diffFiles != expectedAfterDiff)
+                {
+                    throw new InvalidDataException("The provider's file inventory is incomplete; its reported changed-file count does not match the acquired pages.");
+                }
+
+                foreach (var page in diffPages)
+                {
+                    Publish(page);
+                    await WaitForDemandAsync();
                 }
             }
 

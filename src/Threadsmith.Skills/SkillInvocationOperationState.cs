@@ -12,6 +12,24 @@ internal sealed class SkillInvocationOperationState : IAsyncDisposable
     private readonly ConcurrentDictionary<SkillInvocationOperationKey, SkillInvocationOperationEntry> _invocations = [];
     private readonly ConcurrentDictionary<SkillInvocationId, List<SkillSideEffectRecord>> _sideEffects = [];
 
+    /// <summary>Gets an existing invocation entry without starting a replacement.</summary>
+    public bool TryGet(SkillInvocationOperationKey key, out SkillInvocationOperationEntry? entry)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!_invocations.TryGetValue(key, out entry))
+        {
+            return false;
+        }
+
+        if (entry.Result is null)
+        {
+            entry = entry with { SideEffects = SnapshotSideEffects(entry.InvocationId) };
+            _invocations[key] = entry;
+        }
+
+        return true;
+    }
+
     /// <summary>Starts a new invocation or returns the existing matching invocation.</summary>
     public bool TryStart(
         SkillInvocationOperationKey key,
@@ -54,6 +72,27 @@ internal sealed class SkillInvocationOperationState : IAsyncDisposable
                 Result = result,
                 SideEffects = sideEffects,
             });
+    }
+
+    /// <summary>Removes a failed start entry when it produced no observed side effects.</summary>
+    public void RemoveIfNoSideEffects(SkillInvocationOperationKey key, SkillInvocationId invocationId)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (!_invocations.TryGetValue(key, out var entry)
+            || entry.InvocationId != invocationId
+            || entry.Result is not null)
+        {
+            return;
+        }
+
+        var sideEffects = SnapshotSideEffects(invocationId);
+        if (sideEffects.Count == 0)
+        {
+            _invocations.TryRemove(key, out _);
+            return;
+        }
+
+        _invocations[key] = entry with { SideEffects = sideEffects };
     }
 
     /// <summary>Records one externally visible side effect for the owning skill invocation.</summary>

@@ -219,7 +219,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             definition.OutputSchemaAsset,
             hostResultJson,
             cancellationToken);
-        validated = ValidateArtifactDeliveryContract(validated);
+        validated = ValidateArtifactDeliveryContract(validated, []);
         SkillWorkflowStepResult[] steps =
         [
             .. checkpoint.Steps.Select(item => item == waiting
@@ -514,11 +514,13 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
             }
 
-            var validated = ValidateArtifactDeliveryContract(await ValidateAgainstAssetAsync(
+            var sideEffects = procedure.SideEffects ?? [];
+            var validatedOutput = await ValidateAgainstAssetAsync(
                 candidate,
                 step.OutputSchemaAsset,
                 procedure.OutputJson,
-                cancellationToken));
+                cancellationToken);
+            var validated = ValidateArtifactDeliveryContract(validatedOutput, sideEffects);
             using var output = System.Text.Json.JsonDocument.Parse(validated);
             return new SkillWorkflowStepResult
             {
@@ -531,7 +533,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 ContentTokens = content.Sum(item => item.EstimatedTokens),
                 ModelTurns = procedure.ModelTurns,
                 ToolCalls = procedure.ToolCalls,
-                SideEffects = procedure.SideEffects ?? [],
+                SideEffects = sideEffects,
                 RecordedAt = DateTimeOffset.UtcNow,
             };
         }
@@ -751,19 +753,67 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
     }
 
-    private static string ValidateArtifactDeliveryContract(string valueJson)
+    private static string ValidateArtifactDeliveryContract(
+        string valueJson,
+        IReadOnlyList<SkillSideEffectRecord> sideEffects)
     {
         using var document = System.Text.Json.JsonDocument.Parse(valueJson);
-        if (document.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object
-            && document.RootElement.TryGetProperty("delivery", out var delivery)
-            && delivery.ValueKind == System.Text.Json.JsonValueKind.String
-            && string.Equals(delivery.GetString(), "artifact", StringComparison.Ordinal)
-            && !document.RootElement.TryGetProperty("artifact", out _))
+        if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
+            || !document.RootElement.TryGetProperty("delivery", out var delivery)
+            || delivery.ValueKind != System.Text.Json.JsonValueKind.String
+            || !string.Equals(delivery.GetString(), "artifact", StringComparison.Ordinal))
+        {
+            return valueJson;
+        }
+
+        if (!document.RootElement.TryGetProperty("artifact", out var artifact))
         {
             throw new InvalidDataException("Skill value declares artifact delivery but is missing required property 'artifact'.");
         }
 
+        if (artifact.ValueKind != JsonValueKind.Object
+            || !artifact.TryGetProperty("path", out var pathElement)
+            || pathElement.ValueKind != JsonValueKind.String
+            || pathElement.GetString() is not { Length: > 0 } path
+            || !artifact.TryGetProperty("bytesWritten", out var bytesElement)
+            || bytesElement.ValueKind != JsonValueKind.Number
+            || !bytesElement.TryGetInt64(out var bytesWritten))
+        {
+            throw new InvalidDataException("Skill value declares artifact delivery but has incomplete artifact metadata.");
+        }
+
+        if (!sideEffects.Any(item => IsMatchingArtifactSideEffect(item, path, bytesWritten)))
+        {
+            throw new InvalidDataException("Skill value declares artifact delivery that was not observed in write_file side effects.");
+        }
+
         return valueJson;
+    }
+
+    private static bool IsMatchingArtifactSideEffect(
+        SkillSideEffectRecord sideEffect,
+        string declaredPath,
+        long declaredBytesWritten)
+    {
+        return sideEffect.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
+            && sideEffect.ToolId.Equals("write_file", StringComparison.OrdinalIgnoreCase)
+            && sideEffect.BytesWritten == declaredBytesWritten
+            && sideEffect.Path is { Length: > 0 } observedPath
+            && ArtifactPathsMatch(declaredPath, observedPath);
+    }
+
+    private static bool ArtifactPathsMatch(string declaredPath, string observedPath)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var declared = NormalizeArtifactClaimPath(declaredPath);
+        var observed = NormalizeArtifactClaimPath(observedPath);
+        return string.Equals(declared, observed, comparison)
+            || declared.EndsWith("/" + observed, comparison);
+    }
+
+    private static string NormalizeArtifactClaimPath(string path)
+    {
+        return path.Replace('\\', '/').TrimEnd('/');
     }
 
     private static bool IsRootTypeMismatch(InvalidDataException exception)

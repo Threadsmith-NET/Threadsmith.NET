@@ -36,7 +36,7 @@ public sealed partial class AgentOperationalLimitTests
         var options = BindOptions(nameof(DelegateAgentsOptions.EnforceOperationalLimits), "false");
         options.Validate();
 
-        Assert.Equal(3, options.MaximumAgents);
+        Assert.Equal(5, options.MaximumAgents);
         Assert.Equal(0, options.EffectiveLimit(options.MaximumAgents));
         Assert.Equal(0, options.MaximumSummaryCharacters);
         Assert.False(options.ResultLimits.EnforceLimits);

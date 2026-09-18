@@ -90,7 +90,7 @@ public sealed partial class SkillSubsystemTests
         }
     }
 
-    /// <summary>Listing all skills does not silently apply the catalog query's default 100-result limit.</summary>
+    /// <summary>Listing all skills uses an explicit bounded subset and tells the model to narrow broad queries.</summary>
     [Fact]
     public async Task InspectSkillTool_ListsBeyondDefaultCatalogLimit()
     {
@@ -116,7 +116,8 @@ public sealed partial class SkillSubsystemTests
         var application = CreateCatalogApplication(catalog, policy, package.Root);
         var tool = new InspectSkillTool(application, application, TestPromptLoader.Instance, new BoundedJsonSchemaValidator());
         var result = await tool.ExecuteAsync(new InspectSkillInput(), new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), PermissionContext()));
-        Assert.Equal(106, result.Value.Skills.Count);
+        Assert.Equal(32, result.Value.Skills.Count);
+        Assert.Contains("narrower query", result.Value.Guidance, StringComparison.Ordinal);
         Assert.All(result.Value.Skills, entry => Assert.Null(entry.InputSchema));
     }
 

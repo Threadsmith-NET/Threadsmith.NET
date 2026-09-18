@@ -323,6 +323,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     var preflight = _toolPipeline.PreflightBatch(batch);
                     string? failureSummary = null;
                     IReadOnlyList<ToolBatchResult> results = [];
+                    ToolBatchCancelledException? interruptedBatch = null;
 
                     // Rejected requests still consume the existing budget, just as ordinary failed tool calls do.
                     toolCalls += batch.Count;
@@ -363,7 +364,15 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         if (failureSummary is null)
                         {
                             seenCalls = batchCalls;
-                            results = await _toolPipeline.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);
+                            try
+                            {
+                                results = await _toolPipeline.InvokePreparedBatchAsync(preflight.Preparation, cancellationToken);
+                            }
+                            catch (ToolBatchCancelledException exception)
+                            {
+                                results = exception.Results;
+                                interruptedBatch = exception;
+                            }
                         }
                     }
 
@@ -430,6 +439,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                                 ["ToolName"] = toolRequest.ToolName,
                                 ["ToolResult"] = boundedResult,
                             });
+                    }
+
+                    if (interruptedBatch is not null)
+                    {
+                        throw interruptedBatch;
                     }
 
                     if (transientState.HasResponses)

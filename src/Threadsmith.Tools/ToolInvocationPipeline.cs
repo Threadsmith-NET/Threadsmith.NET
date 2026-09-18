@@ -275,8 +275,18 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             }
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        return [.. results.OrderBy(result => result.Ordinal)];
+        var ordered = results.OrderBy(result => result.Ordinal).ToArray();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            if (ordered.Length > 0)
+            {
+                throw new ToolBatchCancelledException(ordered, cancellationToken);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        return ordered;
     }
 
     private async Task<ToolInvocationResult> InvokeCoreAsync(

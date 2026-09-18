@@ -18,16 +18,13 @@ Choose the lead model with `/models` and its supported reasoning level with `/re
 
 Use `/tools` to enable `delegate_agents` and the tools needed for your review. The lead can gather evidence through Git tools, file/search/semantic tools, or `run_process`; it chooses from the enabled tools. Enable `invoke_skill` if you want to start the review through natural language. Enable `write_file` if you want a saved report. Fetching branches or running tests through `run_process` needs the usual process configuration and permissions. Skill verification does not grant tool permissions; the skill requires at least `TrustedRead`, and individual tools keep their normal requirements.
 
-To let the lead request all five specialists in one delegation call, allow at least five assignments in trusted user configuration. The default `agents:delegation:maximumAgents` is three; this is separate from the number that can run simultaneously. For five simultaneous reviewers, merge these settings into `%USERPROFILE%\.threadsmith\config.json` and restart:
+The default `agents:delegation:maximumAgents` is five, which lets the lead request all specialists in one delegation call. This is separate from the number that can run simultaneously. For five simultaneous reviewers, merge these settings into `%USERPROFILE%\.threadsmith\config.json` and restart:
 
 ```json
 {
   "agents": {
     "maxActiveGlobal": 5,
-    "maxActivePerParent": 5,
-    "delegation": {
-      "maximumAgents": 5
-    }
+    "maxActivePerParent": 5
   }
 }
 ```

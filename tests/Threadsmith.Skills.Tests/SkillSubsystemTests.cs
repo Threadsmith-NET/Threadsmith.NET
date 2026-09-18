@@ -563,6 +563,37 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
     }
 
+    /// <summary>Duplicate invoke_skill retries match a stringified JSON object to the native object key.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_DuplicateRetry_CanonicalizesStringifiedStructuredInput()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new CapturingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var firstInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+        var stringifiedInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
+
+        var first = await tool.ExecuteAsync(firstInput, context);
+        var duplicate = await tool.ExecuteAsync(stringifiedInput, context);
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
+    }
+
     /// <summary>A stringified structured input receives provider-neutral corrective guidance.</summary>
     [Fact]
     public async Task InvokeSkillTool_StringifiedObjectFailureExplainsNativeJsonShape()
@@ -1435,10 +1466,14 @@ public sealed partial class SkillSubsystemTests
     private sealed class FixedProcedureRunner : ISkillProcedureRunner
     {
         private readonly string _output;
+        private readonly IReadOnlyList<SkillSideEffectRecord> _sideEffects;
 
-        internal FixedProcedureRunner(string output)
+        internal FixedProcedureRunner(
+            string output,
+            IReadOnlyList<SkillSideEffectRecord>? sideEffects = null)
         {
             _output = output;
+            _sideEffects = sideEffects ?? [];
         }
 
         public Task<SkillProcedureResult> RunAsync(
@@ -1449,7 +1484,11 @@ public sealed partial class SkillSubsystemTests
             string inputJson,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new SkillProcedureResult(_output, ModelTurns: 1, ToolCalls: 0));
+            return Task.FromResult(new SkillProcedureResult(
+                _output,
+                ModelTurns: 1,
+                ToolCalls: _sideEffects.Count,
+                SideEffects: _sideEffects));
         }
     }
 

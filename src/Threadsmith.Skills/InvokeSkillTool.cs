@@ -83,6 +83,10 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
         CancellationToken cancellationToken = default)
     {
         var inputJson = SkillCanonicalJson.CanonicalizeValue(input.Input.GetRawText());
+        var normalizedInputJson = TryCanonicalizeStringifiedJson(inputJson, out var normalized)
+            && !string.Equals(normalized, inputJson, StringComparison.Ordinal)
+                ? normalized
+                : null;
         var operationState = context.Invocation.OperationScope?.GetOrCreate(
             SkillInvocationOperationState.OperationScopeKey,
             static () => new SkillInvocationOperationState());
@@ -94,30 +98,51 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             selectorKey,
             inputJson);
         if (operationState is not null
+            && TryGetDuplicateEntry(operationState, operationKey, normalizedInputJson, out var existingEntry))
+        {
+            return CreateDuplicateExecution(existingEntry);
+        }
+
+        if (operationState is not null
             && !operationState.TryStart(operationKey, invocationId, out var existing))
         {
             return CreateDuplicateExecution(existing);
         }
 
-        var result = await _workflows.InvokeAsync(
-            new SkillInvocationRequest
+        SkillInvocationResult result;
+        try
+        {
+            result = await _workflows.InvokeAsync(
+                new SkillInvocationRequest
+                {
+                    InvocationId = invocationId,
+                    UseDefaultBudget = true,
+                    InvokingToolInvocationId = context.ToolInvocationId,
+                    CallerToolSnapshotId = context.Invocation.ModelVisibleToolSnapshotId,
+                    SessionId = context.SessionId,
+                    RunId = context.RunId,
+                    WorkspaceId = context.Invocation.WorkspaceId,
+                    Selector = input.Selector,
+                    InputJson = inputJson,
+                    Trust = context.Invocation.TrustLevel,
+                    Sensitivity = context.Invocation.Sensitivity,
+                    Phase = context.Phase,
+                    HostBudget = new SkillBudget(),
+                },
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            if (operationState is not null
+                && !await TryCompleteFromCheckpointAsync(operationState, operationKey, invocationId))
             {
-                InvocationId = invocationId,
-                UseDefaultBudget = true,
-                InvokingToolInvocationId = context.ToolInvocationId,
-                CallerToolSnapshotId = context.Invocation.ModelVisibleToolSnapshotId,
-                SessionId = context.SessionId,
-                RunId = context.RunId,
-                WorkspaceId = context.Invocation.WorkspaceId,
-                Selector = input.Selector,
-                InputJson = inputJson,
-                Trust = context.Invocation.TrustLevel,
-                Sensitivity = context.Invocation.Sensitivity,
-                Phase = context.Phase,
-                HostBudget = new SkillBudget(),
-            },
-            cancellationToken);
-        operationState?.Complete(operationKey, result);
+                operationState.RemoveIfNoSideEffects(operationKey, invocationId);
+            }
+
+            throw;
+        }
+
+        CompleteOperation(operationState, operationKey, result);
         return CreateExecution(result, input.Input.ValueKind);
     }
 
@@ -194,6 +219,103 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             JsonValueKind.Undefined,
             "DuplicateOfExistingSkillInvocation",
             "Duplicate invoke_skill call reused the existing skill invocation result. Do not run a replacement review workflow.");
+    }
+
+    private async Task<bool> TryCompleteFromCheckpointAsync(
+        SkillInvocationOperationState operationState,
+        SkillInvocationOperationKey operationKey,
+        SkillInvocationId invocationId)
+    {
+        if (_state is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var checkpoint = await _state.GetCheckpointAsync(invocationId, CancellationToken.None);
+            if (checkpoint is null)
+            {
+                return false;
+            }
+
+            var checkpointReason = checkpoint.Status == SkillInvocationStatus.Failed
+                ? "workflow failed after writing a checkpoint"
+                : "workflow stopped after writing a checkpoint";
+            CompleteOperation(
+                operationState,
+                operationKey,
+                CreateResultFromCheckpoint(checkpoint, checkpointReason));
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    private static void CompleteOperation(
+        SkillInvocationOperationState? operationState,
+        SkillInvocationOperationKey operationKey,
+        SkillInvocationResult result)
+    {
+        if (operationState is null)
+        {
+            return;
+        }
+
+        operationState.Complete(operationKey, result);
+        if (!string.Equals(operationKey.CanonicalInputJson, result.Checkpoint.InputJson, StringComparison.Ordinal))
+        {
+            operationState.Complete(operationKey with { CanonicalInputJson = result.Checkpoint.InputJson }, result);
+        }
+    }
+
+    private static bool TryGetDuplicateEntry(
+        SkillInvocationOperationState operationState,
+        SkillInvocationOperationKey operationKey,
+        string? normalizedInputJson,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out SkillInvocationOperationEntry? entry)
+    {
+        if (operationState.TryGet(operationKey, out var directEntry)
+            && directEntry is not null)
+        {
+            entry = directEntry;
+            return true;
+        }
+
+        if (normalizedInputJson is not null
+            && operationState.TryGet(operationKey with { CanonicalInputJson = normalizedInputJson }, out var normalizedEntry)
+            && normalizedEntry is not null)
+        {
+            entry = normalizedEntry;
+            return true;
+        }
+
+        entry = null;
+        return false;
+    }
+
+    private static SkillInvocationResult CreateResultFromCheckpoint(
+        SkillWorkflowCheckpoint checkpoint,
+        string reason)
+    {
+        return new SkillInvocationResult
+        {
+            Response = checkpoint.Steps.LastOrDefault()?.Response,
+            InvocationId = checkpoint.InvocationId,
+            Package = checkpoint.Package,
+            Status = checkpoint.Status,
+            OutputJson = checkpoint.Status is SkillInvocationStatus.Completed or SkillInvocationStatus.Failed
+                ? checkpoint.Steps.LastOrDefault()?.OutputJson
+                : null,
+            HostActions = checkpoint.Steps
+                .Where(item => item.HostAction is not null)
+                .Select(item => item.HostAction ?? throw new InvalidDataException("Host action was unexpectedly null."))
+                .ToArray(),
+            Reason = reason,
+            Checkpoint = checkpoint,
+        };
     }
 
     private static ToolExecution<InvokeSkillOutput> CreateExecution(
@@ -333,6 +455,35 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
             && reason.Contains("does not match type", StringComparison.Ordinal)
             ? reason + " invoke_skill.input was a JSON string. Pass a native JSON value whose root type matches the inspected inputSchema; do not quote or JSON-encode an object or array."
             : reason;
+    }
+
+    private static bool TryCanonicalizeStringifiedJson(
+        string valueJson,
+        out string canonicalJson)
+    {
+        canonicalJson = string.Empty;
+        try
+        {
+            using var valueDocument = JsonDocument.Parse(valueJson);
+            if (valueDocument.RootElement.ValueKind != JsonValueKind.String
+                || valueDocument.RootElement.GetString() is not { Length: > 0 } text)
+            {
+                return false;
+            }
+
+            using var embeddedDocument = JsonDocument.Parse(text);
+            if (embeddedDocument.RootElement.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+            {
+                return false;
+            }
+
+            canonicalJson = SkillCanonicalJson.CanonicalizeValue(text);
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static JsonElement ParsePayload(string payloadJson)

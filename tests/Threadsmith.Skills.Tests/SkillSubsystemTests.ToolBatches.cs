@@ -1,6 +1,7 @@
 namespace Threadsmith.Skills.Tests;
 
 using System.Runtime.CompilerServices;
+using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -236,6 +237,53 @@ public sealed partial class SkillSubsystemTests
         Assert.Single(model.Requests);
     }
 
+    /// <summary>Cancellation after a sibling write preserves the completed write_file side effect.</summary>
+    [Fact]
+    public async Task SkillToolBatch_CancelledBatchPreservesCompletedWriteSideEffect()
+    {
+        var writer = new SkillBatchWriteFileTool();
+        var blocker = new SkillBatchProbeTool("batch_blocker");
+        var model = new SkillBatchModelProvider
+        {
+            Calls =
+            [
+                new("write_file", "{\"path\":\".inbox/review.md\",\"content\":\"Saved report\"}"),
+                new("batch_blocker", "{}"),
+            ],
+        };
+        await using var events = new DomainEventStream();
+        var runner = CreateBatchRunner(model, [writer, blocker], events);
+        var plan = PermissionPlan() with
+        {
+            AvailableToolIds = ["write_file", "batch_blocker"],
+            EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 2 },
+        };
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var running = runner.RunAsync(plan, PermissionStep(), 1, [], "{}", cancellation.Token);
+        await blocker.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await cancellation.CancelAsync();
+        OperationCanceledException cancellationError;
+        try
+        {
+            await running;
+            Assert.Fail("The cancelled skill batch must not complete successfully.");
+            return;
+        }
+        catch (OperationCanceledException exception)
+        {
+            cancellationError = exception;
+        }
+
+        var sideEffect = Assert.Single(SkillProcedureInterruption.GetSideEffects(cancellationError));
+        Assert.Equal("artifact", sideEffect.Kind);
+        Assert.Equal("write_file", sideEffect.ToolId);
+        Assert.Equal(".inbox/review.md", sideEffect.Path);
+        Assert.Equal(Encoding.UTF8.GetByteCount("Saved report"), sideEffect.BytesWritten);
+        Assert.True(blocker.Completed.Task.IsCompleted);
+        Assert.Single(model.Requests);
+    }
+
     private static SkillInvocationPlan BatchPlan() => PermissionPlan() with
     {
         AvailableToolIds = ["batch_first", "batch_second"],
@@ -345,5 +393,44 @@ public sealed partial class SkillSubsystemTests
         }
 
         protected override void ValidateInput(PermissionProbeInput input) => ArgumentNullException.ThrowIfNull(input);
+    }
+
+    private sealed record SkillBatchWriteFileInput(string Path, string Content);
+
+    private sealed class SkillBatchWriteFileTool : Tool<SkillBatchWriteFileInput, WriteFileOutput>
+    {
+        public SkillBatchWriteFileTool()
+        {
+            Definition = new ToolDefinition
+            {
+                Id = "write_file", DisplayName = "write_file", Description = "Batch write fixture", Version = "1",
+                InputSchema = new ToolSchema(nameof(SkillBatchWriteFileInput), 1, "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"path\",\"content\"],\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}}}"),
+                OutputSchema = new ToolSchema(nameof(WriteFileOutput), 1, "{\"type\":\"object\"}"),
+                Timeout = TimeSpan.FromSeconds(20), MaximumOutputBytes = 1024,
+                Scheduling = new ToolSchedulingDescriptor { ConcurrencyMode = ToolConcurrencyMode.ParallelSafe, MaximumSourceConcurrency = int.MaxValue },
+            };
+        }
+
+        public override ToolDefinition Definition { get; }
+
+        public override Task<ToolExecution<WriteFileOutput>> ExecuteAsync(
+            SkillBatchWriteFileInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateInput(input);
+            cancellationToken.ThrowIfCancellationRequested();
+            var content = input.Content ?? throw new InvalidOperationException("No fixture content was supplied.");
+            return Task.FromResult(new ToolExecution<WriteFileOutput>(
+                new WriteFileOutput(input.Path, Encoding.UTF8.GetByteCount(content), null),
+                []));
+        }
+
+        protected override void ValidateInput(SkillBatchWriteFileInput input)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+            ArgumentException.ThrowIfNullOrWhiteSpace(input.Path);
+            ArgumentException.ThrowIfNullOrWhiteSpace(input.Content);
+        }
     }
 }

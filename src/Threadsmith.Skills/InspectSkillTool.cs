@@ -32,6 +32,9 @@ public sealed record InspectSkillOutput(
 /// <summary>Inspects an enabled skill without starting its workflow or loading its instructions into context.</summary>
 public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutput>
 {
+    private const int DiscoveryCandidateLimit = 128;
+    private const int DiscoveryEntryLimit = 32;
+
     private readonly ICommandHandler<InspectSkillCommand, SkillCatalogCandidate> _inspection;
     private readonly ICommandHandler<ListSkillsCommand, IReadOnlyList<SkillCatalogCandidate>> _listing;
     private readonly IPromptLoader _prompts;
@@ -98,9 +101,10 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
         {
             // Restore availability through the same application boundary used by /skills before filtering.
             var candidates = await _listing.HandleAsync(
-                new ListSkillsCommand(new SkillCatalogQuery { Text = input.Query, MaximumResults = int.MaxValue }),
+                new ListSkillsCommand(new SkillCatalogQuery { Text = input.Query, MaximumResults = DiscoveryCandidateLimit }),
                 cancellationToken);
-            var entries = new List<InspectSkillEntry>(candidates.Count);
+            var entries = new List<InspectSkillEntry>(Math.Min(DiscoveryEntryLimit, candidates.Count));
+            var reachedEntryLimit = false;
             foreach (var item in candidates)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -113,10 +117,21 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
                     ? $"{item.Provenance.Scope}:{item.Metadata.SkillId.Value}@{item.Metadata.Version}"
                     : SkillPolicyIdentity.FormatSelector(item);
                 entries.Add(ProjectEntry(item, selector));
+                if (entries.Count == DiscoveryEntryLimit)
+                {
+                    reachedEntryLimit = true;
+                    break;
+                }
+            }
+
+            var guidance = _prompts.Get(PromptFileNames.ToolInspectSkillDiscoveryGuidance);
+            if (reachedEntryLimit || candidates.Count >= DiscoveryCandidateLimit)
+            {
+                guidance += "\n\nShowing a bounded subset of matching enabled, verified skills. Call inspect_skill again with a narrower query to find a specific skill.";
             }
 
             return new ToolExecution<InspectSkillOutput>(
-                new InspectSkillOutput(_prompts.Get(PromptFileNames.ToolInspectSkillDiscoveryGuidance), entries),
+                new InspectSkillOutput(guidance, entries),
                 []);
         }
 

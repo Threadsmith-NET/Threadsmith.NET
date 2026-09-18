@@ -277,7 +277,18 @@ public sealed class Plan50OpenAiCodexTests
                 $$"""{"models":[{"slug":"dynamic","display_name":"Dynamic","context_window":128000,"default_reasoning_level":"{{reasoning}}","supported_reasoning_levels":["{{reasoning}}"]}]}"""))))
             .DiscoverAsync("token", cancellationToken: TestContext.Current.CancellationToken);
         var registration = new OpenAiCodexProviderRegistration();
-        var profile = Assert.Single(registration.CreateProfiles(configuration));
+        var effectiveCatalog = new EffectiveModelProviderCatalog(
+            new ModelProviderCatalogConfiguration { Providers = [configuration] },
+            new ModelProviderRegistry([registration]));
+        var profile = Assert.Single(effectiveCatalog.ModelCatalog.Profiles);
+        Assert.Equal(
+            new ModelProviderInstructionAsset
+            {
+                SectionId = "provider-openai-codex-instructions",
+                PromptFileName = PromptFileNames.ProviderOpenAiCodexInstructions,
+            },
+            registration.ProviderInstructionAsset);
+        Assert.Equal(registration.ProviderInstructionAsset, profile.ProviderInstructionAsset);
         var provider = registration.CreateProvider(new ModelProviderActivationContext
         {
             HttpClient = new HttpClient(handler),

@@ -165,7 +165,7 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class RoutingModelProvider(string route) : IModelProvider, IModelRequestPreparationResolver, IModelProviderInstructionResolver
     {
-        private readonly PermissionModelProvider _inner = new() { FinalText = "{\"succeeded\":true,\"response\":\"Completed.\"}" };
+        private readonly PermissionModelProvider _inner = new() { FinalText = "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Completed.\"}" };
 
         public List<ModelStreamRequest> Requests => _inner.Requests;
 

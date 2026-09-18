@@ -1226,19 +1226,25 @@ public sealed class SemanticRefreshCoordinator :
         {
             if (binding.IsLoading)
             {
-                return !IsIgnoredPath(binding.Request.RepositoryPath, path);
+                return !SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, path);
             }
         }
 
         var inventory = _backend.GetRefreshInventory(binding.Request.WorkspaceId);
-        if (inventory.SourceDocuments.Contains(path)
-            || inventory.AdditionalDocuments.Contains(path)
+        if (inventory.SourceDocuments.Contains(path))
+        {
+            return !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
+                binding.Request.RepositoryPath,
+                path);
+        }
+
+        if (inventory.AdditionalDocuments.Contains(path)
             || inventory.AnalyzerConfigDocuments.Contains(path))
         {
             return true;
         }
 
-        if (IsIgnoredPath(binding.Request.RepositoryPath, path))
+        if (SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, path))
         {
             return false;
         }
@@ -2160,7 +2166,7 @@ public sealed class SemanticRefreshCoordinator :
                 continue;
             }
 
-            if (IsIgnoredPath(binding.Request.RepositoryPath, normalized))
+            if (SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, normalized))
             {
                 continue;
             }
@@ -2204,7 +2210,7 @@ public sealed class SemanticRefreshCoordinator :
 
                     if ((attributes & FileAttributes.Directory) != 0)
                     {
-                        if (IsIgnoredPath(binding.Request.RepositoryPath, entry)
+                        if (SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, entry)
                             || NormalizePath(binding, entry) is null)
                         {
                             continue;
@@ -2214,7 +2220,7 @@ public sealed class SemanticRefreshCoordinator :
                         continue;
                     }
 
-                    if (IsIgnoredPath(binding.Request.RepositoryPath, entry))
+                    if (SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, entry))
                     {
                         continue;
                     }
@@ -2301,10 +2307,10 @@ public sealed class SemanticRefreshCoordinator :
         var isAdditionalDocument = inventory.AdditionalDocuments.Contains(path);
         var isAnalyzerConfigDocument = inventory.AnalyzerConfigDocuments.Contains(path);
         var isFullReloadInput = inventory.FullReloadInputs.Contains(path);
-        var isKnownTextDocument = isSourceDocument
-            || isAdditionalDocument
-            || isAnalyzerConfigDocument;
-        if (!isKnownTextDocument && IsIgnoredPath(repositoryPath, path))
+        if (SemanticRefreshPathPolicy.IsIgnoredPath(repositoryPath, path)
+            && !(isSourceDocument && !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(repositoryPath, path))
+            && !isAdditionalDocument
+            && !isAnalyzerConfigDocument)
         {
             return SemanticChangeClassification.Irrelevant;
         }
@@ -2360,51 +2366,6 @@ public sealed class SemanticRefreshCoordinator :
             || name.StartsWith("Directory.Build.", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsIgnoredPath(string repositoryPath, string path)
-    {
-        string normalized;
-        try
-        {
-            normalized = Path.GetRelativePath(repositoryPath, path).Replace('\\', '/');
-        }
-        catch (Exception exception) when (exception is ArgumentException
-            or IOException
-            or NotSupportedException)
-        {
-            return true;
-        }
-
-        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Any(IsIgnoredDirectorySegment))
-        {
-            return true;
-        }
-
-        var name = Path.GetFileName(path);
-        var extension = Path.GetExtension(path);
-        return name.StartsWith('~')
-            || name.EndsWith('~')
-            || extension.Equals(".tmp", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".swp", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".swo", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsIgnoredDirectorySegment(string segment)
-    {
-        return segment.Equals(".codegraph", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".git", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".idea", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".inbox", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".threadsmith", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".vs", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".vscode", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("artifacts", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("obj", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("TestResults", StringComparison.OrdinalIgnoreCase);
-    }
-
     private static IReadOnlySet<string> CaptureRelevantWatcherEntries(
         SemanticLoadRequest request,
         IReadOnlyList<string> roots)
@@ -2428,7 +2389,7 @@ public sealed class SemanticRefreshCoordinator :
                 foreach (var entry in entries)
                 {
                     var normalized = NormalizePath(request, entry);
-                    if (normalized is null || IsIgnoredPath(request.RepositoryPath, normalized))
+                    if (normalized is null || SemanticRefreshPathPolicy.IsIgnoredPath(request.RepositoryPath, normalized))
                     {
                         continue;
                     }
@@ -3019,7 +2980,7 @@ public sealed class SemanticRefreshCoordinator :
                     {
                         var relative = Path.GetRelativePath(Request.RepositoryPath, directory)
                             .Replace('\\', '/');
-                        if (IsIgnoredDirectorySegment(Path.GetFileName(directory))
+                        if (SemanticRefreshPathPolicy.IsIgnoredDirectorySegment(Path.GetFileName(directory))
                             || RepositoryPathPolicy.IsProhibited(
                                 relative,
                                 Request.ProhibitedPaths ?? [])

@@ -15,15 +15,15 @@
   "assets": [
     {
       "path": "schemas/input.json",
-      "bytes": 908,
-      "sha256": "fb69f9883facd75e2be6c66517456e465b90c3853e976d06e06bad5a9a4245d0",
+      "bytes": 1070,
+      "sha256": "aaf2d3966e8c18c54a1a30dff79703164c918a06ee4d764c7c790b1f3ed8607e",
       "required": true,
       "kind": "schema"
     },
     {
       "path": "schemas/output.json",
-      "bytes": 251,
-      "sha256": "7d8eb2624c559868e0658680d7377dbbc23e80440bca487385c7618bb47b871c",
+      "bytes": 786,
+      "sha256": "6f6bed3b7a66e3bbc60368446f3fc771bfa0593b9d2328ec08803e96cd876ecd",
       "required": true,
       "kind": "schema"
     }
@@ -57,13 +57,8 @@
     "toolCalls": 128,
     "mutations": 1,
     "validationAttempts": 0,
-    "delegatedChildren": 4,
-    "parallelChildren": 4,
-    "worktrees": 0,
-    "reviewerFindings": 128,
     "wallTime": "00:20:00"
   },
-  "agents": [],
   "workflow": {
     "schemaVersion": 1,
     "workflowId": "review",

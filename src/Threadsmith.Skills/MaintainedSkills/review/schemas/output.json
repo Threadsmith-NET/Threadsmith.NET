@@ -3,15 +3,43 @@
   "additionalProperties": false,
   "required": [
     "succeeded",
+    "delivery",
     "response"
   ],
   "properties": {
     "succeeded": {
       "type": "boolean"
     },
+    "delivery": {
+      "type": "string",
+      "enum": [
+        "artifact",
+        "inline"
+      ]
+    },
     "response": {
       "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "maxLength": 30000
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "bytesWritten"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "bytesWritten": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     }
   }
 }

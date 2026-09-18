@@ -245,7 +245,7 @@ public sealed record DelegateAgentsOptions
     public bool EnforceOperationalLimits { get; init; } = true;
 
     /// <summary>Maximum children in one tool call.</summary>
-    public int MaximumAgents { get; init; } = 3;
+    public int MaximumAgents { get; init; } = 5;
 
     /// <summary>Maximum characters in one child task.</summary>
     public int MaximumTaskCharacters { get; init; } = 4_096;

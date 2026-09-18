@@ -11,6 +11,7 @@ using Threadsmith.Hooks;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
+using Threadsmith.Tools.PullRequests;
 using Threadsmith.Validation;
 using Threadsmith.Workspaces;
 
@@ -21,6 +22,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     private readonly IDomainEventSubscription _hookSubscription;
     private readonly HookEventObserver _hookObserver;
     private readonly HttpClient _hookHttpClient;
+    private readonly HttpClient? _prHttpClient;
     private readonly IDomainEventSubscription _persistenceSubscription;
     private readonly IDomainEventSubscription _projectionSubscription;
     private readonly IDomainEventSubscription _semanticSubscription;
@@ -74,7 +76,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         IDomainEventSubscription webFetchLifecycleSubscription,
         HookEventObserver hookObserver,
         SemanticLifecycleObserver semanticObserver,
-        IDomainEventSubscription semanticSubscription)
+        IDomainEventSubscription semanticSubscription,
+        HttpClient? prHttpClient)
     {
         Events = events;
         Projections = projections;
@@ -93,6 +96,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         HookStore = hookStore;
         HookCoordinator = hookCoordinator;
         _hookHttpClient = hookHttpClient;
+        _prHttpClient = prHttpClient;
         EvidenceStore = evidenceStore;
         PromptLoader = promptLoader;
         PromptAppendLoader = promptAppendLoader;
@@ -137,6 +141,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         await _hookObserver.DisposeAsync();
         await HookCoordinator.DisposeAsync();
         _hookHttpClient.Dispose();
+        _prHttpClient?.Dispose();
         await SemanticEngines.DisposeAsync();
         await _contextLifecycleSubscription.DisposeAsync();
         await _telemetrySubscription.DisposeAsync();
@@ -356,6 +361,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         SemanticRefreshCoordinator? semanticRefreshCoordinator = null;
         SemanticRefreshPublicationGateRouter? semanticRefreshPublicationGate = null;
         SemanticLifecycleObserver? semanticObserver = null;
+        HttpClient? prHttpClient = null;
 
         try
         {
@@ -480,6 +486,12 @@ internal sealed class HostFoundation : IAsyncDisposable
                 secretResolver,
                 advisorySources,
                 operationalLimits.Validation);
+            var prFetchTool = PrFetchComposition.Create(configuration, trustedConfiguration, secretResolver, promptLoader, out prHttpClient);
+            if (prFetchTool is null)
+            {
+                loggerFactory.CreateLogger<HostFoundation>().LogDebug("PR fetching is unavailable: no enabled tools.prFetch.providers accounts are configured in trusted user/machine configuration.");
+            }
+
             (var toolStateManager, var toolRegistry, var webFetchAuthorization, var approvalPrompt) = CreateTools(
                 configuration,
                 trustedConfiguration,
@@ -498,7 +510,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 codeExploreOptions,
                 persistence.ConversationStore,
                 operationalLimits,
-                sanitizer);
+                sanitizer,
+                prFetchTool);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -576,7 +589,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 webFetchLifecycleSubscription,
                 hookObserver,
                 semanticObserver,
-                semanticSubscription);
+                semanticSubscription,
+                prHttpClient);
         }
         catch
         {
@@ -599,6 +613,7 @@ internal sealed class HostFoundation : IAsyncDisposable
 
             await DisposeIfPresentAsync(webFetchLifecycleSubscription);
             directFetchApprovalPrompt?.Dispose();
+            prHttpClient?.Dispose();
             await DisposeIfPresentAsync(hookSubscription);
             await DisposeIfPresentAsync(contextSubscription);
             await DisposeIfPresentAsync(telemetrySubscription);
@@ -946,7 +961,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         CodeExploreOptions codeExploreOptions,
         IConversationStore conversationStore,
         OperationalLimits operationalLimits,
-        IOutputSanitizer sanitizer)
+        IOutputSanitizer sanitizer,
+        PrFetchTool? prFetchTool)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -999,6 +1015,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             ?? defaultShellExecutable;
         ITool[] tools =
         [
+            .. prFetchTool is null ? Array.Empty<ITool>() : [prFetchTool],
             new ListFilesTool(promptLoader, limits),
             new ReadFileTool(promptLoader, sanitizer, limits),
             new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader, limits),

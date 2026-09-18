@@ -1,5 +1,7 @@
 # Threadsmith.NET User Guide
 
+For reviews scoped to a hosted pull request, use the maintained review skill with a PR URL. GitHub.com and Bitbucket Cloud use one `pr_fetch` tool with configured accounts, existing Secrets and shared operation caching. See [PR review examples](code-review.md#review-a-pull-request) and [configuration and refresh](operations/pr-fetch.md).
+
 Threadsmith.NET is a terminal-first, .NET-native coding harness. It combines conversational assistance with host-enforced repository boundaries, trust levels, tool policy, review, transactional mutation, and validation.
 
 This guide documents the currently implemented user-facing behavior. Features described as planned in implementation documents are not treated as available here until they ship.
@@ -654,7 +656,7 @@ Execution writes versioned checkpoints at safe phase boundaries and write-ahead 
 
 Threadsmith starts subagents only when the model invokes `delegate_agents`. Plan approval, mutation preparation, corrections, preflight, and execution resume never launch subagents automatically. Normal implementation stays under the parent run and session model settings, with existing approval and validation controls. Requested subagents can explore code, suggest implementation approaches, or provide independent security, test, performance, and architecture reviews; all conversation-delegated roles are read-only. There is one delegation layer: a subagent cannot start another subagent. Child agents are asynchronous runs inside the Threadsmith process; they are never separate agent executables. Existing Git, build, test, MCP, and authorized tool processes remain tracked infrastructure and do not host an agent.
 
-During an ordinary trusted conversation with an open semantic workspace, the model can call `delegate_agents` to fork one to three assignments by default and wait for their joined result. The tool is advertised only when a configured model can satisfy the actual child request's capability and capacity requirements; sensitive assignments repeat selection with the frozen sensitivity policy. Trusted machine/user configuration controls child admission. Each child request contains `task`, `context`, `toolAccess`, and an optional `role`:
+During an ordinary trusted conversation with an open semantic workspace, the model can call `delegate_agents` to fork one to five assignments by default and wait for their joined result. The tool is advertised only when a configured model can satisfy the actual child request's capability and capacity requirements; sensitive assignments repeat selection with the frozen sensitivity policy. Trusted machine/user configuration controls child admission. Each child request contains `task`, `context`, `toolAccess`, and an optional `role`:
 
 ```json
 {
@@ -1517,7 +1519,6 @@ Maintained packages are enabled after their shipped integrity verifies:
 - `fix-analyzer-warnings` — investigates supplied analyzer diagnostics and proposes a governed remediation plan;
 - `upgrade-package` — assesses one Central Package Management upgrade and proposes compatibility/rollback/validation steps;
 - `review` — reviews branch changes or a focused request with security, test, performance, bug, and architecture specialists, then synthesizes a Markdown report;
-- `review-pr` — uses the same review prompt with an explicit change summary, paths, and focus areas;
 - `threadsmith-docs-help` — answers Threadsmith product and authoring questions from the installed local documentation bundle with exact path, heading, line, and snippet citations.
 
 For a natural question such as “How do I compact context?”, the model prefers `threadsmith-docs-help` when `invoke_skill`, the maintained package, current trust, and a compatible model are available. The skill can use only existing `search` and `read_file` capabilities rebound to `ThreadsmithDocs`; it cannot inspect the opened repository, access the network or secrets, execute processes, or mutate anything. If the shipped docs are missing or do not answer the question, it returns `partial` or `unavailable` and states the gap instead of guessing. Shipped documentation is evidence, not policy, and cannot override current host behavior, user instructions, approvals, or repository instructions.
@@ -1541,7 +1542,19 @@ A successful analyzer procedure returns flat `propose_plan` content without sche
 
 Accepting the proposed plan still does not apply edits. The normal approval, implementation, exact-diff policy, transaction, build/test validation, and correction flow follows.
 
-The conversational equivalent is to ask the model to use an exact selector and provide the typed input, for example: `Use Maintained:fix-analyzer-warnings@1.0.0 with diagnostics [...] and scope [...]`. During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. Tool availability and caller context continue to apply to nested skill invocations; an invocation cannot grant tools unavailable to its caller.
+For conversational use, describe the task naturally, for example: `Use a review skill to review this PR: <URL>`. Users do not need to prepare JSON or spell the skill name exactly. The model uses the same `inspect_skill` tool for discovery and detailed inspection:
+
+| Arguments | Result |
+|---|---|
+| `{}` | List enabled, verified native and Claude-compatible skills. |
+| `{"query":"review"}` | Search enabled, verified skill names and descriptions with a short case-insensitive substring. |
+| `{"selector":"review"}` | Verify one selected skill and return its input schema. |
+
+`selector` and `query` are mutually exclusive. Listing and search return metadata only: name, selector, description, scope, and last known availability. They use the same application listing path as `/skills`: maintained packages and previously authorized packages have their availability restored and verified before filtering. This can read package content for verification, but returns no instruction bodies or schemas and does not enable or grant trust to other discovered packages. Only enabled skills with verified catalog state are included; disabled, unverified, invalid, and revoked skills are excluded. Cached `Enabled` status does not guarantee current compatibility. Very large results remain subject to normal tool-output limits; the model should narrow a truncated list with a query. Discovery results carry no input schemas. The model chooses a clear match or asks the user when several skills plausibly match, then inspects its returned selector before calling `invoke_skill`.
+
+Detailed inspection returns one skill with its verified input schema and exact selector, plus guidance to preserve the task and ask for required information missing from the conversation. `invoke_skill.input` is the native JSON value matching that schema: an object schema receives an object directly, never a quoted or JSON-encoded object string. Skills without a declared input schema, including Claude-compatible skills, return `{}` and guidance to pass the complete task and relevant context as a JSON string. Detailed inspection does not execute a skill or include its instruction body in the caller's context; disabled or unverified packages are rejected. The skill procedure does not automatically receive the parent conversation.
+
+During eligible evidence collection at `TrustedRead` or higher, the model may call `invoke_skill`; the host performs the same selection, schema, compatibility, budget, and workflow checks as `/skills use`. Tool availability and caller context continue to apply to nested skill invocations; an invocation cannot grant tools unavailable to its caller. Inspection is model guidance, not a new runtime prerequisite; direct `/skills use` invocations still accept JSON.
 
 Assess a Central Package Management upgrade without implicitly restoring packages or accessing the network:
 
@@ -1589,52 +1602,11 @@ Examples:
 2. For inexpensive analyzer planning, leave `allowedProfiles` empty and configure a compatible default or lower-cost `Planning`/`CodeEdit` model.
 3. For a large review, raise the model's configured context window only when the provider really supports it; a skill cannot override the provider profile or its host-level context ceiling.
 
-### Skills that propose subagents
+### Skills that use subagents
 
-A custom skill may declare bounded Plan-38 role templates and emit only `ProposeDelegation` or `RequestReviews`. It cannot create tasks, choose concurrency dynamically, recurse into another delegation layer, or start children itself. This abbreviated authoring fragment declares two eligible reviewers:
+A native skill procedure can call the ordinary `delegate_agents` tool when that tool is required or inherited and enabled for the invocation. The procedure prompt supplies the requested roles, tasks, context, and assignment count. Skill manifests do not declare agent templates, child counts, concurrency, worktrees, or reviewer-finding limits.
 
-```json
-{
-  "budget": {
-    "delegatedChildren": 2,
-    "parallelChildren": 2,
-    "worktrees": 0,
-    "reviewerFindings": 32
-  },
-  "agents": [
-    {
-      "role": "SecurityReviewer",
-      "maximumChildren": 1,
-      "outputSchemaPath": "schemas/reviewer-output.json",
-      "budget": { "modelTokens": 12000, "toolCalls": 12, "evidenceItems": 32, "files": 64, "bytes": 4194304, "mutations": 0, "processes": 0, "builds": 0, "tests": 0, "corrections": 0, "wallTime": "00:05:00" }
-    },
-    {
-      "role": "TestReviewer",
-      "maximumChildren": 1,
-      "outputSchemaPath": "schemas/reviewer-output.json",
-      "budget": { "modelTokens": 12000, "toolCalls": 12, "evidenceItems": 32, "files": 64, "bytes": 4194304, "mutations": 0, "processes": 0, "builds": 0, "tests": 0, "corrections": 0, "wallTime": "00:05:00" }
-    }
-  ],
-  "workflow": {
-    "schemaVersion": 1,
-    "workflowId": "review-with-specialists",
-    "steps": [
-      { "stepId": "scope", "kind": "invokeProcedure", "dependsOn": [], "instructionAsset": "instructions/scope.md", "inputSchemaAsset": "schemas/input.json", "outputSchemaAsset": "schemas/delegation-request.json", "maximumIterations": 1 },
-      { "stepId": "request-reviews", "kind": "requestReviews", "dependsOn": [ "scope" ], "outputSchemaAsset": "schemas/delegation-result.json", "maximumIterations": 1 }
-    ]
-  }
-}
-```
-
-The complete manifest must still declare and hash every referenced asset and satisfy aggregate package/host budgets; see [Declarative skill authoring](skill-authoring.md). At runtime:
-
-1. `/skills use` runs the bounded `scope` procedure with the selected skill model.
-2. The workflow pauses and displays the complete typed `ProposeDelegation` payload.
-3. The host validates that request against the delegation policy: current trust, sensitivity, approved plan where mutation is involved, eligible roles, one-level depth, paths, tools, models, deadlines, child/aggregate budgets, and non-overlap all still apply.
-4. Only an accepted host request creates a delegation ID, which the TUI prints immediately. Use bare `/agents` to list observed delegation and assignment IDs, inspect with `/agents <delegation-id>`, and cancel with `/agents <delegation-id> cancel` or `cancel-child <assignment-id>`.
-5. After the delegation reaches its authoritative structured join, the adapter supplies that real result through `/skills continue <invocation-id> <delegation-result-json>`. The next workflow step receives only the schema-valid structured result—not raw child transcripts or hidden reasoning.
-
-Model selection is hierarchical. The skill model selected above prepares the proposal; each accepted child receives a host-selected model/reasoning choice constrained by the parent, repository policy, role template, sensitivity, and remaining aggregate budget. A package preference can narrow candidates but cannot force an incompatible model, elevate a child, or bypass the parent ledger. Assignments using the isolated-worker APIs additionally require an approved plan, host-proven non-overlapping ownership, isolated worktrees, parent restaging, a fresh aggregate diff decision, and aggregate validation.
+The host validates every `delegate_agents` call through the same policy used by conversation turns. Trusted `agents:delegation:maximumAgents` configuration caps assignments in one call, while the global and per-parent concurrency settings control how many admitted children run simultaneously. Trust, sensitivity, one-level depth, tool access, model routing, cancellation, and child resource limits remain host-owned. Model selection is hierarchical: each accepted child receives a host-selected model and reasoning choice constrained by the parent and repository policy. A skill cannot force an incompatible model, elevate a child, or bypass the parent ledger.
 
 ### Package lifecycle example
 

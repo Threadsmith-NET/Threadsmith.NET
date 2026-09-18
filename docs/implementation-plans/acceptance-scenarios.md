@@ -179,7 +179,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 6. User reviews the exact staged diff under the current mutation policy. The host applies authorized changes transactionally, builds affected projects, runs explained selected tests, and records authoritative results.
 7. Cancel and restart at a durable workflow boundary, then explicitly resume.
 8. Repeat with a tampered package, unsigned/unallowlisted digest, incompatible model, disabled required tool, insufficient trust, excessive schema/body, path traversal, prompt instructions claiming approval, and a revoked package between steps.
-9. Invoke maintained `upgrade-package` and `review-pr` workflows against deterministic fixtures; authorize `review-pr` to propose delegated security, test, performance, and architecture reviewers, and verify the skill cannot create/schedule children itself.
+9. Invoke maintained `upgrade-package` and `review` workflows against deterministic fixtures; let the `review` procedure call the ordinary `delegate_agents` tool for its five prompted specialists, and verify trusted `agents:delegation:maximumAgents` configuration remains authoritative.
 
 **Verifies:** centralized tool and trust policy, governed context and structured plans, extension-versus-skill isolation, durable provenance/restoration, mutation policy/model compatibility, transactional execution/checkpointing, governed parallel-agent requests, and scoped metadata-first verified skills/workflows. No skill content grants capabilities, creates agents directly, or bypasses planning, scheduling/integration, exact-diff approval, transactions, validation, cancellation, or authoritative evidence.
 
@@ -827,14 +827,14 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 
 ## Scenario AV — Focused review skills
 
-1. Discover public skills and invoke the verified maintained `review` package for current branch changes, a specific remote branch or explicit instructions. Only `review` is added to the public catalog; specialist procedures cannot be selected publicly.
-2. Capture immutable source and optional requirements before four independent role/model-routed reviewers start. Their provider requests contain only their own procedure and allowed facts, without parent/sibling conversation. Tools inspect frozen source only.
-3. Reject malformed outputs, fabricated citations and out-of-scope issue locations. Preserve accepted siblings and show failed/interrupted coverage. Ordinary native/Claude skills and delegated-role responses remain unchanged.
-4. Render fixed Markdown sections with all P1/P2/P3 headings, evidence-backed strengths/architecture and separate observations. Supplied requirements yield an exhaustive sourced criterion table and honest unknown/runtime states.
-5. Save atomically to an existing authorized invoking-repository `.inbox`, or stream canonical Markdown if absent. Remote acquisition does not change the active checkout. Invalid inbox destinations fail without creating folders or silently choosing another output.
-6. Resume interrupted work with exact pin and permission revalidation, preserving completed results and never silently restarting inference. Retry delivery without overwriting or duplicating reports.
+1. Invoke verified, enabled `Maintained:review@1.0.0` for current changes, a remote branch, explicit instructions and a PR URL. Natural language uses `inspect_skill`/`invoke_skill`; direct `/skills use` uses the same native procedure.
+2. Confirm ordinary delegation to SecurityReviewer, TestReviewer, PerformanceReviewer, BugReviewer and ArchitectureReviewer, with normal configured models, tools, budgets and cancellation. There are no private reviewer procedures or bespoke host finding validators.
+3. PR mode uses `pr_fetch` through normal policy with `kind:"inventory"` for the lead review handoff. A URL-only call selects the enabled account using configured URL patterns, with adapter defaults covering all organizations and repositories. Overlapping matches request an explicit account; missing matches fail before acquisition. Separately ask for the PR's changed files with `kind:"inventory"` and confirm it returns every added, modified, removed and renamed file without requesting the diff. Confirm the review file list excludes unrelated base-only Terraform changes. Complete inventory acquisition before delegation, then let permitted specialists request `kind:"diff"` pages only for assigned patch evidence. Keep omissions/failed coverage explicit. Failure must not substitute branch comparison or change the checkout.
+4. Confirm inventory and diff calls use separate snapshots, every cursor preserves `kind`, cross-kind cursors fail, repeated identical calls in one model execution receive corrective feedback, cached child reads perform no HTTP, explicit refresh invalidates old cursors, narrowed child policy still denies access and owner cancellation cleans up. Repeat for GitHub and Bitbucket Cloud with fixture credentials and a manually authorized live account.
+5. Confirm the existing Summary, Changes, Issues, Observations, Requirements coverage, Validation and coverage limits, Final recommendation and Disclaimer sections. Model synthesis is advisory; unverified findings and incomplete coverage must be identified.
+6. Use ordinary `write_file` to save in an existing authorized `.inbox`, otherwise display the report. A save failure is disclosed with the report in the window. Resume uses normal package/policy revalidation and can rerun a failed procedure; it does not promise review-specific checkpoint or delivery-only recovery.
 
-**Verifies:** exact opt-in review authority, private context separation, immutable evidence, scoped validation, existing role/model and resource controls, deterministic advisory reports, confined delivery and compatibility.
+**Verifies:** ordinary skill/tool/delegation reuse, provider PR scope, cache ownership/refresh, policy and cancellation, honest coverage, and unchanged advisory report delivery under ADR-61.
 
 
 ## Scenario AW — Hierarchical Skill Management

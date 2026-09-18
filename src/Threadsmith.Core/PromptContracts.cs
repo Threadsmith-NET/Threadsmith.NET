@@ -128,6 +128,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SystemSystemPrompt prompt asset.</summary>
     public const string SystemSystemPrompt = "System-SystemPrompt.md";
 
+    /// <summary>Gets the shared parent and child repository inspection guidance asset.</summary>
+    public const string SystemRepositoryInspection = "System-RepositoryInspection.md";
+
     /// <summary>Gets the stable filename for the SystemPhaseEvidenceCollection prompt asset.</summary>
     public const string SystemPhaseEvidenceCollection = "System-Phase-EvidenceCollection.md";
 
@@ -371,11 +374,23 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolWebSearchDescription prompt asset.</summary>
     public const string ToolWebSearchDescription = "Tool-web_search-Description.md";
 
+    /// <summary>Gets the configured-provider PR retrieval tool description.</summary>
+    public const string ToolPrFetchDescription = "Tool-pr_fetch-Description.md";
+
     /// <summary>Gets the stable filename for the ToolWebSearchTrustBoundary prompt asset.</summary>
     public const string ToolWebSearchTrustBoundary = "Tool-web_search-TrustBoundary.md";
 
     /// <summary>Gets the stable filename for the ToolInvokeSkillDescription prompt asset.</summary>
     public const string ToolInvokeSkillDescription = "Tool-invoke_skill-Description.md";
+
+    /// <summary>Gets the stable filename for the skill inspection tool description.</summary>
+    public const string ToolInspectSkillDescription = "Tool-inspect_skill-Description.md";
+
+    /// <summary>Gets the stable filename for skill input preparation guidance.</summary>
+    public const string ToolInspectSkillGuidance = "Tool-inspect_skill-Guidance.md";
+
+    /// <summary>Gets the stable filename for discovery results and skill selection guidance.</summary>
+    public const string ToolInspectSkillDiscoveryGuidance = "Tool-inspect_skill-DiscoveryGuidance.md";
 
     /// <summary>Gets the stable filename for the ToolProposePlanDescription prompt asset.</summary>
     public const string ToolProposePlanDescription = "Tool-propose_plan-Description.md";
@@ -1047,6 +1062,7 @@ public static class PromptFileNames
     public static IReadOnlyList<string> All { get; } = Array.AsReadOnly<string>(
     [
         SystemSystemPrompt,
+        SystemRepositoryInspection,
         SystemPhaseEvidenceCollection,
         SystemPhaseChangePlanning,
         SystemPhaseMutationProposal,
@@ -1128,8 +1144,12 @@ public static class PromptFileNames
         ToolWebFetchDirectAuthorizationUnavailable,
         ToolWebFetchTrustBoundary,
         ToolWebSearchDescription,
+        ToolPrFetchDescription,
         ToolWebSearchTrustBoundary,
         ToolInvokeSkillDescription,
+        ToolInspectSkillDescription,
+        ToolInspectSkillGuidance,
+        ToolInspectSkillDiscoveryGuidance,
         ToolProposePlanDescription,
         ToolProposeMutationsDescription,
         ToolDelegateAgentsDescription,
@@ -1380,6 +1400,7 @@ public static class PromptAssetCatalog
         var contextAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.SystemSystemPrompt,
+            PromptFileNames.SystemRepositoryInspection,
             PromptFileNames.SystemPhaseEvidenceCollection,
             PromptFileNames.SystemPhaseChangePlanning,
             PromptFileNames.SystemPhaseMutationProposal,
@@ -1504,6 +1525,9 @@ public static class PromptAssetCatalog
         var skillAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.ToolInvokeSkillDescription,
+            PromptFileNames.ToolInspectSkillDescription,
+            PromptFileNames.ToolInspectSkillGuidance,
+            PromptFileNames.ToolInspectSkillDiscoveryGuidance,
             PromptFileNames.SkillReview,
             PromptFileNames.SkillProcedureSystem,
             PromptFileNames.SkillProcedureRequest,
@@ -1749,6 +1773,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ToolWriteFileDescription] = Set("MaximumContentBytes"),
                     [PromptFileNames.ToolMemoriesDescription] = Set("MaximumTextCharacters"),
                     [PromptFileNames.ToolWebSearchDescription] = Set("MaximumQueryCharacters", "MaximumFreshnessDays"),
+                    [PromptFileNames.ToolPrFetchDescription] = Set("Providers"),
                     [PromptFileNames.CorrectionRunProcessUnsupportedShell] = Set("ShellExecutable"),
                     [PromptFileNames.ToolWebFetchDirectAuthorizationUnavailable] = Set(
                         "Origin",

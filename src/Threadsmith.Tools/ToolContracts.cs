@@ -266,6 +266,9 @@ public sealed record ToolDefinition
     /// <summary>Whether this tool may be included in a subagent's inherited tool surface.</summary>
     public bool SubagentAvailable { get; init; } = true;
 
+    /// <summary>Whether identical invocations may repeat in later responses; identical siblings in one response remain invalid.</summary>
+    public bool AllowDuplicateInvocations { get; init; }
+
     /// <summary>Whether invocation requires a currently loaded semantic workspace identity.</summary>
     public bool RequiresWorkspace { get; init; }
 
@@ -280,6 +283,10 @@ public sealed record ToolDefinition
 /// <summary>Repository and requester state evaluated for every tool invocation.</summary>
 public sealed record ToolInvocationContext
 {
+    /// <summary>Transient state shared by one primary operation and its permitted descendants.</summary>
+    [JsonIgnore]
+    public ToolOperationScope? OperationScope { get; init; }
+
     /// <summary>Opened workspace used to scope semantic operations.</summary>
     public WorkspaceId? WorkspaceId { get; init; }
 

@@ -225,7 +225,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         foreach (var wave in waves)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfCancelledAfterResults(cancellationToken, results);
             Task<ToolBatchResult>[] tasks = [.. wave.Select(async planned =>
             {
                 var invocation = usePreparedSnapshot
@@ -275,8 +275,32 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             }
         }
 
+        var ordered = results.OrderBy(result => result.Ordinal).ToArray();
+        if (cancellationToken.IsCancellationRequested)
+        {
+            ThrowIfCancelledAfterResults(cancellationToken, ordered);
+        }
+
+        return ordered;
+    }
+
+    private static void ThrowIfCancelledAfterResults(
+        CancellationToken cancellationToken,
+        IReadOnlyList<ToolBatchResult> results)
+    {
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (results.Count > 0)
+        {
+            throw new ToolBatchCancelledException(
+                results.OrderBy(result => result.Ordinal).ToArray(),
+                cancellationToken);
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
-        return [.. results.OrderBy(result => result.Ordinal)];
     }
 
     private async Task<ToolInvocationResult> InvokeCoreAsync(
@@ -552,12 +576,15 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
+            var serializationCancellationToken = execution.Failure?.Classification == ToolErrorClassification.Cancelled
+                ? CancellationToken.None
+                : timeoutCancellation.Token;
             await using var resultStream = new MemoryStream();
             await JsonSerializer.SerializeAsync(
                 resultStream,
                 execution.Value,
                 execution.Value.GetType(),
-                cancellationToken: timeoutCancellation.Token);
+                cancellationToken: serializationCancellationToken);
             if (resultStream.Length > tool.Definition.MaximumOutputBytes)
             {
                 return await CompleteFailureAsync(

@@ -10,7 +10,7 @@ Threadsmith needs reusable procedures without turning repository content into ex
 
 Threadsmith owns a scoped metadata-first skill catalog and a closed declarative workflow interpreter.
 
-A skill is a versioned data package containing bounded metadata, declared SHA-256 asset hashes, bounded input/output JSON Schemas, tool/trust/model/host requirements, aggregate budgets, optional bounded agent templates, and an acyclic graph of host-known workflow step kinds. It contains no assemblies, scripts, expressions, arbitrary code, task scheduling, nested skill calls, or direct repository/network/process effects.
+A skill is a versioned data package containing bounded metadata, declared SHA-256 asset hashes, bounded input/output JSON Schemas, tool/trust/model/host requirements, aggregate budgets, and an acyclic graph of host-known workflow step kinds. It contains no assemblies, scripts, expressions, arbitrary code, task scheduling, nested skill calls, or direct repository/network/process effects. Native procedures may call the ordinary `delegate_agents` tool when it is available; roles and assignment count come from the prompt and tool input, while trusted host configuration remains authoritative.
 
 Discovery reads `skill.json` only. Explicit verification re-reads the manifest, verifies all confined declared assets and rejects undeclared files, applies revocation, and then requires either a detached ECDSA P-256 SHA-256 signature from a repository-excluding trusted signer or an externally authorized exact digest/publisher/source tuple. Signature trust and invocation enablement are separate. Repository configuration may narrow discovery but cannot add signers, allowlists, enablement, or suppress revocation.
 
@@ -25,6 +25,6 @@ SQLite migration 5 stores verification provenance, immutable pins, and versioned
 - Organization, machine, user, repository, and maintained catalogs are searchable without loading procedures.
 - Same-id ambiguity requires explicit selection; no directory-order precedence grants authority.
 - Workflows are reproducible, inspectable, cancellable, and resumable but intentionally less expressive than code.
-- Maintained analyzer, package-upgrade, and PR-review packages exercise the same untrusted-data pipeline as third-party packages.
+- Maintained analyzer, package-upgrade, and review packages exercise the same untrusted-data pipeline as third-party packages.
 - Extension assemblies remain the mechanism for new executable capabilities; skills remain declarative orchestration over existing host capabilities.
 - Marketplace hosting, Git/PR publication, automatic dependency restore, arbitrary scripting, nested skills, and package-owned concurrency remain outside M12.

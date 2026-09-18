@@ -7,6 +7,7 @@ public sealed class SkillApplication :
     ICommandHandler<RefreshSkillsCommand, SkillCatalogSnapshot>,
     ICommandHandler<ListSkillsCommand, IReadOnlyList<SkillCatalogCandidate>>,
     ICommandHandler<GetSkillCommand, SkillCatalogCandidate>,
+    ICommandHandler<InspectSkillCommand, SkillCatalogCandidate>,
     ICommandHandler<GetSkillCompatibilityCommand, SkillCompatibilityResult>,
     ICommandHandler<VerifySkillCommand, SkillCatalogCandidate>,
     ICommandHandler<SetSkillEnabledCommand, SkillCatalogCandidate>,
@@ -90,6 +91,16 @@ public sealed class SkillApplication :
     }
 
     /// <inheritdoc />
+    public async Task<SkillCatalogCandidate> HandleAsync(
+        InspectSkillCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        var candidate = await SkillInvocationSelection.ResolveAsync(_catalog, _state, command.Selector, cancellationToken);
+        return await VerifyCandidateAsync(candidate, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<SkillCompatibilityResult> HandleAsync(
         GetSkillCompatibilityCommand command,
         CancellationToken cancellationToken = default)
@@ -107,9 +118,7 @@ public sealed class SkillApplication :
     {
         ArgumentNullException.ThrowIfNull(command);
         var candidate = await ResolveAsync(command.Selector, cancellationToken);
-        var verified = await _verifier.VerifyAsync(candidate, cancellationToken);
-        await RecordVerificationAsync(verified, cancellationToken);
-        return Update(verified);
+        return await VerifyCandidateAsync(candidate, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -250,6 +259,15 @@ public sealed class SkillApplication :
     {
         ArgumentNullException.ThrowIfNull(command);
         return _workflows.CancelAsync(command.InvocationId, cancellationToken);
+    }
+
+    private async Task<SkillCatalogCandidate> VerifyCandidateAsync(
+        SkillCatalogCandidate candidate,
+        CancellationToken cancellationToken)
+    {
+        var verified = await _verifier.VerifyAsync(candidate, cancellationToken);
+        await RecordVerificationAsync(verified, cancellationToken);
+        return Update(verified);
     }
 
     private Task RecordVerificationAsync(

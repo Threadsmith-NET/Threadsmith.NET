@@ -52,9 +52,9 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(0, original.Executions);
         Assert.Equal(0, replacement.Executions);
         Assert.Single(model.Requests[0].Tools);
-        var result = Assert.Single(model.Requests[1].Messages, message => message.Role == Threadsmith.Models.ModelMessageRole.Tool);
-        Assert.True(result.IsError);
-        Assert.Contains("no longer matches", result.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.Equal(2, model.Requests.Count);
+        var error = Assert.Single(model.Requests[1].Messages, message => message.IsError == true);
+        Assert.Contains("no longer matches", error.GetModelVisibleContent(), StringComparison.Ordinal);
         snapshots.Release(callerId);
     }
 
@@ -151,7 +151,7 @@ public sealed partial class SkillSubsystemTests
                 },
             },
         };
-        var model = new PermissionModelProvider { FinalText = "{\"succeeded\":true,\"response\":\"Host continuation completed.\"}" };
+        var model = new PermissionModelProvider { FinalText = "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Host continuation completed.\"}" };
         var sanitizer = new SecretOutputSanitizer();
         await using var events = new DomainEventStream();
         var pipeline = new ToolInvocationPipeline(

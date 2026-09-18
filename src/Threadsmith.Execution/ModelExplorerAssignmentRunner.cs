@@ -31,6 +31,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
     private readonly IConversationToolSnapshotStore _snapshots;
     private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
+    private readonly ExecutionLimits _executionLimits;
 
     /// <summary>Initializes a new instance of the <see cref="ModelExplorerAssignmentRunnerFactory"/> class.</summary>
     public ModelExplorerAssignmentRunnerFactory(
@@ -49,7 +50,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         RunSteeringCoordinator? steering = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
-        AgentDisplayStream? display = null)
+        AgentDisplayStream? display = null,
+        ExecutionLimits? executionLimits = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -78,6 +80,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
         _sessionUsage = sessionUsage;
         _display = display;
         _steering = steering;
+        _executionLimits = executionLimits ?? new ExecutionLimits();
     }
 
     /// <inheritdoc />
@@ -109,7 +112,8 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             _trustedModels,
             _compactionProfile,
             _display,
-            _snapshots);
+            _snapshots,
+            _executionLimits);
         return new AgentRoleRunnerRegistry(
             Enum.GetValues<AgentRole>().Select(role => new ModelAgentRoleRunner(role, execution)),
             execution);
@@ -146,7 +150,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
         AgentDisplayStream? display = null,
-        IConversationToolSnapshotStore? snapshots = null)
+        IConversationToolSnapshotStore? snapshots = null,
+        ExecutionLimits? executionLimits = null)
     {
         ArgumentNullException.ThrowIfNull(contexts);
         ArgumentNullException.ThrowIfNull(admission);
@@ -180,7 +185,8 @@ public sealed class ModelExplorerAssignmentRunner : IAgentAssignmentRunner, IAge
             trustedModels,
             compactionProfile,
             display,
-            snapshots);
+            snapshots,
+            executionLimits);
     }
 
     /// <inheritdoc />

@@ -1000,15 +1000,10 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var validCallNumber = invalidFirst ? 2 : 1;
         foreach (var message in provider.Requests[1].Messages.Where(message => message.Role == ModelMessageRole.Tool))
         {
-            using var payload = JsonDocument.Parse(message.GetModelVisibleContent());
-            var error = payload.RootElement.GetProperty("error").GetString();
-            Assert.NotNull(error);
-            Assert.Contains($"Call {failedCallNumber} ({invalid.ToolName}) failed validation:", error, StringComparison.Ordinal);
-            Assert.DoesNotContain($"Call {validCallNumber} ({valid.ToolName}) failed validation:", error, StringComparison.Ordinal);
-            Assert.Contains(
-                "Other calls in this batch were not executed; this does not mean their paths or arguments were invalid.",
-                error,
-                StringComparison.Ordinal);
+            var error = message.GetModelVisibleContent();
+            Assert.Contains($"Call {failedCallNumber} (tool '{invalid.ToolName}') failed preflight:", error, StringComparison.Ordinal);
+            Assert.DoesNotContain($"Call {validCallNumber} (tool '{valid.ToolName}') failed preflight:", error, StringComparison.Ordinal);
+            Assert.Contains("before execution", error, StringComparison.Ordinal);
         }
 
         Assert.Null(tool.LastInvocationContext);
@@ -1196,11 +1191,15 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         ModelStreamRequest request,
         IReadOnlyList<ToolRequestModelOutput> attempts)
     {
-        var correction = Assert.Single(request.Messages, message => message.SectionId == "child-tool-error");
-        Assert.Equal(ModelMessageRole.Developer, correction.Role);
-        Assert.Same(correction, request.Messages[^1]);
+        if (attempts.Count == 0)
+        {
+            var correction = Assert.Single(request.Messages, message => message.SectionId.StartsWith("active-turn-correction:", StringComparison.Ordinal));
+            Assert.Equal(ModelMessageRole.Developer, correction.Role);
+            Assert.Same(correction, request.Messages[^1]);
+        }
+
         var history = request.Messages
-            .Where(message => message.SectionId is "child-tool-call" or "child-tool-result")
+            .Where(message => message.ToolCallId is not null)
             .ToArray();
         Assert.Equal(attempts.Count * 2, history.Length);
         var correlations = new HashSet<string>(StringComparer.Ordinal);
@@ -1215,18 +1214,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.NotNull(call.ToolCallId);
             Assert.NotEmpty(call.ToolCallId);
             Assert.True(correlations.Add(call.ToolCallId));
-            Assert.Equal("child-tool-result", result.SectionId);
             Assert.Equal(ModelMessageRole.Tool, result.Role);
             Assert.Equal(call.ToolCallId, result.ToolCallId);
             Assert.Equal(call.ToolName, result.ToolName);
-            using var payload = JsonDocument.Parse(result.GetModelVisibleContent());
-            Assert.False(payload.RootElement.GetProperty("succeeded").GetBoolean());
-            Assert.False(payload.RootElement.GetProperty("executed").GetBoolean());
-            Assert.False(payload.RootElement.TryGetProperty("evidenceId", out _));
-            var error = payload.RootElement.GetProperty("error").GetString();
-            Assert.NotNull(error);
-            Assert.NotEmpty(error);
-            Assert.Contains(error, correction.GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.True(result.IsError);
+            Assert.Contains("Corrective turn 1 of", result.GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Contains("before execution", result.GetModelVisibleContent(), StringComparison.Ordinal);
         }
     }
 
@@ -1241,7 +1234,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         SessionUsageProjection? usage = null,
         DelegateAgentsOptions? options = null,
         IModelProvider? trustedModels = null,
-        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null,
+        ExecutionLimits? executionLimits = null)
     {
         return CreateRunner(
             provider,
@@ -1254,7 +1248,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             usage,
             options,
             trustedModels,
-            compactionProfile);
+            compactionProfile,
+            executionLimits);
     }
 
     private static ModelExplorerAssignmentRunner CreateRunner(
@@ -1268,7 +1263,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         SessionUsageProjection? usage = null,
         DelegateAgentsOptions? options = null,
         IModelProvider? trustedModels = null,
-        ActiveTurnCompactionCandidateProfile? compactionProfile = null)
+        ActiveTurnCompactionCandidateProfile? compactionProfile = null,
+        ExecutionLimits? executionLimits = null)
     {
         var catalog = new ConfiguredModelCatalog(profiles);
         return new ModelExplorerAssignmentRunner(
@@ -1286,7 +1282,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             TestPromptLoader.Instance,
             usage,
             trustedModels: trustedModels,
-            compactionProfile: compactionProfile);
+            compactionProfile: compactionProfile,
+            executionLimits: executionLimits);
     }
 
     private static ToolInvocationPipeline CreatePipeline(
@@ -1466,7 +1463,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         };
     }
 
-    private sealed record InspectMetadataInput;
+    private sealed record InspectMetadataInput(string? Path = null, string? Query = null);
 
     private sealed class StructuredMetadataTool : Tool<InspectMetadataInput, JsonElement>
     {
@@ -1501,14 +1498,16 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         private readonly IReadOnlyList<ToolProvenanceSource> _sources;
 
         /// <summary>Initializes a new instance of the <see cref="InspectMetadataTool"/> class.</summary>
-        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null, bool subagentAvailable = true, string toolId = "inspect_metadata")
+        public InspectMetadataTool(string modelResultContent = "Compiler-backed metadata.", int maximumOutputBytes = 4_096, IReadOnlyList<ToolProvenanceSource>? sources = null, bool subagentAvailable = true, string toolId = "inspect_metadata", bool allowDuplicates = false)
         {
             _modelResultContent = modelResultContent;
             _sources = sources ?? [new ToolProvenanceSource("file", "src/Test.cs")];
-            Definition = Definition with { Id = toolId, MaximumOutputBytes = maximumOutputBytes, SubagentAvailable = subagentAvailable };
+            Definition = Definition with { Id = toolId, MaximumOutputBytes = maximumOutputBytes, SubagentAvailable = subagentAvailable, AllowDuplicateInvocations = allowDuplicates };
         }
 
         public ToolInvocationContext? LastInvocationContext { get; private set; }
+
+        public Exception? Failure { get; init; }
 
         public override ToolDefinition Definition { get; } = new()
         {
@@ -1520,7 +1519,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             InputSchema = new ToolSchema(
                 nameof(InspectMetadataInput),
                 1,
-                "{\"type\":\"object\",\"additionalProperties\":false}"),
+                "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"query\":{\"type\":\"string\"}},\"additionalProperties\":false}"),
             OutputSchema = new ToolSchema("String", 1, "{\"type\":\"string\"}"),
             RequiredTrust = RepositoryTrustLevel.UntrustedInspection,
             RequiredApproval = ApprovalLevel.None,
@@ -1539,6 +1538,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             LastInvocationContext = context.Invocation;
+            if (Failure is { } failure)
+            {
+                throw failure;
+            }
+
             return Task.FromResult(new ToolExecution<string>(
                 "metadata",
                 _sources,

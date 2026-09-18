@@ -15,8 +15,10 @@ using Xunit;
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
     /// <summary>Real native requests preserve signed multi-call rounds through child progress and host tool execution.</summary>
-    [Fact]
-    public async Task RunAsync_NativeThinkingTools_PreservesSignedRoundsAndPrivateState()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsync_NativeThinkingTools_PreservesSignedRoundsAndPrivateState(bool repeatCall)
     {
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
@@ -70,7 +72,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             new ModelProviderCatalogConfiguration { Providers = [configuration] },
             new ModelProviderRegistry([new AnthropicProviderRegistration()]));
         var profile = Assert.Single(catalog.ModelCatalog.Profiles);
-        using var handler = new NativeChildHandler(tool.Definition.Id);
+        using var handler = new NativeChildHandler(tool.Definition.Id) { RepeatCall = repeatCall };
         using var client = new HttpClient(handler);
         var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>("fixture-key"));
         var assignment = CreateAssignment(profile.Id, [tool.Definition.Id]);
@@ -90,6 +92,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
         Assert.Equal("Inspection complete.", outcome.Response);
         Assert.Equal(3, outcome.Usage.ToolCalls);
+        Assert.Equal(repeatCall ? 1 : 0, outcome.Usage.Corrections);
+        Assert.Equal(repeatCall ? 2 : 3, evidence.Snapshot(plan.Provenance.SessionId).Count);
         Assert.Equal(3, handler.Requests.Count);
         Assert.All(handler.Requests, request =>
         {
@@ -110,6 +114,16 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(2, lastRound.Length);
         Assert.True(JsonElement.DeepEquals(replay, lastRound[0]));
         Assert.Equal("private-child-signature-1", lastRound[1].GetProperty("content")[0].GetProperty("signature").GetString());
+        var thirdResult = handler.Requests[2].GetProperty("messages").EnumerateArray()
+            .SelectMany(message => message.GetProperty("content").EnumerateArray())
+            .Single(block => block.GetProperty("type").GetString() == "tool_result"
+                && block.GetProperty("tool_use_id").GetString() == "native_third");
+        Assert.Equal(repeatCall, thirdResult.GetProperty("is_error").GetBoolean());
+        if (repeatCall)
+        {
+            Assert.Contains("already called with these arguments", thirdResult.GetRawText(), StringComparison.Ordinal);
+        }
+
         Assert.DoesNotContain("private-child", JsonSerializer.Serialize(observed), StringComparison.Ordinal);
         Assert.DoesNotContain("private-child", JsonSerializer.Serialize(outcome), StringComparison.Ordinal);
     }
@@ -124,6 +138,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
 
         public List<JsonElement> Requests { get; } = [];
+
+        public bool RepeatCall { get; init; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -142,7 +158,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 for (var ordinal = 0; ordinal < (round == 0 ? 2 : 1); ordinal++)
                 {
                     var wireId = round == 1 ? "native_third" : ordinal == 0 ? "native_one" : "native_two";
-                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = ordinal + 1, content_block = new { type = "tool_use", id = wireId, name = _toolName, input = new { } } }));
+                    var path = round == 1 && RepeatCall ? "src/native_one.cs" : $"src/{wireId}.cs";
+                    stream.Append(NativeEvent("content_block_start", new { type = "content_block_start", index = ordinal + 1, content_block = new { type = "tool_use", id = wireId, name = _toolName, input = new { path } } }));
                     stream.Append(NativeEvent("content_block_stop", new { type = "content_block_stop", index = ordinal + 1 }));
                 }
             }

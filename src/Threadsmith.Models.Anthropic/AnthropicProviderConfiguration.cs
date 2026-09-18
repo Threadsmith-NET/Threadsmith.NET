@@ -176,8 +176,8 @@ public static class AnthropicProfileIdentifiers
 /// <summary>Trusted request policy for hydrated models, independently of hard API capabilities.</summary>
 public sealed record AnthropicModelDefaults
 {
-    /// <summary>Per-request output reserve, validated rather than clamped.</summary>
-    public int RequestOutputTokenReserve { get; init; } = 8192;
+    /// <summary>Preferred per-request output reserve, capped during hydration to each discovered model's output limit.</summary>
+    public int RequestOutputTokenReserve { get; init; } = 32768;
 
     /// <summary>Requested default effort; omission selects reviewed high when available.</summary>
     public ReasoningLevel? DefaultReasoningLevel { get; init; }

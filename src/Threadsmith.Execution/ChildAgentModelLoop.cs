@@ -34,6 +34,7 @@ internal sealed class ChildAgentModelLoop
     private readonly IToolInvocationPipeline _tools;
     private readonly IConversationToolSnapshotStore _snapshots;
     private readonly AgentDisplayStream? _display;
+    private readonly ExecutionLimits _executionLimits;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentModelLoop"/> class.</summary>
     public ChildAgentModelLoop(
@@ -50,7 +51,8 @@ internal sealed class ChildAgentModelLoop
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
         AgentDisplayStream? display = null,
-        IConversationToolSnapshotStore? snapshots = null)
+        IConversationToolSnapshotStore? snapshots = null,
+        ExecutionLimits? executionLimits = null)
     {
         ArgumentNullException.ThrowIfNull(models);
         ArgumentNullException.ThrowIfNull(tools);
@@ -79,6 +81,7 @@ internal sealed class ChildAgentModelLoop
         }
 
         _options = options;
+        _executionLimits = executionLimits ?? new ExecutionLimits();
     }
 
     /// <summary>Runs advertised tools until the model returns its response, without imposing an answer format.</summary>
@@ -119,6 +122,8 @@ internal sealed class ChildAgentModelLoop
         var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
         history.RecordInitialEvidence(deliveredEvidenceIds.ToArray());
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
+        var toolCalls = new ToolCallHistory();
+        var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _executionLimits.MaxCorrectiveTurns));
         var ledger = new AgentBudgetLedger(assignment.Budget);
         var stopwatch = Stopwatch.StartNew();
         using var transientState = new ModelRequestTransientState();
@@ -197,7 +202,7 @@ internal sealed class ChildAgentModelLoop
                     if (response.InvocationFailure is { } failure)
                     {
                         var correctionStart = messages.Count;
-                        AddCorrection(messages, ledger, failure.SafeMessage, prompt, [], registrationById, assignment, round, transientState);
+                        AddCorrection(messages, ledger, failure, correctiveTurns, [], registrationById, assignment, round, transientState);
                         history.RecordExchange(correctionStart, round, []);
                         continue;
                     }
@@ -252,6 +257,8 @@ internal sealed class ChildAgentModelLoop
                                 registrationById,
                                 ledger,
                                 evidenceProgress,
+                                toolCalls,
+                                toolDefinitions,
                                 round,
                                 transientState,
                                 cancellationToken);
@@ -262,16 +269,26 @@ internal sealed class ChildAgentModelLoop
                                 : progressMessage);
                             deliveredEvidenceIds.UnionWith(continuation.DeliveredEvidenceIds);
                             exchangeEvidence = continuation.DeliveredEvidenceIds;
+                            correctiveTurns.Reset();
                         }
                         catch (Exception exception) when (exception is InvalidDataException
                             or ToolArgumentValidationException
-                            or UnauthorizedAccessException)
+                            or UnauthorizedAccessException
+                            or MalformedInvocationException)
                         {
+                            var diagnostic = exception is MalformedInvocationException malformed
+                                ? malformed.Diagnostic
+                                : CorrectiveMessageFactory.CreateToolBatchDiagnostic(
+                                    MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                                    null,
+                                    null,
+                                    _sanitizer.Sanitize(exception.Message),
+                                    response.ToolRequests.Count);
                             AddCorrection(
                                 messages,
                                 ledger,
-                                exception.Message,
-                                prompt,
+                                diagnostic,
+                                correctiveTurns,
                                 response.ToolRequests,
                                 registrationById,
                                 assignment,
@@ -333,6 +350,7 @@ internal sealed class ChildAgentModelLoop
             InvalidDataException => exception.Message,
             ToolArgumentValidationException => exception.Message,
             UnauthorizedAccessException => exception.Message,
+            MalformedInvocationException malformed => malformed.Diagnostic.SafeMessage,
             InvalidOperationException when exception.Message.StartsWith(
                 "The child ",
                 StringComparison.Ordinal) => exception.Message,
@@ -600,6 +618,8 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyDictionary<string, ToolRegistration> registrations,
         AgentBudgetLedger ledger,
         ChildAgentEvidenceProgressTracker evidenceProgress,
+        ToolCallHistory toolCalls,
+        IReadOnlyList<ModelToolDefinition> toolDefinitions,
         int round,
         ModelRequestTransientState transientState,
         CancellationToken cancellationToken)
@@ -646,11 +666,52 @@ internal sealed class ChildAgentModelLoop
         var preflight = ordinary.Length > 0 ? _tools.PreflightBatch(ordinary) : null;
         if (preflight is not null && (!preflight.Succeeded || preflight.Preparation is null))
         {
-            throw new InvalidDataException(
-                $"The tool batch was not executed. Call {preflight.FailedOrdinal + 1} "
-                + $"({preflight.FailedToolId}) failed validation: "
-                + (preflight.SafeReason ?? "Tool arguments could not be validated.")
-                + " Other calls in this batch were not executed; this does not mean their paths or arguments were invalid.");
+            throw new MalformedInvocationException(CorrectiveMessageFactory.CreateToolBatchDiagnostic(
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                preflight.FailedOrdinal,
+                preflight.FailedToolId,
+                preflight.SafeReason ?? new CorrectiveMessageFactory(_prompts).GetToolBatchPreflightFailedReason(),
+                requests.Count));
+        }
+
+        var pendingCalls = new ToolCallHistory(toolCalls);
+        var semanticToolAttempted = toolDefinitions.Any(tool =>
+            SemanticFirstSearchPolicy.IsSemanticInspectionTool(tool.Name) && toolCalls.ContainsTool(tool.Name));
+        for (var ordinal = 0; ordinal < requests.Count; ordinal++)
+        {
+            var request = requests[ordinal];
+            if (SemanticFirstSearchPolicy.TryCreateCorrection(
+                request,
+                childContext,
+                semanticToolAttempted,
+                toolDefinitions,
+                new CorrectiveMessageFactory(_prompts),
+                out var reason))
+            {
+                throw new MalformedInvocationException(CorrectiveMessageFactory.CreateToolBatchDiagnostic(
+                    MalformedInvocationFailureKind.PhaseInvalidTool,
+                    ordinal,
+                    request.ToolName,
+                    reason,
+                    requests.Count));
+            }
+
+            if (!pendingCalls.TryAdd(resolvedRegistrations[ordinal].Tool.Definition, request.ArgumentsJson))
+            {
+                throw new MalformedInvocationException(CorrectiveMessageFactory.CreateToolBatchDiagnostic(
+                    MalformedInvocationFailureKind.PhaseInvalidTool,
+                    ordinal,
+                    request.ToolName,
+                    new CorrectiveMessageFactory(_prompts).CreateDuplicateToolInvocationReason(request.ToolName),
+                    requests.Count));
+            }
+
+            semanticToolAttempted |= SemanticFirstSearchPolicy.IsSemanticInspectionTool(request.ToolName);
+        }
+
+        foreach (var request in requests)
+        {
+            toolCalls.TryAdd(request.ToolName, request.ArgumentsJson);
         }
 
         var results = new List<ToolBatchResult>();
@@ -820,20 +881,26 @@ internal sealed class ChildAgentModelLoop
     private void AddCorrection(
         ICollection<ModelMessage> messages,
         AgentBudgetLedger ledger,
-        string reason,
-        ChildAgentPrompt prompt,
+        MalformedInvocationDiagnostic diagnostic,
+        CorrectiveTurnState correctiveTurns,
         IReadOnlyList<ToolRequestModelOutput> requests,
         IReadOnlyDictionary<string, ToolRegistration> registrations,
         AgentAssignment assignment,
         int round,
         ModelRequestTransientState transientState)
     {
+        diagnostic = diagnostic with
+        {
+            SafeMessage = BoundedText.Truncate(
+                _sanitizer.Sanitize(diagnostic.SafeMessage),
+                _options.EffectiveLimit(_options.MaximumCorrectionReasonCharacters) is > 0 and var limit ? limit : int.MaxValue,
+                out _),
+        };
+        var attemptNumber = correctiveTurns.BeginAttemptOrThrow(diagnostic);
         ledger.Charge(new AgentResourceUsage { Corrections = 1 });
-        var sanitized = BoundedText.Truncate(
-            _sanitizer.Sanitize(reason),
-            _options.EffectiveLimit(_options.MaximumCorrectionReasonCharacters) is > 0 and var limit ? limit : int.MaxValue,
-            out _);
-        var error = JsonSerializer.Serialize(new { succeeded = false, executed = false, error = sanitized });
+        var corrections = new CorrectiveMessageFactory(_prompts);
+        var summary = corrections.CreateToolBatchFailureSummary(diagnostic.ToolOrdinal, diagnostic.ToolName, diagnostic.SafeMessage);
+        var resultsAdded = false;
         for (var ordinal = 0; ordinal < requests.Count; ordinal++)
         {
             var request = requests[ordinal];
@@ -850,12 +917,14 @@ internal sealed class ChildAgentModelLoop
             }
 
             messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, request, round));
-            messages.Add(ChildAgentPrompt.CreateToolResultMessage(
+            messages.Add(corrections.CreateRejectedToolResultMessage(
                 correlationId,
                 request.ToolName,
-                error,
-                round,
-                isError: true));
+                attemptNumber,
+                correctiveTurns.MaximumTurns,
+                summary,
+                diagnostic.ToolOrdinal is null || diagnostic.ToolOrdinal == ordinal) with { ModelRound = round });
+            resultsAdded = true;
         }
 
         if (transientState.HasResponses)
@@ -863,10 +932,13 @@ internal sealed class ChildAgentModelLoop
             transientState.SealRound(round, messages.ToArray());
         }
 
-        var correctionMessage = prompt.CreateCorrectionMessage(sanitized);
-        messages.Add(transientState.HasResponses
-            ? correctionMessage with { Role = ModelMessageRole.User }
-            : correctionMessage);
+        if (!resultsAdded)
+        {
+            var correctionMessage = corrections.CreateDeveloperMessage(diagnostic, attemptNumber, correctiveTurns.MaximumTurns);
+            messages.Add(transientState.HasResponses
+                ? correctionMessage with { Role = ModelMessageRole.User }
+                : correctionMessage);
+        }
     }
 
     private static string CreateToolCallId(

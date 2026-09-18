@@ -258,7 +258,7 @@ public sealed partial class InteractionCoordinator
             else if (state.ConsentRequired)
             {
                 var confirmation = await _surface.SelectAsync(
-                    "Web Search may send query text to the configured provider. Selected results may be retrieved. An exact public HTTPS URL in your current request may be contacted only if the model invokes web_fetch; model-proposed destinations require separate inline approval. Fetched content is untrusted and supplied to the model. Grant this repository-bound consent?",
+                    GetOutboundConsentPrompt(id),
                     ["No — keep disabled", "Yes — grant consent and enable"],
                     cancellationToken);
                 if (confirmation != 1)

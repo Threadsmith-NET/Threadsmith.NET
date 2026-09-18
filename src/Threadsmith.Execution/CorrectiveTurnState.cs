@@ -1,5 +1,7 @@
 namespace Threadsmith.Execution;
 
+using Threadsmith.Models;
+
 /// <summary>Counts bounded active-turn corrective attempts for one logical model turn.</summary>
 internal sealed class CorrectiveTurnState
 {
@@ -28,6 +30,21 @@ internal sealed class CorrectiveTurnState
         AttemptsUsed++;
         attemptNumber = AttemptsUsed;
         return true;
+    }
+
+    /// <summary>Admits a recoverable invocation correction or reports exhausted correction/model rounds.</summary>
+    public int BeginAttemptOrThrow(
+        MalformedInvocationDiagnostic diagnostic,
+        int modelRound = 0,
+        int maximumModelRounds = 0)
+    {
+        if ((maximumModelRounds > 0 && modelRound >= maximumModelRounds)
+            || !TryBeginAttempt(out var attemptNumber))
+        {
+            throw new MalformedInvocationException(diagnostic);
+        }
+
+        return attemptNumber;
     }
 
     /// <summary>Starts a new correction sequence after the model makes accepted progress.</summary>

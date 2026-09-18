@@ -1,6 +1,7 @@
 namespace Threadsmith.Skills;
 
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Tools;
 
@@ -14,6 +15,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private readonly IDomainEventStream _events;
     private readonly IPromptLoader _prompts;
     private readonly ISkillPackageVerifier _verifier;
+    private readonly SkillRuntimeLimits _limits;
     private readonly ISkillProcedureRunner _runner;
     private readonly BoundedJsonSchemaValidator _schemas;
     private readonly ISkillStateStore _state;
@@ -32,7 +34,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         ISkillStateStore state,
         Func<SessionId, CancellationToken, Task<SkillInvocationHostContext>> hostContext,
         IDomainEventStream events,
-        IConversationToolSnapshotStore? snapshots = null)
+        IConversationToolSnapshotStore? snapshots = null,
+        SkillRuntimeLimits? limits = null)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(verifier);
@@ -55,6 +58,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         _hostContext = hostContext;
         _events = events;
         _snapshots = snapshots;
+        _limits = limits ?? new();
+        _limits.Validate();
     }
 
     /// <inheritdoc />
@@ -173,6 +178,12 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             throw new InvalidOperationException("A waiting invocation requires ContinueSkillCommand with host result JSON.");
         }
 
+        if (checkpoint.Steps.Any(static item => !item.Succeeded && item.SideEffects.Count > 0))
+        {
+            throw new InvalidOperationException(
+                "Skill invocation cannot resume because an incomplete step already produced side effects. Inspect the recorded side effects before starting a replacement workflow.");
+        }
+
         var resumed = checkpoint with
         {
             Steps = checkpoint.Steps.TakeWhile(item => item.Succeeded).ToArray(),
@@ -243,7 +254,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             await source.CancelAsync();
         }
 
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(_limits.WorkflowDisposeTimeoutSeconds);
         while (!_active.IsEmpty && DateTimeOffset.UtcNow < deadline)
         {
             await Task.Delay(TimeSpan.FromMilliseconds(10));
@@ -296,6 +307,9 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
 
         var latest = checkpoint;
+        SkillWorkflowStep? interruptedStep = null;
+        var interruptedIteration = 0;
+        SkillWorkflowStepResult? interruptedResult = null;
         try
         {
             var running = checkpoint with
@@ -328,6 +342,9 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 var remainingToolCalls = plan.EffectiveBudget.ToolCalls
                     - current.Steps.Sum(item => item.ToolCalls);
                 var input = ResolveStepInput(step, current);
+                interruptedStep = step;
+                interruptedIteration = iteration;
+                interruptedResult = null;
                 var result = await ExecuteStepAsync(
                     candidate,
                     plan,
@@ -338,6 +355,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                     remainingModelTurns,
                     remainingToolCalls,
                     source.Token);
+                interruptedResult = result;
                 current = current with
                 {
                     Steps = [.. current.Steps, result],
@@ -356,6 +374,9 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 };
                 await SaveAsync(current, VersionOf(latest), source.Token);
                 latest = current;
+                interruptedStep = null;
+                interruptedIteration = 0;
+                interruptedResult = null;
                 if (result.HostAction is not null)
                 {
                     return CreateResult(current, "workflow is waiting for a governed host action");
@@ -379,18 +400,28 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             await PublishCompletionAsync(completed, reason, CancellationToken.None);
             return CreateResult(completed, reason);
         }
-        catch (OperationCanceledException) when (source.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (source.IsCancellationRequested)
         {
+            var interruptedSideEffects = SkillProcedureInterruption.GetSideEffects(exception);
+            var cancelledSteps = AppendInterruptedStepState(
+                latest.Steps,
+                interruptedStep,
+                interruptedIteration,
+                interruptedResult,
+                interruptedSideEffects);
+
             var cancelled = latest with
             {
+                Steps = cancelledSteps,
                 Status = SkillInvocationStatus.Cancelled,
                 NextAction = GetPromptValue(
                     PromptFileNames.SkillWorkflowNextActionResumeAfterCompletePackageHostPolicyRevalidation),
                 RecordedAt = DateTimeOffset.UtcNow,
             };
+            var reason = CreateInterruptedReason(cancelled);
             await SaveAsync(cancelled, VersionOf(latest), CancellationToken.None);
-            await PublishCompletionAsync(cancelled, "workflow cancelled", CancellationToken.None);
-            throw;
+            await PublishCompletionAsync(cancelled, reason, CancellationToken.None);
+            return CreateResult(cancelled, reason);
         }
         catch (SkillCheckpointConflictException)
         {
@@ -398,8 +429,15 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
         catch (Exception exception)
         {
+            var failedSideEffects = SkillProcedureInterruption.GetSideEffects(exception);
             var failed = latest with
             {
+                Steps = AppendInterruptedStepState(
+                    latest.Steps,
+                    interruptedStep,
+                    interruptedIteration,
+                    interruptedResult,
+                    failedSideEffects),
                 Status = SkillInvocationStatus.Failed,
                 NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionInspectFailureThenRevalidate),
                 RecordedAt = DateTimeOffset.UtcNow,
@@ -415,6 +453,45 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             _active.TryRemove(checkpoint.InvocationId, out _);
         }
+    }
+
+    private static IReadOnlyList<SkillWorkflowStepResult> AppendInterruptedStepState(
+        IReadOnlyList<SkillWorkflowStepResult> steps,
+        SkillWorkflowStep? interruptedStep,
+        int interruptedIteration,
+        SkillWorkflowStepResult? interruptedResult,
+        IReadOnlyList<SkillSideEffectRecord> sideEffects)
+    {
+        if (interruptedStep is null
+            || steps.Any(item => string.Equals(item.StepId, interruptedStep.StepId, StringComparison.Ordinal)
+                && item.Iteration == interruptedIteration))
+        {
+            return steps;
+        }
+
+        if (interruptedResult is not null)
+        {
+            return [.. steps, interruptedResult];
+        }
+
+        if (sideEffects.Count == 0)
+        {
+            return steps;
+        }
+
+        return
+        [
+            .. steps,
+            new SkillWorkflowStepResult
+            {
+                StepId = interruptedStep.StepId,
+                Kind = interruptedStep.Kind,
+                Iteration = interruptedIteration,
+                Succeeded = false,
+                SideEffects = sideEffects,
+                RecordedAt = DateTimeOffset.UtcNow,
+            },
+        ];
     }
 
     private string GetPromptValue(string promptFileName)
@@ -478,11 +555,17 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
             }
 
-            var validated = await ValidateAgainstAssetAsync(
+            var sideEffects = procedure.SideEffects ?? [];
+            var validatedOutput = await ValidateAgainstAssetAsync(
                 candidate,
                 step.OutputSchemaAsset,
                 procedure.OutputJson,
                 cancellationToken);
+            var validated = ValidateArtifactDeliveryContract(
+                candidate,
+                step,
+                validatedOutput,
+                sideEffects);
             using var output = System.Text.Json.JsonDocument.Parse(validated);
             return new SkillWorkflowStepResult
             {
@@ -495,6 +578,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 ContentTokens = content.Sum(item => item.EstimatedTokens),
                 ModelTurns = procedure.ModelTurns,
                 ToolCalls = procedure.ToolCalls,
+                SideEffects = sideEffects,
                 RecordedAt = DateTimeOffset.UtcNow,
             };
         }
@@ -643,36 +727,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         SessionId sessionId,
         CancellationToken cancellationToken)
     {
-        SkillCatalogCandidate candidate;
-        if (selector.IndexOfAny([':', '@', '+']) < 0)
-        {
-            var pin = await _state.GetPinAsync(
-                new SkillId(selector),
-                cancellationToken);
-            if (pin is null)
-            {
-                candidate = await ResolveCatalogAsync(selector, cancellationToken);
-            }
-            else
-            {
-                SkillCatalogCandidate[] matches =
-                [
-                    .. _catalog.Snapshot.Candidates.Where(item => item.Identity == pin),
-                ];
-                candidate = matches.Length switch
-                {
-                    0 => throw new KeyNotFoundException("The pinned skill package is no longer installed."),
-                    1 => matches[0],
-                    _ => throw new InvalidOperationException(
-                        "The pinned skill package exists in multiple scopes; invoke a scope-qualified selector."),
-                };
-            }
-        }
-        else
-        {
-            candidate = await ResolveCatalogAsync(selector, cancellationToken);
-        }
-
+        var candidate = await SkillInvocationSelection.ResolveAsync(_catalog, _state, selector, cancellationToken);
         return await VerifyResolvedAsync(candidate, sessionId, cancellationToken);
     }
 
@@ -724,22 +779,142 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             return SkillCanonicalJson.CanonicalizeValue(valueJson);
         }
 
-        var asset = candidate.Metadata.Assets.Single(item =>
-            string.Equals(item.Path, schemaAssetPath, StringComparison.OrdinalIgnoreCase));
-        var path = SkillPathPolicy.ResolveConfined(candidate.Provenance.PackageRoot, asset.Path);
-        var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
-        if (bytes.LongLength != asset.Bytes
-            || !string.Equals(
-                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)),
-                asset.Sha256,
-                StringComparison.Ordinal))
+        var schemaJson = await SkillSchemaAssets.ReadAsync(candidate, schemaAssetPath, cancellationToken);
+        var schema = _schemas.Compile(schemaJson);
+        return ValidateSchemaInput(schema, valueJson);
+    }
+
+    private string ValidateSchemaInput(SkillCompiledSchema schema, string valueJson)
+    {
+        try
         {
-            throw new InvalidDataException("Skill schema changed after package verification.");
+            return _schemas.Validate(schema, valueJson);
+        }
+        catch (InvalidDataException exception) when (
+            IsRootTypeMismatch(exception)
+            && TryGetStringifiedJsonValue(valueJson, out var embeddedJson))
+        {
+            return _schemas.Validate(schema, embeddedJson);
+        }
+    }
+
+    private static string ValidateArtifactDeliveryContract(
+        SkillCatalogCandidate candidate,
+        SkillWorkflowStep step,
+        string valueJson,
+        IReadOnlyList<SkillSideEffectRecord> sideEffects)
+    {
+        if (!RequiresArtifactDeliveryContract(candidate, step))
+        {
+            return valueJson;
         }
 
-        var schemaJson = new System.Text.UTF8Encoding(false, true).GetString(bytes);
-        var schema = _schemas.Compile(schemaJson);
-        return _schemas.Validate(schema, valueJson);
+        using var document = System.Text.Json.JsonDocument.Parse(valueJson);
+        if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
+            || !document.RootElement.TryGetProperty("delivery", out var delivery)
+            || delivery.ValueKind != System.Text.Json.JsonValueKind.String
+            || !string.Equals(delivery.GetString(), "artifact", StringComparison.Ordinal))
+        {
+            return valueJson;
+        }
+
+        if (!document.RootElement.TryGetProperty("artifact", out var artifact))
+        {
+            throw new InvalidDataException("Skill value declares artifact delivery but is missing required property 'artifact'.");
+        }
+
+        if (artifact.ValueKind != JsonValueKind.Object
+            || !artifact.TryGetProperty("path", out var pathElement)
+            || pathElement.ValueKind != JsonValueKind.String
+            || pathElement.GetString() is not { Length: > 0 } path
+            || !artifact.TryGetProperty("bytesWritten", out var bytesElement)
+            || bytesElement.ValueKind != JsonValueKind.Number
+            || !bytesElement.TryGetInt64(out var bytesWritten))
+        {
+            throw new InvalidDataException("Skill value declares artifact delivery but has incomplete artifact metadata.");
+        }
+
+        if (!sideEffects.Any(item => IsMatchingArtifactSideEffect(item, path, bytesWritten)))
+        {
+            throw new InvalidDataException("Skill value declares artifact delivery that was not observed in write_file side effects.");
+        }
+
+        return valueJson;
+    }
+
+    private static bool IsMatchingArtifactSideEffect(
+        SkillSideEffectRecord sideEffect,
+        string declaredPath,
+        long declaredBytesWritten)
+    {
+        return sideEffect.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
+            && sideEffect.ToolId.Equals("write_file", StringComparison.OrdinalIgnoreCase)
+            && sideEffect.BytesWritten == declaredBytesWritten
+            && sideEffect.Path is { Length: > 0 } observedPath
+            && ArtifactPathsMatch(declaredPath, observedPath);
+    }
+
+    private static bool ArtifactPathsMatch(string declaredPath, string observedPath)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        var declared = NormalizeArtifactClaimPath(declaredPath);
+        var observed = NormalizeArtifactClaimPath(observedPath);
+        return string.Equals(declared, observed, comparison);
+    }
+
+    private static string NormalizeArtifactClaimPath(string path)
+    {
+        return path.Replace('\\', '/').TrimEnd('/');
+    }
+
+    private static bool RequiresArtifactDeliveryContract(
+        SkillCatalogCandidate candidate,
+        SkillWorkflowStep step)
+    {
+        return candidate.Provenance.Scope == SkillScope.Maintained
+            && candidate.Metadata.SkillId.Value.Equals("review", StringComparison.Ordinal)
+            && step.Kind == SkillWorkflowStepKind.InvokeProcedure
+            && step.OutputSchemaAsset?.Equals("schemas/output.json", StringComparison.Ordinal) == true;
+    }
+
+    private static bool IsRootTypeMismatch(InvalidDataException exception)
+    {
+        return exception.Message.Contains("Skill value at $ does not match type", StringComparison.Ordinal);
+    }
+
+    private static bool TryGetStringifiedJsonValue(string valueJson, out string embeddedJson)
+    {
+        embeddedJson = string.Empty;
+        try
+        {
+            using var valueDocument = JsonDocument.Parse(valueJson, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+            });
+            if (valueDocument.RootElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            var text = valueDocument.RootElement.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return false;
+            }
+
+            using var embeddedDocument = JsonDocument.Parse(text, new JsonDocumentOptions
+            {
+                AllowTrailingCommas = false,
+                CommentHandling = JsonCommentHandling.Disallow,
+            });
+            embeddedJson = text;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private async Task<SkillWorkflowCheckpoint> GetRequiredCheckpointAsync(
@@ -796,6 +971,25 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 checkpoint.Status,
                 reason),
             cancellationToken);
+    }
+
+    private static string CreateInterruptedReason(SkillWorkflowCheckpoint checkpoint)
+    {
+        var sideEffects = checkpoint.Steps.SelectMany(item => item.SideEffects).ToArray();
+        if (sideEffects.Length == 0)
+        {
+            return "workflow timed out or was cancelled before completion; operation state is unknown";
+        }
+
+        var artifacts = sideEffects
+            .Where(item => item.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(item.Path))
+            .Select(item => item.Path ?? string.Empty)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return artifacts.Length == 0
+            ? "workflow timed out or was cancelled after producing side effects"
+            : $"workflow timed out or was cancelled after writing artifact {string.Join(", ", artifacts)}";
     }
 
     private static SkillWorkflowStep FindNextStep(

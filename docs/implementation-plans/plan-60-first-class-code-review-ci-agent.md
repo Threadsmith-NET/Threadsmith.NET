@@ -1,5 +1,7 @@
 # Plan 60 — First-class Code Review and CI Agent
 
+**Acquisition amendment (Plan 110):** PR retrieval may also use the ordinary built-in `pr_fetch` tool and compiled adapters in `Threadsmith.Tools`, with existing Secrets/policy and a transient operation cache. References below to extension/MCP-only retrieval are broadened to include that tool. Publication remains an explicit extension/MCP capability. Plan 110 serves the existing advisory skill independently; it does not deliver this plan's coordinator, review persistence or CI gates.
+
 **Delivery track:** M24 — First-class Code Review and CI Agent
 
 **Prerequisites:** plans 08, 10–13, 18, 20, 27, 30, 33–35, 37–44, 49, 51–57, and 59
@@ -10,13 +12,13 @@
 
 ## 1 Objective
 
-Promote Threadsmith's maintained `review-pr` skill and advisory reviewers into a dedicated review workflow for local and CI pull-request use. The host derives and freezes the authoritative base/head comparison, admits only introduced-change evidence for gating, correlates findings to exact diff lines, deduplicates and tracks findings across reruns, applies configured severity/confidence/coverage thresholds, emits stable JSON/SARIF/CI annotations and exit codes, and can act as an auditable merge gate. Result processing and gate rules are deterministic for the same accepted inputs; model judgments and findings can vary between runs.
+Promote Threadsmith's maintained `review` skill and advisory reviewers into a dedicated review workflow for local and CI pull-request use. The host derives and freezes the authoritative base/head comparison, admits only introduced-change evidence for gating, correlates findings to exact diff lines, deduplicates and tracks findings across reruns, applies configured severity/confidence/coverage thresholds, emits stable JSON/SARIF/CI annotations and exit codes, and can act as an auditable merge gate. Result processing and gate rules are deterministic for the same accepted inputs; model judgments and findings can vary between runs.
 
 Specialist security, test, performance, architecture, and domain reasoning remains supplied by skills and the prompt-driven roles described in [Plan 95.1](plan-95.1-subagent-role-runners-and-role-model-assignment.md). A role supplies a system-prompt amendment, model selection, and permitted tools; the child may respond in any form. Structured review records and exports belong to the review coordinator, not the child's answer contract. Operational limits use the same configuration and disable behavior as the main agent, with no arbitrary hard-coded review limits. Pull-request retrieval and inline-comment publication remain explicit extension/MCP capabilities. Organization-specific blocking rules remain trusted managed hooks. Core owns review identity, provenance, evidence, finding lifecycle, gating, output, persistence, cancellation, and restoration.
 
 ## 2 Architectural Context
 
-Plans 10-13 and 37 provide immutable baselines, exact diffs, affected validation, correction, and durable execution evidence. Plan 38 provides independent read-only review infrastructure and legacy typed findings. Plan 95.1 establishes the current ordinary-role contract: prompt amendments, configured models and tools, and unrestricted response text. Legacy finding records remain readable but do not impose an answer schema on new child runs. Plan 39's maintained `review-pr` skill supplies review guidance but cannot publish, approve, merge, or gate. Plans 41-43 provide local Git comparisons, blame/history, diagnostics, tests, call hierarchy, and impact. Plan 40 provides advisory and trusted managed blocking hooks. Plans 33-35 and 51-55 provide provenance-aware context and deterministic canonical requests; review reuses the shared context and compaction configuration.
+Plans 10-13 and 37 provide immutable baselines, exact diffs, affected validation, correction, and durable execution evidence. Plan 38 provides independent read-only review infrastructure and legacy typed findings. Plan 95.1 establishes the current ordinary-role contract: prompt amendments, configured models and tools, and unrestricted response text. Legacy finding records remain readable but do not impose an answer schema on new child runs. The maintained `review` skill supplies review guidance but cannot publish, approve, merge, or gate. Plans 41-43 provide local Git comparisons, blame/history, diagnostics, tests, call hierarchy, and impact. Plan 40 provides advisory and trusted managed blocking hooks. Plans 33-35 and 51-55 provide provenance-aware context and deterministic canonical requests; review reuses the shared context and compaction configuration.
 
 The current roadmap lists structured code review and CI pull-request modes without an implementation plan. Threadsmith does not derive trusted base/head refs from a CI provider, prove which lines/behavior were introduced, persist finding identities/dispositions, generate SARIF/CI annotations, publish inline comments, or expose a stable merge-gate exit policy.
 
@@ -54,7 +56,7 @@ The current roadmap lists structured code review and CI pull-request modes witho
 
 ## 5 Current State
 
-Threadsmith can compare local Git refs, inspect semantic impact, discover/run tests, delegate independent security/test/performance/architecture reviewers, and run the maintained `review-pr` skill. Ordinary children return unrestricted text alongside separately recorded identity, status, usage, and tool evidence. Legacy typed findings can carry severity, confidence, paths/ranges, citations, and recommendations. These are advisory run artifacts without a first-class review session, trusted comparison derivation, introduced-line ownership, stable cross-run identity/disposition, output standard, provider publication contract, or CI gate.
+Threadsmith can compare local Git refs, inspect semantic impact, discover/run tests, delegate independent security/test/performance/architecture reviewers, and run the maintained `review` skill. Ordinary children return unrestricted text alongside separately recorded identity, status, usage, and tool evidence. Legacy typed findings can carry severity, confidence, paths/ranges, citations, and recommendations. These are advisory run artifacts without a first-class review session, trusted comparison derivation, introduced-line ownership, stable cross-run identity/disposition, output standard, provider publication contract, or CI gate.
 
 No external PR adapter is required for local review today. Future providers may arrive through extensions/MCP, but core lacks a safe normalized boundary through which they can supply immutable PR metadata or receive idempotent publication requests.
 
@@ -89,7 +91,7 @@ Deleted-code findings use a base-side location plus deletion hunk and describe t
 
 ### 6.3 Reviewer orchestration and progressive disclosure
 
-Core selects required review categories from change risk, repository language/project facts, configured policy, maintained `review-pr`, and trusted hooks. It supplies each reviewer the same immutable snapshot, task, relevant diff/context/evidence, role system-prompt amendment, selected model, and permitted tools through the shared child loop. Domain skills may add relevant instructions after ordinary verification and explicit eligibility. Deadlines, budgets, context assembly, and compaction follow the shared configuration described in section 6.11.
+Core selects required review categories from change risk, repository language/project facts, configured policy, maintained `review`, and trusted hooks. It supplies each reviewer the same immutable snapshot, task, relevant diff/context/evidence, role system-prompt amendment, selected model, and permitted tools through the shared child loop. Domain skills may add relevant instructions after ordinary verification and explicit eligibility. Deadlines, budgets, context assembly, and compaction follow the shared configuration described in section 6.11.
 
 Do not supply a child response schema, require JSON mode or finding objects, demand special citation identifiers, or require a report-submission tool call to finish. Accept prose, Markdown, JSON-looking text, questions, empty replies, and any other ordinary response. Preserve the response and its format after secret sanitization and any explicitly enabled output limits; do not interpret JSON-looking text as a special result. Missing fields or answer style do not trigger retries, format repair, or a failed child status. Tool-call arguments retain their normal operation schemas and technical validation.
 
@@ -199,14 +201,14 @@ No Git/process, provider SDK, extension/MCP implementation, terminal, SARIF libr
 - `Threadsmith.Persistence` — review sessions, immutable observations, dispositions/waivers, checkpoints, publications, and ordered migration.
 - `Threadsmith.App`, `Threadsmith.Tui`, and headless owner — composition, `/review`, CI command, cancellation, exports, and exit codes.
 - `Threadsmith.Telemetry` — sanitized review/gate/publication diagnostics.
-- Maintained `review-pr` skill - use the captured review snapshot and prompt-driven reviewer instructions without prescribing child answer schemas or adding privileged behavior.
+- Maintained `review` skill - use the captured review snapshot and prompt-driven reviewer instructions without prescribing child answer schemas or adding privileged behavior.
 - Dedicated M24 tests, deterministic Git/PR/provider fixtures, ADR-46, Scenario Z, docs, configuration, manual plan, status, and DOX.
 
 Any new project-level fixtures/artifacts copied to output use `CopyToOutputDirectory=PreserveNewest`.
 
 ## 9 Ordered Tasks
 
-1. Inspect Plan-38 review records, the Plan-95.1 ordinary-response contract, shared main/child operational configuration, maintained `review-pr`, Git comparison/impact/diagnostic tools, hook policy, persistence, headless output/exit conventions, and extension/MCP capability boundaries.
+1. Inspect Plan-38 review records, the Plan-95.1 ordinary-response contract, shared main/child operational configuration, maintained `review`, Git comparison/impact/diagnostic tools, hook policy, persistence, headless output/exit conventions, and extension/MCP capability boundaries.
 2. Add ADR-46 for core review authority versus reviewer skills/agents, PR adapters, managed policy, introduced-change gating, and publication idempotency.
 3. Define source/session/comparison/diff/location/finding/disposition/waiver/coverage/gate/output/publication/checkpoint contracts separately from ordinary child responses. Map operational controls to existing shared settings or configurable, disableable review-specific settings where needed.
 4. Implement source resolvers for working tree, local range, host change set, and normalized external PR metadata with immutable base/head/merge-base verification.
@@ -267,7 +269,7 @@ Do not log raw diffs, private PR bodies, secrets/tokens, hidden reasoning, revie
 
 ## 13 Migration/Compatibility
 
-Add an ordered migration for review sessions, source snapshots, immutable findings/observations, dispositions/waivers, checkpoints, outputs, and publication reconciliation. Existing Plan-38 review findings and Plan-39 `review-pr` results remain readable; they are not retroactively treated as authoritative gate sessions without complete source/policy provenance.
+Add an ordered migration for review sessions, source snapshots, immutable findings/observations, dispositions/waivers, checkpoints, outputs, and publication reconciliation. Existing advisory review results are not retroactively treated as authoritative gate sessions without complete source/policy provenance.
 
 The maintained skill keeps its immutable package identity/versioning and is updated through the ordinary governed package process. Existing local Git tools and headless behavior remain compatible. Unknown review/output/fingerprint versions are inspectable but cannot gate, publish, or resume.
 

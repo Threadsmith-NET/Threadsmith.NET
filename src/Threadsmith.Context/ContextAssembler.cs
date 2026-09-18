@@ -223,7 +223,8 @@ public sealed class ContextAssembler : IContextAssembler
         _policy = policy;
         _promptAppendLoader = promptAppendLoader;
         _prompts = prompts;
-        _stableSystemPolicy = prompts.Get(PromptFileNames.SystemSystemPrompt);
+        _stableSystemPolicy = prompts.Get(PromptFileNames.SystemSystemPrompt)
+            + Environment.NewLine + prompts.Get(PromptFileNames.SystemRepositoryInspection);
         _sanitizer = sanitizer;
         _events = events;
         _modelResolver = modelResolver;
@@ -630,13 +631,14 @@ public sealed class ContextAssembler : IContextAssembler
             ];
         var promptAssets = new List<PromptAssetReference>
         {
-            CreateAssetReference("host:stable-policy", PromptFileNames.SystemSystemPrompt, 0, _stableSystemPolicy),
+            CreateAssetReference("host:stable-policy", PromptFileNames.SystemSystemPrompt, 0, _prompts.Get(PromptFileNames.SystemSystemPrompt)),
+            CreateAssetReference("host:repository-inspection", PromptFileNames.SystemRepositoryInspection, 1, _prompts.Get(PromptFileNames.SystemRepositoryInspection)),
         };
         promptAssets.AddRange(instructionBundle.Sources.Select(source => new PromptAssetReference(
             source.Id,
             source.Version,
             source.RelativePath,
-            source.Position + 1,
+            source.Position + 2,
             source.Content.Length)));
         promptAssets.Add(CreateAssetReference(
             $"host:phase:{request.Phase}",
@@ -1370,11 +1372,11 @@ public sealed class ContextAssembler : IContextAssembler
         var messages = new List<ModelMessage>
         {
             CreateTextMessage(ModelMessageRole.System, "host-policy", _stableSystemPolicy),
-            CreateTextMessage(ModelMessageRole.System, "phase-policy", phaseInstructions),
             CreateTextMessage(
                 ModelMessageRole.Developer,
                 "repository-instructions",
                 repositoryInstructions),
+            CreateTextMessage(ModelMessageRole.System, "phase-policy", phaseInstructions),
         };
         var additionalPrefix = additionalMessages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).ToArray();
         messages.AddRange(additionalPrefix);

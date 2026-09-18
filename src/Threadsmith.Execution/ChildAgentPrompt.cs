@@ -40,9 +40,11 @@ internal sealed class ChildAgentPrompt
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(instructions);
+        var hostPolicy = _prompts.Get(PromptFileNames.SystemChildAgentHostPolicy)
+            + Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryInspection);
         return
         [
-            CreateMessage(ModelMessageRole.System, "child-host-policy", _prompts.Get(PromptFileNames.SystemChildAgentHostPolicy)),
+            CreateMessage(ModelMessageRole.System, "child-host-policy", hostPolicy),
             CreateMessage(ModelMessageRole.System, "child-role-amendment", _prompts.Get(_rolePromptFileName)),
             CreateMessage(
                 ModelMessageRole.Developer,
@@ -107,15 +109,6 @@ internal sealed class ChildAgentPrompt
             IsError = isError,
             Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = content }],
         };
-    }
-
-    /// <summary>Creates technical tool-error feedback without constraining the child's answer format.</summary>
-    public ModelMessage CreateCorrectionMessage(string reason)
-    {
-        return CreateMessage(
-            ModelMessageRole.Developer,
-            "child-tool-error",
-            _prompts.Get(PromptFileNames.CorrectionToolBatchValidationUnavailable) + Environment.NewLine + reason);
     }
 
     /// <summary>Creates host-authored coverage guidance after one child tool batch.</summary>

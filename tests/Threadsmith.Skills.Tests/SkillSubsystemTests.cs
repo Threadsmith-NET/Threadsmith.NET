@@ -70,6 +70,29 @@ public sealed partial class SkillSubsystemTests
         Assert.False(candidate.Enabled);
     }
 
+    /// <summary>Removed per-skill agent settings are rejected instead of being silently ignored.</summary>
+    [Theory]
+    [InlineData("agents")]
+    [InlineData("delegatedChildren")]
+    public async Task CatalogRefresh_RejectsRemovedAgentConfiguration(string property)
+    {
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var manifestPath = Path.Combine(package.PackageRoot, "skill.json");
+        var manifest = JsonNode.Parse(await File.ReadAllTextAsync(manifestPath))!.AsObject();
+        if (property == "agents")
+        {
+            manifest[property] = new JsonArray();
+        }
+        else
+        {
+            manifest["budget"]!.AsObject()[property] = 5;
+        }
+
+        await File.WriteAllTextAsync(manifestPath, manifest.ToJsonString());
+
+        await Assert.ThrowsAsync<JsonException>(() => package.CreateCatalog(SkillScope.User).RefreshAsync());
+    }
+
     /// <summary>Verifies all maintained packages discover and integrity-verify.</summary>
     [Fact]
     public async Task MaintainedCatalog_ContainsVerifiedWorkflows()
@@ -88,12 +111,12 @@ public sealed partial class SkillSubsystemTests
         ];
 
         // Assert
-        Assert.Equal(5, verified.Length);
+        Assert.Equal(4, verified.Length);
         Assert.All(verified, item => Assert.Equal(SkillVerificationState.Maintained, item.Verification));
         Assert.All(verified, item => Assert.True(item.Enabled));
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "fix-analyzer-warnings");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "upgrade-package");
-        Assert.Contains(verified, item => item.Metadata.SkillId.Value == "review-pr");
+        Assert.Contains(verified, item => item.Metadata.SkillId.Value == "review");
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "threadsmith-docs-help");
     }
 
@@ -401,6 +424,7 @@ public sealed partial class SkillSubsystemTests
         // Act
         var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
             "{\"selector\":\"test-skill\",\"input\":{\"scope\":\"current\"}}"));
+        Assert.Equal("invoke test-skill", tool.GetActivityDetail(input));
         var execution = await tool.ExecuteAsync(
             input,
             context);
@@ -410,9 +434,11 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(RunPhase.ChangePlanning, workflows.Request.Phase);
         Assert.Equal("{\"scope\":\"current\"}", workflows.Request.InputJson);
         Assert.Contains(
-            "\"input\":{\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]}",
+            "\"type\":[\"object\",\"array\",\"string\",\"number\",\"boolean\",\"null\"]",
             tool.Definition.InputSchema.JsonSchema,
             StringComparison.Ordinal);
+        Assert.Contains("Pass the native JSON value", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.Contains("never pass a quoted or JSON-encoded object string", tool.Definition.Description, StringComparison.Ordinal);
         Assert.DoesNotContain("inputJson", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("invocationId", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.Contains("payloadJson", tool.Definition.OutputSchema.JsonSchema, StringComparison.Ordinal);
@@ -426,6 +452,240 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains("\"output\":{\"summary\":\"done\"}", execution.ModelResultContent, StringComparison.Ordinal);
         Assert.DoesNotContain("invocationId", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("digest", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Skill tool runtime deadlines come from the shared skill runtime limits.</summary>
+    [Fact]
+    public static void SkillRuntimeLimits_ControlModelVisibleToolTimeouts()
+    {
+        var workflows = new CapturingWorkflowOrchestrator();
+        var invoke = new InvokeSkillTool(
+            workflows,
+            TestPromptLoader.Instance,
+            new SkillRuntimeLimits { InvokeSkillTimeoutSeconds = 37 });
+        var inspection = new NoopSkillInspectionHandlers();
+        var inspect = new InspectSkillTool(
+            inspection,
+            inspection,
+            TestPromptLoader.Instance,
+            new BoundedJsonSchemaValidator(),
+            new SkillRuntimeLimits { InspectSkillTimeoutSeconds = 11 });
+
+        Assert.Equal(TimeSpan.FromSeconds(37), invoke.Definition.Timeout);
+        Assert.Equal(TimeSpan.FromSeconds(11), inspect.Definition.Timeout);
+    }
+
+    /// <summary>Configured skill runtime timeout values must be positive.</summary>
+    [Theory]
+    [InlineData("inspect")]
+    [InlineData("invoke")]
+    [InlineData("dispose")]
+    public static void SkillRuntimeLimits_RejectsNonPositiveTimeouts(string field)
+    {
+        var limits = field switch
+        {
+            "inspect" => new SkillRuntimeLimits { InspectSkillTimeoutSeconds = 0 },
+            "invoke" => new SkillRuntimeLimits { InvokeSkillTimeoutSeconds = 0 },
+            "dispose" => new SkillRuntimeLimits { WorkflowDisposeTimeoutSeconds = 0 },
+            _ => throw new ArgumentOutOfRangeException(nameof(field)),
+        };
+
+        Assert.Throws<ArgumentOutOfRangeException>(limits.Validate);
+    }
+
+    /// <summary>Duplicate invoke_skill retries return the existing invocation state instead of launching replacement work.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_DuplicateRetry_ReusesExistingInvocationResult()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new CapturingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+
+        var first = await tool.ExecuteAsync(input, context);
+        var duplicate = await tool.ExecuteAsync(input, context);
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
+        Assert.Contains("Do not run a replacement review workflow", duplicate.Value.Reason, StringComparison.Ordinal);
+        Assert.Contains("Do not run a replacement review workflow", duplicate.ModelResultContent, StringComparison.Ordinal);
+    }
+
+    /// <summary>Selector aliases resolve to one package-scoped duplicate key before workflow execution.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_DuplicateRetry_CanonicalizesSelectorAliases()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var catalog = package.CreateCatalog(SkillScope.Maintained);
+        var candidate = Assert.Single((await catalog.RefreshAsync()).Candidates);
+        var workflows = new CapturingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(
+            workflows,
+            TestPromptLoader.Instance,
+            catalog: catalog,
+            state: new InMemorySkillStateStore());
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var firstInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+        var exactSelector = $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}";
+        var aliasInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            JsonSerializer.Serialize(new { selector = exactSelector, input = new { mode = "pullRequest" } })));
+
+        var first = await tool.ExecuteAsync(firstInput, context);
+        var duplicate = await tool.ExecuteAsync(aliasInput, context);
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
+    }
+
+    /// <summary>Duplicate invoke_skill retries match a stringified JSON object to the native object key.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_DuplicateRetry_CanonicalizesStringifiedStructuredInput()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new CapturingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var firstInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+        var stringifiedInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
+
+        var first = await tool.ExecuteAsync(firstInput, context);
+        var duplicate = await tool.ExecuteAsync(stringifiedInput, context);
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("DuplicateOfExistingSkillInvocation", duplicate.Value.Status);
+    }
+
+    /// <summary>Equivalent stringified and native inputs share the duplicate key while the first invocation is still running.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_RunningInvocationUsesNormalizedStructuredInputKey()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new BlockingWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var stringifiedInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
+        var nativeInput = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+
+        var firstTask = tool.ExecuteAsync(stringifiedInput, context);
+        await workflows.Started.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var duplicate = await tool.ExecuteAsync(nativeInput, context);
+        workflows.Release.TrySetResult();
+        var first = await firstTask;
+
+        Assert.Equal(1, workflows.Executions);
+        Assert.Equal(first.Value.InvocationId, duplicate.Value.InvocationId);
+        Assert.Equal("Running", duplicate.Value.Status);
+    }
+
+    /// <summary>Startup cancellation clears a duplicate entry when no checkpoint or side effect exists.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_StartupCancellationDoesNotLeaveRunningDuplicate()
+    {
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var workflows = new CancelOnceWorkflowOrchestrator();
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+                OperationScope = scope,
+            });
+        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":{\"mode\":\"pullRequest\"}}"));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tool.ExecuteAsync(input, context));
+        var retry = await tool.ExecuteAsync(input, context);
+
+        Assert.Equal(2, workflows.Executions);
+        Assert.Equal("Completed", retry.Value.Status);
+    }
+
+    /// <summary>A stringified structured input receives provider-neutral corrective guidance.</summary>
+    [Fact]
+    public async Task InvokeSkillTool_StringifiedObjectFailureExplainsNativeJsonShape()
+    {
+        var workflows = new CapturingWorkflowOrchestrator
+        {
+            ResultStatus = SkillInvocationStatus.Failed,
+            ResultReason = "Skill value at $ does not match type 'object'.",
+        };
+        var tool = new InvokeSkillTool(workflows, TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(
+            ToolInvocationId.New(),
+            SessionId.New(),
+            RunId.New(),
+            new ToolInvocationContext
+            {
+                RepositoryPath = Environment.CurrentDirectory,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
+            });
+        var input = Assert.IsType<InvokeSkillInput>(tool.DeserializeInput(
+            "{\"selector\":\"review\",\"input\":\"{\\\"mode\\\":\\\"pullRequest\\\"}\"}"));
+
+        var execution = await tool.ExecuteAsync(input, context);
+
+        Assert.Contains("input was a JSON string", execution.Value.Reason, StringComparison.Ordinal);
+        Assert.Contains("native JSON value", execution.Value.Reason, StringComparison.Ordinal);
+        Assert.Contains("do not quote or JSON-encode", execution.Failure?.Message, StringComparison.Ordinal);
+        using var modelOutput = JsonDocument.Parse(execution.ModelResultContent!);
+        Assert.Equal(execution.Value.Reason, modelOutput.RootElement.GetProperty("reason").GetString());
     }
 
     /// <summary>Verifies content budgets stay asset-only while procedure tool metadata is preserved.</summary>
@@ -495,7 +755,7 @@ public sealed partial class SkillSubsystemTests
         Assert.True(modelRequest.Input.Length > request.HostBudget.ContentTokens * 8);
         var tool = Assert.Single(modelRequest.Tools, definition => definition.Name == "code_explore");
         Assert.True(tool.PreferStrictArguments);
-        Assert.False(modelRequest.AllowMultipleToolCalls);
+        Assert.True(modelRequest.AllowMultipleToolCalls);
     }
 
     /// <summary>Verifies required procedure assets cannot be silently dropped under context pressure.</summary>
@@ -732,7 +992,7 @@ public sealed partial class SkillSubsystemTests
         var source = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
         var discovered = (await source.RefreshAsync()).Candidates.Single(item =>
-            item.Metadata.SkillId.Value == "review-pr");
+            item.Metadata.SkillId.Value == "review");
         var first = discovered with
         {
             Metadata = discovered.Metadata with { Version = "1.0.0" },
@@ -779,13 +1039,26 @@ public sealed partial class SkillSubsystemTests
                 InvocationId = SkillInvocationId.New(),
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
-                Selector = "review-pr",
+                Selector = "review",
                 InputJson = "{}",
                 Trust = RepositoryTrustLevel.TrustedRead,
                 Phase = RunPhase.EvidenceCollection,
                 HostBudget = new SkillBudget(),
             }));
         Assert.Equal(pinned.Identity, compatibility.Candidate?.Identity);
+        var application = new SkillApplication(
+            catalog,
+            new PassThroughVerifier(),
+            new FixedSkillTrustPolicyProvider(new SkillTrustPolicySnapshot()),
+            compatibility,
+            orchestrator,
+            state,
+            new SkillPackageInstaller(Path.Combine(root, "store"), Path.Combine(root, "quarantine")));
+        var inspector = new InspectSkillTool(application, application, TestPromptLoader.Instance, new BoundedJsonSchemaValidator());
+        var inspection = await inspector.ExecuteAsync(
+            new InspectSkillInput { Selector = "review" },
+            new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), PermissionContext()));
+        Assert.Equal(SkillPolicyIdentity.FormatSelector(pinned), Assert.Single(inspection.Value.Skills).Selector);
     }
 
     /// <summary>Verifies migration 5 and durable pins/checkpoints round-trip.</summary>
@@ -1045,6 +1318,8 @@ public sealed partial class SkillSubsystemTests
     {
         public IReadOnlyList<ModelProfileId> Profiles { get; init; } = [];
 
+        public IReadOnlyList<string> InheritedTools { get; init; } = [];
+
         private readonly ModelProfileId _profileId = ModelProfileId.New();
 
         public SkillCompatibilityResult Evaluate(
@@ -1055,6 +1330,7 @@ public sealed partial class SkillSubsystemTests
             {
                 IsCompatible = true,
                 CompatibleModels = Profiles.Count > 0 ? Profiles : [_profileId],
+                InheritedTools = InheritedTools,
             };
         }
     }
@@ -1157,6 +1433,10 @@ public sealed partial class SkillSubsystemTests
     {
         public SkillInvocationStatus ResultStatus { get; init; } = SkillInvocationStatus.Completed;
 
+        public string ResultReason { get; init; } = "test complete";
+
+        public int Executions { get; private set; }
+
         internal SkillInvocationRequest? Request { get; private set; }
 
         public Task<SkillInvocationResult> InvokeAsync(
@@ -1164,6 +1444,7 @@ public sealed partial class SkillSubsystemTests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Executions++;
             Request = request;
             var package = PackageIdentity();
             var checkpoint = new SkillWorkflowCheckpoint
@@ -1197,7 +1478,7 @@ public sealed partial class SkillSubsystemTests
                         PayloadJson = "{\"question\":\"continue?\"}",
                     },
                 ],
-                Reason = "test complete",
+                Reason = ResultReason,
                 Checkpoint = checkpoint,
             });
         }
@@ -1225,13 +1506,151 @@ public sealed partial class SkillSubsystemTests
         }
     }
 
+    private sealed class BlockingWorkflowOrchestrator : ISkillWorkflowOrchestrator
+    {
+        public int Executions { get; private set; }
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<SkillInvocationResult> InvokeAsync(
+            SkillInvocationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Executions++;
+            Started.TrySetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            return CreateSkillResult(request, SkillInvocationStatus.Completed, "test complete");
+        }
+
+        public Task<SkillInvocationResult> ResumeAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<SkillInvocationResult> ContinueAsync(
+            SkillInvocationId invocationId,
+            string hostResultJson,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<bool> CancelAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(false);
+        }
+    }
+
+    private sealed class CancelOnceWorkflowOrchestrator : ISkillWorkflowOrchestrator
+    {
+        public int Executions { get; private set; }
+
+        public Task<SkillInvocationResult> InvokeAsync(
+            SkillInvocationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Executions++;
+            if (Executions == 1)
+            {
+                return Task.FromCanceled<SkillInvocationResult>(new CancellationToken(true));
+            }
+
+            return Task.FromResult(CreateSkillResult(request, SkillInvocationStatus.Completed, "test complete"));
+        }
+
+        public Task<SkillInvocationResult> ResumeAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<SkillInvocationResult> ContinueAsync(
+            SkillInvocationId invocationId,
+            string hostResultJson,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillInvocationResult>(new NotSupportedException());
+        }
+
+        public Task<bool> CancelAsync(
+            SkillInvocationId invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(false);
+        }
+    }
+
+    private static SkillInvocationResult CreateSkillResult(
+        SkillInvocationRequest request,
+        SkillInvocationStatus status,
+        string reason)
+    {
+        var package = PackageIdentity();
+        var checkpoint = new SkillWorkflowCheckpoint
+        {
+            WorkflowId = SkillWorkflowId.New(),
+            InvocationId = request.InvocationId,
+            SessionId = request.SessionId,
+            RunId = request.RunId,
+            WorkspaceId = request.WorkspaceId,
+            Package = package,
+            InputJson = request.InputJson,
+            Trust = request.Trust,
+            Phase = request.Phase,
+            EffectiveBudget = request.HostBudget,
+            Status = status,
+            NextAction = "test complete",
+            RecordedAt = DateTimeOffset.UtcNow,
+        };
+        return new SkillInvocationResult
+        {
+            InvocationId = request.InvocationId,
+            Package = package,
+            Status = status,
+            OutputJson = "{\"summary\":\"done\"}",
+            Reason = reason,
+            Checkpoint = checkpoint,
+        };
+    }
+
+    private sealed class NoopSkillInspectionHandlers :
+        ICommandHandler<InspectSkillCommand, SkillCatalogCandidate>,
+        ICommandHandler<ListSkillsCommand, IReadOnlyList<SkillCatalogCandidate>>
+    {
+        public Task<SkillCatalogCandidate> HandleAsync(
+            InspectSkillCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<SkillCatalogCandidate>(new NotSupportedException());
+        }
+
+        public Task<IReadOnlyList<SkillCatalogCandidate>> HandleAsync(
+            ListSkillsCommand command,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<IReadOnlyList<SkillCatalogCandidate>>(new NotSupportedException());
+        }
+    }
+
     private sealed class FixedProcedureRunner : ISkillProcedureRunner
     {
         private readonly string _output;
+        private readonly IReadOnlyList<SkillSideEffectRecord> _sideEffects;
 
-        internal FixedProcedureRunner(string output)
+        internal FixedProcedureRunner(
+            string output,
+            IReadOnlyList<SkillSideEffectRecord>? sideEffects = null)
         {
             _output = output;
+            _sideEffects = sideEffects ?? [];
         }
 
         public Task<SkillProcedureResult> RunAsync(
@@ -1242,12 +1661,18 @@ public sealed partial class SkillSubsystemTests
             string inputJson,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(new SkillProcedureResult(_output, ModelTurns: 1, ToolCalls: 0));
+            return Task.FromResult(new SkillProcedureResult(
+                _output,
+                ModelTurns: 1,
+                ToolCalls: _sideEffects.Count,
+                SideEffects: _sideEffects));
         }
     }
 
     private sealed class CapturingSkillToolModelProvider : IModelProvider
     {
+        public string Output { get; init; } = "{\"summary\":\"ok\"}";
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -1257,7 +1682,7 @@ public sealed partial class SkillSubsystemTests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            yield return new ModelChunk { Text = "{\"summary\":\"ok\"}" };
+            yield return new ModelChunk { Text = Output };
         }
     }
 
@@ -1296,6 +1721,9 @@ public sealed partial class SkillSubsystemTests
         private readonly Dictionary<SkillInvocationId, SkillWorkflowCheckpoint> _checkpoints = [];
         private readonly Dictionary<SkillId, SkillPackageIdentity> _pins = [];
         private readonly Dictionary<string, SkillVerificationRecord> _verifications = [];
+        private bool _checkpointSaveFailed;
+
+        public Func<SkillWorkflowCheckpoint, bool>? FailCheckpointSave { get; init; }
 
         public Task SaveVerificationAsync(
             SkillVerificationRecord verification,
@@ -1334,6 +1762,12 @@ public sealed partial class SkillSubsystemTests
             if (!matches)
             {
                 throw new SkillCheckpointConflictException();
+            }
+
+            if (!_checkpointSaveFailed && FailCheckpointSave?.Invoke(checkpoint) == true)
+            {
+                _checkpointSaveFailed = true;
+                throw new IOException("Injected checkpoint save failure.");
             }
 
             _checkpoints[checkpoint.InvocationId] = checkpoint;

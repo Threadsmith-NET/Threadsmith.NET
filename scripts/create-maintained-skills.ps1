@@ -77,10 +77,6 @@ function New-MaintainedSkill(
                 toolCalls = 12
                 mutations = 0
                 validationAttempts = 0
-                delegatedChildren = 0
-                parallelChildren = 0
-                worktrees = 0
-                reviewerFindings = 0
                 wallTime = '00:05:00'
             }
         } else {
@@ -91,14 +87,9 @@ function New-MaintainedSkill(
                 toolCalls = 24
                 mutations = 16
                 validationAttempts = 4
-                delegatedChildren = 8
-                parallelChildren = 4
-                worktrees = 2
-                reviewerFindings = 128
                 wallTime = '00:20:00'
             }
         }
-        agents = @()
         workflow = [ordered]@{
             schemaVersion = 1
             workflowId = $Id
@@ -280,61 +271,6 @@ Inspect central package management, all direct uses, relevant release constraint
 '@
         'schemas/plan-output.json' = $planOutput
         'schemas/host-result.json' = $hostResult
-    }
-
-New-MaintainedSkill -Folder 'review-pr' -Id 'review-pr' -DisplayName 'Pull Request Review' `
-    -Description 'Perform a bounded evidence-backed security, test, performance, and architecture review.' `
-    -Tags @('review', 'security', 'testing', 'architecture') -RequiredTools @('read_file', 'search', 'git_status') `
-    -MinimumTrust 'TrustedRead' -Workloads @('Review') `
-    -Steps @(
-        [ordered]@{ stepId='review'; kind='invokeProcedure'; dependsOn=@(); instructionAsset='instructions/review.md'; inputSchemaAsset='schemas/input.json'; outputSchemaAsset='schemas/review-output.json'; maximumIterations=1; hostAction=$null },
-        [ordered]@{ stepId='summarize'; kind='summarize'; dependsOn=@('review'); instructionAsset='instructions/summarize.md'; inputSchemaAsset='schemas/review-output.json'; outputSchemaAsset='schemas/review-output.json'; maximumIterations=1; hostAction=$null }
-    ) -Files @{
-        'instructions/review.md' = @'
-Review only the supplied change scope and admitted repository evidence. Find concrete correctness, security, performance, architecture, and test risks. Cite repository-relative paths and explain observable consequences. Do not propose cosmetic churn and do not mutate files. Return structured findings; use an empty findings array when no material issue is found.
-'@
-        'instructions/summarize.md' = @'
-Deduplicate related findings without deleting distinct reviewer opinions. Preserve severity, confidence, location, consequence, and recommended disposition. Return only the same review schema.
-'@
-        'schemas/input.json' = @'
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["changeSummary", "paths"],
-  "properties": {
-    "changeSummary": { "type": "string", "minLength": 1, "maxLength": 8000 },
-    "paths": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "type": "string", "maxLength": 512 } },
-    "focus": { "type": "array", "maxItems": 32, "items": { "type": "string", "maxLength": 128 } }
-  }
-}
-'@
-        'schemas/review-output.json' = @'
-{
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["findings", "summary"],
-  "properties": {
-    "summary": { "type": "string", "minLength": 1, "maxLength": 4000 },
-    "findings": {
-      "type": "array",
-      "maxItems": 128,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["category", "severity", "confidence", "path", "consequence", "recommendation"],
-        "properties": {
-          "category": { "type": "string", "maxLength": 128 },
-          "severity": { "type": "string", "enum": ["info", "warning", "blocking"] },
-          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "path": { "type": "string", "maxLength": 512 },
-          "consequence": { "type": "string", "maxLength": 2000 },
-          "recommendation": { "type": "string", "maxLength": 2000 }
-        }
-      }
-    }
-  }
-}
-'@
     }
 
 New-MaintainedSkill -Folder 'threadsmith-docs-help' -Id 'threadsmith-docs-help' -DisplayName 'Threadsmith Documentation Help' `

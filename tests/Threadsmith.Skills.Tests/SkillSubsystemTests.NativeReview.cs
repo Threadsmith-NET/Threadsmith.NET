@@ -11,12 +11,37 @@ using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
-    /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
-    [Theory]
-    [InlineData("review", "{}")]
-    [InlineData("review-pr", "{\"changeSummary\":\"Inspect change\",\"paths\":[\"tracked.txt\"]}")]
-    public async Task NativeReview_FailedResponseResumesThroughSelectedModel(string selector, string input)
+    /// <summary>Remote reviews scope findings to target-branch changes rather than unrelated base evolution.</summary>
+    [Fact]
+    public void NativeReview_RemoteBranchUsesMergeBaseDelta()
     {
+        var prompt = TestPromptLoader.Instance.Get(PromptFileNames.SkillReview);
+
+        Assert.Contains("git diff <base-ref>...<target-ref>", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not fall back to a direct two-tip tree comparison", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Compare the two trees directly", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR reviews gather inventory before delegation instead of making the lead ingest every diff page.</summary>
+    [Fact]
+    public void NativeReview_PullRequestUsesInventoryBeforeDelegation()
+    {
+        var prompt = TestPromptLoader.Instance.Get(PromptFileNames.SkillReview);
+
+        Assert.Contains("Start with kind:\"inventory\"", prompt, StringComparison.Ordinal);
+        Assert.Contains("Do not call kind:\"diff\" before delegation", prompt, StringComparison.Ordinal);
+        Assert.Contains("specialists to call pr_fetch", prompt, StringComparison.Ordinal);
+        Assert.Contains("kind:\"diff\" only when their assignment needs patch evidence", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("Always set kind:\"diff\"", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("follow its cursors with kind:\"diff\" through the complete page before delegating", prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
+    [Fact]
+    public async Task NativeReview_FailedResponseResumesThroughSelectedModel()
+    {
+        const string selector = "review";
+        const string input = """{"mode":"specialInstructions","instructions":"Review https://example.test/pull-requests/729"}""";
         var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
         await catalog.RefreshAsync();
         var verifier = new SkillPackageVerifier(new SkillTrustPolicySnapshot());
@@ -26,6 +51,7 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(SkillWorkflowStepKind.InvokeProcedure, step.Kind);
         Assert.Equal(PromptFileNames.SkillReview, step.PromptFile);
         Assert.Null(step.InstructionAsset);
+        Assert.Contains("delegate_agents", candidate.Metadata.Requirements.RequiredTools);
         var selected = ModelProfileId.New();
         var current = selected;
         var other = ModelProfileId.New();
@@ -71,10 +97,358 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(contextUsage.InputTokens, contextUsage.Components.Sum(item => item.Tokens));
         Assert.All(model.Requests, item =>
         {
+            Assert.Contains("https://example.test/pull-requests/729", item.Input, StringComparison.Ordinal);
             Assert.Equal(selected, item.ResolvedProfileId);
             Assert.Equal(ReasoningLevel.Medium, item.ReasoningLevel);
             Assert.Contains("Call delegate_agents", item.Input, StringComparison.Ordinal);
+            Assert.Contains("SecurityReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("TestReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("PerformanceReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("BugReviewer", item.Input, StringComparison.Ordinal);
+            Assert.Contains("ArchitectureReviewer", item.Input, StringComparison.Ordinal);
         });
+    }
+
+    /// <summary>A stringified review input object is unwrapped and validated through the same skill schema.</summary>
+    [Fact]
+    public async Task NativeReview_StringifiedObjectInput_IsCanonicalizedAsObject()
+    {
+        const string input = "\"{\\\"mode\\\":\\\"pullRequest\\\",\\\"url\\\":\\\"https://example.test/pull-requests/733\\\"}\"";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Review complete\"}"),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var result = await workflow.InvokeAsync(PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        });
+
+        Assert.Equal(SkillInvocationStatus.Completed, result.Status);
+        Assert.Equal(
+            "{\"mode\":\"pullRequest\",\"url\":\"https://example.test/pull-requests/733\"}",
+            result.Checkpoint.InputJson);
+    }
+
+    /// <summary>Artifact delivery must include the artifact metadata needed by the parent invocation.</summary>
+    [Fact]
+    public async Task NativeReview_ArtifactDeliveryRequiresArtifactMetadata()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Review saved\"}"),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        }));
+
+        Assert.Contains("missing required property 'artifact'", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Artifact delivery must correspond to a write_file side effect produced by the procedure.</summary>
+    [Fact]
+    public async Task NativeReview_ArtifactDeliveryRequiresObservedWriteFileSideEffect()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Review saved\",\"artifact\":{\"path\":\".inbox/review.md\",\"bytesWritten\":12}}"),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        }));
+
+        Assert.Contains("not observed in write_file side effects", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Artifact delivery cannot claim a different path that only shares the written file suffix.</summary>
+    [Fact]
+    public async Task NativeReview_ArtifactDeliveryRejectsSuffixOnlyPathMatch()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner(
+                "{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Review saved\",\"artifact\":{\"path\":\"/tmp/other/.inbox/review.md\",\"bytesWritten\":12}}",
+                [
+                    new SkillSideEffectRecord
+                    {
+                        Kind = "artifact",
+                        ToolId = "write_file",
+                        Path = ".inbox/review.md",
+                        BytesWritten = 12,
+                        RecordedAt = DateTimeOffset.UtcNow,
+                    },
+                ]),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        }));
+
+        Assert.Contains("not observed in write_file side effects", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Failures after artifact creation preserve the observed write in the durable checkpoint.</summary>
+    [Fact]
+    public async Task NativeReview_FailedProcedureCheckpointPreservesObservedSideEffect()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        var sideEffect = ReviewArtifactSideEffect();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new ThrowingProcedureRunner(new InvalidDataException("provider returned malformed output"), [sideEffect]),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+        var request = PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(request));
+
+        var checkpoint = await state.GetCheckpointAsync(request.InvocationId);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(SkillInvocationStatus.Failed, checkpoint.Status);
+        var step = Assert.Single(checkpoint.Steps);
+        Assert.False(step.Succeeded);
+        Assert.Equal(sideEffect, Assert.Single(step.SideEffects));
+    }
+
+    /// <summary>Save failures after a completed artifact step do not lose the observed side effect.</summary>
+    [Fact]
+    public async Task NativeReview_SaveFailureAfterCompletedStepPreservesObservedSideEffect()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var sideEffect = ReviewArtifactSideEffect();
+        var state = new InMemorySkillStateStore
+        {
+            FailCheckpointSave = checkpoint =>
+                checkpoint.Status == SkillInvocationStatus.Running
+                && checkpoint.Steps.Count == 1,
+        };
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner(
+                "{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Review saved\",\"artifact\":{\"path\":\".inbox/review.md\",\"bytesWritten\":12}}",
+                [sideEffect]),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+        var request = PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        };
+
+        await Assert.ThrowsAsync<IOException>(() => workflow.InvokeAsync(request));
+
+        var checkpoint = await state.GetCheckpointAsync(request.InvocationId);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(SkillInvocationStatus.Failed, checkpoint.Status);
+        var step = Assert.Single(checkpoint.Steps);
+        Assert.True(step.Succeeded);
+        Assert.Equal(sideEffect, Assert.Single(step.SideEffects));
+    }
+
+    /// <summary>Resume does not replay an incomplete step that already produced an artifact side effect.</summary>
+    [Fact]
+    public async Task NativeReview_ResumeRejectsIncompleteSideEffectingStep()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var verifier = new SkillPackageVerifier(new SkillTrustPolicySnapshot());
+        var candidate = await verifier.VerifyAsync(catalog.Resolve("review"));
+        var step = Assert.Single(candidate.Metadata.Workflow.Steps);
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        var sideEffect = ReviewArtifactSideEffect();
+        var request = PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        };
+        await state.SaveCheckpointAsync(
+            new SkillWorkflowCheckpoint
+            {
+                WorkflowId = SkillWorkflowId.New(),
+                InvocationId = request.InvocationId,
+                SessionId = request.SessionId,
+                RunId = request.RunId,
+                Package = candidate.Identity,
+                Scope = candidate.Provenance.Scope,
+                InputJson = input,
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                AvailableToolIds = ["delegate_agents"],
+                EffectiveBudget = new SkillBudget(),
+                Status = SkillInvocationStatus.Cancelled,
+                NextAction = "cancelled after write",
+                RecordedAt = DateTimeOffset.UtcNow,
+                Steps =
+                [
+                    new SkillWorkflowStepResult
+                    {
+                        StepId = step.StepId,
+                        Kind = step.Kind,
+                        Iteration = 1,
+                        Succeeded = false,
+                        SideEffects = [sideEffect],
+                        RecordedAt = DateTimeOffset.UtcNow,
+                    },
+                ],
+            },
+            expectedVersion: null);
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            verifier,
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Review complete\"}"),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => workflow.ResumeAsync(request.InvocationId));
+
+        Assert.Contains("side effects", error.Message, StringComparison.OrdinalIgnoreCase);
+        var checkpoint = await state.GetCheckpointAsync(request.InvocationId);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(SkillInvocationStatus.Cancelled, checkpoint.Status);
+        Assert.Equal(sideEffect, Assert.Single(Assert.Single(checkpoint.Steps).SideEffects));
     }
 
     /// <summary>An unavailable selected provider cannot silently dispatch work through a different root model.</summary>
@@ -168,6 +542,36 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(0, Assert.Single(result.Checkpoint.Steps).ModelTurns);
     }
 
+    private static SkillSideEffectRecord ReviewArtifactSideEffect()
+    {
+        return new SkillSideEffectRecord
+        {
+            Kind = "artifact",
+            ToolId = "write_file",
+            Path = ".inbox/review.md",
+            BytesWritten = 12,
+            RecordedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private sealed class ThrowingProcedureRunner(
+        Exception exception,
+        IReadOnlyList<SkillSideEffectRecord> sideEffects) : ISkillProcedureRunner
+    {
+        public Task<SkillProcedureResult> RunAsync(
+            SkillInvocationPlan plan,
+            SkillWorkflowStep step,
+            int iteration,
+            IReadOnlyList<SkillContextSegment> content,
+            string inputJson,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SkillProcedureInterruption.Attach(sideEffects, exception);
+            return Task.FromException<SkillProcedureResult>(exception);
+        }
+    }
+
     private sealed class SessionActivation(SessionId owner) : IProgressiveToolActivationPolicy
     {
         public bool IsActive(string toolId, SessionId sessionId, RunId runId) => sessionId == owner;
@@ -193,8 +597,8 @@ public sealed partial class SkillSubsystemTests
             {
                 Usage = new ModelUsage(10, 2),
                 Text = Requests.Count == 1
-                ? "{\"succeeded\":false,\"response\":\"# Review unavailable\\nAll specialists failed.\"}"
-                : "{\"succeeded\":true,\"response\":\"# Review complete\\nNo supported issue.\"}",
+                ? "{\"succeeded\":false,\"delivery\":\"inline\",\"response\":\"# Review unavailable\\nAll specialists failed.\"}"
+                : "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"# Review complete\\nNo supported issue.\"}",
             };
         }
     }

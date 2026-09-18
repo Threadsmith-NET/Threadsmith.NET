@@ -69,13 +69,8 @@
     "toolCalls": 12,
     "mutations": 0,
     "validationAttempts": 0,
-    "delegatedChildren": 0,
-    "parallelChildren": 0,
-    "worktrees": 0,
-    "reviewerFindings": 0,
     "wallTime": "00:05:00"
   },
-  "agents": [],
   "workflow": {
     "schemaVersion": 1,
     "workflowId": "threadsmith-docs-help",

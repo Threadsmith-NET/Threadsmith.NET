@@ -4,15 +4,15 @@ Status: Amended; the original private-review workflow is retired.
 
 ## Decision
 
-The maintained `review` and `review-pr` packages are ordinary native model procedures. Their editable `prompts/Skill-Review.md` directs evidence gathering with advertised tools, five specialist assignments through `delegate_agents`, structured response guidance, model synthesis and delivery through `write_file` or the window.
+The maintained `review` package is an ordinary native model procedure. Its editable `prompts/Skill-Review.md` directs evidence gathering with advertised tools, five specialist assignments through `delegate_agents`, structured response guidance, model synthesis and delivery through `write_file` or the window.
 
 The root uses the selected session model and reasoning frozen at invocation. Children use ordinary role configuration, falling back to that parent selection. Native model calls capture the same request-lifetime tool registrations as conversations and release them after tool execution/child joining. Host trust, tool enablement, approvals, scheduling and cancellation remain authoritative.
 
 `inherit` passes the parent's enabled, permitted tools to a `SharedWorkspace` child, including process execution, file tools, and skills when available. Tool metadata `SubagentAvailable` defaults to true; tools marked false are removed, including `delegate_agents`. Explicit `readOnly` keeps a narrower non-network inspection surface. Child-invoked skills preserve the filtered caller scope and model provenance through the shared pipeline. Caller snapshots are transient. Explicit host resume and continuation use the existing durable checkpoint and current-session revalidation, preserving host-action workflows after the calling request ends.
 
-No compiled recipe, private reviewer package, capture store, special reader, per-reviewer validator, deterministic deduplication, formatter or report writer remains. Remote acquisition uses existing advertised tools such as `run_process`; ordinary Git/read tools continue to address the invoking workspace. Prompts must supply remote evidence to children when it resides elsewhere.
+No compiled recipe, private reviewer package, review capture store, special reader, per-reviewer validator, deterministic deduplication, formatter or report writer remains. Remote branch acquisition uses advertised tools such as `run_process`; ordinary Git/read tools continue to address the invoking workspace. PR URL acquisition uses the ordinary `pr_fetch` tool (Plan 110), with compiled provider adapters and an operation-scoped, bounded tool acquisition cache shared with permitted children. This cache stores evidence, not review state, findings or reports. Prompts supply the captured remote identity and evidence to children; PR retrieval failure does not authorize a branch-tip substitute.
 
-Remote fetch requires the ordinary tool's trust, executable allowlist and approval configuration; package compatibility does not promise a usable fetch tool. Commit SHAs allow stable committed-source reads. Working-tree stability and coordinating shared edits remain part of the assigned task, without a review-specific freeze mechanism.
+Remote fetch requires the ordinary tool's trust, network/Secrets permissions and, for process tools, executable allowlist and approval configuration; package compatibility does not promise a usable fetch tool. Commit SHAs allow stable committed-source reads. Working-tree stability and coordinating shared edits remain part of the assigned task, without a review-specific freeze mechanism.
 
 ## Consequences
 

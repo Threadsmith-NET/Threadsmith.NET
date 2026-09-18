@@ -415,7 +415,6 @@ public sealed partial class SkillCatalog : ISkillCatalog, IUpdatableSkillCatalog
         SkillManifestValidator.ValidateBudget(metadata.Budget);
         SkillManifestValidator.ValidateWorkflow(metadata.Workflow, metadata.Assets);
         SkillManifestValidator.ValidateWorkflowBudget(metadata.Workflow, metadata.Budget);
-        SkillManifestValidator.ValidateAgents(metadata.Agents, metadata.Assets, metadata.Budget);
         if (metadata.Signature is not null)
         {
             ValidateText(metadata.Signature.SignerId, "signer id", options.MaximumTextCharacters);

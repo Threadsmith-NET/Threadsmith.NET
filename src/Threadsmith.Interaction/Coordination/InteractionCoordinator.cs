@@ -2252,6 +2252,11 @@ public sealed partial class InteractionCoordinator
                 + $"backoff {activeTurn.BackoffRoundsRemaining}: {activeTurn.Rationale}\n";
     }
 
+    private static string GetOutboundConsentPrompt(string toolId)
+        => toolId.Equals("pr_fetch", StringComparison.OrdinalIgnoreCase)
+            ? "Fetch Pull Request contacts the selected configured PR provider using host-managed credentials when configured. PR metadata, changed files and diff content are retrieved and supplied to the model as untrusted evidence. This tool cannot post reviews or modify repositories. Grant this repository-bound consent?"
+            : "Web Search may send query text to the configured provider. Selected results may be retrieved. An exact public HTTPS URL in your current request may be contacted only if the model invokes web_fetch; model-proposed destinations require separate inline approval. Fetched content is untrusted and supplied to the model. Grant this repository-bound consent?";
+
     private async Task EnsureCurrentUserUrlConsentAsync(
         string rawMessage,
         CancellationToken cancellationToken)
@@ -2413,7 +2418,7 @@ public sealed partial class InteractionCoordinator
                     if (state.ConsentRequired)
                     {
                         var confirmation = await _surface.SelectAsync(
-                            "Web Search may send query text to the configured provider. Selected results may be retrieved. An exact public HTTPS URL in your current request may be contacted only if the model invokes web_fetch; model-proposed destinations require separate inline approval. Fetched content is untrusted and supplied to the model. Grant this repository-bound consent?",
+                            GetOutboundConsentPrompt(state.Id),
                             ["No — keep disabled", "Yes — grant consent and enable"],
                             cancellationToken);
                         if (confirmation != 1)
@@ -3643,20 +3648,27 @@ public sealed partial class InteractionCoordinator
                 case "use":
                     (var selector, var input) = ParseSkillUse(remainder);
                     var invocationId = SkillInvocationId.New();
-                    var invoked = await controller.InvokeSkillAsync(
-                        new SkillInvocationRequest
-                        {
-                            InvocationId = invocationId,
-                            UseDefaultBudget = true,
-                            SessionId = sessionId,
-                            RunId = RunId.New(),
-                            Selector = selector,
-                            InputJson = input,
-                            Trust = trust,
-                            Phase = RunPhase.EvidenceCollection,
-                            HostBudget = new SkillBudget(),
-                        },
+                    var invoked = await RunCancellableSkillOperationAsync(
+                        token => controller.InvokeSkillAsync(
+                            new SkillInvocationRequest
+                            {
+                                InvocationId = invocationId,
+                                UseDefaultBudget = true,
+                                SessionId = sessionId,
+                                RunId = RunId.New(),
+                                Selector = selector,
+                                InputJson = input,
+                                Trust = trust,
+                                Phase = RunPhase.EvidenceCollection,
+                                HostBudget = new SkillBudget(),
+                            },
+                            token),
                         cancellationToken);
+                    if (invoked is null)
+                    {
+                        return;
+                    }
+
                     var invocationRole = invoked.Status == SkillInvocationStatus.Failed
                         ? PresentationTextRole.Warning
                         : PresentationTextRole.Status;
@@ -3668,7 +3680,14 @@ public sealed partial class InteractionCoordinator
 
                 case "continue":
                     (var continueId, var hostResult) = ParseSkillContinuation(remainder);
-                    var continued = await controller.ContinueSkillAsync(continueId, hostResult, cancellationToken);
+                    var continued = await RunCancellableSkillOperationAsync(
+                        token => controller.ContinueSkillAsync(continueId, hostResult, token),
+                        cancellationToken);
+                    if (continued is null)
+                    {
+                        return;
+                    }
+
                     await _surface.WriteAsync(
                         FormatSkillInvocation(continued),
                         PresentationTextRole.Status,
@@ -3681,7 +3700,14 @@ public sealed partial class InteractionCoordinator
                         throw new ArgumentException("Skill resume requires an invocation GUID.");
                     }
 
-                    var resumed = await controller.ResumeSkillAsync(new SkillInvocationId(resumeId), cancellationToken);
+                    var resumed = await RunCancellableSkillOperationAsync(
+                        token => controller.ResumeSkillAsync(new SkillInvocationId(resumeId), token),
+                        cancellationToken);
+                    if (resumed is null)
+                    {
+                        return;
+                    }
+
                     await _surface.WriteAsync(
                         FormatSkillInvocation(resumed),
                         PresentationTextRole.Status,
@@ -3733,12 +3759,7 @@ public sealed partial class InteractionCoordinator
                     return;
             }
         }
-        catch (Exception exception) when (exception is ArgumentException
-            or InvalidDataException
-            or InvalidOperationException
-            or KeyNotFoundException
-            or UnauthorizedAccessException
-            or NotSupportedException)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             await _surface.WriteAsync(
                 $"Skill command failed: {exception.Message}\n",

@@ -55,7 +55,7 @@
       "secretKeyReference": "secrets:models:anthropic",
       "models": [],
       "defaults": {
-        "requestOutputTokenReserve": 8192,
+        "requestOutputTokenReserve": 32768,
         "defaultReasoningLevel": "high",
         "timeoutSeconds": 120,
         "retryMaxAttempts": 3,

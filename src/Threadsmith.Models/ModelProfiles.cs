@@ -176,6 +176,9 @@ public sealed record ModelProfile
     /// <summary>Provider family, such as <c>openai-compatible</c>.</summary>
     public required string Provider { get; init; }
 
+    /// <summary>Optional instruction asset declared by the compiled provider registration.</summary>
+    public ModelProviderInstructionAsset? ProviderInstructionAsset { get; init; }
+
     /// <summary>Configured provider display name, or null for a legacy profile.</summary>
     public string? ProviderName { get; init; }
 

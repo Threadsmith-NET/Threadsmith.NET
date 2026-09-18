@@ -260,36 +260,8 @@ public sealed record SkillBudget
     /// <summary>Maximum validation attempts.</summary>
     public int ValidationAttempts { get; init; } = 4;
 
-    /// <summary>Maximum delegated children.</summary>
-    public int DelegatedChildren { get; init; } = 8;
-
-    /// <summary>Maximum parallel children.</summary>
-    public int ParallelChildren { get; init; } = 4;
-
-    /// <summary>Maximum managed worktrees.</summary>
-    public int Worktrees { get; init; } = 2;
-
-    /// <summary>Maximum reviewer findings.</summary>
-    public int ReviewerFindings { get; init; } = 128;
-
     /// <summary>Maximum wall-clock duration.</summary>
     public TimeSpan WallTime { get; init; } = TimeSpan.FromMinutes(20);
-}
-
-/// <summary>Optional bounded Plan-38 role template declared by a skill.</summary>
-public sealed record SkillAgentTemplate
-{
-    /// <summary>Eligible child role.</summary>
-    public required AgentRole Role { get; init; }
-
-    /// <summary>Maximum children with this role.</summary>
-    public int MaximumChildren { get; init; } = 1;
-
-    /// <summary>Structured result schema asset path.</summary>
-    public required string OutputSchemaPath { get; init; }
-
-    /// <summary>Role-specific resource ceiling.</summary>
-    public AgentResourceBudget Budget { get; init; } = new();
 }
 
 /// <summary>One node in a bounded declarative acyclic workflow.</summary>
@@ -380,9 +352,6 @@ public sealed record SkillManifestMetadata
 
     /// <summary>Package resource ceilings.</summary>
     public SkillBudget Budget { get; init; } = new();
-
-    /// <summary>Optional child-role templates.</summary>
-    public IReadOnlyList<SkillAgentTemplate> Agents { get; init; } = [];
 
     /// <summary>Declarative workflow graph.</summary>
     public required SkillWorkflowDefinition Workflow { get; init; }
@@ -623,6 +592,28 @@ public sealed record SkillHostActionProposal
     public required string PayloadJson { get; init; }
 }
 
+/// <summary>One externally visible side effect produced by a skill-owned tool call.</summary>
+public sealed record SkillSideEffectRecord
+{
+    /// <summary>Stable side-effect kind.</summary>
+    public required string Kind { get; init; }
+
+    /// <summary>Tool that produced the side effect.</summary>
+    public required string ToolId { get; init; }
+
+    /// <summary>Tool invocation that produced the side effect when known.</summary>
+    public ToolInvocationId? ToolInvocationId { get; init; }
+
+    /// <summary>Repository-relative or absolute path associated with the side effect, when any.</summary>
+    public string? Path { get; init; }
+
+    /// <summary>Produced byte count, when any.</summary>
+    public long? BytesWritten { get; init; }
+
+    /// <summary>When the host observed the side effect.</summary>
+    public required DateTimeOffset RecordedAt { get; init; }
+}
+
 /// <summary>One durable completed or waiting workflow step.</summary>
 public sealed record SkillWorkflowStepResult
 {
@@ -658,6 +649,9 @@ public sealed record SkillWorkflowStepResult
 
     /// <summary>Artifact references retained by the host.</summary>
     public IReadOnlyList<ExecutionArtifactReference> Artifacts { get; init; } = [];
+
+    /// <summary>Externally visible side effects produced while executing this step.</summary>
+    public IReadOnlyList<SkillSideEffectRecord> SideEffects { get; init; } = [];
 
     /// <summary>When the step reached this state.</summary>
     public required DateTimeOffset RecordedAt { get; init; }
@@ -931,7 +925,8 @@ public sealed class SkillCheckpointConflictException : InvalidOperationException
 public sealed record SkillProcedureResult(
     string OutputJson,
     int ModelTurns,
-    int ToolCalls);
+    int ToolCalls,
+    IReadOnlyList<SkillSideEffectRecord>? SideEffects = null);
 
 /// <summary>Runs one bounded procedure model turn and returns schema-targeted JSON.</summary>
 public interface ISkillProcedureRunner
@@ -980,6 +975,9 @@ public sealed record ListSkillsCommand(SkillCatalogQuery Query)
 
 /// <summary>Inspects one explicitly selected skill.</summary>
 public sealed record GetSkillCommand(string Selector) : ICommand<SkillCatalogCandidate>;
+
+/// <summary>Resolves and verifies a skill for invocation inspection, honoring existing pins.</summary>
+public sealed record InspectSkillCommand(string Selector) : ICommand<SkillCatalogCandidate>;
 
 /// <summary>Evaluates current compatibility without loading package bodies.</summary>
 public sealed record GetSkillCompatibilityCommand(

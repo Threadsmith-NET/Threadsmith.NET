@@ -154,10 +154,6 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
             ToolCalls = Math.Min(package.ToolCalls, host.ToolCalls),
             Mutations = Math.Min(package.Mutations, host.Mutations),
             ValidationAttempts = Math.Min(package.ValidationAttempts, host.ValidationAttempts),
-            DelegatedChildren = Math.Min(package.DelegatedChildren, host.DelegatedChildren),
-            ParallelChildren = Math.Min(package.ParallelChildren, host.ParallelChildren),
-            Worktrees = Math.Min(package.Worktrees, host.Worktrees),
-            ReviewerFindings = Math.Min(package.ReviewerFindings, host.ReviewerFindings),
             WallTime = package.WallTime < host.WallTime ? package.WallTime : host.WallTime,
         };
     }

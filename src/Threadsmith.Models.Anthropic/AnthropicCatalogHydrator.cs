@@ -221,10 +221,13 @@ public static class AnthropicCatalogHydrator
 
         var input = discovered.MaximumInputTokens ?? policy.MaximumInputTokens;
         var output = discovered.MaximumOutputTokens ?? policy.MaximumOutputTokens;
+        var requestOutputTokenReserve = output is > 0
+            ? Math.Min(defaults.RequestOutputTokenReserve, output.Value)
+            : defaults.RequestOutputTokenReserve;
         reason = "input/output limits or request reserve incompatible";
         if (input is not > 0 || output is not > 0 || output > input
-            || defaults.RequestOutputTokenReserve <= 0 || defaults.RequestOutputTokenReserve >= input
-            || defaults.RequestOutputTokenReserve > output)
+            || requestOutputTokenReserve <= 0 || requestOutputTokenReserve >= input
+            || requestOutputTokenReserve > output)
         {
             return null;
         }
@@ -248,7 +251,7 @@ public static class AnthropicCatalogHydrator
         reason = "reviewed thinking or caching policy incomplete";
         if (levels.Length == 0 || levels.Length > 16 || levels.Distinct().Count() != levels.Length
             || (thinking == AnthropicThinkingMode.Manual && policy.ManualThinkingBudgets.Any(pair =>
-                pair.Key == ReasoningLevel.None || pair.Value < 1024 || pair.Value >= defaults.RequestOutputTokenReserve))
+                pair.Key == ReasoningLevel.None || pair.Value < 1024 || pair.Value >= requestOutputTokenReserve))
             || (policy.PromptCachingEnabled && policy.MinimumCacheableTokens is not > 0))
         {
             return null;
@@ -288,7 +291,7 @@ public static class AnthropicCatalogHydrator
             Enabled = modelOverride?.Enabled ?? true,
             ContextWindow = input.Value,
             MaximumOutputTokens = output.Value,
-            RequestOutputTokenReserve = defaults.RequestOutputTokenReserve,
+            RequestOutputTokenReserve = requestOutputTokenReserve,
             Capabilities = new ModelCapabilitySet { Streaming = policy.SupportsStreaming, ToolCalls = policy.SupportsToolCalls, StructuredOutput = policy.SupportsStrictSchemas },
             Cost = new ModelCostMetadata
             {

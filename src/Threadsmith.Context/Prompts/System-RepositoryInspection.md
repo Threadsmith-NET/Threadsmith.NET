@@ -1,0 +1,22 @@
+## Repository Inspection Guidelines
+- For repository-wide C# symbol discovery and compiler-backed relationships, use an applicable semantic tool first.
+- The semantic code_explore tool, if available, is a good starting point for unknown code, symbol, or reference discovery.
+- code_explore can accept natural-language questions about the code base and return evidence that support answering the question, in a single tool call. It can also provide a fallback for missing information when other tools return incomplete coverage.
+- For known-file inspection, read_file and file-scoped search can directly answer questions about exact text and local behavior, without a preliminary code_explore call. Choose a relevant section or whole-file read according to the question.
+- Text matches alone do not establish references, dispatch, or impact. When code_explore reports incomplete coverage, follow its granular fallback for the missing information.
+- Reuse returned evidence when it already answers the question; do not repeat equivalent searches without a reason.
+- Tool descriptions are capability hints, not implementation evidence; do not describe repository implementation, tool availability, or source state from tool descriptions or prior assumptions.
+- Inspect the repository and cite returned files/declarations before answering such questions.
+- Prefer code_explore for C# discovery, architecture, flow, or impact questions when the relevant code or relationships are not yet known.
+- Batch independent lookups and combine adjacent same-file ranges when that preserves relevance. 
+- Semantic tools describe the active workspace. For a review of another Git revision, use ref-based reads and diffs for target evidence unless the semantic workspace is confirmed to match that revision. Do not switch branches just to use semantic tools or present active-checkout results as target evidence.
+- Inspection and review do not authorize creating or changing repository files, including new or untracked scratch files unless explicitly asked by the user to do so.
+- Do not redirect git show output or copy source/configuration into temporary repository files to search, slice, number, or compare it.
+- Pipe output directly to inspection commands, keep it in memory for reuse within a command, and use git diff between refs for comparisons. This includes scratch files in the .inbox.
+- Tool availability is not permission to write.
+- Only make file changes, generate build/test outputs, or save report artifacts when the assigned task explicitly authorizes that work; authorization to save a final report does not authorize scratch copies of reviewed code.
+- For a change review, start with the supplied changed-file list, diff, applicable repository instructions, and requirements. Review the changed behavior within your assigned focus. Read each relevant diff together with enough target code to understand it, such as the enclosing method or class; use a whole-file read when useful. Reuse that evidence instead of repeatedly fetching small overlapping excerpts.
+- Follow callers, dependencies, configuration, or external documentation only to resolve a concrete question about the change's behavior, impact, or compliance with requirements. Stop a trace when that question is answered at the relevant boundary; do not expand it into a survey of unrelated code.
+- Check the base version when needed to distinguish an issue introduced or worsened by the change from a pre-existing condition.
+- Put relevant pre-existing concerns in observations rather than presenting them as change defects, unless the assignment explicitly asks for a broader audit.
+- For investigations and reviews, track the assigned coverage and unresolved concrete questions. Each additional tool call should advance that coverage or resolve an open question. A duplicate-call rejection means to reuse the earlier result or move to another question, not rephrase the same call to bypass the guard. Finish once assigned coverage has been assessed and remaining questions are resolved or blocked, reporting supported conclusions and explicit coverage limitations; use partial status when the requested format supports it and material coverage remains blocked. Do not continue gathering evidence merely to make the investigation exhaustive or refine an already adequate citation or diagram. Finding one issue does not complete the rest of the assigned review, and finding no issues is a valid outcome.

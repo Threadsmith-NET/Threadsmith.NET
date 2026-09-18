@@ -650,7 +650,8 @@ internal static class ApplicationComposition
                         runSteering,
                         integration.Models.TrustedProvider,
                         activeTurnCompactionProfile,
-                        agentDisplay);
+                        agentDisplay,
+                        host.ExecutionLimits);
                     delegateAgentsTool = new DelegateAgentsTool(
                         new DelegateAgentsPlanFactory(
                             mutationCoordinator,
@@ -778,6 +779,7 @@ internal static class ApplicationComposition
                 integration.Models.Catalog,
                 "1.0.0",
                 trustedModels: integration.Models.TrustedCatalog);
+            var skillSchemas = new BoundedJsonSchemaValidator(skillSchemaOptions);
             var skillWorkflow = new SkillWorkflowOrchestrator(
                 compatibleSkillCatalog,
                 skillVerifier,
@@ -786,7 +788,7 @@ internal static class ApplicationComposition
                     new SkillContentLoader(host.Sanitizer, host.PromptLoader),
                     compatibleSkillCatalog,
                     host.Sanitizer),
-                new BoundedJsonSchemaValidator(skillSchemaOptions),
+                skillSchemas,
                 new ModelSkillProcedureRunner(
                     integration.Models.Provider,
                     tools.ToolRegistry,
@@ -831,7 +833,8 @@ internal static class ApplicationComposition
                     };
                 },
                 host.Events,
-                conversationToolSnapshots);
+                conversationToolSnapshots,
+                skillRuntimeLimits);
             var skillApplication = new SkillApplication(
                 compatibleSkillCatalog,
                 skillVerifier,
@@ -844,10 +847,19 @@ internal static class ApplicationComposition
                     Path.Combine(userProfile, ".threadsmith", "skill-quarantine"),
                     LoadSkillInstallerLimits(host.Configuration, host.TrustedConfiguration),
                     skillCatalogOptions));
-            var invokeSkillTool = new InvokeSkillTool(skillWorkflow, host.PromptLoader, skillRuntimeLimits);
+            var invokeSkillTool = new InvokeSkillTool(
+                skillWorkflow,
+                host.PromptLoader,
+                skillRuntimeLimits,
+                compatibleSkillCatalog,
+                persistence.SkillStateStore);
+            var inspectSkillTool = new InspectSkillTool(skillApplication, skillApplication, host.PromptLoader, skillSchemas, skillRuntimeLimits);
             tools.ToolRegistry.RegisterOrReplace(
                 invokeSkillTool,
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "invoke-skill"));
+            tools.ToolRegistry.RegisterOrReplace(
+                inspectSkillTool,
+                new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "inspect-skill"));
             var hookApplication = new HookManagementApplication(tools.HookCoordinator, persistence.HookStore, host.Events);
             var sessionLifecycle = new SessionLifecycleApplication(
                 host.Paths.RepositoryRoot,
@@ -923,6 +935,7 @@ internal static class ApplicationComposition
                 skillWorkflow,
                 tools.ToolRegistry,
                 invokeSkillTool,
+                inspectSkillTool,
                 delegateAgentsTool,
                 approvalPolicy,
                 planApprovalPolicy,
@@ -1401,6 +1414,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
     private readonly HybridRepositoryMemoryRetriever _memoryRetriever;
     private readonly DelegateAgentsTool? _delegateAgentsTool;
     private readonly InvokeSkillTool _invokeSkillTool;
+    private readonly InspectSkillTool _inspectSkillTool;
     private readonly TransactionalWorkspaceCoordinator _mutationCoordinator;
     private readonly SkillWorkflowOrchestrator _skillWorkflow;
     private readonly ToolRegistry _toolRegistry;
@@ -1414,6 +1428,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         SkillWorkflowOrchestrator skillWorkflow,
         ToolRegistry toolRegistry,
         InvokeSkillTool invokeSkillTool,
+        InspectSkillTool inspectSkillTool,
         DelegateAgentsTool? delegateAgentsTool,
         MutationApprovalPolicyService mutationApprovalPolicy,
         PlanApprovalPolicyService planApprovalPolicy,
@@ -1442,6 +1457,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         _skillWorkflow = skillWorkflow;
         _toolRegistry = toolRegistry;
         _invokeSkillTool = invokeSkillTool;
+        _inspectSkillTool = inspectSkillTool;
         _delegateAgentsTool = delegateAgentsTool;
         MutationApprovalPolicy = mutationApprovalPolicy;
         PlanApprovalPolicy = planApprovalPolicy;
@@ -1508,6 +1524,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
 
         _toolRegistry.Remove(_memoriesTool.Definition.Id, _memoriesTool);
         _toolRegistry.Remove(_invokeSkillTool.Definition.Id, _invokeSkillTool);
+        _toolRegistry.Remove(_inspectSkillTool.Definition.Id, _inspectSkillTool);
         await _skillWorkflow.DisposeAsync();
         await _agentScheduler.DisposeAsync();
         await _mutationCoordinator.DisposeAsync();

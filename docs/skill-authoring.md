@@ -28,7 +28,6 @@ Use `src/Threadsmith.Skills/MaintainedSkills/fix-analyzer-warnings/skill.json` a
 - immutable assets and hashes;
 - required/optional tool ids and minimum tool contract versions;
 - minimum trust, approval disclosures, compatible host range, configured-model requirements, and aggregate budget;
-- optional bounded Plan-38 role templates that remain proposals;
 - one acyclic `workflow` with a closed set of host-recognized steps;
 - optional detached signature envelope.
 
@@ -105,6 +104,6 @@ A model step may reference a code-declared deployed `promptFile` instead of a pa
 
 Optional step `successProperty` and `responseProperty` name top-level output fields. The former must be a boolean and determines execution success; the latter must be a string and supplies readable output. Include them in the output schema. A false success value preserves the response and fails the workflow; explicit resume reruns that failed procedure. Findings do not themselves mean execution failed.
 
-The maintained review packages use these generic contracts with `prompts/Skill-Review.md` and ordinary `delegate_agents`. There is no private reviewer package format or special host entry.
+The maintained review skill uses these generic contracts with `prompts/Skill-Review.md` and ordinary `delegate_agents`. Agent roles and assignment count come from the procedure prompt and tool input; manifests do not define per-skill agent templates or agent limits. Trusted `agents:delegation:maximumAgents` configuration caps each delegation call. There is no private reviewer package format or special host entry.
 
 Native procedures do not advertise recursive `invoke_skill` calls: the invoking tool owns its source lease until the procedure returns. Use the ordinary `delegate_agents` tool for child work.

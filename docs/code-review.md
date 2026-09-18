@@ -18,16 +18,13 @@ Choose the lead model with `/models` and its supported reasoning level with `/re
 
 Use `/tools` to enable `delegate_agents` and the tools needed for your review. The lead can gather evidence through Git tools, file/search/semantic tools, or `run_process`; it chooses from the enabled tools. Enable `invoke_skill` if you want to start the review through natural language. Enable `write_file` if you want a saved report. Fetching branches or running tests through `run_process` needs the usual process configuration and permissions. Skill verification does not grant tool permissions; the skill requires at least `TrustedRead`, and individual tools keep their normal requirements.
 
-To let the lead request all five specialists in one delegation call, allow at least five assignments in trusted user configuration. The default `agents:delegation:maximumAgents` is three; this is separate from the number that can run simultaneously. For five simultaneous reviewers, merge these settings into `%USERPROFILE%\.threadsmith\config.json` and restart:
+The default `agents:delegation:maximumAgents` is five, which lets the lead request all specialists in one delegation call. This is separate from the number that can run simultaneously. For five simultaneous reviewers, merge these settings into `%USERPROFILE%\.threadsmith\config.json` and restart:
 
 ```json
 {
   "agents": {
     "maxActiveGlobal": 5,
-    "maxActivePerParent": 5,
-    "delegation": {
-      "maximumAgents": 5
-    }
+    "maxActivePerParent": 5
   }
 }
 ```
@@ -48,13 +45,23 @@ Compare committed changes on the current branch with `main`:
 
 To include working changes, say so in `instructions`. Specify the intended base explicitly when it matters.
 
+### Review a pull request
+
+Configure a GitHub.com or Bitbucket Cloud account and enable `pr_fetch` as described in [PR retrieval](operations/pr-fetch.md). Supply the PR link in conversation, or invoke:
+
+```text
+/skills use Maintained:review@1.0.0 {"mode":"pullRequest","url":"https://bitbucket.org/workspace/repository/pull-requests/123"}
+```
+
+The lead obtains the provider's PR metadata and complete changed-file inventory with `kind:"inventory"` before delegation. Specialists fetch `kind:"diff"` pages only when their assigned review questions need patch evidence, and they verify returned PR metadata against the handoff. The review reports binary, omitted or incomplete coverage and does not substitute a branch comparison if retrieval fails. The five specialists, report sections and delivery remain the same. Natural language uses these same inputs; the model asks for an account when ambiguous.
+
 ### Review a remote branch
 
 ```text
 /skills use Maintained:review@1.0.0 {"mode":"remoteBranch","repository":"https://github.com/Threadsmith-NET/Threadsmith.NET.git","branch":"feature/plan-108-focused-review-skills","baseBranch":"main"}
 ```
 
-The shipped prompt tells the lead to use a PR diff when available, reuse suitable local refs, or fetch just the two branch tips with depth 1 and no tags. It requests a direct comparison of the two trees, without fetching history to find a merge base. Acquisition uses the ordinary enabled tools and their configured repository access.
+The shipped prompt tells the lead to use a PR diff when available. Otherwise it reuses suitable local refs or fetches the two requested refs and enough targeted history to resolve their merge base. The review covers changes introduced on the target branch since that merge base. If the merge base cannot be resolved, the review stops instead of substituting a direct comparison of the two branch-tip trees, which could misclassify newer base-branch work as a target-branch change. Acquisition uses the ordinary enabled tools and their configured repository access.
 
 ### Review specific behavior against documentation
 
@@ -70,24 +77,15 @@ The available `review` input fields are:
 
 | Field | Purpose |
 | --- | --- |
-| `mode` | `currentBranchChanges`, `remoteBranch`, or `specialInstructions`. |
+| `mode` | `currentBranchChanges`, `remoteBranch`, `pullRequest`, or `specialInstructions`. |
+| `url`, `provider` | Required PR web URL and optional configured account ID for `pullRequest`; the tool selects the matching account from configured URL patterns. |
 | `baseBranch` | The comparison base. |
 | `repository`, `branch` | The remote repository and source branch. |
 | `instructions` | Review goals, situational instructions, and whether to include working changes. |
 | `paths` | Repository-relative paths to focus on. |
 | `requirementsDocumentPath`, `requirementsSource` | A requirements file and whether it comes from `workspace` or `reviewTarget`. |
 
-There is no `prUrl` field in this input schema. Supply a PR link in natural language or in `instructions`, along with enough information to identify the target.
-
-### The `review-pr` alternative
-
-`Maintained:review-pr@1.0.0` uses the same lead prompt and specialist roles, but accepts an explicit change summary, paths, and optional focus areas. Verify and enable that package separately if using it:
-
-```text
-/skills use Maintained:review-pr@1.0.0 {"changeSummary":"Rotate raw model logs at startup and on /new, preserving previous sessions with numbered archives.","paths":["src/Threadsmith.Models/ModelExchangeLogging.cs","src/Threadsmith.Execution/SessionLifecycleApplication.cs","src/Threadsmith.App/ModelComposition.cs","tests/Threadsmith.ModelTooling.Tests/JsonlModelExchangeLogTests.cs"],"focus":["correctness","tests","architecture"]}
-```
-
-Despite its name, `review-pr` takes a change description and paths, not a PR URL.
+Use `url` for a PR link; there is no `prUrl` field. Normally omit `provider`; the tool reports ambiguity if multiple configured accounts match, so the model can ask which account to use.
 
 ## Invoke through natural language
 
@@ -167,7 +165,7 @@ The behavior above describes the current shipped prompts. The lead's instruction
 
 | Purpose | Source file |
 | --- | --- |
-| Lead for both `review` and `review-pr` | `src/Threadsmith.Skills/Prompts/Skill-Review.md` |
+| Lead | `src/Threadsmith.Skills/Prompts/Skill-Review.md` |
 | Security | `src/Threadsmith.Execution/Prompts/System-ChildAgent-SecurityReviewer.md` |
 | Tests | `src/Threadsmith.Execution/Prompts/System-ChildAgent-TestReviewer.md` |
 | Performance | `src/Threadsmith.Execution/Prompts/System-ChildAgent-PerformanceReviewer.md` |

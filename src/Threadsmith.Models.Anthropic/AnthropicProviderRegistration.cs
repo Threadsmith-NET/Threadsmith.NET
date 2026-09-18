@@ -13,6 +13,9 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
     public string TypeDiscriminator => "anthropic";
 
     /// <inheritdoc />
+    public ModelProviderInstructionAsset? ProviderInstructionAsset => null;
+
+    /// <inheritdoc />
     public Type ProviderConfigurationType => typeof(AnthropicProviderConfiguration);
 
     /// <inheritdoc />

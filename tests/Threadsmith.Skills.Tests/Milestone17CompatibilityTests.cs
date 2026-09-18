@@ -250,7 +250,7 @@ public sealed class Milestone17CompatibilityTests
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 Selector = "claude:Repository:portable-review",
-                InputJson = "{\"target\":\"repository\"}",
+                InputJson = "\"Review https://example.test/pull-requests/729\"",
                 Trust = RepositoryTrustLevel.TrustedRead,
                 Phase = RunPhase.EvidenceCollection,
                 HostBudget = new SkillBudget(),
@@ -263,6 +263,7 @@ public sealed class Milestone17CompatibilityTests
         Assert.Contains(runner.Content, item => item.AssetPath == "SKILL.md"
             && item.Content.Contains("Review this repository.", StringComparison.Ordinal));
         Assert.Equal("{\"summary\":\"ok\"}", result.OutputJson);
+        Assert.Equal("\"Review https://example.test/pull-requests/729\"", runner.InputJson);
     }
 
     /// <summary>A changed Claude source cannot verify or resume under an earlier digest selector.</summary>
@@ -693,6 +694,8 @@ public sealed class Milestone17CompatibilityTests
 
     private sealed class CapturingProcedureRunner : ISkillProcedureRunner
     {
+        public string? InputJson { get; private set; }
+
         public IReadOnlyList<SkillContextSegment> Content { get; private set; } = [];
 
         public Task<SkillProcedureResult> RunAsync(
@@ -705,6 +708,7 @@ public sealed class Milestone17CompatibilityTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Content = content;
+            InputJson = inputJson;
             return Task.FromResult(new SkillProcedureResult("{\"summary\":\"ok\"}", 1, 0));
         }
     }
@@ -805,6 +809,8 @@ public sealed class Milestone17CompatibilityTests
     private sealed class TestProviderRegistration : IModelProviderRegistration
     {
         public string TypeDiscriminator => "test";
+
+        public ModelProviderInstructionAsset? ProviderInstructionAsset => null;
 
         public Type ProviderConfigurationType => typeof(TestProviderConfiguration);
 

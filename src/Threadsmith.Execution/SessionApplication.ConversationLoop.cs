@@ -23,6 +23,8 @@ public sealed partial class SessionApplication
         var maximumPlanningToolRounds = _limits.MaxPlanningToolRounds;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var invocationContext = await CreateToolInvocationContextAsync(registration, cancellationToken);
+        await using var operationScope = new ToolOperationScope(cancellationToken);
+        invocationContext = invocationContext is null ? null : invocationContext with { OperationScope = operationScope };
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
         using var loopState = new ConversationLoopState(
             _limits.MaxStructuredOutputCharacters,
@@ -455,7 +457,10 @@ public sealed partial class SessionApplication
             context,
             usageRequestId,
             modelRequest,
-            loopState.LastGroupSequence);
+            loopState.LastGroupSequence)
+        {
+            ToolRegistrations = conversationTools.Registrations,
+        };
     }
 
     private async Task<(SessionModelPreferenceSnapshot? Preference, ContextAssemblyResult Context)>
@@ -1193,8 +1198,8 @@ public sealed partial class SessionApplication
 
         foreach (var call in streamState.PendingToolCalls)
         {
-            loopState.InvokedToolKeys.Add(CreateToolKey(call.ToolName, call.ArgumentsJson));
-            if (IsSemanticInspectionTool(call.ToolName))
+            loopState.InvokedToolCalls.TryAdd(call.ToolName, call.ArgumentsJson);
+            if (SemanticFirstSearchPolicy.IsSemanticInspectionTool(call.ToolName))
             {
                 loopState.SemanticToolAttempted = true;
             }
@@ -1291,7 +1296,7 @@ public sealed partial class SessionApplication
             .Select(tool => tool.Name)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var semanticToolAttempted = loopState.SemanticToolAttempted;
-        var observedToolKeys = new HashSet<string>(loopState.InvokedToolKeys, StringComparer.Ordinal);
+        var observedToolCalls = new ToolCallHistory(loopState.InvokedToolCalls);
         foreach (var call in pendingCalls.OrderBy(item => item.Ordinal))
         {
             if (!availableToolIds.Contains(call.ToolName))
@@ -1305,11 +1310,12 @@ public sealed partial class SessionApplication
                 return true;
             }
 
-            if (TryCreateSemanticFirstSearchCorrection(
+            if (SemanticFirstSearchPolicy.TryCreateCorrection(
                 new ToolRequestModelOutput(call.ToolName, call.ArgumentsJson),
                 round.InvocationContext,
                 semanticToolAttempted,
                 round.ModelTools,
+                RequireCorrectiveMessages(),
                 out var semanticFirstContent))
             {
                 diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
@@ -1321,8 +1327,8 @@ public sealed partial class SessionApplication
                 return true;
             }
 
-            var toolKey = CreateToolKey(call.ToolName, call.ArgumentsJson);
-            if (!observedToolKeys.Add(toolKey))
+            var definition = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)).Tool.Definition;
+            if (!observedToolCalls.TryAdd(definition, call.ArgumentsJson))
             {
                 diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
                     MalformedInvocationFailureKind.PhaseInvalidTool,
@@ -1333,7 +1339,7 @@ public sealed partial class SessionApplication
                 return true;
             }
 
-            if (IsSemanticInspectionTool(call.ToolName))
+            if (SemanticFirstSearchPolicy.IsSemanticInspectionTool(call.ToolName))
             {
                 semanticToolAttempted = true;
             }
@@ -1351,11 +1357,7 @@ public sealed partial class SessionApplication
         MalformedInvocationDiagnostic diagnostic,
         CancellationToken cancellationToken)
     {
-        if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out var attemptNumber))
-        {
-            throw new MalformedInvocationException(diagnostic);
-        }
-
+        var attemptNumber = correctiveTurns.BeginAttemptOrThrow(diagnostic, round.ModelRound, maximumModelRounds);
         var failureSummary = RequireCorrectiveMessages().CreateToolBatchFailureSummary(
             diagnostic.ToolOrdinal,
             diagnostic.ToolName,
@@ -1524,11 +1526,6 @@ public sealed partial class SessionApplication
         }
 
         return correctiveTurns.TryBeginAttempt(out attemptNumber);
-    }
-
-    private static string CreateToolKey(string toolName, string argumentsJson)
-    {
-        return $"{toolName}|{argumentsJson}";
     }
 
     private static SemanticConfidenceLevel ReadSemanticConfidence(string toolId, string content)
@@ -2483,7 +2480,10 @@ public sealed partial class SessionApplication
         ContextAssemblyResult? Context,
         ModelRequestUsageId UsageRequestId,
         ModelStreamRequest ModelRequest,
-        long DeliveredThroughGroupSequence);
+        long DeliveredThroughGroupSequence)
+    {
+        public IReadOnlyList<ToolRegistration> ToolRegistrations { get; init; } = [];
+    }
 
     private sealed record ConversationRoundOutcome(
         ImplementationPlan? Plan,
@@ -2695,7 +2695,7 @@ public sealed partial class SessionApplication
 
         public ModelRequestTransientState TransientState { get; } = new();
 
-        public HashSet<string> InvokedToolKeys { get; } = new(StringComparer.Ordinal);
+        public ToolCallHistory InvokedToolCalls { get; } = new();
 
         public long LastGroupSequence => _nextGroupSequence - 1;
 

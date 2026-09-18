@@ -277,6 +277,8 @@ public sealed partial class Milestone19Tests
 
             var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
             Assert.Equal(ModelMessageRole.System, messages[0].Role);
+            Assert.Contains(TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection), messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Contains(result.Inspection.PromptAssets, asset => asset.Source == PromptFileNames.SystemRepositoryInspection);
             Assert.Equal("current-user", messages[^1].SectionId);
             Assert.Contains("current question", messages[^1].Content[0].Content, StringComparison.Ordinal);
             Assert.DoesNotContain(

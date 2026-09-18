@@ -3,10 +3,38 @@ namespace Threadsmith.Skills.Tests;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
+using Threadsmith.Telemetry;
+using Threadsmith.Tools;
 using Xunit;
 
 public sealed partial class SkillSubsystemTests
 {
+    /// <summary>A single JSON Markdown fence does not discard an otherwise valid declared result.</summary>
+    [Fact]
+    public async Task SkillProcedure_UnwrapsCompleteJsonFence()
+    {
+        var model = new CapturingSkillToolModelProvider
+        {
+            Output = "```json\r\n{\"summary\":\"ok\"}\r\n```",
+        };
+        var registry = new ToolRegistry([]);
+        var runner = new ModelSkillProcedureRunner(
+            model,
+            registry,
+            new ThrowingToolInvocationPipeline(),
+            new SecretOutputSanitizer(),
+            (_, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return Task.FromResult(PermissionContext());
+            },
+            TestPromptLoader.Instance);
+
+        var result = await runner.RunAsync(PermissionPlan(), PermissionStep(), 1, [], "{}");
+
+        Assert.Equal("{\"summary\":\"ok\"}", result.OutputJson);
+    }
+
     /// <summary>Skill turns inherit supported profile defaults independently of reasoning visibility.</summary>
     [Theory]
     [InlineData("high", false)]
@@ -80,7 +108,7 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(continuation.Messages[1].ToolCallId, continuation.Messages[2].ToolCallId);
         Assert.Equal(denyTool, continuation.Messages[2].IsError);
         var instructions = Assert.Single(continuation.Messages[0].Content).Content;
-        Assert.Contains("Return only JSON matching the declared output schema.", instructions, StringComparison.Ordinal);
+        Assert.Contains(TestPromptLoader.Instance.Get(PromptFileNames.SkillProcedureSystem).ReplaceLineEndings(Environment.NewLine), instructions, StringComparison.Ordinal);
         Assert.Contains("Continue the declared procedure. Return only output-schema JSON.", continuation.Input, StringComparison.Ordinal);
         var toolResult = Assert.Single(continuation.Messages[2].Content).Content;
         Assert.Contains(toolResult, continuation.Input, StringComparison.Ordinal);

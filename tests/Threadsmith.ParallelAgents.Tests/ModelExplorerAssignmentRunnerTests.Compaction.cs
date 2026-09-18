@@ -409,6 +409,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public EvidenceId FirstEvidenceId { get; set; }
 
+        public bool RepeatAfterCompaction { get; init; }
+
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
             Requests.Add(request);
@@ -436,12 +438,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
                 if (_round < 2)
                 {
-                    yield return new ModelChunk { Output = new ToolRequestModelOutput(_toolId, "{}") };
+                    yield return new ModelChunk { Output = new ToolRequestModelOutput(_toolId, JsonSerializer.Serialize(new { path = $"src/File{_round}.cs" })) };
                 }
                 else if (_round == 2)
                 {
                     yield return new ModelChunk { Output = new ToolRequestModelOutput(ChildAgentEvidenceTool.ToolId, JsonSerializer.Serialize(new { evidenceId = FirstEvidenceId.Value })) };
-                    yield return new ModelChunk { Output = new ToolRequestModelOutput(_toolId, "{}") };
+                    yield return new ModelChunk { Output = new ToolRequestModelOutput(_toolId, JsonSerializer.Serialize(new { path = $"src/File{(RepeatAfterCompaction ? 0 : _round)}.cs" })) };
                 }
                 else
                 {

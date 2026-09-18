@@ -561,12 +561,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 step.OutputSchemaAsset,
                 procedure.OutputJson,
                 cancellationToken);
-            var validated = ValidateArtifactDeliveryContract(
-                candidate,
-                step,
-                validatedOutput,
-                sideEffects);
-            using var output = System.Text.Json.JsonDocument.Parse(validated);
+            using var output = System.Text.Json.JsonDocument.Parse(validatedOutput);
             return new SkillWorkflowStepResult
             {
                 Succeeded = step.SuccessProperty is null || output.RootElement.GetProperty(step.SuccessProperty).GetBoolean(),
@@ -574,7 +569,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 StepId = step.StepId,
                 Kind = step.Kind,
                 Iteration = iteration,
-                OutputJson = validated,
+                OutputJson = validatedOutput,
                 ContentTokens = content.Sum(item => item.EstimatedTokens),
                 ModelTurns = procedure.ModelTurns,
                 ToolCalls = procedure.ToolCalls,
@@ -796,85 +791,6 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             return _schemas.Validate(schema, embeddedJson);
         }
-    }
-
-    private static string ValidateArtifactDeliveryContract(
-        SkillCatalogCandidate candidate,
-        SkillWorkflowStep step,
-        string valueJson,
-        IReadOnlyList<SkillSideEffectRecord> sideEffects)
-    {
-        if (!RequiresArtifactDeliveryContract(candidate, step))
-        {
-            return valueJson;
-        }
-
-        using var document = System.Text.Json.JsonDocument.Parse(valueJson);
-        if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
-            || !document.RootElement.TryGetProperty("delivery", out var delivery)
-            || delivery.ValueKind != System.Text.Json.JsonValueKind.String
-            || !string.Equals(delivery.GetString(), "artifact", StringComparison.Ordinal))
-        {
-            return valueJson;
-        }
-
-        if (!document.RootElement.TryGetProperty("artifact", out var artifact))
-        {
-            throw new InvalidDataException("Skill value declares artifact delivery but is missing required property 'artifact'.");
-        }
-
-        if (artifact.ValueKind != JsonValueKind.Object
-            || !artifact.TryGetProperty("path", out var pathElement)
-            || pathElement.ValueKind != JsonValueKind.String
-            || pathElement.GetString() is not { Length: > 0 } path
-            || !artifact.TryGetProperty("bytesWritten", out var bytesElement)
-            || bytesElement.ValueKind != JsonValueKind.Number
-            || !bytesElement.TryGetInt64(out var bytesWritten))
-        {
-            throw new InvalidDataException("Skill value declares artifact delivery but has incomplete artifact metadata.");
-        }
-
-        if (!sideEffects.Any(item => IsMatchingArtifactSideEffect(item, path, bytesWritten)))
-        {
-            throw new InvalidDataException("Skill value declares artifact delivery that was not observed in write_file side effects.");
-        }
-
-        return valueJson;
-    }
-
-    private static bool IsMatchingArtifactSideEffect(
-        SkillSideEffectRecord sideEffect,
-        string declaredPath,
-        long declaredBytesWritten)
-    {
-        return sideEffect.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
-            && sideEffect.ToolId.Equals("write_file", StringComparison.OrdinalIgnoreCase)
-            && sideEffect.BytesWritten == declaredBytesWritten
-            && sideEffect.Path is { Length: > 0 } observedPath
-            && ArtifactPathsMatch(declaredPath, observedPath);
-    }
-
-    private static bool ArtifactPathsMatch(string declaredPath, string observedPath)
-    {
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var declared = NormalizeArtifactClaimPath(declaredPath);
-        var observed = NormalizeArtifactClaimPath(observedPath);
-        return string.Equals(declared, observed, comparison);
-    }
-
-    private static string NormalizeArtifactClaimPath(string path)
-    {
-        return path.Replace('\\', '/').TrimEnd('/');
-    }
-
-    private static bool RequiresArtifactDeliveryContract(
-        SkillCatalogCandidate candidate,
-        SkillWorkflowStep step)
-    {
-        return candidate.Provenance.Scope == SkillScope.Maintained
-            && candidate.Metadata.SkillId.Value.Equals("review", StringComparison.Ordinal)
-            && step.Kind == SkillWorkflowStepKind.InvokeProcedure
-            && step.OutputSchemaAsset?.Equals("schemas/output.json", StringComparison.Ordinal) == true;
     }
 
     private static bool IsRootTypeMismatch(InvalidDataException exception)

@@ -658,6 +658,14 @@ public static class Milestone4Tests
         Assert.False(properties.TryGetProperty("revision", out _));
         var stepSchema = properties.GetProperty("steps").GetProperty("items");
         Assert.False(stepSchema.GetProperty("properties").TryGetProperty("stepId", out _));
+        var fileIntentsSchema = stepSchema.GetProperty("properties").GetProperty("fileIntents");
+        Assert.Equal(1, fileIntentsSchema.GetProperty("minItems").GetInt32());
+        Assert.Contains("Every step must declare at least one concrete file change", fileIntentsSchema.GetProperty("description").GetString(), StringComparison.Ordinal);
+        var destinationPathSchema = fileIntentsSchema.GetProperty("items").GetProperty("properties").GetProperty("destinationPath");
+        Assert.Equal(
+            ["string", "null"],
+            destinationPathSchema.GetProperty("type").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("Required for Move/Rename", destinationPathSchema.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.Equal(2, projection.Plan?.Plan.SchemaVersion);
         Assert.Equal(1, projection.Plan?.Plan.Revision);
         Assert.NotEqual(default, projection.Plan?.Plan.Steps[0].StepId);

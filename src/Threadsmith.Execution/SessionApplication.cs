@@ -738,6 +738,8 @@ public sealed partial class SessionApplication :
                   "description": { "type": "string", "maxLength": {{limits.MaximumDescriptionCharacters}} },
                   "fileIntents": {
                     "type": "array",
+                    "description": "Every step must declare at least one concrete file change. Put review-only or verification work in a relevant step's validation array.",
+                    "minItems": 1,
                     "maxItems": {{limits.MaximumMetadataItems}},
                     "items": {
                       "type": "object",
@@ -746,7 +748,11 @@ public sealed partial class SessionApplication :
                       "properties": {
                         "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
                         "path": { "type": "string", "maxLength": {{limits.MaximumPathCharacters}} },
-                        "destinationPath": { "type": "string", "maxLength": {{limits.MaximumPathCharacters}} }
+                        "destinationPath": {
+                          "type": ["string", "null"],
+                          "description": "Required for Move/Rename: the repository-relative destination path. Omit for Modify/Create/Delete; use null if the transport requires this property.",
+                          "maxLength": {{limits.MaximumPathCharacters}}
+                        }
                       }
                     }
                   },

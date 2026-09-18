@@ -141,10 +141,11 @@ internal static class SemanticFirstSearchPolicy
 
     private static bool ContainsDeclarationKeyword(string query)
     {
-        return query.Contains("class", StringComparison.OrdinalIgnoreCase)
-            || query.Contains("interface", StringComparison.OrdinalIgnoreCase)
-            || query.Contains("record", StringComparison.OrdinalIgnoreCase)
-            || query.Contains("struct", StringComparison.OrdinalIgnoreCase);
+        return ExtractIdentifierTokens(query).Any(static token =>
+            token.Equals("class", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("interface", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("record", StringComparison.OrdinalIgnoreCase)
+            || token.Equals("struct", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool LooksLikeExactCSharpPathQuery(string query)

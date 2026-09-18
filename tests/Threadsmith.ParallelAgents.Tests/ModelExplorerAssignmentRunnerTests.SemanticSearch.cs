@@ -55,6 +55,42 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
     }
 
+    /// <summary>Declaration keywords are matched as tokens; prose substrings do not force semantic lookup.</summary>
+    [Theory]
+    [InlineData("structured output")]
+    [InlineData("recording failures")]
+    public async Task RunAsync_SearchForDeclarationKeywordSubstring_DoesNotForceSemanticLookup(string query)
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var profile = CreateProfile();
+        var search = new InspectMetadataTool(toolId: "search");
+        var semantic = new InspectMetadataTool(toolId: "code_explore");
+        var registry = new ToolRegistry([search, semantic]);
+        string[] toolIds = [search.Definition.Id, semantic.Definition.Id];
+        var assignment = CreateAssignment(profile.Id, toolIds);
+        var plan = CreatePlan(assignment);
+        var call = new ToolRequestModelOutput("search", JsonSerializer.Serialize(new { query }));
+        var provider = new ToolBatchSequenceProvider([[call], []]);
+        var runner = CreateRunner(
+            provider,
+            CreatePipeline(registry, events, sanitizer),
+            evidence,
+            sanitizer,
+            profile,
+            CreateParentContext(plan, toolIds),
+            registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId));
+
+        var outcome = await runner.RunAsync(plan, assignment);
+
+        Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        Assert.Equal(0, outcome.Usage.Corrections);
+        Assert.NotNull(search.LastInvocationContext);
+        Assert.Null(semantic.LastInvocationContext);
+        Assert.Single(evidence.Snapshot(plan.Provenance.SessionId));
+    }
+
     /// <summary>Ref-based reads remain valid when the review target differs from the active semantic workspace.</summary>
     [Fact]
     public async Task RunAsync_RemoteRevisionRead_DoesNotForceActiveWorkspaceSemanticTools()

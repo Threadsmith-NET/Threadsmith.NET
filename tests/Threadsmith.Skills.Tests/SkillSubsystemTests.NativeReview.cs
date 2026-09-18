@@ -275,6 +275,130 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains("not observed in write_file side effects", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Failures after artifact creation preserve the observed write in the durable checkpoint.</summary>
+    [Fact]
+    public async Task NativeReview_FailedProcedureCheckpointPreservesObservedSideEffect()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        var sideEffect = ReviewArtifactSideEffect();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new ThrowingProcedureRunner(new InvalidDataException("provider returned malformed output"), [sideEffect]),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+        var request = PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        };
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(request));
+
+        var checkpoint = await state.GetCheckpointAsync(request.InvocationId);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(SkillInvocationStatus.Failed, checkpoint.Status);
+        var step = Assert.Single(checkpoint.Steps);
+        Assert.False(step.Succeeded);
+        Assert.Equal(sideEffect, Assert.Single(step.SideEffects));
+    }
+
+    /// <summary>Resume does not replay an incomplete step that already produced an artifact side effect.</summary>
+    [Fact]
+    public async Task NativeReview_ResumeRejectsIncompleteSideEffectingStep()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var verifier = new SkillPackageVerifier(new SkillTrustPolicySnapshot());
+        var candidate = await verifier.VerifyAsync(catalog.Resolve("review"));
+        var step = Assert.Single(candidate.Metadata.Workflow.Steps);
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        var sideEffect = ReviewArtifactSideEffect();
+        var request = PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        };
+        await state.SaveCheckpointAsync(
+            new SkillWorkflowCheckpoint
+            {
+                WorkflowId = SkillWorkflowId.New(),
+                InvocationId = request.InvocationId,
+                SessionId = request.SessionId,
+                RunId = request.RunId,
+                Package = candidate.Identity,
+                Scope = candidate.Provenance.Scope,
+                InputJson = input,
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                AvailableToolIds = ["delegate_agents"],
+                EffectiveBudget = new SkillBudget(),
+                Status = SkillInvocationStatus.Cancelled,
+                NextAction = "cancelled after write",
+                RecordedAt = DateTimeOffset.UtcNow,
+                Steps =
+                [
+                    new SkillWorkflowStepResult
+                    {
+                        StepId = step.StepId,
+                        Kind = step.Kind,
+                        Iteration = 1,
+                        Succeeded = false,
+                        SideEffects = [sideEffect],
+                        RecordedAt = DateTimeOffset.UtcNow,
+                    },
+                ],
+            },
+            expectedVersion: null);
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            verifier,
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner("{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Review complete\"}"),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => workflow.ResumeAsync(request.InvocationId));
+
+        Assert.Contains("side effects", error.Message, StringComparison.OrdinalIgnoreCase);
+        var checkpoint = await state.GetCheckpointAsync(request.InvocationId);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(SkillInvocationStatus.Cancelled, checkpoint.Status);
+        Assert.Equal(sideEffect, Assert.Single(Assert.Single(checkpoint.Steps).SideEffects));
+    }
+
     /// <summary>An unavailable selected provider cannot silently dispatch work through a different root model.</summary>
     [Fact]
     public async Task NativeReview_OfflineRootFailsBeforeToolExecution()
@@ -364,6 +488,36 @@ public sealed partial class SkillSubsystemTests
         var result = await workflow.ContinueAsync(waiting.InvocationId, "{}");
         Assert.Equal(SkillInvocationStatus.Completed, result.Status);
         Assert.Equal(0, Assert.Single(result.Checkpoint.Steps).ModelTurns);
+    }
+
+    private static SkillSideEffectRecord ReviewArtifactSideEffect()
+    {
+        return new SkillSideEffectRecord
+        {
+            Kind = "artifact",
+            ToolId = "write_file",
+            Path = ".inbox/review.md",
+            BytesWritten = 12,
+            RecordedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    private sealed class ThrowingProcedureRunner(
+        Exception exception,
+        IReadOnlyList<SkillSideEffectRecord> sideEffects) : ISkillProcedureRunner
+    {
+        public Task<SkillProcedureResult> RunAsync(
+            SkillInvocationPlan plan,
+            SkillWorkflowStep step,
+            int iteration,
+            IReadOnlyList<SkillContextSegment> content,
+            string inputJson,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            SkillProcedureInterruption.Attach(sideEffects, exception);
+            return Task.FromException<SkillProcedureResult>(exception);
+        }
     }
 
     private sealed class SessionActivation(SessionId owner) : IProgressiveToolActivationPolicy

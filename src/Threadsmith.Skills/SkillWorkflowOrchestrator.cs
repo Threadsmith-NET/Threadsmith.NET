@@ -178,6 +178,12 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             throw new InvalidOperationException("A waiting invocation requires ContinueSkillCommand with host result JSON.");
         }
 
+        if (checkpoint.Steps.Any(static item => !item.Succeeded && item.SideEffects.Count > 0))
+        {
+            throw new InvalidOperationException(
+                "Skill invocation cannot resume because an incomplete step already produced side effects. Inspect the recorded side effects before starting a replacement workflow.");
+        }
+
         var resumed = checkpoint with
         {
             Steps = checkpoint.Steps.TakeWhile(item => item.Succeeded).ToArray(),
@@ -393,26 +399,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         catch (OperationCanceledException exception) when (source.IsCancellationRequested)
         {
             var interruptedSideEffects = SkillProcedureInterruption.GetSideEffects(exception);
-            var cancelledSteps = latest.Steps;
-            if (interruptedStep is not null
-                && interruptedSideEffects.Count > 0
-                && !cancelledSteps.Any(item => string.Equals(item.StepId, interruptedStep.StepId, StringComparison.Ordinal)
-                    && item.Iteration == interruptedIteration))
-            {
-                cancelledSteps =
-                [
-                    .. cancelledSteps,
-                    new SkillWorkflowStepResult
-                    {
-                        StepId = interruptedStep.StepId,
-                        Kind = interruptedStep.Kind,
-                        Iteration = interruptedIteration,
-                        Succeeded = false,
-                        SideEffects = interruptedSideEffects,
-                        RecordedAt = DateTimeOffset.UtcNow,
-                    },
-                ];
-            }
+            var cancelledSteps = AppendInterruptedStepSideEffects(
+                latest.Steps,
+                interruptedStep,
+                interruptedIteration,
+                interruptedSideEffects);
 
             var cancelled = latest with
             {
@@ -433,8 +424,14 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
         catch (Exception exception)
         {
+            var failedSideEffects = SkillProcedureInterruption.GetSideEffects(exception);
             var failed = latest with
             {
+                Steps = AppendInterruptedStepSideEffects(
+                    latest.Steps,
+                    interruptedStep,
+                    interruptedIteration,
+                    failedSideEffects),
                 Status = SkillInvocationStatus.Failed,
                 NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionInspectFailureThenRevalidate),
                 RecordedAt = DateTimeOffset.UtcNow,
@@ -450,6 +447,35 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             _active.TryRemove(checkpoint.InvocationId, out _);
         }
+    }
+
+    private static IReadOnlyList<SkillWorkflowStepResult> AppendInterruptedStepSideEffects(
+        IReadOnlyList<SkillWorkflowStepResult> steps,
+        SkillWorkflowStep? interruptedStep,
+        int interruptedIteration,
+        IReadOnlyList<SkillSideEffectRecord> sideEffects)
+    {
+        if (interruptedStep is null
+            || sideEffects.Count == 0
+            || steps.Any(item => string.Equals(item.StepId, interruptedStep.StepId, StringComparison.Ordinal)
+                && item.Iteration == interruptedIteration))
+        {
+            return steps;
+        }
+
+        return
+        [
+            .. steps,
+            new SkillWorkflowStepResult
+            {
+                StepId = interruptedStep.StepId,
+                Kind = interruptedStep.Kind,
+                Iteration = interruptedIteration,
+                Succeeded = false,
+                SideEffects = sideEffects,
+                RecordedAt = DateTimeOffset.UtcNow,
+            },
+        ];
     }
 
     private string GetPromptValue(string promptFileName)

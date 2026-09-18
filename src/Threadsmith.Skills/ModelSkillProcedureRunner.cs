@@ -463,6 +463,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         {
             throw SkillProcedureInterruption.Create(sideEffects.ToArray(), exception);
         }
+        catch (Exception exception) when (sideEffects.Count > 0)
+        {
+            SkillProcedureInterruption.Attach(sideEffects.ToArray(), exception);
+            throw;
+        }
     }
 
     private static bool TryCreateSideEffect(

@@ -20,7 +20,7 @@
     "response": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 160000
+      "maxLength": 30000
     },
     "artifact": {
       "type": "object",

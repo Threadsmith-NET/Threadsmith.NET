@@ -284,6 +284,35 @@ public sealed partial class SkillSubsystemTests
         Assert.Single(model.Requests);
     }
 
+    /// <summary>Provider failures after a completed write retain the write_file side effect.</summary>
+    [Fact]
+    public async Task SkillToolBatch_ProviderFailurePreservesCompletedWriteSideEffect()
+    {
+        var writer = new SkillBatchWriteFileTool();
+        var model = new SkillBatchModelProvider
+        {
+            Calls = [new("write_file", "{\"path\":\".inbox/review.md\",\"content\":\"Saved report\"}")],
+            FinalException = new ModelProviderException("provider failed after write"),
+        };
+        await using var events = new DomainEventStream();
+        var runner = CreateBatchRunner(model, [writer], events);
+        var plan = PermissionPlan() with
+        {
+            AvailableToolIds = ["write_file"],
+            EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 1 },
+        };
+
+        var error = await Assert.ThrowsAsync<ModelProviderException>(
+            () => runner.RunAsync(plan, PermissionStep(), 1, [], "{}"));
+
+        var sideEffect = Assert.Single(SkillProcedureInterruption.GetSideEffects(error));
+        Assert.Equal("artifact", sideEffect.Kind);
+        Assert.Equal("write_file", sideEffect.ToolId);
+        Assert.Equal(".inbox/review.md", sideEffect.Path);
+        Assert.Equal(Encoding.UTF8.GetByteCount("Saved report"), sideEffect.BytesWritten);
+        Assert.Equal(2, model.Requests.Count);
+    }
+
     private static SkillInvocationPlan BatchPlan() => PermissionPlan() with
     {
         AvailableToolIds = ["batch_first", "batch_second"],
@@ -306,6 +335,8 @@ public sealed partial class SkillSubsystemTests
         public IReadOnlyList<IReadOnlyList<ToolRequestModelOutput>> AdditionalBatches { get; init; } = [];
 
         public bool Replay { get; init; }
+
+        public Exception? FinalException { get; init; }
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -351,6 +382,11 @@ public sealed partial class SkillSubsystemTests
             }
             else
             {
+                if (FinalException is not null)
+                {
+                    throw FinalException;
+                }
+
                 yield return new ModelChunk { Text = "{\"succeeded\":true,\"response\":\"Fixture complete\"}" };
             }
         }

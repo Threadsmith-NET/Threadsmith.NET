@@ -496,6 +496,37 @@ public sealed class PrFetchTests
         Assert.Equal(1, handler.DiffRequests);
     }
 
+    /// <summary>Scoped diff buffering enforces the shared cache limit before publishing raw diff pages.</summary>
+    [Fact]
+    public async Task ScopedDiffBuffer_EnforcesCacheCeilingBeforePublish()
+    {
+        using var handler = new PrHandler(false) { DiffText = new string('x', 3000) };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(
+            http,
+            new TestSecrets(),
+            Options(false) with
+            {
+                MaximumCacheBytes = 1500,
+                MaximumResponseBytes = 0,
+            },
+            false);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var baseContext = Context(scope);
+        var context = baseContext with
+        {
+            Invocation = baseContext.Invocation with { ApprovedRoots = ["src"] },
+        };
+
+        var first = await tool.ExecuteAsync(Input(false), context);
+        var inventory = await tool.ExecuteAsync(Input(false) with { Cursor = first.Value.Cursor }, context);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            tool.ExecuteAsync(Input(false) with { Cursor = inventory.Value.Cursor }, context));
+
+        Assert.Contains("maximumCacheBytes", error.Message, StringComparison.Ordinal);
+        Assert.Equal(1, handler.DiffRequests);
+    }
+
     /// <summary>A cancelled waiter cannot cancel another reader's acquisition.</summary>
     [Fact]
     public async Task ConcurrentReadersShareFetch_OneWaiterCancellationDoesNotCancelOwner()

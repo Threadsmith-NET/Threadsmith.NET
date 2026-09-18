@@ -65,9 +65,16 @@ internal static class SemanticRefreshPathPolicy
             return true;
         }
 
-        return Path.GetFileName(path).EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+        return IsGeneratedSourceDocumentName(Path.GetFileName(path))
             && normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
                 .Any(IsBuildOutputDirectorySegment);
+    }
+
+    private static bool IsGeneratedSourceDocumentName(string name)
+    {
+        return name.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith("AssemblyAttributes.cs", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsBuildOutputDirectorySegment(string segment)

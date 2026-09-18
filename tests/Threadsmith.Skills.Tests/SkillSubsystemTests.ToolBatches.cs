@@ -313,6 +313,42 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(2, model.Requests.Count);
     }
 
+    /// <summary>Cancellation before a later wave starts retains completed side-effecting siblings.</summary>
+    [Fact]
+    public async Task SkillToolBatch_CancelledLaterWavePreservesCompletedWriteSideEffect()
+    {
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var writer = new SkillBatchWriteFileTool(ToolConcurrencyMode.SerializedPerRegistration);
+        var canceller = new SkillBatchCancelTool(cancellation);
+        var later = new SkillBatchProbeTool("batch_later", ToolConcurrencyMode.SerializedPerRegistration);
+        later.Release.TrySetResult();
+        var model = new SkillBatchModelProvider
+        {
+            Calls =
+            [
+                new("write_file", "{\"path\":\".inbox/review.md\",\"content\":\"Saved report\"}"),
+                new("batch_cancel", "{}"),
+                new("batch_later", "{}"),
+            ],
+        };
+        await using var events = new DomainEventStream();
+        var runner = CreateBatchRunner(model, [writer, canceller, later], events);
+        var plan = PermissionPlan() with
+        {
+            AvailableToolIds = ["write_file", "batch_cancel", "batch_later"],
+            EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 3 },
+        };
+
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => runner.RunAsync(plan, PermissionStep(), 1, [], "{}", cancellation.Token));
+
+        var sideEffect = Assert.Single(SkillProcedureInterruption.GetSideEffects(error));
+        Assert.Equal("artifact", sideEffect.Kind);
+        Assert.Equal("write_file", sideEffect.ToolId);
+        Assert.Equal(".inbox/review.md", sideEffect.Path);
+        Assert.False(later.Started.Task.IsCompleted);
+    }
+
     private static SkillInvocationPlan BatchPlan() => PermissionPlan() with
     {
         AvailableToolIds = ["batch_first", "batch_second"],
@@ -394,7 +430,7 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class SkillBatchProbeTool : Tool<PermissionProbeInput, PermissionProbeOutput>
     {
-        public SkillBatchProbeTool(string id)
+        public SkillBatchProbeTool(string id, ToolConcurrencyMode concurrencyMode = ToolConcurrencyMode.ParallelSafe)
         {
             Definition = new ToolDefinition
             {
@@ -402,7 +438,11 @@ public sealed partial class SkillSubsystemTests
                 InputSchema = new ToolSchema(nameof(PermissionProbeInput), 1, "{\"type\":\"object\",\"additionalProperties\":false}"),
                 OutputSchema = new ToolSchema(nameof(PermissionProbeOutput), 1, "{\"type\":\"object\"}"),
                 Timeout = TimeSpan.FromSeconds(20), MaximumOutputBytes = 1024,
-                Scheduling = new ToolSchedulingDescriptor { ConcurrencyMode = ToolConcurrencyMode.ParallelSafe, MaximumSourceConcurrency = int.MaxValue },
+                Scheduling = new ToolSchedulingDescriptor
+                {
+                    ConcurrencyMode = concurrencyMode,
+                    MaximumSourceConcurrency = concurrencyMode == ToolConcurrencyMode.ParallelSafe ? int.MaxValue : 1,
+                },
             };
         }
 
@@ -431,11 +471,44 @@ public sealed partial class SkillSubsystemTests
         protected override void ValidateInput(PermissionProbeInput input) => ArgumentNullException.ThrowIfNull(input);
     }
 
+    private sealed class SkillBatchCancelTool : Tool<PermissionProbeInput, PermissionProbeOutput>
+    {
+        private readonly CancellationTokenSource _cancellation;
+
+        public SkillBatchCancelTool(CancellationTokenSource cancellation)
+        {
+            _cancellation = cancellation;
+            Definition = new ToolDefinition
+            {
+                Id = "batch_cancel", DisplayName = "batch_cancel", Description = "Batch cancellation fixture", Version = "1",
+                InputSchema = new ToolSchema(nameof(PermissionProbeInput), 1, "{\"type\":\"object\",\"additionalProperties\":false}"),
+                OutputSchema = new ToolSchema(nameof(PermissionProbeOutput), 1, "{\"type\":\"object\"}"),
+                Timeout = TimeSpan.FromSeconds(20), MaximumOutputBytes = 1024,
+                Scheduling = new ToolSchedulingDescriptor { ConcurrencyMode = ToolConcurrencyMode.ParallelSafe, MaximumSourceConcurrency = int.MaxValue },
+            };
+        }
+
+        public override ToolDefinition Definition { get; }
+
+        public override async Task<ToolExecution<PermissionProbeOutput>> ExecuteAsync(
+            PermissionProbeInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateInput(input);
+            cancellationToken.ThrowIfCancellationRequested();
+            await _cancellation.CancelAsync();
+            return new ToolExecution<PermissionProbeOutput>(new PermissionProbeOutput(), [], ModelResultContent: Definition.Id);
+        }
+
+        protected override void ValidateInput(PermissionProbeInput input) => ArgumentNullException.ThrowIfNull(input);
+    }
+
     private sealed record SkillBatchWriteFileInput(string Path, string Content);
 
     private sealed class SkillBatchWriteFileTool : Tool<SkillBatchWriteFileInput, WriteFileOutput>
     {
-        public SkillBatchWriteFileTool()
+        public SkillBatchWriteFileTool(ToolConcurrencyMode concurrencyMode = ToolConcurrencyMode.ParallelSafe)
         {
             Definition = new ToolDefinition
             {
@@ -443,7 +516,11 @@ public sealed partial class SkillSubsystemTests
                 InputSchema = new ToolSchema(nameof(SkillBatchWriteFileInput), 1, "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"path\",\"content\"],\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}}}"),
                 OutputSchema = new ToolSchema(nameof(WriteFileOutput), 1, "{\"type\":\"object\"}"),
                 Timeout = TimeSpan.FromSeconds(20), MaximumOutputBytes = 1024,
-                Scheduling = new ToolSchedulingDescriptor { ConcurrencyMode = ToolConcurrencyMode.ParallelSafe, MaximumSourceConcurrency = int.MaxValue },
+                Scheduling = new ToolSchedulingDescriptor
+                {
+                    ConcurrencyMode = concurrencyMode,
+                    MaximumSourceConcurrency = concurrencyMode == ToolConcurrencyMode.ParallelSafe ? int.MaxValue : 1,
+                },
             };
         }
 

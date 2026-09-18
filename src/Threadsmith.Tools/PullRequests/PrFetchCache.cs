@@ -251,6 +251,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
             {
                 var diffPages = new List<PullRequestPage>();
                 var diffFiles = 0;
+                long bufferedDiffBytes = 0;
                 await foreach (var page in provider.ReadPagesAsync(target, account, PrFetchKind.Diff, token))
                 {
                     if (page.Files.Count > 0)
@@ -266,6 +267,17 @@ internal sealed class PrFetchCache : IAsyncDisposable
 
                     if (page.Kind.Equals("diff", StringComparison.Ordinal))
                     {
+                        var pageBytes = JsonSerializer.SerializeToUtf8Bytes(page).LongLength;
+                        lock (_gate)
+                        {
+                            if (_options.MaximumCacheBytes > 0
+                                && _bytes + bufferedDiffBytes + pageBytes > _options.MaximumCacheBytes)
+                            {
+                                throw new InvalidDataException("PR evidence exceeded tools.prFetch.maximumCacheBytes; cached revisions were not evicted or replaced.");
+                            }
+                        }
+
+                        bufferedDiffBytes += pageBytes;
                         diffPages.Add(page);
                     }
                 }

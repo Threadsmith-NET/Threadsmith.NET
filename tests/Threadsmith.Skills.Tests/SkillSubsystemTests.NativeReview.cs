@@ -320,6 +320,58 @@ public sealed partial class SkillSubsystemTests
         Assert.Equal(sideEffect, Assert.Single(step.SideEffects));
     }
 
+    /// <summary>Save failures after a completed artifact step do not lose the observed side effect.</summary>
+    [Fact]
+    public async Task NativeReview_SaveFailureAfterCompletedStepPreservesObservedSideEffect()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var sideEffect = ReviewArtifactSideEffect();
+        var state = new InMemorySkillStateStore
+        {
+            FailCheckpointSave = checkpoint =>
+                checkpoint.Status == SkillInvocationStatus.Running
+                && checkpoint.Steps.Count == 1,
+        };
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner(
+                "{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Review saved\",\"artifact\":{\"path\":\".inbox/review.md\",\"bytesWritten\":12}}",
+                [sideEffect]),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+        var request = PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        };
+
+        await Assert.ThrowsAsync<IOException>(() => workflow.InvokeAsync(request));
+
+        var checkpoint = await state.GetCheckpointAsync(request.InvocationId);
+        Assert.NotNull(checkpoint);
+        Assert.Equal(SkillInvocationStatus.Failed, checkpoint.Status);
+        var step = Assert.Single(checkpoint.Steps);
+        Assert.True(step.Succeeded);
+        Assert.Equal(sideEffect, Assert.Single(step.SideEffects));
+    }
+
     /// <summary>Resume does not replay an incomplete step that already produced an artifact side effect.</summary>
     [Fact]
     public async Task NativeReview_ResumeRejectsIncompleteSideEffectingStep()

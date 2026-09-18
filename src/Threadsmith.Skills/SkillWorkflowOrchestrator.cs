@@ -309,6 +309,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         var latest = checkpoint;
         SkillWorkflowStep? interruptedStep = null;
         var interruptedIteration = 0;
+        SkillWorkflowStepResult? interruptedResult = null;
         try
         {
             var running = checkpoint with
@@ -343,6 +344,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 var input = ResolveStepInput(step, current);
                 interruptedStep = step;
                 interruptedIteration = iteration;
+                interruptedResult = null;
                 var result = await ExecuteStepAsync(
                     candidate,
                     plan,
@@ -353,8 +355,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                     remainingModelTurns,
                     remainingToolCalls,
                     source.Token);
-                interruptedStep = null;
-                interruptedIteration = 0;
+                interruptedResult = result;
                 current = current with
                 {
                     Steps = [.. current.Steps, result],
@@ -373,6 +374,9 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 };
                 await SaveAsync(current, VersionOf(latest), source.Token);
                 latest = current;
+                interruptedStep = null;
+                interruptedIteration = 0;
+                interruptedResult = null;
                 if (result.HostAction is not null)
                 {
                     return CreateResult(current, "workflow is waiting for a governed host action");
@@ -399,10 +403,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         catch (OperationCanceledException exception) when (source.IsCancellationRequested)
         {
             var interruptedSideEffects = SkillProcedureInterruption.GetSideEffects(exception);
-            var cancelledSteps = AppendInterruptedStepSideEffects(
+            var cancelledSteps = AppendInterruptedStepState(
                 latest.Steps,
                 interruptedStep,
                 interruptedIteration,
+                interruptedResult,
                 interruptedSideEffects);
 
             var cancelled = latest with
@@ -427,10 +432,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             var failedSideEffects = SkillProcedureInterruption.GetSideEffects(exception);
             var failed = latest with
             {
-                Steps = AppendInterruptedStepSideEffects(
+                Steps = AppendInterruptedStepState(
                     latest.Steps,
                     interruptedStep,
                     interruptedIteration,
+                    interruptedResult,
                     failedSideEffects),
                 Status = SkillInvocationStatus.Failed,
                 NextAction = GetPromptValue(PromptFileNames.SkillWorkflowNextActionInspectFailureThenRevalidate),
@@ -449,16 +455,26 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
     }
 
-    private static IReadOnlyList<SkillWorkflowStepResult> AppendInterruptedStepSideEffects(
+    private static IReadOnlyList<SkillWorkflowStepResult> AppendInterruptedStepState(
         IReadOnlyList<SkillWorkflowStepResult> steps,
         SkillWorkflowStep? interruptedStep,
         int interruptedIteration,
+        SkillWorkflowStepResult? interruptedResult,
         IReadOnlyList<SkillSideEffectRecord> sideEffects)
     {
         if (interruptedStep is null
-            || sideEffects.Count == 0
             || steps.Any(item => string.Equals(item.StepId, interruptedStep.StepId, StringComparison.Ordinal)
                 && item.Iteration == interruptedIteration))
+        {
+            return steps;
+        }
+
+        if (interruptedResult is not null)
+        {
+            return [.. steps, interruptedResult];
+        }
+
+        if (sideEffects.Count == 0)
         {
             return steps;
         }

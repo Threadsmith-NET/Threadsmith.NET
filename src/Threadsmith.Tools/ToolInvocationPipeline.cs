@@ -225,7 +225,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         foreach (var wave in waves)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfCancelledAfterResults(cancellationToken, results);
             Task<ToolBatchResult>[] tasks = [.. wave.Select(async planned =>
             {
                 var invocation = usePreparedSnapshot
@@ -278,15 +278,29 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var ordered = results.OrderBy(result => result.Ordinal).ToArray();
         if (cancellationToken.IsCancellationRequested)
         {
-            if (ordered.Length > 0)
-            {
-                throw new ToolBatchCancelledException(ordered, cancellationToken);
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfCancelledAfterResults(cancellationToken, ordered);
         }
 
         return ordered;
+    }
+
+    private static void ThrowIfCancelledAfterResults(
+        CancellationToken cancellationToken,
+        IReadOnlyList<ToolBatchResult> results)
+    {
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (results.Count > 0)
+        {
+            throw new ToolBatchCancelledException(
+                results.OrderBy(result => result.Ordinal).ToArray(),
+                cancellationToken);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private async Task<ToolInvocationResult> InvokeCoreAsync(

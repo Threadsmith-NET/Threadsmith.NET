@@ -326,6 +326,43 @@ public static class SemanticRefreshCoordinatorTests
         Assert.True(SemanticRefreshPathPolicy.IsIgnoredPath(
             repository.Root,
             generatedSourcePath));
+        Assert.True(SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
+            repository.Root,
+            generatedSourcePath));
+
+        var assemblyInfoPath = Path.Combine(
+            repository.Root,
+            "container",
+            "source",
+            "AI.Inference.Fusion.Tests",
+            "obj",
+            "Debug",
+            "net8.0",
+            "AI.Inference.Fusion.Tests.AssemblyInfo.cs");
+        var assemblyAttributesPath = Path.Combine(
+            repository.Root,
+            "container",
+            "source",
+            "AI.Inference.Fusion.Tests",
+            "obj",
+            "Debug",
+            "net8.0",
+            ".NETCoreApp,Version=v10.0.AssemblyAttributes.cs");
+        var sourceArtifactPath = Path.Combine(
+            repository.Root,
+            "src",
+            "Artifacts",
+            "ArtifactFactory.cs");
+
+        Assert.True(SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
+            repository.Root,
+            assemblyInfoPath));
+        Assert.True(SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
+            repository.Root,
+            assemblyAttributesPath));
+        Assert.False(SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
+            repository.Root,
+            sourceArtifactPath));
     }
 
     /// <summary>Ignored build and editor churn during watcher handoff causes no follow-up refresh.</summary>

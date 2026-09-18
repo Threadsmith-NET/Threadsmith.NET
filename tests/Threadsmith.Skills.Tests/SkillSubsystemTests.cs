@@ -1721,6 +1721,9 @@ public sealed partial class SkillSubsystemTests
         private readonly Dictionary<SkillInvocationId, SkillWorkflowCheckpoint> _checkpoints = [];
         private readonly Dictionary<SkillId, SkillPackageIdentity> _pins = [];
         private readonly Dictionary<string, SkillVerificationRecord> _verifications = [];
+        private bool _checkpointSaveFailed;
+
+        public Func<SkillWorkflowCheckpoint, bool>? FailCheckpointSave { get; init; }
 
         public Task SaveVerificationAsync(
             SkillVerificationRecord verification,
@@ -1759,6 +1762,12 @@ public sealed partial class SkillSubsystemTests
             if (!matches)
             {
                 throw new SkillCheckpointConflictException();
+            }
+
+            if (!_checkpointSaveFailed && FailCheckpointSave?.Invoke(checkpoint) == true)
+            {
+                _checkpointSaveFailed = true;
+                throw new IOException("Injected checkpoint save failure.");
             }
 
             _checkpoints[checkpoint.InvocationId] = checkpoint;

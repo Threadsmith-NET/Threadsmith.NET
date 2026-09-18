@@ -381,6 +381,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     {
                         var toolRequest = toolRequests[batchRequest.Ordinal];
                         resultsByOrdinal.TryGetValue(batchRequest.Ordinal, out var result);
+                        if (result is null && interruptedBatch is not null)
+                        {
+                            continue;
+                        }
+
                         if (result is { Succeeded: true }
                             && TryCreateSideEffect(toolRequest.ToolName, result, out var sideEffect))
                         {

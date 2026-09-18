@@ -9,7 +9,7 @@ public sealed class DelegateAgentsPlanFactory
 {
     private const string ContextPolicyVersion = "agent-context/2";
     private const string InheritToolPolicyVersion = "delegate-agents-inherit/2";
-    private const string ReadOnlyToolPolicyVersion = "delegate-agents-read-only/1";
+    private const string ReadOnlyToolPolicyVersion = "delegate-agents-read-only/2";
     private readonly DelegateAgentsOptions _options;
     private readonly SessionModelPreferences _preferences;
     private readonly IPromptLoader _prompts;
@@ -117,7 +117,8 @@ public sealed class DelegateAgentsPlanFactory
                 TrustCeiling = !inherit && context.Invocation.TrustLevel > RepositoryTrustLevel.TrustedBuild
                     ? RepositoryTrustLevel.TrustedBuild
                     : context.Invocation.TrustLevel,
-                AllowNetwork = inherit,
+                AllowNetwork = inherit || definitions.Any(definition =>
+                    definition.ReadOnlySubagentNetworkAvailable),
                 AllowProcesses = inherit && definitions.Any(definition =>
                     definition.Category is ToolCategory.ProcessExecution or ToolCategory.CodeExecution),
                 ProhibitedPaths = context.Invocation.ProhibitedPaths.ToArray(),
@@ -162,7 +163,8 @@ public sealed class DelegateAgentsPlanFactory
                     || (definition.Category is not ToolCategory.Workflow
                         and not ToolCategory.ProcessExecution
                         and not ToolCategory.CodeExecution
-                        and not ToolCategory.ExternalSearch
+                        && (definition.Category is not ToolCategory.ExternalSearch
+                            || definition.ReadOnlySubagentNetworkAvailable)
                         && definition.SideEffect == ToolSideEffect.ReadOnly
                         && definition.RequiredApproval == ApprovalLevel.None)))
                 .OrderBy(definition => definition.Id, StringComparer.Ordinal),

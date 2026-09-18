@@ -887,6 +887,12 @@ internal static class InteractionPresentationFormatter
                 ? resultDetail
                 : $"{activityDetail} · {resultDetail}";
         }
+        else if (completed is { Succeeded: true, IsTruncated: true })
+        {
+            activityDetail = string.IsNullOrWhiteSpace(activityDetail)
+                ? "truncated"
+                : $"{activityDetail} · truncated";
+        }
 
         AppendDetailPart(detail, activityDetail);
         if (completed is { Succeeded: false })

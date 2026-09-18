@@ -124,9 +124,11 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
     PostSanitizationToolOutput IPostSanitizationToolOutputBoundary.BoundSanitizedOutput(
         string resultJson,
         string? modelResultContent,
-        ToolInvocationContext context)
+        ToolInvocationContext context,
+        int maximumOutputBytes)
     {
-        var maximumBytes = CodeExploreModelBudget.GetMaximumResultBytes(context, _operationalOptions.MaximumResultBytes) ?? int.MaxValue;
+        var configuredMaximumBytes = CodeExploreModelBudget.GetMaximumResultBytes(context, _operationalOptions.MaximumResultBytes) ?? int.MaxValue;
+        var maximumBytes = Math.Min(configuredMaximumBytes, maximumOutputBytes);
         var sanitizedResult = JsonSerializer.Deserialize<CodeExploreResult>(resultJson)
             ?? throw new InvalidOperationException("The sanitized code exploration result could not be deserialized.");
         var markdownMaximumBytes = _renderer.ResolveRenderedMarkdownMaximumBytes(

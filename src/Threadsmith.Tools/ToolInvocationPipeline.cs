@@ -382,6 +382,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var executionContext = new ToolExecutionContext(invocationId, request.SessionId, request.RunId, request.Context)
         {
             Phase = request.Phase,
+            MaximumOutputBytes = tool.Definition.MaximumOutputBytes,
         };
         var activityDetail = CreateActivityDetail(tool, input);
         var transientActivityDetail = CreateTransientActivityDetail(tool, input, executionContext);
@@ -640,7 +641,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 var boundedOutput = outputBoundary.BoundSanitizedOutput(
                     resultJson,
                     modelResultContent,
-                    request.Context);
+                    request.Context,
+                    tool.Definition.MaximumOutputBytes);
                 resultJson = boundedOutput.ResultJson;
                 modelResultContent = boundedOutput.ModelResultContent;
                 isTruncated |= boundedOutput.WasTruncated;

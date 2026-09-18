@@ -396,6 +396,21 @@
       "timeoutSeconds": 120,
       "pageCharacters": 8192
     },
+    // Jira Cloud accounts belong in user/machine config. Repo config may disable
+    // accounts or lower limits only. Store API tokens through standard Secrets.
+    // Scoped token example: "work": { "type": "jiraCloud", "enabled": true,
+    //   "siteUrl": "https://example.atlassian.net", "endpointMode": "scopedGateway",
+    //   "cloudId": "11111111-2222-4333-8444-555555555555",
+    //   "browseHostAliases": ["issues.example.org"],
+    //   "authentication": { "mode": "basic", "username": "developer@example.org",
+    //     "secretReference": "secrets:jira:work-token" } }
+    // For an unscoped token use endpointMode "site" and omit cloudId.
+    "jira": {
+      "providers": {},
+      "maximumResponseBytes": 2097152,
+      "maximumBodyBytes": 65536,
+      "timeoutSeconds": 30
+    },
     "readFile": {
       "maxBytes": 1048576,
       "defaultLines": 2000,

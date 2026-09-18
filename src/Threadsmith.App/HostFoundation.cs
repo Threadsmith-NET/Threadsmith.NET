@@ -11,6 +11,7 @@ using Threadsmith.Hooks;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
+using Threadsmith.Tools.Jira;
 using Threadsmith.Tools.PullRequests;
 using Threadsmith.Validation;
 using Threadsmith.Workspaces;
@@ -22,6 +23,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     private readonly IDomainEventSubscription _hookSubscription;
     private readonly HookEventObserver _hookObserver;
     private readonly HttpClient _hookHttpClient;
+    private readonly HttpClient? _jiraHttpClient;
     private readonly HttpClient? _prHttpClient;
     private readonly IDomainEventSubscription _persistenceSubscription;
     private readonly IDomainEventSubscription _projectionSubscription;
@@ -77,6 +79,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         HookEventObserver hookObserver,
         SemanticLifecycleObserver semanticObserver,
         IDomainEventSubscription semanticSubscription,
+        HttpClient? jiraHttpClient,
         HttpClient? prHttpClient)
     {
         Events = events;
@@ -96,6 +99,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         HookStore = hookStore;
         HookCoordinator = hookCoordinator;
         _hookHttpClient = hookHttpClient;
+        _jiraHttpClient = jiraHttpClient;
         _prHttpClient = prHttpClient;
         EvidenceStore = evidenceStore;
         PromptLoader = promptLoader;
@@ -141,6 +145,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         await _hookObserver.DisposeAsync();
         await HookCoordinator.DisposeAsync();
         _hookHttpClient.Dispose();
+        _jiraHttpClient?.Dispose();
         _prHttpClient?.Dispose();
         await SemanticEngines.DisposeAsync();
         await _contextLifecycleSubscription.DisposeAsync();
@@ -361,6 +366,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         SemanticRefreshCoordinator? semanticRefreshCoordinator = null;
         SemanticRefreshPublicationGateRouter? semanticRefreshPublicationGate = null;
         SemanticLifecycleObserver? semanticObserver = null;
+        HttpClient? jiraHttpClient = null;
         HttpClient? prHttpClient = null;
 
         try
@@ -492,6 +498,12 @@ internal sealed class HostFoundation : IAsyncDisposable
                 loggerFactory.CreateLogger<HostFoundation>().LogDebug("PR fetching is unavailable: no enabled tools.prFetch.providers accounts are configured in trusted user/machine configuration.");
             }
 
+            var jiraTool = JiraComposition.Create(configuration, trustedConfiguration, secretResolver, promptLoader, out jiraHttpClient);
+            if (jiraTool is null)
+            {
+                loggerFactory.CreateLogger<HostFoundation>().LogDebug("Jira is unavailable: no enabled tools.jira.providers accounts are configured in trusted user/machine configuration.");
+            }
+
             (var toolStateManager, var toolRegistry, var webFetchAuthorization, var approvalPrompt) = CreateTools(
                 configuration,
                 trustedConfiguration,
@@ -511,6 +523,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 persistence.ConversationStore,
                 operationalLimits,
                 sanitizer,
+                jiraTool,
                 prFetchTool);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
@@ -590,6 +603,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 hookObserver,
                 semanticObserver,
                 semanticSubscription,
+                jiraHttpClient,
                 prHttpClient);
         }
         catch
@@ -613,6 +627,7 @@ internal sealed class HostFoundation : IAsyncDisposable
 
             await DisposeIfPresentAsync(webFetchLifecycleSubscription);
             directFetchApprovalPrompt?.Dispose();
+            jiraHttpClient?.Dispose();
             prHttpClient?.Dispose();
             await DisposeIfPresentAsync(hookSubscription);
             await DisposeIfPresentAsync(contextSubscription);
@@ -962,6 +977,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         IConversationStore conversationStore,
         OperationalLimits operationalLimits,
         IOutputSanitizer sanitizer,
+        JiraTool? jiraTool,
         PrFetchTool? prFetchTool)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
@@ -1015,6 +1031,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             ?? defaultShellExecutable;
         ITool[] tools =
         [
+            .. jiraTool is null ? Array.Empty<ITool>() : [jiraTool],
             .. prFetchTool is null ? Array.Empty<ITool>() : [prFetchTool],
             new ListFilesTool(promptLoader, limits),
             new ReadFileTool(promptLoader, sanitizer, limits),

@@ -382,7 +382,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         var toolRequest = toolRequests[batchRequest.Ordinal];
                         resultsByOrdinal.TryGetValue(batchRequest.Ordinal, out var result);
                         if (result is { Succeeded: true }
-                            && TryCreateSideEffect(toolRequest.ToolName, result, context.RepositoryPath, out var sideEffect))
+                            && TryCreateSideEffect(toolRequest.ToolName, result, out var sideEffect))
                         {
                             sideEffects.Add(sideEffect);
                             operationState.AddSideEffect(plan.Request.InvocationId, sideEffect);
@@ -468,7 +468,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
     private static bool TryCreateSideEffect(
         string toolName,
         ToolInvocationResult result,
-        string repositoryPath,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out SkillSideEffectRecord? sideEffect)
     {
         sideEffect = null;
@@ -501,7 +500,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                 Kind = "artifact",
                 ToolId = "write_file",
                 ToolInvocationId = result.ToolInvocationId,
-                Path = NormalizeArtifactPath(path, repositoryPath),
+                Path = path,
                 BytesWritten = bytesWritten,
                 RecordedAt = DateTimeOffset.UtcNow,
             };
@@ -526,28 +525,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
         value = default;
         return false;
-    }
-
-    private static string NormalizeArtifactPath(string path, string repositoryPath)
-    {
-        try
-        {
-            var fullPath = Path.GetFullPath(path, repositoryPath);
-            var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-            var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-            var prefix = repository + Path.DirectorySeparatorChar;
-            return fullPath.StartsWith(prefix, comparison)
-                ? Path.GetRelativePath(repository, fullPath).Replace('\\', '/')
-                : fullPath;
-        }
-        catch (ArgumentException)
-        {
-            return path;
-        }
-        catch (NotSupportedException)
-        {
-            return path;
-        }
     }
 
     private static string NormalizeDeclaredJsonOutput(string output)

@@ -226,6 +226,55 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains("not observed in write_file side effects", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Artifact delivery cannot claim a different path that only shares the written file suffix.</summary>
+    [Fact]
+    public async Task NativeReview_ArtifactDeliveryRejectsSuffixOnlyPathMatch()
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner(
+                "{\"succeeded\":true,\"delivery\":\"artifact\",\"response\":\"Review saved\",\"artifact\":{\"path\":\"/tmp/other/.inbox/review.md\",\"bytesWritten\":12}}",
+                [
+                    new SkillSideEffectRecord
+                    {
+                        Kind = "artifact",
+                        ToolId = "write_file",
+                        Path = ".inbox/review.md",
+                        BytesWritten = 12,
+                        RecordedAt = DateTimeOffset.UtcNow,
+                    },
+                ]),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        }));
+
+        Assert.Contains("not observed in write_file side effects", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>An unavailable selected provider cannot silently dispatch work through a different root model.</summary>
     [Fact]
     public async Task NativeReview_OfflineRootFailsBeforeToolExecution()

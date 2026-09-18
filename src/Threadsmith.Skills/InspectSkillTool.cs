@@ -32,7 +32,7 @@ public sealed record InspectSkillOutput(
 /// <summary>Inspects an enabled skill without starting its workflow or loading its instructions into context.</summary>
 public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutput>
 {
-    private const int DiscoveryCandidateLimit = 128;
+    private const int DiscoveryCandidateLimit = 500;
     private const int DiscoveryEntryLimit = 32;
 
     private readonly ICommandHandler<InspectSkillCommand, SkillCatalogCandidate> _inspection;

@@ -121,6 +121,46 @@ public sealed partial class SkillSubsystemTests
         Assert.All(result.Value.Skills, entry => Assert.Null(entry.InputSchema));
     }
 
+    /// <summary>Unavailable skills in the first catalog window do not hide later enabled skills.</summary>
+    [Fact]
+    public async Task InspectSkillTool_FiltersAvailabilityBeforeOutputLimit()
+    {
+        using var package = TemporaryPackage.CopyMaintained("review");
+        var claudeRoot = Path.Combine(package.Root, "claude");
+        for (var index = 0; index < 150; index++)
+        {
+            var directory = Path.Combine(claudeRoot, $"aaa-disabled-{index:D3}");
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(Path.Combine(directory, "SKILL.md"), $"---\nname: aaa-disabled-{index:D3}\ndescription: Audit changes\n---\nInstructions.\n");
+        }
+
+        var catalog = new CompatibleSkillCatalog(
+            package.CreateCatalog(SkillScope.Maintained),
+            new ClaudeSkillCompatibilityCatalog([new ClaudeSkillRoot(SkillScope.User, claudeRoot, "user:claude", false)]));
+        await catalog.RefreshAsync();
+        foreach (var candidate in catalog.Snapshot.Candidates)
+        {
+            var availableReview = candidate.Metadata.SkillId.Value == "review";
+            catalog.UpdateCandidate(candidate with
+            {
+                Enabled = availableReview,
+                Verification = availableReview
+                    ? SkillVerificationState.Maintained
+                    : SkillVerificationState.Unverified,
+            });
+        }
+
+        var policy = new FileSkillTrustPolicyProvider(Path.Combine(package.Root, "policy.json"), new SkillTrustPolicySnapshot());
+        var application = CreateCatalogApplication(catalog, policy, package.Root);
+        var tool = new InspectSkillTool(application, application, TestPromptLoader.Instance, new BoundedJsonSchemaValidator());
+
+        var result = await tool.ExecuteAsync(new InspectSkillInput(), new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), PermissionContext()));
+
+        var entry = Assert.Single(result.Value.Skills);
+        Assert.Equal("review", entry.Name);
+        Assert.Null(entry.InputSchema);
+    }
+
     /// <summary>Both discovery variations hide unavailable native and Claude skills without changing their state.</summary>
     [Theory]
     [InlineData(null)]

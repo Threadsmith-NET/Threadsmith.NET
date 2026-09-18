@@ -219,7 +219,6 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
             definition.OutputSchemaAsset,
             hostResultJson,
             cancellationToken);
-        validated = ValidateArtifactDeliveryContract(validated, []);
         SkillWorkflowStepResult[] steps =
         [
             .. checkpoint.Steps.Select(item => item == waiting
@@ -520,7 +519,11 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 step.OutputSchemaAsset,
                 procedure.OutputJson,
                 cancellationToken);
-            var validated = ValidateArtifactDeliveryContract(validatedOutput, sideEffects);
+            var validated = ValidateArtifactDeliveryContract(
+                candidate,
+                step,
+                validatedOutput,
+                sideEffects);
             using var output = System.Text.Json.JsonDocument.Parse(validated);
             return new SkillWorkflowStepResult
             {
@@ -754,9 +757,16 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     }
 
     private static string ValidateArtifactDeliveryContract(
+        SkillCatalogCandidate candidate,
+        SkillWorkflowStep step,
         string valueJson,
         IReadOnlyList<SkillSideEffectRecord> sideEffects)
     {
+        if (!RequiresArtifactDeliveryContract(candidate, step))
+        {
+            return valueJson;
+        }
+
         using var document = System.Text.Json.JsonDocument.Parse(valueJson);
         if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
             || !document.RootElement.TryGetProperty("delivery", out var delivery)
@@ -807,13 +817,22 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         var declared = NormalizeArtifactClaimPath(declaredPath);
         var observed = NormalizeArtifactClaimPath(observedPath);
-        return string.Equals(declared, observed, comparison)
-            || declared.EndsWith("/" + observed, comparison);
+        return string.Equals(declared, observed, comparison);
     }
 
     private static string NormalizeArtifactClaimPath(string path)
     {
         return path.Replace('\\', '/').TrimEnd('/');
+    }
+
+    private static bool RequiresArtifactDeliveryContract(
+        SkillCatalogCandidate candidate,
+        SkillWorkflowStep step)
+    {
+        return candidate.Provenance.Scope == SkillScope.Maintained
+            && candidate.Metadata.SkillId.Value.Equals("review", StringComparison.Ordinal)
+            && step.Kind == SkillWorkflowStepKind.InvokeProcedure
+            && step.OutputSchemaAsset?.Equals("schemas/output.json", StringComparison.Ordinal) == true;
     }
 
     private static bool IsRootTypeMismatch(InvalidDataException exception)

@@ -196,7 +196,10 @@ internal sealed class PrFetchCache : IAsyncDisposable
             Publish(new PullRequestPage("metadata", [], string.Empty, [initialLimitation]));
             await WaitForDemandAsync();
             var files = 0;
-            await foreach (var page in provider.ReadPagesAsync(target, account, kind, token))
+            var scopedDiff = kind == PrFetchKind.Diff && isFileAllowed is not null;
+            var bufferedPages = new List<PullRequestPage>();
+            var acquisitionKind = scopedDiff ? PrFetchKind.Inventory : kind;
+            await foreach (var page in provider.ReadPagesAsync(target, account, acquisitionKind, token))
             {
                 if (page.Files.Count > 0 && isFileAllowed is not null
                     && page.Files.Any(file => !isFileAllowed(file)))
@@ -211,6 +214,12 @@ internal sealed class PrFetchCache : IAsyncDisposable
                 }
 
                 files += page.Files.Count;
+                if (scopedDiff)
+                {
+                    bufferedPages.Add(page);
+                    continue;
+                }
+
                 Publish(page);
                 await WaitForDemandAsync();
             }
@@ -224,6 +233,38 @@ internal sealed class PrFetchCache : IAsyncDisposable
             if (metadata.ExpectedFiles is { } expected && files != expected)
             {
                 throw new InvalidDataException("The provider's file inventory is incomplete; its reported changed-file count does not match the acquired pages.");
+            }
+
+            foreach (var page in bufferedPages)
+            {
+                Publish(page);
+                await WaitForDemandAsync();
+            }
+
+            if (scopedDiff && entry.HasDisallowedFiles)
+            {
+                throw new UnauthorizedAccessException(
+                    "PR diff content cannot be fetched because one or more changed files are outside the caller's approved repository path scope.");
+            }
+
+            if (scopedDiff)
+            {
+                await foreach (var page in provider.ReadPagesAsync(target, account, PrFetchKind.Diff, token))
+                {
+                    if (!page.Kind.Equals("diff", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    Publish(page);
+                    await WaitForDemandAsync();
+                }
+
+                var afterDiff = await provider.GetMetadataAsync(target, account, token);
+                if (metadata.Revision != afterDiff.Revision)
+                {
+                    throw new InvalidDataException("The PR changed during acquisition; discard all pages of this snapshot and refresh.");
+                }
             }
 
             var completionLimitation = kind == PrFetchKind.Diff

@@ -406,7 +406,7 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
                 MaximumSourceConcurrency = int.MaxValue,
             },
             Timeout = TimeSpan.FromSeconds(limits.InvokeSkillTimeoutSeconds),
-            MaximumOutputBytes = 64 * 1024,
+            MaximumOutputBytes = 512 * 1024,
         };
     }
 

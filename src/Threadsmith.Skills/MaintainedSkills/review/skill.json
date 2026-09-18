@@ -22,8 +22,8 @@
     },
     {
       "path": "schemas/output.json",
-      "bytes": 760,
-      "sha256": "e3d6efbe3a436b0e67df3da56d50a86847c50120cdd85c167b836bb17b758868",
+      "bytes": 787,
+      "sha256": "6daf118ec521021c4cf0f6b2f028e23069679a3dda44e760b4972565ff24b463",
       "required": true,
       "kind": "schema"
     }

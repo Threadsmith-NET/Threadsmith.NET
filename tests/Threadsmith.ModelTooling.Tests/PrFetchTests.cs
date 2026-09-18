@@ -439,6 +439,34 @@ public sealed class PrFetchTests
         Assert.Contains("outside the caller's approved repository path scope", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Scoped diff acquisition validates inventory completeness before exposing raw diff content.</summary>
+    [Fact]
+    public async Task ScopedDiffWithIncompleteInventory_DoesNotReturnRawDiff()
+    {
+        using var handler = new PrHandler(false)
+        {
+            ChangedFilesOverride = 2,
+            ChangedPath = "src/changed.cs",
+            DiffText = "diff --git a/.env b/.env\n--- a/.env\n+++ b/.env\n@@ -1 +1 @@\n-old\n+new\n",
+        };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new TestSecrets(), Options(false), false);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var baseContext = Context(scope);
+        var context = baseContext with
+        {
+            Invocation = baseContext.Invocation with { ApprovedRoots = ["src"] },
+        };
+
+        var first = await tool.ExecuteAsync(Input(false), context);
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            tool.ExecuteAsync(Input(false) with { Cursor = first.Value.Cursor }, context));
+
+        Assert.Contains("file inventory is incomplete", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(".env", JsonSerializer.Serialize(first.Value), StringComparison.Ordinal);
+        Assert.Equal(0, handler.DiffRequests);
+    }
+
     /// <summary>A cancelled waiter cannot cancel another reader's acquisition.</summary>
     [Fact]
     public async Task ConcurrentReadersShareFetch_OneWaiterCancellationDoesNotCancelOwner()
@@ -713,6 +741,8 @@ public sealed class PrFetchTests
 
         public bool MultipleFilePages { get; init; }
 
+        public int? ChangedFilesOverride { get; init; }
+
         public string? MetadataRedirect { get; init; }
 
         public bool RedirectDiff { get; init; }
@@ -791,9 +821,10 @@ public sealed class PrFetchTests
             }
 
             var revision = ChangeRevision && count > 1 ? "moved" : "head";
+            var changedFiles = ChangedFilesOverride ?? (MultipleFilePages ? 21 : 1);
             return _bitbucket
                 ? Json("""{"title":"PR","description":"desc","state":"OPEN","source":{"commit":{"hash":"HEAD"},"repository":{"full_name":"org/repo"}},"destination":{"commit":{"hash":"base-with-unrelated-terraform"},"repository":{"full_name":"org/repo"}}} """.Replace("HEAD", revision, StringComparison.Ordinal))
-                : Json("""{"title":"PR","body":"desc","state":"open","changed_files":1,"head":{"sha":"HEAD","repo":{"full_name":"org/repo"}},"base":{"sha":"base-with-unrelated-terraform","repo":{"full_name":"org/repo"}}} """.Replace("HEAD", revision, StringComparison.Ordinal).Replace("\"changed_files\":1", MultipleFilePages ? "\"changed_files\":21" : "\"changed_files\":1", StringComparison.Ordinal));
+                : Json("""{"title":"PR","body":"desc","state":"open","changed_files":1,"head":{"sha":"HEAD","repo":{"full_name":"org/repo"}},"base":{"sha":"base-with-unrelated-terraform","repo":{"full_name":"org/repo"}}} """.Replace("HEAD", revision, StringComparison.Ordinal).Replace("\"changed_files\":1", $"\"changed_files\":{changedFiles}", StringComparison.Ordinal));
         }
 
         private static HttpResponseMessage Redirect(string url) => new(HttpStatusCode.Redirect) { Headers = { Location = new Uri(url) } };

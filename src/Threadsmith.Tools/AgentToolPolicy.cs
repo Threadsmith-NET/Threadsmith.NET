@@ -43,6 +43,17 @@ public static class AgentToolPolicy
                 .Concat(frozenAssignment.Policy.DeniedToolIds)
                 .Distinct(StringComparer.OrdinalIgnoreCase),
         ];
+        string[] allowedNetworkToolIds = frozenAssignment.Policy.AllowNetwork
+            ? [.. frozenAssignment.Policy.AllowedNetworkToolIds.Intersect(parentAllowed, StringComparer.OrdinalIgnoreCase)]
+            : [];
+        if (parent.AllowedNetworkToolIds is { } parentNetworkToolIds)
+        {
+            allowedNetworkToolIds =
+            [
+                .. allowedNetworkToolIds.Intersect(parentNetworkToolIds, StringComparer.OrdinalIgnoreCase),
+            ];
+        }
+
         var approvedRoots = IntersectApprovedRoots(
             parent.ApprovedRoots,
             frozenAssignment.Scope.Files.Concat(frozenAssignment.Scope.Directories),
@@ -71,6 +82,7 @@ public static class AgentToolPolicy
                 .ToArray(),
             AllowedExecutables = parent.AllowedExecutables,
             AllowedNetworkHosts = frozenAssignment.Policy.AllowNetwork ? parent.AllowedNetworkHosts : [],
+            AllowedNetworkToolIds = allowedNetworkToolIds,
             ModelVisibleToolSnapshotId = null,
             ModelContextWindowTokens = null,
             ModelRequestOutputReserveTokens = null,

@@ -131,6 +131,15 @@ public static class DelegationPlanValidator
         ValidateText(assignment.Policy.ContextPolicyVersion, nameof(assignment.Policy.ContextPolicyVersion), maximumText);
         ValidateText(assignment.Policy.ToolPolicyVersion, nameof(assignment.Policy.ToolPolicyVersion), maximumText);
         assignment.Policy.ResultLimits.Validate();
+        if ((!assignment.Policy.AllowNetwork && assignment.Policy.AllowedNetworkToolIds.Count > 0)
+            || assignment.Policy.AllowedNetworkToolIds.Except(
+                assignment.Policy.AllowedToolIds,
+                StringComparer.OrdinalIgnoreCase).Any())
+        {
+            throw new InvalidDataException(
+                "Assignment network tool ids must be a subset of allowed tools and require network authority.");
+        }
+
         if (assignment.Deadline <= plan.AcceptedAt || assignment.Tasks.Count < 1
             || Exceeds(assignment.Tasks.Count, limits.EffectiveLimit(limits.MaximumTasksPerAssignment)))
         {

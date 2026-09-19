@@ -1,17 +1,217 @@
 namespace Threadsmith.ParallelAgents.Tests;
 
+using System.Net;
+using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
+using Threadsmith.Tools.Jira;
 using Xunit;
 
 /// <summary>Verifies Plan 91 model-facing contracts and frozen child policy construction.</summary>
 public sealed class Plan91DelegationToolTests
 {
+    /// <summary>A read-only child executes Jira under its narrowed network and tool policy.</summary>
+    [Fact]
+    public async Task ReadOnlyChildExecutesExplicitlyEligibleJiraTool()
+    {
+        const string canary = "Delegated Jira description canary";
+        using var handler = new DelegatedJiraHandler(canary);
+        using var http = new HttpClient(handler);
+        var options = new JiraOptions
+        {
+            Providers = new Dictionary<string, JiraProviderOptions>
+            {
+                ["work-jira"] = new()
+                {
+                    Enabled = true,
+                    SiteUrl = "https://example.atlassian.net",
+                    EndpointMode = "site",
+                    Authentication = new()
+                    {
+                        Username = "developer@example.org",
+                        SecretReference = "secrets:jira:delegated",
+                    },
+                },
+            },
+        };
+        var jira = new JiraTool(
+            new JiraCloudClient(http, new DelegatedJiraSecrets(), options),
+            options,
+            TestPromptLoader.Instance);
+        var registry = new ToolRegistry([jira]);
+        var workspaceId = WorkspaceId.New();
+        var baseline = new WorkspaceBaseline(
+            workspaceId,
+            Environment.CurrentDirectory,
+            DateTimeOffset.UtcNow,
+            [],
+            GitRevision: "delegated-jira-baseline",
+            ApprovedRoots: ["."],
+            TrustLevel: RepositoryTrustLevel.TrustedRead);
+        var snapshots = new ConversationToolSnapshotStore();
+        var context = CreateExecutionContext(
+            workspaceId,
+            ConversationSensitivity.None,
+            registry,
+            snapshots,
+            visibleToolIds: ["jira"],
+            allowedNetworkHosts: ["example.atlassian.net"]);
+        var plan = new DelegateAgentsPlanFactory(
+            new StubWorkspaceResolver(baseline),
+            new SessionModelPreferences(ModelProfileId.New(), ReasoningLevel.None),
+            snapshots,
+            TestPromptLoader.Instance).Create(
+                new DelegateAgentsInput
+                {
+                    Agents =
+                    [
+                        new DelegateAgentRequest
+                        {
+                            Role = AgentRole.Explorer,
+                            Task = "Read APP-123.",
+                            Context = "Use Jira.",
+                            ToolAccess = DelegateAgentToolAccess.ReadOnly,
+                        },
+                    ],
+                },
+                context);
+        var assignment = Assert.Single(plan.Assignments);
+        var childContext = AgentToolPolicy.Scope(
+            context.Invocation,
+            plan,
+            assignment,
+            baseline.RepositoryPath);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(
+            registry,
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance);
+
+        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = context.SessionId,
+            RunId = assignment.ChildRunId,
+            ToolId = "jira",
+            ArgumentsJson = "{\"kind\":\"read\",\"issue\":\"APP-123\",\"provider\":\"work-jira\"}",
+            Context = childContext,
+            Phase = RunPhase.EvidenceCollection,
+        });
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.Contains(canary, result.ResultJson, StringComparison.Ordinal);
+        Assert.Equal(["jira"], assignment.Policy.AllowedToolIds);
+        Assert.Equal(["jira"], assignment.Policy.AllowedNetworkToolIds);
+        Assert.True(assignment.Policy.AllowNetwork);
+        Assert.Equal(["example.atlassian.net"], childContext.AllowedNetworkHosts);
+        Assert.Equal(["jira"], childContext.AllowedNetworkToolIds);
+        Assert.Equal(1, handler.Requests);
+    }
+
+    /// <summary>Jira network authority does not authorize another read-only tool's network claims.</summary>
+    [Fact]
+    public async Task ReadOnlyChildNetworkAuthorityIsScopedToOptedInToolIds()
+    {
+        var jira = new MetadataTool(
+            "jira",
+            ToolCategory.ExternalSearch,
+            ToolSideEffect.ReadOnly,
+            readOnlySubagentNetworkAvailable: true,
+            networkHost: "jira.example.test");
+        var repositoryExtension = new MetadataTool(
+            "repository_extension",
+            ToolCategory.RepositoryInspection,
+            ToolSideEffect.ReadOnly,
+            networkHost: "extension.example.test");
+        var registry = new ToolRegistry([jira, repositoryExtension]);
+        var workspaceId = WorkspaceId.New();
+        var baseline = new WorkspaceBaseline(
+            workspaceId,
+            Environment.CurrentDirectory,
+            DateTimeOffset.UtcNow,
+            [],
+            GitRevision: "delegated-network-policy-baseline",
+            ApprovedRoots: ["."],
+            TrustLevel: RepositoryTrustLevel.TrustedRead);
+        var snapshots = new ConversationToolSnapshotStore();
+        var context = CreateExecutionContext(
+            workspaceId,
+            ConversationSensitivity.None,
+            registry,
+            snapshots,
+            visibleToolIds: ["jira", "repository_extension"],
+            allowedNetworkHosts: ["jira.example.test", "extension.example.test"]);
+        var plan = new DelegateAgentsPlanFactory(
+            new StubWorkspaceResolver(baseline),
+            new SessionModelPreferences(ModelProfileId.New(), ReasoningLevel.None),
+            snapshots,
+            TestPromptLoader.Instance).Create(
+                new DelegateAgentsInput
+                {
+                    Agents =
+                    [
+                        new DelegateAgentRequest
+                        {
+                            Role = AgentRole.Explorer,
+                            Task = "Inspect repository evidence.",
+                            Context = "Use read-only tools.",
+                            ToolAccess = DelegateAgentToolAccess.ReadOnly,
+                        },
+                    ],
+                },
+                context);
+        var assignment = Assert.Single(plan.Assignments);
+        var childContext = AgentToolPolicy.Scope(
+            context.Invocation,
+            plan,
+            assignment,
+            baseline.RepositoryPath);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(
+            registry,
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance);
+
+        var denied = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = context.SessionId,
+            RunId = assignment.ChildRunId,
+            ToolId = "repository_extension",
+            ArgumentsJson = "{}",
+            Context = childContext,
+            Phase = RunPhase.EvidenceCollection,
+        });
+        var allowed = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = context.SessionId,
+            RunId = assignment.ChildRunId,
+            ToolId = "jira",
+            ArgumentsJson = "{}",
+            Context = childContext,
+            Phase = RunPhase.EvidenceCollection,
+        });
+
+        Assert.False(denied.Succeeded);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
+        Assert.Equal(0, repositoryExtension.Executions);
+        Assert.True(allowed.Succeeded, allowed.Error);
+        Assert.Equal(1, jira.Executions);
+        Assert.Equal(["jira", "repository_extension"], assignment.Policy.AllowedToolIds);
+        Assert.Equal(["jira"], assignment.Policy.AllowedNetworkToolIds);
+        Assert.Equal(["jira"], childContext.AllowedNetworkToolIds);
+    }
+
     /// <summary>Verifies read-only and inherited children receive explicitly narrowed and fully inherited tool surfaces.</summary>
     [Fact]
     public void PlanFactory_FreezesContextSensitivityAndNarrowedTools()
@@ -36,6 +236,11 @@ public sealed class Plan91DelegationToolTests
                 ToolSideEffect.ExecutesCode,
                 conversationAvailable: true),
             new MetadataTool("web_search", ToolCategory.ExternalSearch, ToolSideEffect.ReadOnly),
+            new MetadataTool(
+                "jira",
+                ToolCategory.ExternalSearch,
+                ToolSideEffect.ReadOnly,
+                readOnlySubagentNetworkAvailable: true),
             new MetadataTool("invoke_skill", ToolCategory.Workflow, ToolSideEffect.ReadOnly),
             new MetadataTool(DelegateAgentsContract.ToolId, ToolCategory.Workflow, ToolSideEffect.ReadOnly, subagentAvailable: false),
             new MetadataTool("parent_only_read", ToolCategory.FileRead, ToolSideEffect.ReadOnly, subagentAvailable: false),
@@ -66,6 +271,7 @@ public sealed class Plan91DelegationToolTests
                 "parent_only_read",
                 DelegateAgentsContract.ToolId,
                 "invoke_skill",
+                "jira",
                 "read_file",
                 "run_process",
                 "web_search",
@@ -100,12 +306,15 @@ public sealed class Plan91DelegationToolTests
         Assert.Equal(["src/private/**"], plan.Assignments[0].Policy.ProhibitedPaths);
         Assert.Equal(ConversationSensitivity.Sensitive, plan.Assignments[0].Policy.Sensitivity);
         Assert.Equal(profileId, plan.Assignments[0].Policy.ModelProfileId);
-        Assert.Equal(["read_file"], plan.Assignments[0].Policy.AllowedToolIds);
-        Assert.False(plan.Assignments[0].Policy.AllowNetwork);
+        Assert.Equal(["jira", "read_file"], plan.Assignments[0].Policy.AllowedToolIds);
+        Assert.Equal(["jira"], plan.Assignments[0].Policy.AllowedNetworkToolIds);
+        Assert.Equal("delegate-agents-read-only/3", plan.Assignments[0].Policy.ToolPolicyVersion);
+        Assert.True(plan.Assignments[0].Policy.AllowNetwork);
         Assert.False(plan.Assignments[0].Policy.AllowProcesses);
         Assert.Equal(
-            ["approval_read", "invoke_skill", "read_file", "run_process", "web_search"],
+            ["approval_read", "invoke_skill", "jira", "read_file", "run_process", "web_search"],
             plan.Assignments[1].Policy.AllowedToolIds);
+        Assert.Equal(plan.Assignments[1].Policy.AllowedToolIds, plan.Assignments[1].Policy.AllowedNetworkToolIds);
         Assert.True(plan.Assignments[1].Policy.AllowNetwork);
         Assert.True(plan.Assignments[1].Policy.AllowProcesses);
         Assert.Equal(AgentRunMode.SharedWorkspace, plan.Assignments[1].Mode);
@@ -583,7 +792,8 @@ public sealed class Plan91DelegationToolTests
         IConversationToolSnapshotStore toolSnapshots,
         IReadOnlyList<string>? approvedRoots = null,
         IReadOnlyList<string>? prohibitedPaths = null,
-        IReadOnlyList<string>? visibleToolIds = null)
+        IReadOnlyList<string>? visibleToolIds = null,
+        IReadOnlyList<string>? allowedNetworkHosts = null)
     {
         var sessionId = SessionId.New();
         var runId = RunId.New();
@@ -607,7 +817,7 @@ public sealed class Plan91DelegationToolTests
                 ApprovedRoots = approvedRoots ?? ["."],
                 ProhibitedPaths = prohibitedPaths ?? [],
                 AllowedExecutables = ["dotnet"],
-                AllowedNetworkHosts = ["example.test"],
+                AllowedNetworkHosts = allowedNetworkHosts ?? ["example.test"],
                 ModelVisibleToolSnapshotId = snapshotId,
                 RequestedBy = "model",
             })
@@ -831,6 +1041,7 @@ public sealed class Plan91DelegationToolTests
     private sealed class MetadataTool : Tool<MetadataToolInput, string>
     {
         private readonly ToolDefinition _definition;
+        private readonly string? _networkHost;
 
         public MetadataTool(
             string id,
@@ -838,8 +1049,11 @@ public sealed class Plan91DelegationToolTests
             ToolSideEffect sideEffect,
             bool conversationAvailable = false,
             ApprovalLevel requiredApproval = ApprovalLevel.None,
-            bool subagentAvailable = true)
+            bool subagentAvailable = true,
+            bool readOnlySubagentNetworkAvailable = false,
+            string? networkHost = null)
         {
+            _networkHost = networkHost;
             _definition = new ToolDefinition
             {
                 Id = id,
@@ -857,21 +1071,79 @@ public sealed class Plan91DelegationToolTests
                 MaximumOutputBytes = 1_024,
                 ConversationAvailable = conversationAvailable,
                 SubagentAvailable = subagentAvailable,
+                ReadOnlySubagentNetworkAvailable = readOnlySubagentNetworkAvailable,
             };
         }
 
         public override ToolDefinition Definition => _definition;
+
+        internal int Executions { get; private set; }
 
         public override Task<ToolExecution<string>> ExecuteAsync(
             MetadataToolInput input,
             ToolExecutionContext context,
             CancellationToken cancellationToken = default)
         {
+            Executions++;
             return Task.FromResult(new ToolExecution<string>("ok", []));
         }
 
+        protected override IReadOnlyList<string> GetNetworkHosts(MetadataToolInput input)
+            => _networkHost is null ? [] : [_networkHost];
+
         protected override void ValidateInput(MetadataToolInput input)
         {
+        }
+    }
+
+    private sealed class DelegatedJiraSecrets : ISecretResolver
+    {
+        public Task<SecretResolutionResult> ResolveAsync(
+            SecretResolutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new SecretResolutionResult { Value = new SecretValue("delegated-token") });
+        }
+    }
+
+    private sealed class DelegatedJiraHandler(string description) : HttpMessageHandler
+    {
+        internal int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests++;
+            var body = JsonSerializer.Serialize(new
+            {
+                id = "10001",
+                key = "APP-123",
+                fields = new
+                {
+                    summary = "Delegated Jira issue",
+                    updated = "2026-09-18T12:00:00.000+0000",
+                    description = new
+                    {
+                        type = "doc",
+                        version = 1,
+                        content = new[]
+                        {
+                            new
+                            {
+                                type = "paragraph",
+                                content = new[] { new { type = "text", text = description } },
+                            },
+                        },
+                    },
+                },
+            });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
         }
     }
 

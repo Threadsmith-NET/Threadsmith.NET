@@ -12,6 +12,35 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class ToolActivityRenderingTests
 {
+    /// <summary>Successful built-in tools project final truncation without inspecting result content.</summary>
+    [Fact]
+    public static void GenericToolCompletionShowsFinalTruncationState()
+    {
+        var started = new ToolInvocationStarted(
+            SessionId.New(),
+            DateTimeOffset.UtcNow,
+            ToolInvocationId.New(),
+            "jira",
+            ActivityDetail: "read · APP-123 · work-jira")
+        {
+            TransientActivityDetail = "read · APP-123 · work-jira",
+        };
+        var completed = new ToolInvocationCompleted(
+            started.SessionId,
+            started.OccurredAt,
+            started.ToolInvocationId,
+            true,
+            ResultJson: "{\"Body\":\"private ticket body\"}",
+            IsTruncated: true,
+            TransientActivityDetail: "read · APP-123 · work-jira · description retrieved with limitations");
+
+        var text = InteractionPresentationFormatter.FormatToolCompletion(started, completed, false);
+
+        Assert.Contains("read · APP-123 · work-jira", text, StringComparison.Ordinal);
+        Assert.Contains("truncated", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("private ticket body", text, StringComparison.Ordinal);
+    }
+
     /// <summary>Expanded tool text counts encoded controls and its truncation notice within the display budget.</summary>
     [Theory]
     [InlineData(1)]

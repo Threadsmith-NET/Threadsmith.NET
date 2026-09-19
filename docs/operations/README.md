@@ -12,7 +12,7 @@ Use the [user guide](../user-guide.md) for the complete product walkthrough. The
 - [Session lifecycle](session-lifecycle.md)
 - [Model providers](model-providers.md)
 - [Secret discovery](secret-discovery.md)
-- [Tools](tools.md), [parallel tools](parallel-tools.md), and [web fetch](web-fetch.md)
+- [Tools](tools.md), [parallel tools](parallel-tools.md), [web fetch](web-fetch.md), [PR fetch](pr-fetch.md), and [Jira](jira.md)
 - [Skills](skills.md), [parallel agents](parallel-agents.md), and [lifecycle hooks](lifecycle-hooks.md)
 - [MCP connections](mcp-connections.md)
 - [Themes and terminal status](tui-themes.md)

@@ -366,6 +366,34 @@ public static class Milestone4Tests
         Assert.Contains("steps[0].fileIntents[0].path", exception.Diagnostic.SafeMessage, StringComparison.Ordinal);
     }
 
+    /// <summary>The host rejects empty file-intent arrays even when a provider bypasses strict tool schema enforcement.</summary>
+    [Fact]
+    public static void ModelOutputValidator_EmptyPlanFileIntents_AreRejectedAsMalformedOutput()
+    {
+        const string json = """
+            {
+              "summary": "Invalid empty-intent plan.",
+              "steps": [
+                {
+                  "title": "Missing scope",
+                  "description": "Attempt to submit a plan without a concrete file intent.",
+                  "fileIntents": [],
+                  "expectedOutcome": "Rejected safely.",
+                  "validation": []
+                }
+              ],
+              "risks": [],
+              "outstandingQuestions": []
+            }
+            """;
+
+        var exception = Assert.Throws<MalformedInvocationException>(() =>
+            ModelOutputValidator.ParsePlan(json));
+
+        Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
+        Assert.Contains("steps[0].fileIntents", exception.Diagnostic.SafeMessage, StringComparison.Ordinal);
+    }
+
     /// <summary>Null plan collections are corrective schema mismatches, not runtime null dereferences.</summary>
     [Theory]
     [InlineData("steps")]
@@ -658,6 +686,14 @@ public static class Milestone4Tests
         Assert.False(properties.TryGetProperty("revision", out _));
         var stepSchema = properties.GetProperty("steps").GetProperty("items");
         Assert.False(stepSchema.GetProperty("properties").TryGetProperty("stepId", out _));
+        var fileIntentsSchema = stepSchema.GetProperty("properties").GetProperty("fileIntents");
+        Assert.Equal(1, fileIntentsSchema.GetProperty("minItems").GetInt32());
+        Assert.Contains("Every step must declare at least one concrete file change", fileIntentsSchema.GetProperty("description").GetString(), StringComparison.Ordinal);
+        var destinationPathSchema = fileIntentsSchema.GetProperty("items").GetProperty("properties").GetProperty("destinationPath");
+        Assert.Equal(
+            ["string", "null"],
+            destinationPathSchema.GetProperty("type").EnumerateArray().Select(item => item.GetString()));
+        Assert.Contains("Required for Move/Rename", destinationPathSchema.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.Equal(2, projection.Plan?.Plan.SchemaVersion);
         Assert.Equal(1, projection.Plan?.Plan.Revision);
         Assert.NotEqual(default, projection.Plan?.Plan.Steps[0].StepId);
@@ -1907,7 +1943,7 @@ public static class Milestone4Tests
         {
             Steps =
             [
-                CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents() },
+                CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/missing.cs") },
                 CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("secrets/token.txt") },
             ],
         };

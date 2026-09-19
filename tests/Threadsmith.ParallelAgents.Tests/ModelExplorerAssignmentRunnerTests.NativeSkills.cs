@@ -1,8 +1,11 @@
 namespace Threadsmith.ParallelAgents.Tests;
 
 using System.Collections.Concurrent;
+using System.Net;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -10,6 +13,7 @@ using Threadsmith.Models;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
+using Threadsmith.Tools.Jira;
 using Threadsmith.Workspaces;
 using Xunit;
 
@@ -18,6 +22,108 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     private const string NativeReviewContext = "Frozen native review context. Jira BUG-123 acceptance criterion: metadata must retain compiler-backed descriptions.";
 
     private const string NativeChildResponse = "Ordinary child inspected Compiler-backed metadata.";
+
+    /// <summary>A native model procedure reads Jira through the ordinary governed tool pipeline.</summary>
+    [Fact]
+    public async Task NativeSkill_ReadsJiraThroughSharedPipeline()
+    {
+        const string canary = "Native skill Jira description canary";
+        using var handler = new NativeJiraHandler(canary);
+        using var http = new HttpClient(handler);
+        var options = new JiraOptions
+        {
+            Providers = new Dictionary<string, JiraProviderOptions>
+            {
+                ["work-jira"] = new()
+                {
+                    Enabled = true,
+                    SiteUrl = "https://example.atlassian.net",
+                    EndpointMode = "site",
+                    Authentication = new()
+                    {
+                        Username = "developer@example.org",
+                        SecretReference = "secrets:jira:native-skill",
+                    },
+                },
+            },
+        };
+        var jira = new JiraTool(
+            new JiraCloudClient(http, new NativeJiraSecrets(), options),
+            options,
+            TestPromptLoader.Instance);
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var registry = new ToolRegistry([jira]);
+        var pipeline = CreatePipeline(registry, events, sanitizer);
+        var profile = CreateProfile() with
+        {
+            ContextWindow = 32_768,
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, StructuredOutput = true },
+            IntendedWorkloadClasses = [WorkloadClass.General],
+            SupportedReasoningLevels = [ReasoningLevel.None],
+        };
+        var catalog = new ConfiguredModelCatalog([profile]);
+        var request = new SkillInvocationRequest
+        {
+            InvocationId = SkillInvocationId.New(),
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            WorkspaceId = WorkspaceId.New(),
+            Selector = "native-jira-test",
+            InputJson = "{}",
+            Trust = RepositoryTrustLevel.TrustedRead,
+            Phase = RunPhase.EvidenceCollection,
+            HostBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 1, ContentTokens = 8_000 },
+        };
+        var authority = new ToolInvocationContext
+        {
+            WorkspaceId = request.WorkspaceId,
+            RepositoryPath = Environment.CurrentDirectory,
+            TrustLevel = request.Trust,
+            AllowedToolIds = ["jira"],
+            AllowedNetworkHosts = ["example.atlassian.net"],
+            RequestedBy = "explicit-skill-user",
+        };
+        var plan = new SkillInvocationPlan
+        {
+            Request = request,
+            Package = new SkillPackageIdentity(
+                new SkillId("native-jira-test"),
+                "test.native-jira",
+                "1.0.0",
+                new SkillDigest("sha256", new string('b', 64)),
+                "test"),
+            Scope = SkillScope.User,
+            Verification = SkillVerificationState.DigestAllowlisted,
+            Compatibility = new SkillCompatibilityResult { IsCompatible = true },
+            ModelProfileId = profile.Id,
+            ReasoningLevel = ReasoningLevel.None.ToString(),
+            AvailableToolIds = ["jira"],
+            EffectiveBudget = request.HostBudget,
+        };
+        var provider = new NativeJiraProvider(canary);
+        var runner = new ModelSkillProcedureRunner(
+            provider,
+            registry,
+            pipeline,
+            sanitizer,
+            (_, _) => Task.FromResult(authority),
+            TestPromptLoader.Instance,
+            catalog);
+
+        var result = await runner.RunAsync(
+            plan,
+            new SkillWorkflowStep { StepId = "read", Kind = SkillWorkflowStepKind.InvokeProcedure },
+            iteration: 1,
+            content: [],
+            inputJson: "{}").WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Equal(2, result.ModelTurns);
+        Assert.Equal(1, result.ToolCalls);
+        Assert.Contains(canary, provider.ObservedToolResult, StringComparison.Ordinal);
+        Assert.Contains(canary, result.OutputJson, StringComparison.Ordinal);
+        Assert.Equal(1, handler.Requests);
+    }
 
     /// <summary>A native procedure delegates through ordinary tools while retaining its frozen model and request snapshots.</summary>
     [Theory]
@@ -304,6 +410,93 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         {
             _inner.Release(snapshotId);
             Released.Enqueue(snapshotId);
+        }
+    }
+
+    private sealed class NativeJiraProvider(string canary) : IModelProvider
+    {
+        private int _requests;
+
+        internal string ObservedToolResult { get; private set; } = string.Empty;
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _requests++;
+            await Task.Yield();
+            if (_requests == 1)
+            {
+                Assert.Contains(request.Tools, tool => tool.Name == "jira");
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "jira",
+                        "{\"kind\":\"read\",\"issue\":\"APP-123\",\"provider\":\"work-jira\"}"),
+                };
+                yield break;
+            }
+
+            ObservedToolResult = Assert.Single(request.Messages, message =>
+                message.Role == ModelMessageRole.Tool && message.ToolName == "jira").GetModelVisibleContent();
+            Assert.Contains(canary, ObservedToolResult, StringComparison.Ordinal);
+            yield return new ModelChunk
+            {
+                Text = JsonSerializer.Serialize(new { succeeded = true, description = canary }),
+                FinishReason = ModelFinishReason.Stop,
+            };
+        }
+    }
+
+    private sealed class NativeJiraSecrets : ISecretResolver
+    {
+        public Task<SecretResolutionResult> ResolveAsync(
+            SecretResolutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new SecretResolutionResult { Value = new SecretValue("native-token") });
+        }
+    }
+
+    private sealed class NativeJiraHandler(string description) : HttpMessageHandler
+    {
+        internal int Requests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Requests++;
+            var body = JsonSerializer.Serialize(new
+            {
+                id = "10001",
+                key = "APP-123",
+                fields = new
+                {
+                    summary = "Native Jira issue",
+                    updated = "2026-09-18T12:00:00.000+0000",
+                    description = new
+                    {
+                        type = "doc",
+                        version = 1,
+                        content = new[]
+                        {
+                            new
+                            {
+                                type = "paragraph",
+                                content = new[] { new { type = "text", text = description } },
+                            },
+                        },
+                    },
+                },
+            });
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            });
         }
     }
 }

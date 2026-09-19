@@ -1,6 +1,6 @@
 # Threadsmith.NET User Guide
 
-For reviews scoped to a hosted pull request, use the maintained review skill with a PR URL. GitHub.com and Bitbucket Cloud use one `pr_fetch` tool with configured accounts, existing Secrets and shared operation caching. See [PR review examples](code-review.md#review-a-pull-request) and [configuration and refresh](operations/pr-fetch.md).
+For reviews scoped to a hosted pull request, use the maintained review skill with a PR URL. GitHub.com and Bitbucket Cloud use one `pr_fetch` tool with configured accounts, existing Secrets and shared operation caching. See [PR review examples](code-review.md#review-a-pull-request) and [configuration and refresh](operations/pr-fetch.md). The optional `jira` tool can read a configured Jira Cloud issue description from a key or supported browse URL; see [Jira issue reads](operations/jira.md).
 
 Threadsmith.NET is a terminal-first, .NET-native coding harness. It combines conversational assistance with host-enforced repository boundaries, trust levels, tool policy, review, transactional mutation, and validation.
 
@@ -18,6 +18,8 @@ This guide documents the currently implemented user-facing behavior. Features de
    - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
 6. [How repository changes are governed](#how-repository-changes-are-governed)
 7. [Tools and tool availability](#tools-and-tool-availability)
+   - [Hosted pull-request retrieval](#hosted-pull-request-retrieval)
+   - [Jira Cloud issue reads](#jira-cloud-issue-reads)
 8. [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning)
 9. [Repository configuration](#repository-configuration)
 10. [Themes and session status](#themes-and-session-status)
@@ -817,7 +819,7 @@ These settings narrow runtime use independently of availability:
 
 For `list_files` and `search`, the optional `path` is relative to the repository. Omitting it, passing `null`, an empty or whitespace-only string, or `"."` selects the repository root. This works the same way for the main agent and subagents, without granting access outside their approved roots or to prohibited files. `read_file` still needs a nonblank file path, and `search` still needs a nonblank query.
 
-The catalog includes repository listing/reading/search, typed local Git inspection, normalized .NET inventory, semantic symbol/reference/implementation discovery, controlled process execution, current date/time, and other host-governed capabilities. Recursive repository listing and text search skip prohibited/reparse-point descendants; installed releases include a RID-matched ripgrep executable and use it through a bounded `rg` fast path for whole-repository literal text searches, respecting repository ignore files while including relevant hidden files. Source-development launches prefer the same app-local `tools/rg(.exe)` layout and may use an `rg` found on `PATH` when no staged payload exists. Regex searches, narrowed globs, configured prohibited-path boundaries, unavailable ripgrep, or a failed native invocation use the confined managed scanner. Search prunes `.git`, `bin`, `obj`, SQLite databases (including `.threadsmith/threadsmith.db`), and oversized files as applicable; files that become locked, inaccessible, or unavailable are skipped without aborting the managed scan. Results and native output remain bounded. On Windows these tools also skip reserved DOS device-name entries such as `nul` so one unopenable path cannot abort the remaining inspection. Use `code_explore` when natural-language C# questions, exact C# symbols, stable symbol IDs, or repository-relative C# paths should return current source or safe current-context back-references, compiler-proven flow among named anchors, dispatch branches, or compact impact context; use granular semantic tools for exact follow-up; use `search` for exact text and regular expressions.
+The catalog includes repository listing/reading/search, typed local Git inspection, normalized .NET inventory, semantic symbol/reference/implementation discovery, controlled process execution, current date/time, optional governed Jira issue reads, and other host-governed capabilities. Recursive repository listing and text search skip prohibited/reparse-point descendants; installed releases include a RID-matched ripgrep executable and use it through a bounded `rg` fast path for whole-repository literal text searches, respecting repository ignore files while including relevant hidden files. Source-development launches prefer the same app-local `tools/rg(.exe)` layout and may use an `rg` found on `PATH` when no staged payload exists. Regex searches, narrowed globs, configured prohibited-path boundaries, unavailable ripgrep, or a failed native invocation use the confined managed scanner. Search prunes `.git`, `bin`, `obj`, SQLite databases (including `.threadsmith/threadsmith.db`), and oversized files as applicable; files that become locked, inaccessible, or unavailable are skipped without aborting the managed scan. Results and native output remain bounded. On Windows these tools also skip reserved DOS device-name entries such as `nul` so one unopenable path cannot abort the remaining inspection. Use `code_explore` when natural-language C# questions, exact C# symbols, stable symbol IDs, or repository-relative C# paths should return current source or safe current-context back-references, compiler-proven flow among named anchors, dispatch branches, or compact impact context; use granular semantic tools for exact follow-up; use `search` for exact text and regular expressions.
 
 The typed Git tools are `git_diff`, `git_log`, `git_show`, `git_blame`, and `git_compare_branches`. They accept closed modes and validated revision tokens, treat path filters as literal repository-relative data after `--`, preserve unusual filenames through NUL-delimited normalization, classify blobs before text decoding, disable pagers/color/external diff and text-conversion behavior, perform no remote access, and truthfully report bounded commits, paths, lines, patches, bytes, and execution time. The model-facing `git_diff` and `git_show` contracts use only an optional `paths` array with at most 64 entries; a one-item array retains existing single-file behavior. `git_diff` supports working-tree, staged, root/ordinary commit, direct-range, and merge-base comparisons. Branch comparison reports its merge base, ahead/behind counts, and normalized changed paths. Git is evaluated by executable policy, and recursive evidence omits descendants outside approved roots or matching prohibited paths.
 
@@ -925,6 +927,134 @@ Configure it with scalar values:
   }
 }
 ```
+
+### Hosted pull-request retrieval
+
+The optional `pr_fetch` tool reads provider-authoritative evidence for GitHub.com and Bitbucket Cloud pull requests. It returns metadata and a complete changed-file inventory, with bounded provider diff pages when requested. It does not check out a branch, write repository files, post review comments, or reconstruct a comparison from local branch tips. The maintained review skill uses this tool when a review starts from a hosted PR URL.
+
+`pr_fetch` is registered only when startup loads at least one enabled account from trusted user or machine configuration. Account bindings belong under `tools.prFetch.providers` in `~/.threadsmith/config.json` or the machine configuration:
+
+```json
+{
+  "tools": {
+    "prFetch": {
+      "providers": {
+        "work-github": {
+          "type": "github",
+          "enabled": true,
+          "authentication": {
+            "mode": "bearer",
+            "secretReference": "secrets:github:review-token"
+          }
+        },
+        "work-bitbucket": {
+          "type": "bitbucketCloud",
+          "enabled": true,
+          "authentication": {
+            "mode": "basic",
+            "username": "developer@example.org",
+            "secretReference": "secrets:bitbucket:review-token"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+GitHub accounts support unauthenticated public reads or bearer authentication using `mode: "bearer"` and a `secretReference`. Bitbucket Cloud supports public reads, bearer access tokens, or API tokens using Basic authentication with the Atlassian email as `username`. Put referenced values in the user Secrets file rather than ordinary configuration:
+
+```json
+{
+  "secrets": {
+    "github": {
+      "review-token": "<GitHub-read-token>"
+    },
+    "bitbucket": {
+      "review-token": "<Bitbucket-API-token>"
+    }
+  }
+}
+```
+
+Complete setup as follows:
+
+1. If `tools.enabled` or `tools.allow` is present, add `pr_fetch` while preserving the other required entries.
+2. Add `api.github.com` or `api.bitbucket.org`, as applicable, to `tools.allowedNetworkHosts`.
+3. Restart Threadsmith after adding or changing an account profile.
+4. Open the target repository, run `/tools`, select **Fetch Pull Request**, and accept the repository-bound outbound disclosure.
+
+If **Fetch Pull Request** is absent from `/tools`, confirm that trusted configuration contains at least one enabled provider, then restart. Repository configuration may disable an account or lower limits but cannot add, enable, rebind, or redirect one.
+
+Use `kind: "inventory"` for metadata and the complete added, modified, removed, and renamed file list. Use `kind: "diff"` only when patch content or changed-line evidence is needed:
+
+```json
+{"url":"https://github.com/owner/repository/pull/123","kind":"inventory"}
+```
+
+```json
+{"url":"https://github.com/owner/repository/pull/123","kind":"diff"}
+```
+
+The unique matching account is selected from trusted URL patterns; supply `provider` when configured patterns are ambiguous. Supported PR subviews and fragments normalize to the canonical PR URL. If a result returns a `cursor`, call `pr_fetch` once with the same URL and kind plus that exact cursor, continuing until `deliveryComplete` is true and the cursor is null. Use `refresh: true` without a cursor to discard and reacquire the bounded operation snapshot.
+
+Live progress identifies the account, inventory/diff kind, first or continuation page, refresh state, and canonical URL. Results report acquisition and delivery completeness, source/destination commit identities, file coverage, and any diff limitations. Before delivery completes, treat the evidence as provisional. Authorized parent, skill, and child executions can reuse the in-memory operation cache, but every invocation still passes normal tool, network, disclosure, and budget policy. See [pull-request retrieval](operations/pr-fetch.md) for URL routing, cursor semantics, cache lifetime, bounds, and provider-specific authentication.
+
+### Jira Cloud issue reads
+
+The optional `jira` tool reads one Jira Cloud issue through the ordinary governed tool pipeline. It accepts an issue key such as `APP-123` or a supported browse URL such as `https://example.atlassian.net/browse/APP-123?source=mail#description`. It retrieves bounded identity, summary, and standard-description fields as untrusted evidence. It does not search Jira, fetch comments or attachments, follow description links, or edit, comment on, or transition tickets.
+
+Jira is registered only when startup loads at least one enabled account from trusted user or machine configuration. The following scoped-token profile belongs under `tools` in `~/.threadsmith/config.json` or the machine configuration:
+
+```json
+{
+  "tools": {
+    "jira": {
+      "providers": {
+        "work-jira": {
+          "type": "jiraCloud",
+          "enabled": true,
+          "siteUrl": "https://example.atlassian.net",
+          "endpointMode": "scopedGateway",
+          "cloudId": "11111111-2222-4333-8444-555555555555",
+          "authentication": {
+            "mode": "basic",
+            "username": "developer@example.org",
+            "secretReference": "secrets:jira:work-token"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Create a scoped token with the classic `read:jira-work` scope and use the tenant's cloud ID. For an API token without scopes, set `endpointMode` to `site` and omit `cloudId`. Scoped mode contacts `api.atlassian.com`; unscoped mode contacts the exact `.atlassian.net` host in `siteUrl`. Threadsmith never falls back between modes.
+
+Store the token value in the user Secrets file at `~/.threadsmith/secrets/config.json`, not in ordinary configuration:
+
+```json
+{
+  "secrets": {
+    "jira": {
+      "work-token": "<your-Atlassian-API-token>"
+    }
+  }
+}
+```
+
+Complete setup as follows:
+
+1. If `tools.enabled` or `tools.allow` is present, add `jira` while preserving the other required entries.
+2. Add `api.atlassian.com` to `tools.allowedNetworkHosts` for scoped mode, or add the configured tenant hostname for unscoped mode.
+3. Restart Threadsmith after adding or changing the account profile.
+4. Open the target repository, run `/tools`, select **Jira**, and accept the repository-bound outbound disclosure.
+
+If **Jira** is absent from `/tools`, confirm that trusted configuration contains at least one provider with `enabled: true`, then restart. A repository configuration file may disable an account or lower its limits, but cannot introduce, enable, or rebind a Jira account.
+
+The model-facing operation uses `kind: "read"`; future edit and transition kinds are not available. A key uses the only enabled account unless `provider` is supplied, while a browse URL selects a profile by its trusted site host or configured exact alias. Ambiguous keys require an explicit provider. Query strings and fragments on a valid `/browse/{key}` URL are parsed locally and are not forwarded to Jira.
+
+Live tool progress shows the operation, ticket key, selected account, and outcome without dumping ticket content. The description remains available to the model, so requests such as "Read `APP-123` and summarize the acceptance criteria" or "Show me the ticket description" can use or display it in the normal assistant response. Rich Jira descriptions are projected to bounded plain text; `bodyComplete`, `limitations`, and truncation state disclose unsupported media/cards or an omitted suffix. See [Jira issue reads](operations/jira.md) for custom browse aliases, bounds, rotation, failure behavior, and complete examples.
 
 ### Governed web search
 
@@ -1181,6 +1311,15 @@ The recommended durable personal store is the strict-JSON file `~/.threadsmith/s
 {
   "secrets": {
     "BRAVE_SEARCH_API_KEY": "<credential>",
+    "github": {
+      "review-token": "<credential>"
+    },
+    "bitbucket": {
+      "review-token": "<credential>"
+    },
+    "jira": {
+      "work-token": "<credential>"
+    },
     "models": {
       "example": "<credential>"
     }
@@ -1204,6 +1343,7 @@ Repository values cannot satisfy credentials requiring user-owned or managed aut
 |---|---|---|
 | OpenAI-compatible configured model | Optional `secretKeyReference` | `RepositoryOwned` |
 | Brave `web_search` | Required API-key reference | `UserOwned` |
+| Jira Cloud issue read | Selected account's API-token reference | `UserOwned` |
 | MCP stdio scope, static HTTP headers, and optional OAuth client secret | Conditional profile references | `UserOwned` |
 | Managed HTTP lifecycle hook | Conditional single bearer reference | `UserOwned` |
 | Private configured NuGet advisory source | Conditional source credential | `UserOwned` |

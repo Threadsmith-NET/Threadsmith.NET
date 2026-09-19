@@ -266,6 +266,9 @@ public sealed record ToolDefinition
     /// <summary>Whether this tool may be included in a subagent's inherited tool surface.</summary>
     public bool SubagentAvailable { get; init; } = true;
 
+    /// <summary>Whether a read-only subagent may receive this network tool under its frozen policy.</summary>
+    public bool ReadOnlySubagentNetworkAvailable { get; init; }
+
     /// <summary>Whether identical invocations may repeat in later responses; identical siblings in one response remain invalid.</summary>
     public bool AllowDuplicateInvocations { get; init; }
 
@@ -310,6 +313,9 @@ public sealed record ToolInvocationContext
 
     /// <summary>Network hostnames permitted for network-aware tools.</summary>
     public IReadOnlyList<string> AllowedNetworkHosts { get; init; } = [];
+
+    /// <summary>Optional tool-id restriction on use of allowed network hosts; null preserves ordinary host behavior.</summary>
+    public IReadOnlyList<string>? AllowedNetworkToolIds { get; init; }
 
     /// <summary>Tool identifiers permitted by repository configuration; empty permits registered tools.</summary>
     public IReadOnlyList<string> AllowedToolIds { get; init; } = [];
@@ -522,6 +528,9 @@ public sealed record ToolExecutionContext(
 {
     /// <summary>Authoritative run phase for this invocation.</summary>
     public RunPhase Phase { get; init; } = RunPhase.Intake;
+
+    /// <summary>Effective serialized output ceiling after configured runtime wrappers are applied.</summary>
+    public int? MaximumOutputBytes { get; init; }
 }
 
 /// <summary>Non-generic execution envelope retained inside the tool runtime.</summary>
@@ -548,7 +557,8 @@ internal interface IPostSanitizationToolOutputBoundary
     PostSanitizationToolOutput BoundSanitizedOutput(
         string resultJson,
         string? modelResultContent,
-        ToolInvocationContext context);
+        ToolInvocationContext context,
+        int maximumOutputBytes);
 }
 
 /// <summary>Sanitized tool output after applying a tool-specific model boundary.</summary>

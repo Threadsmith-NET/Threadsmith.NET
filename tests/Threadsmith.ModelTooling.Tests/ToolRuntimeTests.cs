@@ -880,6 +880,68 @@ public static partial class ToolRuntimeTests
         }
     }
 
+    /// <summary>The effective tool-runtime cap bounds both structured and Markdown code-explore output.</summary>
+    [Fact]
+    public static async Task CodeExplorePipeline_RuntimeCapBoundsMarkdownOutput()
+    {
+        const int maximumOutputBytes = 4_200;
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var options = new CodeExploreOptions
+            {
+                AdaptiveSizingEnabled = false,
+                MaximumResultBytes = 12_000,
+                MaximumMarkdownBytes = 12_000,
+            };
+            var tool = new CodeExploreOutputFormattingTool(
+                new StaticCodeExploreResultTool(CreateSanitizerExpansionCodeExploreResult()),
+                new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
+                TestPromptLoader.Instance,
+                options);
+            await using var events = new DomainEventStream();
+            var pipeline = CreatePipeline(
+                events,
+                [tool],
+                sanitizer: new ExpandingCodeExploreSanitizer(),
+                runtimeOptions: new ToolRuntimeOptions
+                {
+                    ByTool =
+                    [
+                        new ToolRuntimeToolOverride
+                        {
+                            ToolId = "code_explore",
+                            MaximumOutputBytes = maximumOutputBytes,
+                        },
+                    ],
+                });
+
+            var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "code_explore",
+                ArgumentsJson = "{\"query\":\"inspect source\"}",
+                Context = CreateContext(repository) with
+                {
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    WorkspaceId = WorkspaceId.New(),
+                },
+            });
+
+            Assert.True(result.Succeeded, result.Error);
+            Assert.True(result.IsTruncated);
+            Assert.NotNull(result.ResultJson);
+            Assert.NotNull(result.ModelResultContent);
+            Assert.True(Encoding.UTF8.GetByteCount(result.ResultJson) <= maximumOutputBytes);
+            Assert.True(Encoding.UTF8.GetByteCount(result.ModelResultContent) <= maximumOutputBytes);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>An impossibly small model capacity fails without inventing a larger minimum output allowance.</summary>
     [Fact]
     public static async Task CodeExploreOutputFormattingTool_InsufficientModelBudget_RejectsWithoutInventingCapacity()
@@ -3703,10 +3765,11 @@ public static partial class ToolRuntimeTests
         IDomainEventStream events,
         IEnumerable<ITool> tools,
         ToolParallelOptions? parallelOptions = null,
-        IOutputSanitizer? sanitizer = null)
+        IOutputSanitizer? sanitizer = null,
+        ToolRuntimeOptions? runtimeOptions = null)
     {
         return new(
-                new ToolRegistry(tools),
+                new ToolRegistry(tools, runtimeOptions: runtimeOptions),
                 new DefaultPolicyEngine(),
                 new DenyApprovalPolicy(),
                 events,

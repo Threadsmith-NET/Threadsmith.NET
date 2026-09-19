@@ -547,40 +547,44 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 content,
                 input,
                 cancellationToken);
-            if (procedure.ModelTurns is < 1
-                || procedure.ModelTurns > remainingModelTurns
-                || procedure.ToolCalls < 0
-                || procedure.ToolCalls > remainingToolCalls)
-            {
-                throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
-            }
-
             var sideEffects = procedure.SideEffects ?? [];
-            var validatedOutput = await ValidateAgainstAssetAsync(
-                candidate,
-                step.OutputSchemaAsset,
-                procedure.OutputJson,
-                cancellationToken);
-            var validated = ValidateArtifactDeliveryContract(
-                candidate,
-                step,
-                validatedOutput,
-                sideEffects);
-            using var output = System.Text.Json.JsonDocument.Parse(validated);
-            return new SkillWorkflowStepResult
+            try
             {
-                Succeeded = step.SuccessProperty is null || output.RootElement.GetProperty(step.SuccessProperty).GetBoolean(),
-                Response = step.ResponseProperty is null ? null : output.RootElement.GetProperty(step.ResponseProperty).GetString(),
-                StepId = step.StepId,
-                Kind = step.Kind,
-                Iteration = iteration,
-                OutputJson = validated,
-                ContentTokens = content.Sum(item => item.EstimatedTokens),
-                ModelTurns = procedure.ModelTurns,
-                ToolCalls = procedure.ToolCalls,
-                SideEffects = sideEffects,
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
+                if (procedure.ModelTurns is < 1
+                    || procedure.ModelTurns > remainingModelTurns
+                    || procedure.ToolCalls < 0
+                    || procedure.ToolCalls > remainingToolCalls)
+                {
+                    throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
+                }
+
+                var validatedOutput = await ValidateAgainstAssetAsync(
+                    candidate,
+                    step.OutputSchemaAsset,
+                    procedure.OutputJson,
+                    cancellationToken);
+                using var output = System.Text.Json.JsonDocument.Parse(validatedOutput);
+                ValidateArtifactClaim(output.RootElement, sideEffects);
+                return new SkillWorkflowStepResult
+                {
+                    Succeeded = step.SuccessProperty is null || output.RootElement.GetProperty(step.SuccessProperty).GetBoolean(),
+                    Response = step.ResponseProperty is null ? null : output.RootElement.GetProperty(step.ResponseProperty).GetString(),
+                    StepId = step.StepId,
+                    Kind = step.Kind,
+                    Iteration = iteration,
+                    OutputJson = validatedOutput,
+                    ContentTokens = content.Sum(item => item.EstimatedTokens),
+                    ModelTurns = procedure.ModelTurns,
+                    ToolCalls = procedure.ToolCalls,
+                    SideEffects = sideEffects,
+                    RecordedAt = DateTimeOffset.UtcNow,
+                };
+            }
+            catch (Exception exception)
+            {
+                SkillProcedureInterruption.Attach(sideEffects, exception);
+                throw;
+            }
         }
 
         var actionKind = step.HostAction ?? MapAction(step.Kind);
@@ -798,48 +802,38 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
     }
 
-    private static string ValidateArtifactDeliveryContract(
-        SkillCatalogCandidate candidate,
-        SkillWorkflowStep step,
-        string valueJson,
+    private static void ValidateArtifactClaim(
+        JsonElement output,
         IReadOnlyList<SkillSideEffectRecord> sideEffects)
     {
-        if (!RequiresArtifactDeliveryContract(candidate, step))
-        {
-            return valueJson;
-        }
-
-        using var document = System.Text.Json.JsonDocument.Parse(valueJson);
-        if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object
-            || !document.RootElement.TryGetProperty("delivery", out var delivery)
-            || delivery.ValueKind != System.Text.Json.JsonValueKind.String
+        if (output.ValueKind != JsonValueKind.Object
+            || !output.TryGetProperty("delivery", out var delivery)
+            || delivery.ValueKind != JsonValueKind.String
             || !string.Equals(delivery.GetString(), "artifact", StringComparison.Ordinal))
         {
-            return valueJson;
+            return;
         }
 
-        if (!document.RootElement.TryGetProperty("artifact", out var artifact))
-        {
-            throw new InvalidDataException("Skill value declares artifact delivery but is missing required property 'artifact'.");
-        }
-
-        if (artifact.ValueKind != JsonValueKind.Object
+        if (!output.TryGetProperty("artifact", out var artifact)
+            || artifact.ValueKind != JsonValueKind.Object
             || !artifact.TryGetProperty("path", out var pathElement)
             || pathElement.ValueKind != JsonValueKind.String
-            || pathElement.GetString() is not { Length: > 0 } path
+            || string.IsNullOrWhiteSpace(pathElement.GetString())
             || !artifact.TryGetProperty("bytesWritten", out var bytesElement)
             || bytesElement.ValueKind != JsonValueKind.Number
-            || !bytesElement.TryGetInt64(out var bytesWritten))
+            || !bytesElement.TryGetInt64(out var bytesWritten)
+            || bytesWritten < 0)
         {
-            throw new InvalidDataException("Skill value declares artifact delivery but has incomplete artifact metadata.");
+            throw new InvalidDataException(
+                "Skill value declares artifact delivery but has incomplete artifact metadata.");
         }
 
+        var path = pathElement.GetString()!;
         if (!sideEffects.Any(item => IsMatchingArtifactSideEffect(item, path, bytesWritten)))
         {
-            throw new InvalidDataException("Skill value declares artifact delivery that was not observed in write_file side effects.");
+            throw new InvalidDataException(
+                "Skill value declares artifact delivery that was not observed in artifact side effects.");
         }
-
-        return valueJson;
     }
 
     private static bool IsMatchingArtifactSideEffect(
@@ -848,7 +842,6 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         long declaredBytesWritten)
     {
         return sideEffect.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
-            && sideEffect.ToolId.Equals("write_file", StringComparison.OrdinalIgnoreCase)
             && sideEffect.BytesWritten == declaredBytesWritten
             && sideEffect.Path is { Length: > 0 } observedPath
             && ArtifactPathsMatch(declaredPath, observedPath);
@@ -857,24 +850,10 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private static bool ArtifactPathsMatch(string declaredPath, string observedPath)
     {
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var declared = NormalizeArtifactClaimPath(declaredPath);
-        var observed = NormalizeArtifactClaimPath(observedPath);
-        return string.Equals(declared, observed, comparison);
-    }
-
-    private static string NormalizeArtifactClaimPath(string path)
-    {
-        return path.Replace('\\', '/').TrimEnd('/');
-    }
-
-    private static bool RequiresArtifactDeliveryContract(
-        SkillCatalogCandidate candidate,
-        SkillWorkflowStep step)
-    {
-        return candidate.Provenance.Scope == SkillScope.Maintained
-            && candidate.Metadata.SkillId.Value.Equals("review", StringComparison.Ordinal)
-            && step.Kind == SkillWorkflowStepKind.InvokeProcedure
-            && step.OutputSchemaAsset?.Equals("schemas/output.json", StringComparison.Ordinal) == true;
+        return string.Equals(
+            declaredPath.Replace('\\', '/'),
+            observedPath.Replace('\\', '/'),
+            comparison);
     }
 
     private static bool IsRootTypeMismatch(InvalidDataException exception)

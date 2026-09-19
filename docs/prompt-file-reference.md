@@ -38,11 +38,11 @@ Common editing rules:
 | System and phase prompts | 28 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 199 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 14 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **311** | Complete deployed catalog. |
+| **Total** | **312** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -715,6 +715,14 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 `Providers` is the ordinally sorted list of enabled configured account IDs, compiled adapter types and recognized web hosts, rendered at startup without resolving credentials. Routing patterns are read from account configuration by host code and are not rendered into this token. The description defines the required `kind` values `inventory` and `diff`, explains cursor continuity and the result's kind/continuation fields, and permits explicit account selection when supplied by the user or needed to resolve ambiguity. Wording cannot change retrieval scope, provider selection, trust, permission or cache authority. `Skill-Review.md` requests `kind:"inventory"` for the lead `pullRequest` handoff and reserves `kind:"diff"` for specialist patch evidence while retaining the five-role/report contract.
 
+#### `jira` family
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Tool-jira-Description.md` | Jira issue read, account selection and description-coverage guidance. | [`Providers`](#placeholder-providers) |
+
+For Jira, `Providers` is the ordinally sorted list of enabled configured account IDs and canonical Jira site hosts. It excludes browse aliases, account emails, cloud IDs and secret references. The description defines only `kind:"read"`; future mutation operations require a versioned contract and policy change. Wording cannot authorize another endpoint, account, scope, issue operation or linked-resource fetch.
+
 ### Skill prompts
 
 Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages.
@@ -951,7 +959,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-toolname"></a>`ToolName` | Display-safe or canonical name of the referenced tool. |
 | <a id="placeholder-toolresult"></a>`ToolResult` | Bounded serialized or textual result returned by a tool. |
 | <a id="placeholder-totalcallers"></a>`TotalCallers` | Total caller count before result projection bounds. |
-| <a id="placeholder-providers"></a>`Providers` | Sorted enabled configured PR account IDs, compiled adapter types and recognized web hosts, without credentials. |
+| <a id="placeholder-providers"></a>`Providers` | Sorted enabled configured account IDs and safe provider/site host metadata for `pr_fetch` and `jira`, without credentials, Jira aliases, emails, cloud IDs or secret references. |
 | <a id="placeholder-totalevidenceitems"></a>`TotalEvidenceItems` | Cumulative number of evidence and tool-result items observed by the delegated child after the current tool round. |
 | <a id="placeholder-totalfiles"></a>`TotalFiles` | Cumulative number of distinct attributable files observed by the delegated child after the current tool round. |
 | <a id="placeholder-totalimplementations"></a>`TotalImplementations` | Total implementation count before projection bounds. |

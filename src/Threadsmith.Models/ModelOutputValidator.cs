@@ -338,9 +338,11 @@ public static class ModelOutputValidator
             ValidatePlanText(step.Description, limits.MaximumDescriptionCharacters, $"{path}.description");
             ValidatePlanText(step.ExpectedOutcome, limits.MaximumSummaryCharacters, $"{path}.expectedOutcome");
             ValidatePlanTextItems(step.Validation, limits.MaximumMetadataItems, limits.MaximumSummaryCharacters, $"{path}.validation");
-            if (step.FileIntents is null || step.FileIntents.Count > limits.MaximumMetadataItems)
+            if (step.FileIntents is null
+                || step.FileIntents.Count < 1
+                || step.FileIntents.Count > limits.MaximumMetadataItems)
             {
-                throw new MalformedModelOutputException($"{path}.fileIntents must be an array with at most {limits.MaximumMetadataItems} entries.");
+                throw new MalformedModelOutputException($"{path}.fileIntents must contain between 1 and {limits.MaximumMetadataItems} entries.");
             }
 
             for (var intentIndex = 0; intentIndex < step.FileIntents.Count; intentIndex++)

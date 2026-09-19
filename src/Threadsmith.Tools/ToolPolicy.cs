@@ -112,7 +112,18 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
         }
 
-        foreach (var networkHost in tool.GetNetworkHosts(input))
+        var networkHosts = tool.GetNetworkHosts(input);
+        if (networkHosts.Count > 0
+            && context.AllowedNetworkToolIds is { } allowedNetworkToolIds
+            && !allowedNetworkToolIds.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase))
+        {
+            return new ToolPolicyDecision(
+                false,
+                requiredApproval,
+                "The tool is not allow-listed for network access in this execution context.");
+        }
+
+        foreach (var networkHost in networkHosts)
         {
             var configuredHost = context.AllowedNetworkHosts.Contains(
                 networkHost,

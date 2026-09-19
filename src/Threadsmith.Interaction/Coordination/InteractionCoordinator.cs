@@ -2253,9 +2253,12 @@ public sealed partial class InteractionCoordinator
     }
 
     private static string GetOutboundConsentPrompt(string toolId)
-        => toolId.Equals("pr_fetch", StringComparison.OrdinalIgnoreCase)
-            ? "Fetch Pull Request contacts the selected configured PR provider using host-managed credentials when configured. PR metadata, changed files and diff content are retrieved and supplied to the model as untrusted evidence. This tool cannot post reviews or modify repositories. Grant this repository-bound consent?"
-            : "Web Search may send query text to the configured provider. Selected results may be retrieved. An exact public HTTPS URL in your current request may be contacted only if the model invokes web_fetch; model-proposed destinations require separate inline approval. Fetched content is untrusted and supplied to the model. Grant this repository-bound consent?";
+        => toolId.ToLowerInvariant() switch
+        {
+            "pr_fetch" => "Fetch Pull Request contacts the selected configured PR provider using host-managed credentials when configured. PR metadata, changed files and diff content are retrieved and supplied to the model as untrusted evidence. This tool cannot post reviews or modify repositories. Grant this repository-bound consent?",
+            "jira" => "Jira contacts the selected configured Jira Cloud account using a host-managed API token. The requested issue identity, summary and description are retrieved and supplied to the model as untrusted evidence. This tool cannot search, edit, comment on or transition tickets. Grant this repository-bound consent?",
+            _ => "Web Search may send query text to the configured provider. Selected results may be retrieved. An exact public HTTPS URL in your current request may be contacted only if the model invokes web_fetch; model-proposed destinations require separate inline approval. Fetched content is untrusted and supplied to the model. Grant this repository-bound consent?",
+        };
 
     private async Task EnsureCurrentUserUrlConsentAsync(
         string rawMessage,

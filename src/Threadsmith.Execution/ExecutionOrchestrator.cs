@@ -92,71 +92,8 @@ public sealed class ExecutionOrchestrator :
         ExecutionStartRequest request,
         CancellationToken cancellationToken = default)
     {
-        ValidateStartRequest(request);
-        if (await _checkpoints.GetOutcomeAsync(request.RunId, cancellationToken) is not null)
-        {
-            throw new InvalidOperationException("A terminal execution cannot be started again.");
-        }
-
-        // A new execution may follow an external edit or manual rollback, even
-        // after /new. Freeze current approved endpoints before asking for edits;
-        // retries and approval keep this generation so later drift still conflicts.
-        var baseline = await _workspaces.PromoteBaselineAsync(
-            request.Baseline.WorkspaceId,
-            request.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray(),
-            cancellationToken);
-        request = request with
-        {
-            Baseline = baseline,
-            ValidationRequest = request.ValidationRequest with { Baseline = baseline },
-        };
-        var diagnosticIdentity = GetBaselineIdentity(request.Baseline);
-        var planHash = GetHash(JsonSerializer.Serialize(request.ApprovedPlan, JsonOptions));
-        var preparing = CreateCheckpoint(
-            request,
-            planHash,
-            diagnosticIdentity,
-            ExecutionCheckpointPhase.ImplementationPreparing,
-            nextAction: "start implementation model turn");
-        var requestState = await _artifacts.PublishAsync(
-            request.SessionId,
-            "executionStartRequest",
-            JsonSerializer.Serialize(request, JsonOptions),
-            cancellationToken);
-        preparing = preparing with { StateArtifact = requestState };
-        await SaveCheckpointAsync(preparing, cancellationToken);
-
-        try
-        {
-            return await PrepareInitialPlanProposalAsync(request, preparing, null, cancellationToken);
-        }
-        catch (OperationCanceledException)
-        {
-            var cancelled = preparing with
-            {
-                Phase = ExecutionCheckpointPhase.Cancelled,
-                NextAction = "explicit resume after repository revalidation",
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
-            await SaveCheckpointAsync(cancelled, CancellationToken.None);
-            throw;
-        }
-        catch (Exception exception)
-        {
-            await SaveCheckpointAsync(
-                preparing with
-                {
-                    Phase = ExecutionCheckpointPhase.Failed,
-                    NextAction = "inspect failure and submit a fresh request",
-                    RecordedAt = DateTimeOffset.UtcNow,
-                },
-                CancellationToken.None);
-            _logger.LogError(
-                exception,
-                "Execution preparation failed for run {RunId}.",
-                request.RunId.Value);
-            throw;
-        }
+        using var gate = await EnterRunContinuationGateAsync(request.RunId, cancellationToken);
+        return await StartCoreAsync(request, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -189,6 +126,8 @@ public sealed class ExecutionOrchestrator :
                 "The next plan must preserve the objective and workspace and advance the plan revision.");
         }
 
+        request = EnsurePlanValidationScope(request);
+
         var baseline = await _workspaces.PromoteBaselineAsync(
             request.Baseline.WorkspaceId,
             request.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray(),
@@ -201,7 +140,10 @@ public sealed class ExecutionOrchestrator :
         request = request with
         {
             Baseline = baseline,
-            ValidationRequest = request.ValidationRequest with { Baseline = baseline },
+            ValidationRequest = MergeValidationScope(
+                active.Request.ValidationRequest,
+                request.ValidationRequest,
+                baseline),
             InitialBudgetUsage = cumulativeBudgetUsed,
         };
         var firstStep = request.ApprovedPlan.Steps[0];
@@ -401,7 +343,7 @@ public sealed class ExecutionOrchestrator :
         {
             var restart = await RestoreStartRequestAsync(checkpoint, cancellationToken);
             ValidateLiveWorkspace(checkpoint, restart.Baseline);
-            var restarted = await StartAsync(restart, cancellationToken);
+            var restarted = await StartCoreAsync(restart, cancellationToken);
             await PublishResumeAsync(
                 sessionId,
                 runId,
@@ -521,6 +463,7 @@ public sealed class ExecutionOrchestrator :
         RunId runId,
         CancellationToken cancellationToken = default)
     {
+        using var gate = await EnterRunContinuationGateAsync(runId, cancellationToken);
         var active = await ResolveActiveAsync(sessionId, runId, cancellationToken);
         return active.Request with { InitialBudgetUsage = active.PlanningBudgetUsed };
     }
@@ -624,20 +567,36 @@ public sealed class ExecutionOrchestrator :
             throw new InvalidDataException("The objective boundary does not contain a completed current plan.");
         }
 
-        var validation = active.Validation
-            ?? throw new InvalidDataException("The completed objective has no validation result.");
+        var baseline = active.BaselineCapture
+            ?? throw new InvalidDataException("The completed objective has no validation baseline.");
+        var validated = await ValidateExecutionAsync(
+            active,
+            baseline,
+            active.AccumulatedResidualRisks
+                .Concat(active.Request.ApprovedPlan.Risks)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray(),
+            cancellationToken);
+        active = validated.Active;
+        var validation = validated.Validation;
+        var status = validation.Gate.Status == AcceptanceGateStatus.Passed
+            ? ExecutionCheckpointPhase.Completed
+            : ExecutionCheckpointPhase.Failed;
         var finalDiff = await PublishFinalDiffAsync(active, cancellationToken);
         var outcome = CreateOutcomeProjection(
-            active, validation, active.ApprovalProvenance, finalDiff, ExecutionCheckpointPhase.Completed);
+            active, validation, active.ApprovalProvenance, finalDiff, status);
         await RecordOutcomeAsync(outcome, cancellationToken);
         await SaveCheckpointAsync(
             checkpoint with
             {
-                Phase = ExecutionCheckpointPhase.Completed,
+                Phase = status,
                 CompletedStepIds = active.CompletedPlanStepIds,
                 DiffArtifact = finalDiff,
+                ValidationArtifact = validated.Artifact,
                 StateArtifact = await PublishStateAsync(active, cancellationToken),
-                NextAction = "terminal objective outcome recorded",
+                NextAction = status == ExecutionCheckpointPhase.Completed
+                    ? "terminal objective outcome recorded after cumulative validation"
+                    : "inspect cumulative validation failure and submit a fresh request",
                 RecordedAt = DateTimeOffset.UtcNow,
             },
             cancellationToken);
@@ -663,6 +622,79 @@ public sealed class ExecutionOrchestrator :
             command.RunId,
             cancellationToken);
         return active.Staged;
+    }
+
+    private async Task<ExecutionContinuation> StartCoreAsync(
+        ExecutionStartRequest request,
+        CancellationToken cancellationToken)
+    {
+        ValidateStartRequest(request);
+        if (await _checkpoints.GetOutcomeAsync(request.RunId, cancellationToken) is not null)
+        {
+            throw new InvalidOperationException("A terminal execution cannot be started again.");
+        }
+
+        request = EnsurePlanValidationScope(request);
+
+        // A new execution may follow an external edit or manual rollback, even
+        // after /new. Freeze current approved endpoints before asking for edits;
+        // retries and approval keep this generation so later drift still conflicts.
+        var baseline = await _workspaces.PromoteBaselineAsync(
+            request.Baseline.WorkspaceId,
+            request.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray(),
+            cancellationToken);
+        request = request with
+        {
+            Baseline = baseline,
+            ValidationRequest = request.ValidationRequest with { Baseline = baseline },
+        };
+        var diagnosticIdentity = GetBaselineIdentity(request.Baseline);
+        var planHash = GetHash(JsonSerializer.Serialize(request.ApprovedPlan, JsonOptions));
+        var preparing = CreateCheckpoint(
+            request,
+            planHash,
+            diagnosticIdentity,
+            ExecutionCheckpointPhase.ImplementationPreparing,
+            nextAction: "start implementation model turn");
+        var requestState = await _artifacts.PublishAsync(
+            request.SessionId,
+            "executionStartRequest",
+            JsonSerializer.Serialize(request, JsonOptions),
+            cancellationToken);
+        preparing = preparing with { StateArtifact = requestState };
+        await SaveCheckpointAsync(preparing, cancellationToken);
+
+        try
+        {
+            return await PrepareInitialPlanProposalAsync(request, preparing, null, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            var cancelled = preparing with
+            {
+                Phase = ExecutionCheckpointPhase.Cancelled,
+                NextAction = "explicit resume after repository revalidation",
+                RecordedAt = DateTimeOffset.UtcNow,
+            };
+            await SaveCheckpointAsync(cancelled, CancellationToken.None);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            await SaveCheckpointAsync(
+                preparing with
+                {
+                    Phase = ExecutionCheckpointPhase.Failed,
+                    NextAction = "inspect failure and submit a fresh request",
+                    RecordedAt = DateTimeOffset.UtcNow,
+                },
+                CancellationToken.None);
+            _logger.LogError(
+                exception,
+                "Execution preparation failed for run {RunId}.",
+                request.RunId.Value);
+            throw;
+        }
     }
 
     private static void ValidateContinueRequest(ContinueExecutionRequest request)
@@ -801,19 +833,11 @@ public sealed class ExecutionOrchestrator :
             active.Request.Baseline.WorkspaceId,
             committed.ChangedFiles,
             cancellationToken);
-        var appliedDiff = CreateAppliedDiff(active.Staged, committed);
         active = active with
         {
             Commit = committed,
             CurrentBatchFullyApplied = IsEntireStagedSetApplied(active.Staged, committed),
-            AppliedFiles = active.AppliedFiles
-                .Concat(committed.ChangedFiles)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToArray(),
-            AppliedPlanStepIds = active.AppliedPlanStepIds,
-            AppliedDiffs = string.IsNullOrWhiteSpace(appliedDiff)
-                ? active.AppliedDiffs
-                : [.. active.AppliedDiffs, appliedDiff],
+            AppliedFiles = MergePaths(active.AppliedFiles, committed.ChangedFiles),
             AppliedLifecycleChanges = active.AppliedLifecycleChanges
                 .Concat(CreateAppliedLifecycleChanges(active.Staged, committed))
                 .ToArray(),
@@ -860,30 +884,14 @@ public sealed class ExecutionOrchestrator :
         string provenance,
         CancellationToken cancellationToken)
     {
-        var committed = active.Commit
-            ?? throw new InvalidDataException("Applied execution state has no authoritative commit result.");
-        var validation = await _mutationValidation.HandleAsync(
-            new ValidateMutationCommand
-            {
-                Request = active.Request.ValidationRequest,
-                BaselineCapture = baseline,
-                MutationSet = active.Staged.MutationSet,
-                RequiredApprovalsPresent = committed.AppliedMutations.Count > 0,
-                FinalDiffAvailable = active.AppliedDiffs.Count > 0,
-                ResidualRisks = active.Request.ApprovedPlan.Risks,
-            },
+        var validated = await ValidateExecutionAsync(
+            active,
+            baseline,
+            active.Request.ApprovedPlan.Risks,
             cancellationToken);
-        var validationArtifact = await _artifacts.PublishAsync(
-            request.SessionId,
-            "executionValidation",
-            JsonSerializer.Serialize(validation, JsonOptions),
-            cancellationToken);
-        active = active with
-        {
-            Validation = validation,
-            PriorValidations = [.. active.PriorValidations, validation],
-        };
-        _runs[request.RunId] = active;
+        active = validated.Active;
+        var validation = validated.Validation;
+        var validationArtifact = validated.Artifact;
 
         var succeeded = validation.Gate.Status == AcceptanceGateStatus.Passed;
         if (!active.CurrentBatchFullyApplied)
@@ -1028,6 +1036,40 @@ public sealed class ExecutionOrchestrator :
 
         return await CompleteAsync(
             active, applied, validation, validationArtifact, provenance, cancellationToken);
+    }
+
+    private async Task<ValidationExecutionResult> ValidateExecutionAsync(
+        ActiveExecution active,
+        BaselineCapture baseline,
+        IReadOnlyList<string> residualRisks,
+        CancellationToken cancellationToken)
+    {
+        var committed = active.Commit
+            ?? throw new InvalidDataException("Applied execution state has no authoritative commit result.");
+        var validation = await _mutationValidation.HandleAsync(
+            new ValidateMutationCommand
+            {
+                Request = active.Request.ValidationRequest,
+                BaselineCapture = baseline,
+                MutationSet = active.Staged.MutationSet,
+                RequiredApprovalsPresent = committed.AppliedMutations.Count > 0,
+                FinalDiffAvailable = active.AppliedFiles.Count > 0,
+                ResidualRisks = residualRisks,
+            },
+            cancellationToken);
+        var artifact = await _artifacts.PublishAsync(
+            active.Request.SessionId,
+            "executionValidation",
+            JsonSerializer.Serialize(validation, JsonOptions),
+            cancellationToken);
+        var validated = active with
+        {
+            Validation = validation,
+            FailedValidationCount = active.FailedValidationCount
+                + (validation.Gate.Status == AcceptanceGateStatus.Passed ? 0 : 1),
+        };
+        _runs[active.Request.RunId] = validated;
+        return new ValidationExecutionResult(validated, validation, artifact);
     }
 
     private async Task<ExecutionOutcomeProjection> CompleteAsync(
@@ -1238,8 +1280,6 @@ public sealed class ExecutionOrchestrator :
             false,
             null,
             null,
-            [],
-            [],
             [],
             [])
         {
@@ -1461,6 +1501,32 @@ public sealed class ExecutionOrchestrator :
 
         var active = JsonSerializer.Deserialize<ActiveExecution>(json, JsonOptions)
             ?? throw new InvalidDataException("The continuation-state artifact is invalid.");
+        if (active.Request is null
+            || active.Request.ValidationRequest is null
+            || active.Request.ApprovedPlan?.Steps is null
+            || active.AppliedFiles is null)
+        {
+            throw new InvalidDataException("The continuation-state artifact is incomplete.");
+        }
+
+        var legacyFailedValidations = active.LegacyPriorValidations?.OfType<MutationValidationResult>().Count(item =>
+            item.Gate.Status != AcceptanceGateStatus.Passed) ?? 0;
+        var scopedRequest = EnsurePlanValidationScope(active.Request);
+        scopedRequest = scopedRequest with
+        {
+            ValidationRequest = scopedRequest.ValidationRequest with
+            {
+                AffectedPaths = MergePaths(
+                    scopedRequest.ValidationRequest.AffectedPaths,
+                    active.AppliedFiles),
+            },
+        };
+        active = active with
+        {
+            Request = scopedRequest,
+            FailedValidationCount = Math.Max(active.FailedValidationCount, legacyFailedValidations),
+            LegacyPriorValidations = null,
+        };
         if (checkpoint.SchemaVersion == 1)
         {
             var inferredStepId = active.CurrentStepId != default
@@ -1803,6 +1869,73 @@ public sealed class ExecutionOrchestrator :
         }
     }
 
+    private static ExecutionStartRequest EnsurePlanValidationScope(ExecutionStartRequest request)
+    {
+        var affectedPaths = MergePaths(
+            request.ValidationRequest.AffectedPaths,
+            request.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths()));
+        return request with
+        {
+            ValidationRequest = request.ValidationRequest with { AffectedPaths = affectedPaths },
+        };
+    }
+
+    private static BuildValidationRequest MergeValidationScope(
+        BuildValidationRequest previous,
+        BuildValidationRequest current,
+        WorkspaceBaseline baseline)
+    {
+        var comparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var projects = previous.Projects
+            .Concat(current.Projects)
+            .GroupBy(project => project.FilePath, comparer)
+            .Select(group =>
+            {
+                var items = group.ToArray();
+                var latest = items[^1];
+                return latest with
+                {
+                    TargetFrameworks = items
+                        .SelectMany(project => project.TargetFrameworks)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray(),
+                    Confidence = (SemanticConfidenceLevel)items.Min(project => (int)project.Confidence),
+                    IsDirectlyChanged = items.Any(project => project.IsDirectlyChanged),
+                };
+            })
+            .ToArray();
+        var projectInventory = current.ProjectInventory
+            .Concat(previous.ProjectInventory)
+            .DistinctBy(project => project.FilePath, comparer)
+            .ToArray();
+        return current with
+        {
+            Baseline = baseline,
+            Projects = projects,
+            AffectedPaths = MergePaths(previous.AffectedPaths, current.AffectedPaths),
+            Confidence = (SemanticConfidenceLevel)Math.Min(
+                (int)previous.Confidence,
+                (int)current.Confidence),
+            ProjectInventory = projectInventory,
+            Stages = previous.Stages.Concat(current.Stages).Distinct().ToArray(),
+        };
+    }
+
+    private static IReadOnlyList<string> MergePaths(params IEnumerable<string>[] sources)
+    {
+        var comparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        return sources
+            .SelectMany(source => source)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Replace('\\', '/'))
+            .Distinct(comparer)
+            .ToArray();
+    }
+
     private static void ValidateBaselineCapture(
         ExecutionStartRequest request,
         BaselineCapture capture)
@@ -1853,15 +1986,14 @@ public sealed class ExecutionOrchestrator :
             || active.LastCompletedPlanOrdinal < 0
             || active.LastCompletedPlanOrdinal > active.PlanOrdinal
             || active.BatchOrdinal < 1
-            || active.PriorValidations is null
             || active.AppliedFiles is null
             || active.AppliedPlanStepIds is null
-            || active.AppliedDiffs is null
             || active.AppliedLifecycleChanges is null
             || active.AppliedLifecycleReconciliations is null
             || active.CompletedPlanStepIds is null
             || active.CompletedBehaviorSummary is null
             || active.AccumulatedResidualRisks is null
+            || active.FailedValidationCount < 0
             || active.PlanningBudgetUsed is null
             || active.PlanningBudgetUsed.Tokens < 0
             || active.PlanningBudgetUsed.Calls < 0
@@ -2092,23 +2224,6 @@ public sealed class ExecutionOrchestrator :
             && staged.MutationSet.Mutations.All(mutation => appliedMutationIds.Contains(mutation.MutationId));
     }
 
-    private static string CreateAppliedDiff(
-        StagedMutationSet staged,
-        MutationCommitResult committed)
-    {
-        HashSet<MutationId> appliedMutationIds = [.. committed.AppliedMutations];
-        if (IsEntireStagedSetApplied(staged, committed))
-        {
-            return staged.Preview.UnifiedDiff;
-        }
-
-        return string.Join(
-            Environment.NewLine,
-            staged.Preview.Changes
-                .Where(change => appliedMutationIds.Contains(change.MutationId))
-                .Select(change => change.UnifiedDiff));
-    }
-
     private static IReadOnlyList<FileLifecycleChange> CreateAppliedLifecycleChanges(
         StagedMutationSet staged,
         MutationCommitResult committed)
@@ -2153,8 +2268,7 @@ public sealed class ExecutionOrchestrator :
             FinalDiff = finalDiff,
             Validation = validation,
             ApprovalProvenance = provenance,
-            CorrectionAttempts = active.PriorValidations.Count(item =>
-                item.Gate.Status != AcceptanceGateStatus.Passed),
+            CorrectionAttempts = active.FailedValidationCount,
             RollbackAvailable = active.AppliedFiles.Count > 0,
             ResidualRisks = active.AccumulatedResidualRisks.Concat(active.Request.ApprovedPlan.Risks)
                 .Concat(failed ? validation?.Gate.Reasons ?? [] : [])
@@ -2284,6 +2398,11 @@ public sealed class ExecutionOrchestrator :
         }
     }
 
+    private sealed record ValidationExecutionResult(
+        ActiveExecution Active,
+        MutationValidationResult Validation,
+        ExecutionArtifactReference Artifact);
+
     private sealed record ActiveExecution(
         ExecutionStartRequest Request,
         StagedMutationSet Staged,
@@ -2294,10 +2413,8 @@ public sealed class ExecutionOrchestrator :
         bool CurrentBatchFullyApplied,
         BaselineCapture? BaselineCapture,
         MutationCommitResult? Commit,
-        IReadOnlyList<MutationValidationResult> PriorValidations,
         IReadOnlyList<string> AppliedFiles,
-        IReadOnlyList<StepId> AppliedPlanStepIds,
-        IReadOnlyList<string> AppliedDiffs)
+        IReadOnlyList<StepId> AppliedPlanStepIds)
     {
         public IReadOnlyDictionary<string, ExecutionArtifactReference?> OriginalFiles { get; init; }
             = new Dictionary<string, ExecutionArtifactReference?>();
@@ -2307,6 +2424,12 @@ public sealed class ExecutionOrchestrator :
         public IReadOnlyList<FileLifecycleReconciliation> AppliedLifecycleReconciliations { get; init; } = [];
 
         public MutationValidationResult? Validation { get; init; }
+
+        public int FailedValidationCount { get; init; }
+
+        [JsonPropertyName("PriorValidations")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+        public IReadOnlyList<MutationValidationResult>? LegacyPriorValidations { get; init; }
 
         public int PlanOrdinal { get; init; } = 1;
 

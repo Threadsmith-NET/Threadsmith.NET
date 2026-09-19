@@ -68,11 +68,16 @@ public sealed partial class ExecutionOrchestratorTests
 
     /// <summary>Verifies multiple ordinary plans can complete one objective without terminalizing the shared run early.</summary>
     [Theory]
-    [InlineData(false, false, false)]
-    [InlineData(true, false, false)]
-    [InlineData(false, true, false)]
-    [InlineData(false, false, true)]
-    public async Task IncrementalPlans_PreserveCumulativeOutcome(bool failValidation, bool cancelAfterProposal, bool failCommit)
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
+    public async Task IncrementalPlans_PreserveCumulativeOutcome(
+        bool failValidation,
+        bool cancelAfterProposal,
+        bool failCommit,
+        bool failFinalValidation)
     {
         var fixture = CreateFixture();
         await using var events = fixture.Events;
@@ -111,6 +116,19 @@ public sealed partial class ExecutionOrchestratorTests
             AllowPlanContinuation = true,
             InitialBudgetUsage = new BudgetDimensions(10, 1, TimeSpan.FromSeconds(1)),
             CorrectionBudget = 0,
+            ValidationRequest = fixture.StartRequest.ValidationRequest with
+            {
+                AffectedPaths = ["src/First.cs"],
+                Projects =
+                [
+                    new AffectedProject(
+                        "First",
+                        "src/First/First.csproj",
+                        ["net10.0"],
+                        SemanticConfidenceLevel.FullSemantic,
+                        true),
+                ],
+            },
         };
         var terminalWait = fixture.Orchestrator.WaitForOutcomeAsync(firstRequest.RunId);
 
@@ -130,6 +148,12 @@ public sealed partial class ExecutionOrchestratorTests
                 failValidation ? AcceptanceGateStatus.Failed : AcceptanceGateStatus.Passed,
                 failValidation ? ["Second tranche failed validation."] : []),
         });
+        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult with
+        {
+            Gate = new AcceptanceGateResult(
+                failFinalValidation ? AcceptanceGateStatus.Failed : AcceptanceGateStatus.Passed,
+                failFinalValidation ? ["Cumulative validation found a regression."] : []),
+        });
 
         var currentBaseline = fixture.WorkspaceResolver
             .GetWorkspace(firstRequest.Baseline.WorkspaceId)
@@ -138,7 +162,20 @@ public sealed partial class ExecutionOrchestratorTests
         {
             Baseline = currentBaseline,
             ApprovedPlan = secondPlan,
-            ValidationRequest = firstRequest.ValidationRequest with { Baseline = currentBaseline },
+            ValidationRequest = firstRequest.ValidationRequest with
+            {
+                Baseline = currentBaseline,
+                AffectedPaths = ["src/Second.cs"],
+                Projects =
+                [
+                    new AffectedProject(
+                        "Second",
+                        "src/Second/Second.csproj",
+                        ["net10.0"],
+                        SemanticConfidenceLevel.FullSemantic,
+                        true),
+                ],
+            },
             InitialBudgetUsage = new BudgetDimensions(15, 2, TimeSpan.FromSeconds(2)),
         };
         using var cancellation = new CancellationTokenSource();
@@ -180,9 +217,26 @@ public sealed partial class ExecutionOrchestratorTests
         var secondBoundary = await fixture.Orchestrator.WaitForPlanCompletionAsync(
             firstRequest.RunId,
             afterPlanOrdinal: 1);
+        var boundaryCheckpoint = await fixture.Checkpoints.GetCheckpointAsync(firstRequest.RunId)
+            ?? throw new InvalidOperationException("The second plan boundary checkpoint is missing.");
+        var compactState = await fixture.Artifacts.ReadAsync(boundaryCheckpoint.StateArtifact!)
+            ?? throw new InvalidOperationException("The second plan boundary state is missing.");
+        Assert.DoesNotContain("\"AppliedDiffs\"", compactState, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"PriorValidations\"", compactState, StringComparison.Ordinal);
         var outcome = await fixture.Orchestrator.CompleteObjectiveAsync(
             firstRequest.SessionId,
             firstRequest.RunId);
+
+        if (failFinalValidation)
+        {
+            Assert.Equal(ExecutionCheckpointPhase.Failed, outcome.Status);
+            Assert.Equal(
+                ["Cumulative validation found a regression."],
+                outcome.Validation?.Gate.Reasons);
+            Assert.Same(outcome, await terminalWait);
+            Assert.Equal(3, fixture.ValidationHandler.Commands.Count);
+            return;
+        }
 
         Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, secondPending.Phase);
         Assert.Equal(2, secondPending.PlanOrdinal);
@@ -194,7 +248,13 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(["src/Example.cs"], outcome.ChangedFiles);
         Assert.Same(outcome, await terminalWait);
         Assert.Equal(2, fixture.CommitHandler.Commands.Count);
-        Assert.Equal(2, fixture.ValidationHandler.Commands.Count);
+        Assert.Equal(3, fixture.ValidationHandler.Commands.Count);
+        var finalValidation = fixture.ValidationHandler.Commands[^1].Request;
+        Assert.Contains("src/First.cs", finalValidation.AffectedPaths);
+        Assert.Contains("src/Second.cs", finalValidation.AffectedPaths);
+        Assert.Contains("src/Example.cs", finalValidation.AffectedPaths);
+        Assert.Contains(finalValidation.Projects, project => project.Name == "First");
+        Assert.Contains(finalValidation.Projects, project => project.Name == "Second");
         Assert.Equal(15, fixture.ProposalHandler.Commands[1].BudgetUsed?.Tokens);
         Assert.Equal(2, fixture.ProposalHandler.Commands[1].BudgetUsed?.Calls);
     }
@@ -623,6 +683,38 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
         await second;
         Assert.Single(fixture.CommitHandler.Commands);
+    }
+
+    /// <summary>Resume request restoration cannot race an initial proposal already in flight.</summary>
+    [Fact]
+    public async Task ConcurrentResumeRequest_WaitsForInitialProposalGate()
+    {
+        var fixture = CreateFixture(blockFirstProposal: true);
+        await using var events = fixture.Events;
+        var start = fixture.Orchestrator.StartAsync(fixture.StartRequest);
+        await fixture.ProposalHandler.FirstHandleEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        var resumeRequest = fixture.Orchestrator.GetResumeRequestAsync(
+            fixture.StartRequest.SessionId,
+            fixture.StartRequest.RunId);
+        try
+        {
+            Assert.False(resumeRequest.IsCompleted);
+        }
+        finally
+        {
+            fixture.ProposalHandler.ReleaseFirstHandle();
+        }
+
+        var pending = await start.WaitAsync(TimeSpan.FromSeconds(5));
+        var restoredRequest = await resumeRequest.WaitAsync(TimeSpan.FromSeconds(5));
+        var resumed = await fixture.Orchestrator.ResumeAsync(
+            fixture.StartRequest.SessionId,
+            fixture.StartRequest.RunId);
+
+        Assert.Equal(fixture.StartRequest.RunId, restoredRequest.RunId);
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
+        Assert.Equal(pending.MutationSetId, resumed.MutationSetId);
+        Assert.Single(fixture.ProposalHandler.Commands);
     }
 
     /// <summary>Verifies resume waits for an in-flight continuation on the same run.</summary>

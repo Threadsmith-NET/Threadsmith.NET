@@ -1699,6 +1699,8 @@ public sealed partial class SessionApplication
     {
         if (string.Equals(name, CompleteObjectiveToolName, StringComparison.OrdinalIgnoreCase))
         {
+            ModelOutputValidator.ValidateNoArgumentInvocation(
+                new ToolRequestModelOutput(name, arguments));
             streamState.ObjectiveComplete = true;
         }
         else

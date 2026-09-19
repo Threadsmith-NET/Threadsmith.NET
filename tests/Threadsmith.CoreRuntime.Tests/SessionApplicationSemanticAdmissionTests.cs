@@ -181,6 +181,64 @@ public static class SessionApplicationSemanticAdmissionTests
         Assert.True(published);
     }
 
+    /// <summary>A restored run resumes under the same workspace gate used by semantic publication.</summary>
+    [Fact]
+    public static async Task ResumeRun_WorkspacePublicationWaitsForAdmissionAndAttachment()
+    {
+        await using var events = new DomainEventStream();
+        var refresh = new WorkspaceSemanticRefreshCoordinator();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        var workspaceId = WorkspaceId.New();
+        var (application, orchestrator) = CreateResumeApplication(
+            events, refresh, sessionId, runId, workspaceId);
+
+        var resume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
+        await orchestrator.ResumeEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        var published = false;
+        var publication = application.PublishAsync(
+            sessionId,
+            workspaceId,
+            _ =>
+            {
+                published = true;
+                return Task.FromResult(true);
+            });
+
+        Assert.False(publication.IsCompleted);
+        Assert.False(published);
+        orchestrator.ReleaseResume();
+        _ = await resume.WaitAsync(TimeSpan.FromSeconds(5));
+        orchestrator.ReleaseOutcome();
+        Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
+        Assert.True(await publication.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.True(published);
+    }
+
+    /// <summary>Concurrent resume requests attach only one completion observer.</summary>
+    [Fact]
+    public static async Task ResumeRun_ConcurrentRequestsAttachOneObserver()
+    {
+        await using var events = new DomainEventStream();
+        var refresh = new WorkspaceSemanticRefreshCoordinator();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        var workspaceId = WorkspaceId.New();
+        var (application, orchestrator) = CreateResumeApplication(
+            events, refresh, sessionId, runId, workspaceId);
+
+        var firstResume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
+        await orchestrator.ResumeEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        var secondResume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
+        orchestrator.ReleaseResume();
+
+        _ = await firstResume.WaitAsync(TimeSpan.FromSeconds(5));
+        _ = await secondResume.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(1, orchestrator.WaitForOutcomeCallCount);
+        orchestrator.ReleaseOutcome();
+        Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
+    }
+
     /// <summary>Workspace aliases share publication exclusion while unrelated workspaces proceed.</summary>
     [Fact]
     public static async Task HandleAsync_WorkspacePublication_BlocksAliasButNotUnrelatedWorkspace()
@@ -362,6 +420,165 @@ public static class SessionApplicationSemanticAdmissionTests
         Assert.Equal(2, refresh.EnsureCount);
         Assert.Equal(1, Volatile.Read(ref budgetFactoryCalls));
         Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
+    }
+
+    private static (SessionApplication Application, BlockingResumeOrchestrator Orchestrator) CreateResumeApplication(
+        DomainEventStream events,
+        WorkspaceSemanticRefreshCoordinator refresh,
+        SessionId sessionId,
+        RunId runId,
+        WorkspaceId workspaceId)
+    {
+        var orchestrator = new BlockingResumeOrchestrator(sessionId, runId, workspaceId);
+        var application = new SessionApplication(
+            events,
+            new FakeModelProvider(new ScriptedSession()),
+            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            executionOrchestrator: orchestrator,
+            executionRequestFactory: (_, _, _, _, _) => Task.FromResult<ExecutionStartRequest?>(null),
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance,
+            semanticRefreshCoordinator: refresh);
+        application.RegisterRestoredSession(sessionId);
+        refresh.SetWorkspace(sessionId, workspaceId);
+        return (application, orchestrator);
+    }
+
+    private sealed class BlockingResumeOrchestrator : IExecutionOrchestrator
+    {
+        private readonly TaskCompletionSource _releaseOutcome =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private readonly TaskCompletionSource _releaseResume =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private readonly TaskCompletionSource _resumeEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private readonly ExecutionContinuation _continuation;
+        private readonly ExecutionOutcomeProjection _outcome;
+        private readonly ExecutionStartRequest _request;
+        private int _waitForOutcomeCallCount;
+
+        public BlockingResumeOrchestrator(SessionId sessionId, RunId runId, WorkspaceId workspaceId)
+        {
+            var baseline = new WorkspaceBaseline(
+                workspaceId,
+                Path.GetTempPath(),
+                DateTimeOffset.UtcNow,
+                [],
+                ApprovedRoots: ["src"],
+                TrustLevel: RepositoryTrustLevel.TrustedMutation);
+            var step = new ImplementationPlanStep
+            {
+                StepId = StepId.New(),
+                Title = "Restore work",
+                Description = "Restore the interrupted execution.",
+                FileIntents = [new PlanFileIntent { Kind = PlanFileChangeKind.Modify, Path = "src/Example.cs" }],
+                ExpectedOutcome = "Execution resumes.",
+                Validation = ["Validate the restored work."],
+            };
+            var plan = new ImplementationPlan
+            {
+                Summary = "Restore work",
+                Steps = [step],
+            };
+            _request = new ExecutionStartRequest
+            {
+                SessionId = sessionId,
+                RunId = runId,
+                Baseline = baseline,
+                Task = new TaskSpecification("Restore work", []),
+                ApprovedPlan = plan,
+                ValidationRequest = new BuildValidationRequest
+                {
+                    SessionId = sessionId,
+                    RunId = runId,
+                    Baseline = baseline,
+                    Confidence = SemanticConfidenceLevel.FullSemantic,
+                    Stages = [MutationValidationStage.Semantic],
+                },
+            };
+            _continuation = new ExecutionContinuation
+            {
+                SessionId = sessionId,
+                RunId = runId,
+                WorkspaceId = workspaceId,
+                PlanRevision = plan.Revision,
+                PlanHash = "plan",
+                Phase = ExecutionCheckpointPhase.CompletionPending,
+                DiagnosticBaselineIdentity = "baseline",
+                MutationBaselineIdentity = "baseline",
+                NextAction = "observe the terminal outcome",
+                RecordedAt = DateTimeOffset.UtcNow,
+            };
+            _outcome = new ExecutionOutcomeProjection
+            {
+                Key = new ProjectionKey("executionOutcome", runId.Value.ToString("D")),
+                SessionId = sessionId,
+                RunId = runId,
+                Status = ExecutionCheckpointPhase.Completed,
+                CompletedStepIds = [step.StepId],
+                ApprovalProvenance = "restored execution",
+            };
+        }
+
+        public Task ResumeEntered => _resumeEntered.Task;
+
+        public int WaitForOutcomeCallCount => Volatile.Read(ref _waitForOutcomeCallCount);
+
+        public void ReleaseOutcome()
+        {
+            _releaseOutcome.TrySetResult();
+        }
+
+        public void ReleaseResume()
+        {
+            _releaseResume.TrySetResult();
+        }
+
+        public Task<ExecutionStartRequest> GetResumeRequestAsync(
+            SessionId sessionId,
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_request);
+        }
+
+        public async Task<ExecutionContinuation> ResumeAsync(
+            SessionId sessionId,
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            _resumeEntered.TrySetResult();
+            await _releaseResume.Task.WaitAsync(cancellationToken);
+            return _continuation;
+        }
+
+        public Task<ExecutionContinuation> StartAsync(
+            ExecutionStartRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ExecutionOutcomeProjection> ContinueAsync(
+            ContinueExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public async Task<ExecutionOutcomeProjection> WaitForOutcomeAsync(
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _waitForOutcomeCallCount);
+            await _releaseOutcome.Task.WaitAsync(cancellationToken);
+            return _outcome;
+        }
     }
 
     private sealed class BlockingSemanticRefreshCoordinator : ISemanticRefreshCoordinator

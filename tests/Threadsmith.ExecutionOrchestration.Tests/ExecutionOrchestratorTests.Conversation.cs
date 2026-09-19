@@ -219,6 +219,37 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(maximumPlans > 1, scenario.Model.SecondRequest!.Tools.Any(tool => tool.Name == "propose_plan"));
     }
 
+    /// <summary>Completion arguments outside the advertised empty schema receive a corrective turn.</summary>
+    [Fact]
+    public async Task IncrementalPlanBoundary_MalformedCompletionArgumentsAreCorrected()
+    {
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync(maximumPlans: 1);
+        scenario.Model.EmitMalformedCompletionOnce = true;
+        var correction = new TaskCompletionSource<ModelCorrectionAttempted>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = scenario.Events.Subscribe((domainEvent, _) =>
+        {
+            if (domainEvent is ModelCorrectionAttempted attempted)
+            {
+                correction.TrySetResult(attempted);
+            }
+
+            return Task.CompletedTask;
+        });
+
+        var runId = await scenario.SubmitAndApprovePlanAsync();
+        var succeeded = await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId));
+        var attempted = await correction.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.True(succeeded);
+        Assert.Equal(ModelCorrectionCategory.PlanSchema, attempted.Category);
+        Assert.Equal(3, scenario.Model.RequestCount);
+        var archived = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
+        Assert.Contains(
+            archived.Messages,
+            message => message.Content?.Contains("\"Status\":\"Completed\"", StringComparison.Ordinal) == true);
+    }
+
     /// <summary>Fresh session/engine instances and subsequent same-process resumes reattach one observer.</summary>
     [Theory]
     [InlineData(false)]
@@ -245,6 +276,7 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
         Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(request.RunId));
         scenario.Model.ConfirmObjective = true;
+        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult);
         await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(request.SessionId, request.RunId));
 
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
@@ -691,6 +723,8 @@ public sealed partial class ExecutionOrchestratorTests
         private readonly int _planProposalCount;
         private int _requests;
 
+        private bool _malformedCompletionEmitted;
+
         public ConversationModel(ImplementationPlan plan, int planProposalCount)
         {
             _plan = plan;
@@ -704,6 +738,10 @@ public sealed partial class ExecutionOrchestratorTests
         public ModelStreamRequest? LastRequest { get; private set; }
 
         public bool ConfirmObjective { get; set; } = true;
+
+        public bool EmitMalformedCompletionOnce { get; set; }
+
+        public int RequestCount => _requests;
 
         public string ResponseText { get; set; } = "Hello from the ordinary conversation.";
 
@@ -736,11 +774,18 @@ public sealed partial class ExecutionOrchestratorTests
             }
 
             SecondRequest ??= request;
+            var completionArguments = "{}";
+            if (EmitMalformedCompletionOnce && !_malformedCompletionEmitted)
+            {
+                _malformedCompletionEmitted = true;
+                completionArguments = "{\"remainingWork\":\"tests\"}";
+            }
+
             yield return new ModelChunk
             {
                 Text = ResponseText,
                 Output = ConfirmObjective && request.Tools.Any(tool => tool.Name == "complete_objective")
-                    ? new ToolRequestModelOutput("complete_objective", "{}")
+                    ? new ToolRequestModelOutput("complete_objective", completionArguments)
                     : null,
                 FinishReason = ModelFinishReason.Stop,
             };

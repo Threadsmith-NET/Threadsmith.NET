@@ -276,7 +276,9 @@ public sealed class ValidationPipeline
                     .Select(project => project.FilePath)
                     .Distinct(StringComparer.OrdinalIgnoreCase)];
                 var changedFiles = new HashSet<string>(
-                    GetMutationPaths(mutationSet),
+                    request.AffectedPaths.Count > 0
+                        ? request.AffectedPaths
+                        : GetMutationPaths(mutationSet),
                     StringComparer.OrdinalIgnoreCase);
                 var diagnostics = await _semanticEngine.GetDiagnosticsAsync(
                     request.Baseline.WorkspaceId,

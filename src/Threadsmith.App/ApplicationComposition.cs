@@ -399,9 +399,12 @@ internal static class ApplicationComposition
 
                 var baseline = mutationCoordinator.GetWorkspace(workspaceId).Baseline;
                 var projectInventory = semantic.SemanticEngines.GetProjects(workspaceId);
+                var affectedPaths = plan.Steps
+                    .SelectMany(step => step.GetAffectedPaths())
+                    .ToArray();
                 var affectedProjects = AffectedProjectCalculator.Calculate(
                     baseline.RepositoryPath,
-                    plan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray(),
+                    affectedPaths,
                     projectInventory);
                 return new ExecutionStartRequest
                 {
@@ -416,6 +419,7 @@ internal static class ApplicationComposition
                         RunId = runId,
                         Baseline = baseline,
                         Projects = affectedProjects.Projects,
+                        AffectedPaths = affectedPaths,
                         Confidence = state.SemanticConfidence,
                         ProjectInventory = projectInventory,
                         Stages = validationStages,

@@ -115,70 +115,57 @@ public sealed partial class SessionApplication :
     {
         var orchestrator = _executionOrchestrator
             ?? throw new InvalidOperationException("The execution orchestrator is unavailable.");
-        var gate = _semanticAdmissionGates.GetOrAdd(
-            SemanticAdmissionKey.Create(command.SessionId, default), static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
+        _ = await GetResumeRegistrationAsync(command, cancellationToken);
+
+        var request = await orchestrator.GetResumeRequestAsync(
+            command.SessionId,
+            command.RunId,
+            cancellationToken);
+        if (_semanticRefreshCoordinator is null)
         {
-            _runs.TryGetValue(command.RunId, out var previous);
-            if (previous is not null && previous.SessionId != command.SessionId)
-            {
-                throw new UnauthorizedAccessException("The execution does not belong to the requesting session.");
-            }
-
-            if (previous?.Cancellation.IsCancellationRequested == true && previous.ExecutionObservation is { } observation)
-            {
-                await observation.WaitAsync(cancellationToken);
-            }
-
-            var checkpoint = await orchestrator.ResumeAsync(command.SessionId, command.RunId, cancellationToken);
-            if (previous is not null && !previous.Completion.Task.IsCompleted)
-            {
-                return checkpoint;
-            }
-
-            if (previous?.ExecutionObservation is { } finishedObservation)
-            {
-                await finishedObservation.WaitAsync(cancellationToken);
-            }
-
-            var request = await orchestrator.GetResumeRequestAsync(command.SessionId, command.RunId, cancellationToken);
-            var registration = CreateRunRegistration(
-                command.SessionId,
-                command.RunId,
-                request.Baseline.WorkspaceId,
-                request.Task,
-                RunPhase.ImplementationPreparing,
+            return await ResumeWithAdmissionAsync(
+                command,
+                request,
+                orchestrator,
                 cancellationToken);
-            var usage = registration.Budget.Accrue(request.InitialBudgetUsage);
-            if (usage.IsExhausted)
-            {
-                registration.Cancellation.Dispose();
-                throw new BudgetExceededException(usage.Reason ?? "Execution budget exhausted.");
-            }
-
-            registration.ExecutionStarted = true;
-            registration.IncrementalPlanExecution = request.AllowPlanContinuation;
-            registration.CompletedPlanCount = checkpoint.PlanOrdinal - 1;
-            registration.LastPublishedPlan = request.ApprovedPlan;
-            if (_conversationStore is not null)
-            {
-                var snapshot = await _conversationStore.GetSnapshotAsync(command.SessionId, cancellationToken: cancellationToken);
-                registration.SourceMessage = snapshot.Messages.FirstOrDefault(message =>
-                    message.RunId == command.RunId && message.Role == ConversationRole.User);
-                registration.CurrentMessageId = registration.SourceMessage?.Id;
-                registration.ConversationMode = snapshot.Mode;
-            }
-
-            _runs[command.RunId] = registration;
-            _steering.RegisterRun(command.SessionId, command.RunId);
-            registration.SteeringRegistered = true;
-            registration.ExecutionObservation = CompleteExecutionAsync(command.RunId, registration);
-            return checkpoint;
         }
-        finally
+
+        while (true)
         {
-            gate.Release();
+            var refresh = await _semanticRefreshCoordinator.EnsureCurrentAsync(
+                command.SessionId,
+                SemanticRefreshReason.UserAdmission,
+                cancellationToken);
+            if (refresh.WorkspaceId != request.Baseline.WorkspaceId)
+            {
+                throw new InvalidOperationException(
+                    "The resumed execution workspace no longer matches the session's semantic binding.");
+            }
+
+            var gate = _semanticAdmissionGates.GetOrAdd(
+                SemanticAdmissionKey.Create(command.SessionId, refresh.WorkspaceId),
+                static _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken);
+            try
+            {
+                if (!_semanticRefreshCoordinator.TryAdmitCurrent(
+                    command.SessionId,
+                    refresh.WorkspaceId,
+                    static () => true))
+                {
+                    continue;
+                }
+
+                return await ResumeAndAttachAsync(
+                    command,
+                    request,
+                    orchestrator,
+                    cancellationToken);
+            }
+            finally
+            {
+                gate.Release();
+            }
         }
     }
 
@@ -444,9 +431,9 @@ public sealed partial class SessionApplication :
         finally
         {
             if (registration.Completion.Task.IsCompleted
-                && _runs.TryRemove(command.RunId, out var completed))
+                && _runs.TryRemove(new KeyValuePair<RunId, RunRegistration>(command.RunId, registration)))
             {
-                completed.Cancellation.Dispose();
+                registration.Cancellation.Dispose();
             }
         }
     }
@@ -915,6 +902,108 @@ public sealed partial class SessionApplication :
         _steering.RegisterRun(command.SessionId, runId);
         registration.SteeringRegistered = true;
         return true;
+    }
+
+    private async Task<ExecutionContinuation> ResumeWithAdmissionAsync(
+        ResumeRunCommand command,
+        ExecutionStartRequest request,
+        IExecutionOrchestrator orchestrator,
+        CancellationToken cancellationToken)
+    {
+        var gate = _semanticAdmissionGates.GetOrAdd(
+            SemanticAdmissionKey.Create(command.SessionId, request.Baseline.WorkspaceId),
+            static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await ResumeAndAttachAsync(
+                command,
+                request,
+                orchestrator,
+                cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task<RunRegistration?> GetResumeRegistrationAsync(
+        ResumeRunCommand command,
+        CancellationToken cancellationToken)
+    {
+        _runs.TryGetValue(command.RunId, out var registration);
+        if (registration is not null && registration.SessionId != command.SessionId)
+        {
+            throw new UnauthorizedAccessException("The execution does not belong to the requesting session.");
+        }
+
+        if (registration?.Cancellation.IsCancellationRequested == true
+            && registration.ExecutionObservation is { } observation)
+        {
+            await observation.WaitAsync(cancellationToken);
+        }
+
+        return registration;
+    }
+
+    private async Task<ExecutionContinuation> ResumeAndAttachAsync(
+        ResumeRunCommand command,
+        ExecutionStartRequest request,
+        IExecutionOrchestrator orchestrator,
+        CancellationToken cancellationToken)
+    {
+        var previous = await GetResumeRegistrationAsync(command, cancellationToken);
+
+        var checkpoint = await orchestrator.ResumeAsync(
+            command.SessionId,
+            command.RunId,
+            cancellationToken);
+        if (previous is not null && !previous.Completion.Task.IsCompleted)
+        {
+            return checkpoint;
+        }
+
+        if (previous?.ExecutionObservation is { } finishedObservation)
+        {
+            await finishedObservation.WaitAsync(cancellationToken);
+        }
+
+        var registration = CreateRunRegistration(
+            command.SessionId,
+            command.RunId,
+            request.Baseline.WorkspaceId,
+            request.Task,
+            RunPhase.ImplementationPreparing,
+            cancellationToken);
+        var usage = registration.Budget.Accrue(request.InitialBudgetUsage);
+        if (usage.IsExhausted)
+        {
+            registration.Cancellation.Dispose();
+            throw new BudgetExceededException(usage.Reason ?? "Execution budget exhausted.");
+        }
+
+        registration.ExecutionStarted = true;
+        registration.IncrementalPlanExecution = request.AllowPlanContinuation;
+        registration.CompletedPlanCount = checkpoint.PlanOrdinal - 1;
+        registration.LastPublishedPlan = request.ApprovedPlan;
+        if (_conversationStore is not null)
+        {
+            var snapshot = await _conversationStore.GetSnapshotAsync(
+                command.SessionId,
+                cancellationToken: cancellationToken);
+            registration.SourceMessage = snapshot.Messages.FirstOrDefault(message =>
+                message.RunId == command.RunId && message.Role == ConversationRole.User);
+            registration.CurrentMessageId = registration.SourceMessage?.Id;
+            registration.ConversationMode = snapshot.Mode;
+        }
+
+        previous?.Cancellation.Dispose();
+        _runs[command.RunId] = registration;
+        _steering.RegisterRun(command.SessionId, command.RunId);
+        registration.SteeringRegistered = true;
+        registration.ExecutionObservation = CompleteExecutionAsync(command.RunId, registration);
+        return checkpoint;
     }
 
     private RunRegistration CreateRunRegistration(

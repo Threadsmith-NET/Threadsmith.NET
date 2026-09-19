@@ -18,6 +18,7 @@ This guide documents the currently implemented user-facing behavior. Features de
    - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
 6. [How repository changes are governed](#how-repository-changes-are-governed)
 7. [Tools and tool availability](#tools-and-tool-availability)
+   - [Hosted pull-request retrieval](#hosted-pull-request-retrieval)
    - [Jira Cloud issue reads](#jira-cloud-issue-reads)
 8. [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning)
 9. [Repository configuration](#repository-configuration)
@@ -927,6 +928,78 @@ Configure it with scalar values:
 }
 ```
 
+### Hosted pull-request retrieval
+
+The optional `pr_fetch` tool reads provider-authoritative evidence for GitHub.com and Bitbucket Cloud pull requests. It returns metadata and a complete changed-file inventory, with bounded provider diff pages when requested. It does not check out a branch, write repository files, post review comments, or reconstruct a comparison from local branch tips. The maintained review skill uses this tool when a review starts from a hosted PR URL.
+
+`pr_fetch` is registered only when startup loads at least one enabled account from trusted user or machine configuration. Account bindings belong under `tools.prFetch.providers` in `~/.threadsmith/config.json` or the machine configuration:
+
+```json
+{
+  "tools": {
+    "prFetch": {
+      "providers": {
+        "work-github": {
+          "type": "github",
+          "enabled": true,
+          "authentication": {
+            "mode": "bearer",
+            "secretReference": "secrets:github:review-token"
+          }
+        },
+        "work-bitbucket": {
+          "type": "bitbucketCloud",
+          "enabled": true,
+          "authentication": {
+            "mode": "basic",
+            "username": "developer@example.org",
+            "secretReference": "secrets:bitbucket:review-token"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+GitHub accounts support unauthenticated public reads or bearer authentication using `mode: "bearer"` and a `secretReference`. Bitbucket Cloud supports public reads, bearer access tokens, or API tokens using Basic authentication with the Atlassian email as `username`. Put referenced values in the user Secrets file rather than ordinary configuration:
+
+```json
+{
+  "secrets": {
+    "github": {
+      "review-token": "<GitHub-read-token>"
+    },
+    "bitbucket": {
+      "review-token": "<Bitbucket-API-token>"
+    }
+  }
+}
+```
+
+Complete setup as follows:
+
+1. If `tools.enabled` or `tools.allow` is present, add `pr_fetch` while preserving the other required entries.
+2. Add `api.github.com` or `api.bitbucket.org`, as applicable, to `tools.allowedNetworkHosts`.
+3. Restart Threadsmith after adding or changing an account profile.
+4. Open the target repository, run `/tools`, select **Fetch Pull Request**, and accept the repository-bound outbound disclosure.
+
+If **Fetch Pull Request** is absent from `/tools`, confirm that trusted configuration contains at least one enabled provider, then restart. Repository configuration may disable an account or lower limits but cannot add, enable, rebind, or redirect one.
+
+Use `kind: "inventory"` for metadata and the complete added, modified, removed, and renamed file list. Use `kind: "diff"` only when patch content or changed-line evidence is needed:
+
+```json
+{"url":"https://github.com/owner/repository/pull/123","kind":"inventory"}
+```
+
+```json
+{"url":"https://github.com/owner/repository/pull/123","kind":"diff"}
+```
+
+The unique matching account is selected from trusted URL patterns; supply `provider` when configured patterns are ambiguous. Supported PR subviews and fragments normalize to the canonical PR URL. If a result returns a `cursor`, call `pr_fetch` once with the same URL and kind plus that exact cursor, continuing until `deliveryComplete` is true and the cursor is null. Use `refresh: true` without a cursor to discard and reacquire the bounded operation snapshot.
+
+Live progress identifies the account, inventory/diff kind, first or continuation page, refresh state, and canonical URL. Results report acquisition and delivery completeness, source/destination commit identities, file coverage, and any diff limitations. Before delivery completes, treat the evidence as provisional. Authorized parent, skill, and child executions can reuse the in-memory operation cache, but every invocation still passes normal tool, network, disclosure, and budget policy. See [pull-request retrieval](operations/pr-fetch.md) for URL routing, cursor semantics, cache lifetime, bounds, and provider-specific authentication.
+
 ### Jira Cloud issue reads
 
 The optional `jira` tool reads one Jira Cloud issue through the ordinary governed tool pipeline. It accepts an issue key such as `APP-123` or a supported browse URL such as `https://example.atlassian.net/browse/APP-123?source=mail#description`. It retrieves bounded identity, summary, and standard-description fields as untrusted evidence. It does not search Jira, fetch comments or attachments, follow description links, or edit, comment on, or transition tickets.
@@ -1238,6 +1311,12 @@ The recommended durable personal store is the strict-JSON file `~/.threadsmith/s
 {
   "secrets": {
     "BRAVE_SEARCH_API_KEY": "<credential>",
+    "github": {
+      "review-token": "<credential>"
+    },
+    "bitbucket": {
+      "review-token": "<credential>"
+    },
     "jira": {
       "work-token": "<credential>"
     },

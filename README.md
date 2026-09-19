@@ -10,6 +10,7 @@ Threadsmith.NET is currently under active testing and feature refinement. I'd sa
 
 Some recent enhancements (most recent first): 
 - Governed Jira Cloud issue reads from ticket keys or browse URLs, with scoped and unscoped API-token support
+- Provider-backed GitHub.com and Bitbucket Cloud pull-request retrieval for inventories and bounded diff evidence
 - Significant TUI enhancements
 - Configurable parameters expansion
 - Built out subagent roles and tabbed UI
@@ -175,9 +176,12 @@ Threadsmith registers a built-in runtime tool catalog. Repository configuration,
 | `datetime` | Return current UTC and local date/time with timezone information. |
 | `csharp_script` | Run bounded C# in a fresh isolated worker; disabled by default and reserved for fully trusted automation. |
 | `web_search` | Search the web through Brave after explicit repository-scoped outbound consent; disabled by default, with bounded results treated as untrusted evidence. |
+| `pr_fetch` | Read configured GitHub.com or Bitbucket Cloud pull-request metadata, complete changed-file inventories, and optional bounded diff pages without checking out or modifying the PR. |
 | `jira` | Read a configured Jira Cloud issue's identity, summary, and bounded plain-text description from an issue key or browse URL; disabled until an account is configured and enabled. |
 
 Loaded extensions and configured MCP servers may contribute additional tools to the same governed pipeline. At `TrustedRead` or higher, the conditional `invoke_skill` tool lets a model invoke an explicit enabled, compatible declarative skill during evidence collection; it cannot invoke another skill recursively or grant itself additional tools, trust, models, agents, approval, or mutation authority.
+
+The pull-request integration is read-only and uses trusted user or machine account profiles, with optional credentials supplied through the standard Secrets boundary. It supports GitHub.com and Bitbucket Cloud, requires normal network policy and repository-bound outbound consent, and shares bounded acquisition snapshots across authorized review agents and skills. See [pull-request retrieval](docs/operations/pr-fetch.md) for the complete paging and cache contract, or the [user guide](docs/user-guide.md#hosted-pull-request-retrieval) for setup and common calls.
 
 The Jira integration is read-only and uses trusted user or machine account profiles plus the standard Secrets boundary. It supports scoped tokens through Atlassian's API gateway and unscoped tokens through the configured tenant, requires normal network policy and repository-bound outbound consent, and keeps ticket content out of compact tool-progress blocks. See [Jira issue reads](docs/operations/jira.md) for setup and examples, or the [user guide](docs/user-guide.md#jira-cloud-issue-reads) for the quick workflow.
 

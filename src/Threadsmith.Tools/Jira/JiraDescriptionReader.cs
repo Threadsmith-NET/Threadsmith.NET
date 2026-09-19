@@ -276,6 +276,13 @@ internal static class JiraDescriptionReader
                 break;
             }
 
+            state.CountItem();
+            if (state.ItemsVisited > MaximumNodesAndMarks)
+            {
+                state.WorkLimitReached = true;
+                break;
+            }
+
             if (ReadRequiredString(row, "type") != "tableRow")
             {
                 throw new InvalidDataException("Jira returned a non-row child in an ADF table.");

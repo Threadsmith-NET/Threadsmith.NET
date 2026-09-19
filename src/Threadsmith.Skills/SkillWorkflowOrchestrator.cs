@@ -547,35 +547,44 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                 content,
                 input,
                 cancellationToken);
-            if (procedure.ModelTurns is < 1
-                || procedure.ModelTurns > remainingModelTurns
-                || procedure.ToolCalls < 0
-                || procedure.ToolCalls > remainingToolCalls)
-            {
-                throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
-            }
-
             var sideEffects = procedure.SideEffects ?? [];
-            var validatedOutput = await ValidateAgainstAssetAsync(
-                candidate,
-                step.OutputSchemaAsset,
-                procedure.OutputJson,
-                cancellationToken);
-            using var output = System.Text.Json.JsonDocument.Parse(validatedOutput);
-            return new SkillWorkflowStepResult
+            try
             {
-                Succeeded = step.SuccessProperty is null || output.RootElement.GetProperty(step.SuccessProperty).GetBoolean(),
-                Response = step.ResponseProperty is null ? null : output.RootElement.GetProperty(step.ResponseProperty).GetString(),
-                StepId = step.StepId,
-                Kind = step.Kind,
-                Iteration = iteration,
-                OutputJson = validatedOutput,
-                ContentTokens = content.Sum(item => item.EstimatedTokens),
-                ModelTurns = procedure.ModelTurns,
-                ToolCalls = procedure.ToolCalls,
-                SideEffects = sideEffects,
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
+                if (procedure.ModelTurns is < 1
+                    || procedure.ModelTurns > remainingModelTurns
+                    || procedure.ToolCalls < 0
+                    || procedure.ToolCalls > remainingToolCalls)
+                {
+                    throw new InvalidDataException("Skill procedure reported invalid or excessive resource usage.");
+                }
+
+                var validatedOutput = await ValidateAgainstAssetAsync(
+                    candidate,
+                    step.OutputSchemaAsset,
+                    procedure.OutputJson,
+                    cancellationToken);
+                using var output = System.Text.Json.JsonDocument.Parse(validatedOutput);
+                ValidateArtifactClaim(output.RootElement, sideEffects);
+                return new SkillWorkflowStepResult
+                {
+                    Succeeded = step.SuccessProperty is null || output.RootElement.GetProperty(step.SuccessProperty).GetBoolean(),
+                    Response = step.ResponseProperty is null ? null : output.RootElement.GetProperty(step.ResponseProperty).GetString(),
+                    StepId = step.StepId,
+                    Kind = step.Kind,
+                    Iteration = iteration,
+                    OutputJson = validatedOutput,
+                    ContentTokens = content.Sum(item => item.EstimatedTokens),
+                    ModelTurns = procedure.ModelTurns,
+                    ToolCalls = procedure.ToolCalls,
+                    SideEffects = sideEffects,
+                    RecordedAt = DateTimeOffset.UtcNow,
+                };
+            }
+            catch (Exception exception)
+            {
+                SkillProcedureInterruption.Attach(sideEffects, exception);
+                throw;
+            }
         }
 
         var actionKind = step.HostAction ?? MapAction(step.Kind);
@@ -791,6 +800,60 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         {
             return _schemas.Validate(schema, embeddedJson);
         }
+    }
+
+    private static void ValidateArtifactClaim(
+        JsonElement output,
+        IReadOnlyList<SkillSideEffectRecord> sideEffects)
+    {
+        if (output.ValueKind != JsonValueKind.Object
+            || !output.TryGetProperty("delivery", out var delivery)
+            || delivery.ValueKind != JsonValueKind.String
+            || !string.Equals(delivery.GetString(), "artifact", StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!output.TryGetProperty("artifact", out var artifact)
+            || artifact.ValueKind != JsonValueKind.Object
+            || !artifact.TryGetProperty("path", out var pathElement)
+            || pathElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(pathElement.GetString())
+            || !artifact.TryGetProperty("bytesWritten", out var bytesElement)
+            || bytesElement.ValueKind != JsonValueKind.Number
+            || !bytesElement.TryGetInt64(out var bytesWritten)
+            || bytesWritten < 0)
+        {
+            throw new InvalidDataException(
+                "Skill value declares artifact delivery but has incomplete artifact metadata.");
+        }
+
+        var path = pathElement.GetString()!;
+        if (!sideEffects.Any(item => IsMatchingArtifactSideEffect(item, path, bytesWritten)))
+        {
+            throw new InvalidDataException(
+                "Skill value declares artifact delivery that was not observed in artifact side effects.");
+        }
+    }
+
+    private static bool IsMatchingArtifactSideEffect(
+        SkillSideEffectRecord sideEffect,
+        string declaredPath,
+        long declaredBytesWritten)
+    {
+        return sideEffect.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
+            && sideEffect.BytesWritten == declaredBytesWritten
+            && sideEffect.Path is { Length: > 0 } observedPath
+            && ArtifactPathsMatch(declaredPath, observedPath);
+    }
+
+    private static bool ArtifactPathsMatch(string declaredPath, string observedPath)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return string.Equals(
+            declaredPath.Replace('\\', '/'),
+            observedPath.Replace('\\', '/'),
+            comparison);
     }
 
     private static bool IsRootTypeMismatch(InvalidDataException exception)

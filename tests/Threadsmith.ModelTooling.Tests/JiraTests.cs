@@ -275,6 +275,33 @@ public sealed class JiraTests
         Assert.InRange(allocated, 0, 8 * 1024 * 1024);
     }
 
+    /// <summary>Empty table rows consume the same bounded projection-work budget as other ADF nodes.</summary>
+    [Fact]
+    public void AdfProjectionBoundsEmptyTableRows()
+    {
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            type = "doc",
+            version = 1,
+            content = new[]
+            {
+                new
+                {
+                    type = "table",
+                    content = Enumerable.Range(0, 50_100)
+                        .Select(_ => new { type = "tableRow", content = Array.Empty<object>() })
+                        .ToArray(),
+                },
+            },
+        }));
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 2 * 1024 * 1024);
+
+        Assert.True(result.IsTruncated);
+        Assert.False(result.BodyComplete);
+        Assert.Contains("projection-work-limit", result.Limitations);
+    }
+
     /// <summary>Known ADF containers and label fallbacks preserve honest coverage and table shape.</summary>
     [Fact]
     public void AdfKnownNodesValidateAndPreserveStructure()

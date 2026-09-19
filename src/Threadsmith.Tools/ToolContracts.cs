@@ -314,6 +314,9 @@ public sealed record ToolInvocationContext
     /// <summary>Network hostnames permitted for network-aware tools.</summary>
     public IReadOnlyList<string> AllowedNetworkHosts { get; init; } = [];
 
+    /// <summary>Optional tool-id restriction on use of allowed network hosts; null preserves ordinary host behavior.</summary>
+    public IReadOnlyList<string>? AllowedNetworkToolIds { get; init; }
+
     /// <summary>Tool identifiers permitted by repository configuration; empty permits registered tools.</summary>
     public IReadOnlyList<string> AllowedToolIds { get; init; } = [];
 

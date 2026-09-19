@@ -299,6 +299,9 @@ public sealed record AgentPolicySnapshot
     /// <summary>Explicit allowed tool ids.</summary>
     public IReadOnlyList<string> AllowedToolIds { get; init; } = [];
 
+    /// <summary>Allowed tool ids that may exercise the assignment's network-host authority.</summary>
+    public IReadOnlyList<string> AllowedNetworkToolIds { get; init; } = [];
+
     /// <summary>Explicit denied tool ids.</summary>
     public IReadOnlyList<string> DeniedToolIds { get; init; } = [];
 

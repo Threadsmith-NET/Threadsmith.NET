@@ -444,14 +444,11 @@ internal static class JiraDescriptionReader
                     }
                 }
 
-                var renderedCell = RenderNode(cell, state, depth + 2, 0)
-                    .Replace("\n", " / ", StringComparison.Ordinal);
-                if (merged)
-                {
-                    renderedCell = renderedCell.Length == 0
-                        ? "[merged cell]"
-                        : $"[merged cell] {renderedCell}";
-                }
+                var renderedCell = RenderTableCellBounded(
+                    RenderNode(cell, state, depth + 2, 0),
+                    merged,
+                    state.MaximumBodyBytes - cellBytes,
+                    state);
 
                 AppendBounded(
                     renderedCells,
@@ -472,6 +469,73 @@ internal static class JiraDescriptionReader
         }
 
         return renderedRows.ToString();
+    }
+
+    private static string RenderTableCellBounded(
+        string value,
+        bool merged,
+        int maximumBytes,
+        ProjectionState state)
+    {
+        var builder = new StringBuilder(Math.Min(maximumBytes, 4096));
+        var bytesUsed = 0;
+        var prefix = merged
+            ? value.Length == 0 ? "[merged cell]" : "[merged cell] "
+            : string.Empty;
+        var boundedPrefix = JiraTextBounds.Utf8Prefix(prefix, maximumBytes, out var prefixTruncated);
+        builder.Append(boundedPrefix);
+        bytesUsed += Encoding.UTF8.GetByteCount(boundedPrefix);
+        if (prefixTruncated)
+        {
+            state.BodyLimitReached = true;
+            return builder.ToString();
+        }
+
+        var runesVisited = 0;
+        Span<char> encoded = stackalloc char[2];
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if ((runesVisited++ & 255) == 0)
+            {
+                state.CheckCancellation();
+            }
+
+            var replacement = rune.Value switch
+            {
+                '\n' => " / ",
+                '\t' => "\\t",
+                _ => null,
+            };
+            if (replacement is not null)
+            {
+                var bounded = JiraTextBounds.Utf8Prefix(
+                    replacement,
+                    maximumBytes - bytesUsed,
+                    out var truncated);
+                builder.Append(bounded);
+                bytesUsed += Encoding.UTF8.GetByteCount(bounded);
+                if (truncated)
+                {
+                    state.BodyLimitReached = true;
+                    break;
+                }
+
+                continue;
+            }
+
+            var runeBytes = rune.Utf8SequenceLength;
+            if (runeBytes > maximumBytes - bytesUsed)
+            {
+                state.BodyLimitReached = true;
+                break;
+            }
+
+            var characters = rune.EncodeToUtf16(encoded);
+            builder.Append(encoded[..characters]);
+            bytesUsed += runeBytes;
+        }
+
+        return builder.ToString();
     }
 
     private static string RenderPanel(JsonElement node, ProjectionState state, int depth, int listDepth)

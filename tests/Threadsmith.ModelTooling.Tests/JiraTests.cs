@@ -371,6 +371,70 @@ public sealed class JiraTests
         Assert.True(result.BodyComplete);
     }
 
+    /// <summary>Authored tabs remain distinguishable from structural table-cell delimiters.</summary>
+    [Fact]
+    public void AdfProjectionEscapesAuthoredTabsInTableCells()
+    {
+        using var document = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"table","content":[{"type":"tableRow","content":[{"type":"tableCell","content":[{"type":"paragraph","content":[{"type":"text","text":"A\tB"}]}]},{"type":"tableCell","content":[{"type":"paragraph","content":[{"type":"text","text":"C"}]}]}]}]}]}""");
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
+
+        Assert.Equal("A\\tB\tC", result.Body);
+        Assert.True(result.BodyComplete);
+    }
+
+    /// <summary>Table line-break flattening streams within the output bound.</summary>
+    [Fact]
+    public void AdfProjectionBoundsTableCellFlattening()
+    {
+        const int maximumBodyBytes = 1024 * 1024;
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            type = "doc",
+            version = 1,
+            content = new[]
+            {
+                new
+                {
+                    type = "table",
+                    content = new[]
+                    {
+                        new
+                        {
+                            type = "tableRow",
+                            content = new[]
+                            {
+                                new
+                                {
+                                    type = "tableCell",
+                                    content = new[]
+                                    {
+                                        new
+                                        {
+                                            type = "paragraph",
+                                            content = new[] { new { type = "text", text = new string('\n', maximumBodyBytes - 1) } },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var result = JiraDescriptionReader.Read(document.RootElement, maximumBodyBytes);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith(" /  / ", result.Body, StringComparison.Ordinal);
+        Assert.InRange(Encoding.UTF8.GetByteCount(result.Body), maximumBodyBytes - 2, maximumBodyBytes);
+        Assert.True(result.IsTruncated);
+        Assert.Contains("body-byte-limit", result.Limitations);
+        Assert.InRange(allocated, 0, 32 * 1024 * 1024);
+    }
+
     /// <summary>Blockquote prefixes stop at the output bound without materializing an array of lines.</summary>
     [Fact]
     public void AdfProjectionBoundsBlockquotePrefixExpansion()
@@ -537,6 +601,10 @@ public sealed class JiraTests
         var tableResult = JiraDescriptionReader.Read(table.RootElement, 65536);
         Assert.Equal("[merged cell] A\tB", tableResult.Body);
         Assert.False(tableResult.BodyComplete);
+
+        var boundedTableResult = JiraDescriptionReader.Read(table.RootElement, 5);
+        Assert.Equal("[merg", boundedTableResult.Body);
+        Assert.True(boundedTableResult.IsTruncated);
     }
 
     /// <summary>ADF projection observes invocation cancellation before doing bounded synchronous work.</summary>

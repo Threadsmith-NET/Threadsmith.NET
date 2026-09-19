@@ -18,6 +18,7 @@ This guide documents the currently implemented user-facing behavior. Features de
    - [Active-turn tool continuation compaction](#active-turn-tool-continuation-compaction)
 6. [How repository changes are governed](#how-repository-changes-are-governed)
 7. [Tools and tool availability](#tools-and-tool-availability)
+   - [Jira Cloud issue reads](#jira-cloud-issue-reads)
 8. [Model providers, secrets, and reasoning](#model-providers-secrets-and-reasoning)
 9. [Repository configuration](#repository-configuration)
 10. [Themes and session status](#themes-and-session-status)
@@ -926,6 +927,62 @@ Configure it with scalar values:
 }
 ```
 
+### Jira Cloud issue reads
+
+The optional `jira` tool reads one Jira Cloud issue through the ordinary governed tool pipeline. It accepts an issue key such as `APP-123` or a supported browse URL such as `https://example.atlassian.net/browse/APP-123?source=mail#description`. It retrieves bounded identity, summary, and standard-description fields as untrusted evidence. It does not search Jira, fetch comments or attachments, follow description links, or edit, comment on, or transition tickets.
+
+Jira is registered only when startup loads at least one enabled account from trusted user or machine configuration. The following scoped-token profile belongs under `tools` in `~/.threadsmith/config.json` or the machine configuration:
+
+```json
+{
+  "tools": {
+    "jira": {
+      "providers": {
+        "work-jira": {
+          "type": "jiraCloud",
+          "enabled": true,
+          "siteUrl": "https://example.atlassian.net",
+          "endpointMode": "scopedGateway",
+          "cloudId": "11111111-2222-4333-8444-555555555555",
+          "authentication": {
+            "mode": "basic",
+            "username": "developer@example.org",
+            "secretReference": "secrets:jira:work-token"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Create a scoped token with the classic `read:jira-work` scope and use the tenant's cloud ID. For an API token without scopes, set `endpointMode` to `site` and omit `cloudId`. Scoped mode contacts `api.atlassian.com`; unscoped mode contacts the exact `.atlassian.net` host in `siteUrl`. Threadsmith never falls back between modes.
+
+Store the token value in the user Secrets file at `~/.threadsmith/secrets/config.json`, not in ordinary configuration:
+
+```json
+{
+  "secrets": {
+    "jira": {
+      "work-token": "<your-Atlassian-API-token>"
+    }
+  }
+}
+```
+
+Complete setup as follows:
+
+1. If `tools.enabled` or `tools.allow` is present, add `jira` while preserving the other required entries.
+2. Add `api.atlassian.com` to `tools.allowedNetworkHosts` for scoped mode, or add the configured tenant hostname for unscoped mode.
+3. Restart Threadsmith after adding or changing the account profile.
+4. Open the target repository, run `/tools`, select **Jira**, and accept the repository-bound outbound disclosure.
+
+If **Jira** is absent from `/tools`, confirm that trusted configuration contains at least one provider with `enabled: true`, then restart. A repository configuration file may disable an account or lower its limits, but cannot introduce, enable, or rebind a Jira account.
+
+The model-facing operation uses `kind: "read"`; future edit and transition kinds are not available. A key uses the only enabled account unless `provider` is supplied, while a browse URL selects a profile by its trusted site host or configured exact alias. Ambiguous keys require an explicit provider. Query strings and fragments on a valid `/browse/{key}` URL are parsed locally and are not forwarded to Jira.
+
+Live tool progress shows the operation, ticket key, selected account, and outcome without dumping ticket content. The description remains available to the model, so requests such as "Read `APP-123` and summarize the acceptance criteria" or "Show me the ticket description" can use or display it in the normal assistant response. Rich Jira descriptions are projected to bounded plain text; `bodyComplete`, `limitations`, and truncation state disclose unsupported media/cards or an omitted suffix. See [Jira issue reads](operations/jira.md) for custom browse aliases, bounds, rotation, failure behavior, and complete examples.
+
 ### Governed web search
 
 `web_search` searches an external index through the compiled Brave Search adapter. It is read-only with respect to the repository, but each invocation sends the query text to an external service. For that reason, the tool is disabled by default and has an additional consent gate beyond ordinary tool availability, repository trust, and invocation policy.
@@ -1181,6 +1238,9 @@ The recommended durable personal store is the strict-JSON file `~/.threadsmith/s
 {
   "secrets": {
     "BRAVE_SEARCH_API_KEY": "<credential>",
+    "jira": {
+      "work-token": "<credential>"
+    },
     "models": {
       "example": "<credential>"
     }

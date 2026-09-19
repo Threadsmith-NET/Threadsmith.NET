@@ -9,6 +9,7 @@ Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives mode
 Threadsmith.NET is currently under active testing and feature refinement. I'd say it's transitioned from pre-Alpha to pre-Beta! 
 
 Some recent enhancements (most recent first): 
+- Governed Jira Cloud issue reads from ticket keys or browse URLs, with scoped and unscoped API-token support
 - Significant TUI enhancements
 - Configurable parameters expansion
 - Built out subagent roles and tabbed UI
@@ -174,8 +175,11 @@ Threadsmith registers a built-in runtime tool catalog. Repository configuration,
 | `datetime` | Return current UTC and local date/time with timezone information. |
 | `csharp_script` | Run bounded C# in a fresh isolated worker; disabled by default and reserved for fully trusted automation. |
 | `web_search` | Search the web through Brave after explicit repository-scoped outbound consent; disabled by default, with bounded results treated as untrusted evidence. |
+| `jira` | Read a configured Jira Cloud issue's identity, summary, and bounded plain-text description from an issue key or browse URL; disabled until an account is configured and enabled. |
 
 Loaded extensions and configured MCP servers may contribute additional tools to the same governed pipeline. At `TrustedRead` or higher, the conditional `invoke_skill` tool lets a model invoke an explicit enabled, compatible declarative skill during evidence collection; it cannot invoke another skill recursively or grant itself additional tools, trust, models, agents, approval, or mutation authority.
+
+The Jira integration is read-only and uses trusted user or machine account profiles plus the standard Secrets boundary. It supports scoped tokens through Atlassian's API gateway and unscoped tokens through the configured tenant, requires normal network policy and repository-bound outbound consent, and keeps ticket content out of compact tool-progress blocks. See [Jira issue reads](docs/operations/jira.md) for setup and examples, or the [user guide](docs/user-guide.md#jira-cloud-issue-reads) for the quick workflow.
 
 `propose_plan` is also a model-callable tool, but it is intentionally not a general-purpose runtime tool. It is a phase-gated workflow signal: during the initial conversational/evidence turn, the model uses its schema-constrained arguments to ask the host to begin governed planning. It does not read, execute, or mutate repository content, cannot be used outside that phase, and never authorizes its own proposal.
 

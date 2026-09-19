@@ -37,6 +37,7 @@ internal static class JiraDescriptionReader
         var state = new ProjectionState(maximumBodyBytes, cancellationToken);
         var body = new StringBuilder(Math.Min(maximumBodyBytes, 4096));
         var bodyBytes = 0;
+        var blockIndex = 0;
         foreach (var node in content.EnumerateArray())
         {
             if (state.LimitReached)
@@ -44,11 +45,21 @@ internal static class JiraDescriptionReader
                 break;
             }
 
-            var rendered = RenderNode(node, state, 1, 0);
-            if (rendered.Length > 0)
+            if (blockIndex > 0
+                && !TryAppendBounded(body, "\n\n", ref bodyBytes, state))
             {
-                AppendBounded(body, ref bodyBytes, body.Length == 0 ? string.Empty : "\n\n", rendered, state);
+                break;
             }
+
+            if (bodyBytes == state.MaximumBodyBytes)
+            {
+                state.BodyLimitReached = true;
+                break;
+            }
+
+            var rendered = RenderNode(node, state, 1, 0);
+            AppendBounded(body, ref bodyBytes, string.Empty, rendered, state);
+            blockIndex++;
         }
 
         if (state.BodyLimitReached)
@@ -150,6 +161,7 @@ internal static class JiraDescriptionReader
 
         var children = new StringBuilder();
         var childBytes = 0;
+        var childIndex = 0;
         foreach (var child in content.EnumerateArray())
         {
             if (state.LimitReached)
@@ -157,16 +169,21 @@ internal static class JiraDescriptionReader
                 break;
             }
 
-            var rendered = RenderNode(child, state, depth + 1, listDepth);
-            if (rendered.Length > 0)
+            if (childIndex > 0
+                && !TryAppendBounded(children, separator, ref childBytes, state))
             {
-                AppendBounded(
-                    children,
-                    ref childBytes,
-                    children.Length == 0 ? string.Empty : separator,
-                    rendered,
-                    state);
+                break;
             }
+
+            if (childBytes == state.MaximumBodyBytes)
+            {
+                state.BodyLimitReached = true;
+                break;
+            }
+
+            var rendered = RenderNode(child, state, depth + 1, listDepth);
+            AppendBounded(children, ref childBytes, string.Empty, rendered, state);
+            childIndex++;
         }
 
         return children.ToString();
@@ -174,7 +191,7 @@ internal static class JiraDescriptionReader
 
     private static string RenderText(JsonElement node, ProjectionState state)
     {
-        var text = state.Fit(ReadRequiredString(node, "text"));
+        var text = state.Fit(NormalizeAuthoredLineEndings(ReadRequiredString(node, "text")));
         if (!node.TryGetProperty("marks", out var marks))
         {
             return text;
@@ -185,6 +202,11 @@ internal static class JiraDescriptionReader
             throw new InvalidDataException("Jira returned malformed ADF text marks.");
         }
 
+        var prefixes = new List<string>();
+        var suffixes = new List<string>();
+        var renderedBytes = Encoding.UTF8.GetByteCount(text);
+        var isOriginalText = true;
+        var markLimitReached = false;
         foreach (var mark in marks.EnumerateArray())
         {
             if (state.BodyLimitReached)
@@ -200,17 +222,68 @@ internal static class JiraDescriptionReader
             }
 
             var type = ReadRequiredString(mark, "type");
-            text = state.Fit(type switch
+            string? prefix = null;
+            string? suffix = null;
+            switch (type)
             {
-                "link" => RenderLinkMark(text, mark, state),
-                "strike" => $"[struck: {text}]",
-                "subsup" => RenderSubSup(text, mark),
-                "strong" or "em" or "underline" or "code" or "textColor" or "backgroundColor" => text,
-                _ => RetainUnknownMark(text, state),
-            });
+                case "link":
+                    suffix = RenderLinkSuffix(text, isOriginalText, mark, state);
+                    break;
+                case "strike":
+                    prefix = "[struck: ";
+                    suffix = "]";
+                    break;
+                case "subsup":
+                    (prefix, suffix) = ReadSubSupWrapper(mark);
+                    break;
+                case "strong":
+                case "em":
+                case "underline":
+                case "code":
+                case "textColor":
+                case "backgroundColor":
+                case "alignment":
+                    break;
+                default:
+                    state.AddCoverageLimitation("unsupported-adf-mark");
+                    break;
+            }
+
+            var addedBytes = 0;
+            if (prefix is not null)
+            {
+                prefixes.Add(prefix);
+                addedBytes += Encoding.UTF8.GetByteCount(prefix);
+            }
+
+            if (suffix is not null)
+            {
+                suffixes.Add(suffix);
+                addedBytes += Encoding.UTF8.GetByteCount(suffix);
+            }
+
+            if (addedBytes > 0)
+            {
+                isOriginalText = false;
+            }
+
+            if (addedBytes > state.MaximumBodyBytes - renderedBytes)
+            {
+                markLimitReached = true;
+                break;
+            }
+
+            renderedBytes += addedBytes;
         }
 
-        return text;
+        if (prefixes.Count == 0 && suffixes.Count == 0)
+        {
+            return text;
+        }
+
+        var rendered = RenderMarkedTextBounded(text, prefixes, suffixes, state);
+        state.BodyLimitReached |= markLimitReached;
+        return rendered;
     }
 
     private static string RenderList(
@@ -249,16 +322,43 @@ internal static class JiraDescriptionReader
                 throw new InvalidDataException("Jira returned a non-item child in an ADF list.");
             }
 
+            if (index > 0
+                && !TryAppendBounded(lines, "\n", ref lineBytes, state))
+            {
+                break;
+            }
+
+            if (lineBytes == state.MaximumBodyBytes)
+            {
+                state.BodyLimitReached = true;
+                break;
+            }
+
             var itemText = RenderNode(item, state, depth + 1, listDepth + 1);
             var indent = new string(' ', listDepth * 2);
             var prefix = ordered
-                ? (start + index).ToString(CultureInfo.InvariantCulture) + ". "
+                ? ((long)start + index).ToString(CultureInfo.InvariantCulture) + ". "
                 : "- ";
+            var itemPrefix = indent + prefix;
+            var continuationPrefix = new string(' ', itemPrefix.Length);
+            var remaining = state.MaximumBodyBytes - lineBytes;
+            if (remaining <= 0)
+            {
+                state.BodyLimitReached = true;
+                break;
+            }
+
+            var renderedItem = PrefixLinesBounded(
+                itemText,
+                itemPrefix,
+                continuationPrefix,
+                remaining,
+                state);
             AppendBounded(
                 lines,
                 ref lineBytes,
-                lines.Length == 0 ? string.Empty : "\n",
-                indent + prefix + IndentContinuation(itemText, indent.Length + prefix.Length),
+                string.Empty,
+                renderedItem,
                 state);
             index++;
         }
@@ -276,6 +376,18 @@ internal static class JiraDescriptionReader
         {
             if (state.LimitReached)
             {
+                break;
+            }
+
+            if (rowIndex > 0
+                && !TryAppendBounded(renderedRows, "\n", ref rowBytes, state))
+            {
+                break;
+            }
+
+            if (rowBytes == state.MaximumBodyBytes)
+            {
+                state.BodyLimitReached = true;
                 break;
             }
 
@@ -299,6 +411,18 @@ internal static class JiraDescriptionReader
             {
                 if (state.LimitReached)
                 {
+                    break;
+                }
+
+                if (cellIndex > 0
+                    && !TryAppendBounded(renderedCells, "\t", ref cellBytes, state))
+                {
+                    break;
+                }
+
+                if (cellBytes == state.MaximumBodyBytes)
+                {
+                    state.BodyLimitReached = true;
                     break;
                 }
 
@@ -332,7 +456,7 @@ internal static class JiraDescriptionReader
                 AppendBounded(
                     renderedCells,
                     ref cellBytes,
-                    cellIndex == 0 ? string.Empty : "\t",
+                    string.Empty,
                     renderedCell,
                     state);
                 cellIndex++;
@@ -341,7 +465,7 @@ internal static class JiraDescriptionReader
             AppendBounded(
                 renderedRows,
                 ref rowBytes,
-                rowIndex == 0 ? string.Empty : "\n",
+                string.Empty,
                 renderedCells.ToString(),
                 state);
             rowIndex++;
@@ -352,13 +476,13 @@ internal static class JiraDescriptionReader
 
     private static string RenderPanel(JsonElement node, ProjectionState state, int depth, int listDepth)
     {
-        var panelType = "panel";
-        if (node.TryGetProperty("attrs", out var attrs))
+        if (!node.TryGetProperty("attrs", out var attrs))
         {
-            EnsureObject(attrs, "ADF panel attributes");
-            panelType = ReadRequiredString(attrs, "panelType");
+            throw new InvalidDataException("Jira returned ADF panel content without attributes.");
         }
 
+        EnsureObject(attrs, "ADF panel attributes");
+        var panelType = ReadRequiredString(attrs, "panelType");
         if (panelType is not ("info" or "note" or "warning" or "error" or "success" or "custom"))
         {
             state.AddCoverageLimitation("unsupported-panel-type");
@@ -536,7 +660,11 @@ internal static class JiraDescriptionReader
             : $"[unsupported content] {descendants}";
     }
 
-    private static string RenderLinkMark(string text, JsonElement mark, ProjectionState state)
+    private static string? RenderLinkSuffix(
+        string originalText,
+        bool isOriginalText,
+        JsonElement mark,
+        ProjectionState state)
     {
         if (mark.TryGetProperty("attrs", out var attrs))
         {
@@ -545,15 +673,17 @@ internal static class JiraDescriptionReader
                 && href.ValueKind == JsonValueKind.String
                 && TrySafeUrl(href.GetString(), out var safeUrl))
             {
-                return text.Equals(safeUrl, StringComparison.Ordinal) ? text : $"{text} ({safeUrl})";
+                return isOriginalText && originalText.Equals(safeUrl, StringComparison.Ordinal)
+                    ? null
+                    : $" ({safeUrl})";
             }
         }
 
         state.AddCoverageLimitation("unsafe-or-missing-link");
-        return text;
+        return null;
     }
 
-    private static string RenderSubSup(string text, JsonElement mark)
+    private static (string Prefix, string Suffix) ReadSubSupWrapper(JsonElement mark)
     {
         if (!mark.TryGetProperty("attrs", out var attrs))
         {
@@ -563,16 +693,10 @@ internal static class JiraDescriptionReader
         EnsureObject(attrs, "ADF subsup attributes");
         return ReadRequiredString(attrs, "type") switch
         {
-            "sub" => $"_{{{text}}}",
-            "sup" => $"^{{{text}}}",
+            "sub" => ("_{", "}"),
+            "sup" => ("^{", "}"),
             _ => throw new InvalidDataException("Jira returned an invalid ADF subsup type."),
         };
-    }
-
-    private static string RetainUnknownMark(string text, ProjectionState state)
-    {
-        state.AddCoverageLimitation("unsupported-adf-mark");
-        return text;
     }
 
     private static JsonElement ReadRequiredContent(JsonElement node)
@@ -629,7 +753,8 @@ internal static class JiraDescriptionReader
             || value.Any(char.IsControl)
             || !Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
-            || uri.UserInfo.Length > 0)
+            || uri.UserInfo.Length > 0
+            || Uri.UnescapeDataString(uri.OriginalString).Any(char.IsControl))
         {
             return false;
         }
@@ -639,10 +764,18 @@ internal static class JiraDescriptionReader
     }
 
     private static string PrefixLinesBounded(string value, string prefix, ProjectionState state)
+        => PrefixLinesBounded(value, prefix, prefix, state.MaximumBodyBytes, state);
+
+    private static string PrefixLinesBounded(
+        string value,
+        string firstPrefix,
+        string continuationPrefix,
+        int maximumBytes,
+        ProjectionState state)
     {
-        var builder = new StringBuilder(Math.Min(state.MaximumBodyBytes, 4096));
+        var builder = new StringBuilder(Math.Min(maximumBytes, 4096));
         var bytesUsed = 0;
-        if (!TryAppendBounded(builder, prefix, ref bytesUsed, state))
+        if (!TryAppendBounded(builder, firstPrefix, ref bytesUsed, maximumBytes, state))
         {
             return builder.ToString();
         }
@@ -658,8 +791,8 @@ internal static class JiraDescriptionReader
 
             if (rune.Value == '\n')
             {
-                if (!TryAppendBounded(builder, "\n", ref bytesUsed, state)
-                    || !TryAppendBounded(builder, prefix, ref bytesUsed, state))
+                if (!TryAppendBounded(builder, "\n", ref bytesUsed, maximumBytes, state)
+                    || !TryAppendBounded(builder, continuationPrefix, ref bytesUsed, maximumBytes, state))
                 {
                     break;
                 }
@@ -668,7 +801,7 @@ internal static class JiraDescriptionReader
             }
 
             var runeBytes = rune.Utf8SequenceLength;
-            if (bytesUsed + runeBytes > state.MaximumBodyBytes)
+            if (runeBytes > maximumBytes - bytesUsed)
             {
                 state.BodyLimitReached = true;
                 break;
@@ -682,14 +815,48 @@ internal static class JiraDescriptionReader
         return builder.ToString();
     }
 
+    private static string RenderMarkedTextBounded(
+        string text,
+        IReadOnlyList<string> prefixes,
+        IReadOnlyList<string> suffixes,
+        ProjectionState state)
+    {
+        var builder = new StringBuilder(Math.Min(state.MaximumBodyBytes, 4096));
+        var bytesUsed = 0;
+        for (var index = prefixes.Count - 1; index >= 0 && !state.BodyLimitReached; index--)
+        {
+            AppendBounded(builder, ref bytesUsed, string.Empty, prefixes[index], state);
+        }
+
+        if (!state.BodyLimitReached)
+        {
+            AppendBounded(builder, ref bytesUsed, string.Empty, text, state);
+        }
+
+        for (var index = 0; index < suffixes.Count && !state.BodyLimitReached; index++)
+        {
+            AppendBounded(builder, ref bytesUsed, string.Empty, suffixes[index], state);
+        }
+
+        return builder.ToString();
+    }
+
     private static bool TryAppendBounded(
         StringBuilder builder,
         string value,
         ref int bytesUsed,
         ProjectionState state)
+        => TryAppendBounded(builder, value, ref bytesUsed, state.MaximumBodyBytes, state);
+
+    private static bool TryAppendBounded(
+        StringBuilder builder,
+        string value,
+        ref int bytesUsed,
+        int maximumBytes,
+        ProjectionState state)
     {
         var bytes = Encoding.UTF8.GetByteCount(value);
-        if (bytesUsed + bytes > state.MaximumBodyBytes)
+        if (bytes > maximumBytes - bytesUsed)
         {
             state.BodyLimitReached = true;
             return false;
@@ -700,8 +867,10 @@ internal static class JiraDescriptionReader
         return true;
     }
 
-    private static string IndentContinuation(string value, int spaces)
-        => value.Replace("\n", "\n" + new string(' ', spaces), StringComparison.Ordinal);
+    private static string NormalizeAuthoredLineEndings(string value)
+        => value.Contains('\r')
+            ? value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n')
+            : value;
 
     private static void AppendBounded(
         StringBuilder builder,

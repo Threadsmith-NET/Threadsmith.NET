@@ -366,6 +366,34 @@ public static class Milestone4Tests
         Assert.Contains("steps[0].fileIntents[0].path", exception.Diagnostic.SafeMessage, StringComparison.Ordinal);
     }
 
+    /// <summary>The host rejects empty file-intent arrays even when a provider bypasses strict tool schema enforcement.</summary>
+    [Fact]
+    public static void ModelOutputValidator_EmptyPlanFileIntents_AreRejectedAsMalformedOutput()
+    {
+        const string json = """
+            {
+              "summary": "Invalid empty-intent plan.",
+              "steps": [
+                {
+                  "title": "Missing scope",
+                  "description": "Attempt to submit a plan without a concrete file intent.",
+                  "fileIntents": [],
+                  "expectedOutcome": "Rejected safely.",
+                  "validation": []
+                }
+              ],
+              "risks": [],
+              "outstandingQuestions": []
+            }
+            """;
+
+        var exception = Assert.Throws<MalformedInvocationException>(() =>
+            ModelOutputValidator.ParsePlan(json));
+
+        Assert.Equal(MalformedInvocationFailureKind.PlanSchemaMismatch, exception.Diagnostic.Kind);
+        Assert.Contains("steps[0].fileIntents", exception.Diagnostic.SafeMessage, StringComparison.Ordinal);
+    }
+
     /// <summary>Null plan collections are corrective schema mismatches, not runtime null dereferences.</summary>
     [Theory]
     [InlineData("steps")]
@@ -1915,7 +1943,7 @@ public static class Milestone4Tests
         {
             Steps =
             [
-                CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents() },
+                CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("src/missing.cs") },
                 CreatePlan("unused", 1).Steps[0] with { FileIntents = ModifyIntents("secrets/token.txt") },
             ],
         };

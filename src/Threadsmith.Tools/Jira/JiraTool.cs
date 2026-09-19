@@ -71,10 +71,12 @@ public sealed class JiraTool : Tool<JiraInput, JiraReadOutput>, IPostSanitizatio
         CancellationToken cancellationToken = default)
     {
         var resolved = Resolve(input);
+        var maximumOutputBytes = context.MaximumOutputBytes ?? Definition.MaximumOutputBytes;
         var issue = await _client.ReadIssueAsync(
             resolved.ProviderId,
             resolved.Provider,
             resolved.RequestedKey,
+            Math.Min(_options.MaximumBodyBytes, maximumOutputBytes),
             cancellationToken);
         var site = JiraAddress.ValidateSiteUrl(resolved.Provider.SiteUrl);
         var output = new JiraReadOutput
@@ -95,7 +97,7 @@ public sealed class JiraTool : Tool<JiraInput, JiraReadOutput>, IPostSanitizatio
         };
         var bounded = BoundOutput(
             output,
-            context.MaximumOutputBytes ?? Definition.MaximumOutputBytes);
+            maximumOutputBytes);
         var completion = bounded.Output.BodyState == "absent"
             ? "no description"
             : bounded.Output.BodyComplete ? "description retrieved" : "description retrieved with limitations";

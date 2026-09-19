@@ -29,11 +29,13 @@ public sealed class JiraCloudClient
         string providerId,
         JiraProviderOptions provider,
         string key,
+        int maximumBodyBytes,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBodyBytes);
         var requestUri = BuildRequestUri(provider, key);
         using var request = new HttpRequestMessage(HttpMethod.Get, requestUri);
         request.Headers.Accept.ParseAdd("application/json");
@@ -93,7 +95,7 @@ public sealed class JiraCloudClient
 
         using (document)
         {
-            return ReadIssue(document.RootElement, cancellationToken);
+            return ReadIssue(document.RootElement, maximumBodyBytes, cancellationToken);
         }
     }
 
@@ -142,11 +144,14 @@ public sealed class JiraCloudClient
             return "Jira rate-limited the request. Retry later.";
         }
 
-        var seconds = Math.Min((int)Math.Ceiling(retry.Value.TotalSeconds), 86400);
+        var seconds = (int)Math.Ceiling(Math.Min(retry.Value.TotalSeconds, 86400d));
         return $"Jira rate-limited the request. Retry after about {seconds} seconds.";
     }
 
-    private JiraIssueData ReadIssue(JsonElement root, CancellationToken cancellationToken)
+    private static JiraIssueData ReadIssue(
+        JsonElement root,
+        int maximumBodyBytes,
+        CancellationToken cancellationToken)
     {
         if (root.ValueKind != JsonValueKind.Object)
         {
@@ -183,7 +188,7 @@ public sealed class JiraCloudClient
         {
             projected = JiraDescriptionReader.Read(
                 description,
-                _options.MaximumBodyBytes,
+                maximumBodyBytes,
                 cancellationToken);
         }
         catch (InvalidDataException exception)

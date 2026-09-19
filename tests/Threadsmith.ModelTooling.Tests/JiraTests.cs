@@ -241,6 +241,25 @@ public sealed class JiraTests
         Assert.DoesNotContain("projection-work-limit", result.Limitations);
     }
 
+    /// <summary>An exactly full prefix stops before parsing a malformed following block.</summary>
+    [Fact]
+    public void AdfExactBodyLimitStopsBeforeMalformedSuffix()
+    {
+        using var document = JsonDocument.Parse(
+            """
+            {"type":"doc","version":1,"content":[
+              {"type":"paragraph","content":[{"type":"text","text":"0123456789"}]},
+              {"type":"paragraph","content":false}
+            ]}
+            """);
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 10);
+
+        Assert.Equal("0123456789", result.Body);
+        Assert.True(result.IsTruncated);
+        Assert.Contains("body-byte-limit", result.Limitations);
+    }
+
     /// <summary>Projection bounds repeated mark expansion before it can amplify allocations.</summary>
     [Fact]
     public void AdfBodyLimitBoundsRepeatedMarkExpansion()
@@ -273,6 +292,43 @@ public sealed class JiraTests
 
         Assert.Equal("xxxxxxxxxx", result.Body);
         Assert.InRange(allocated, 0, 8 * 1024 * 1024);
+    }
+
+    /// <summary>Many expanding marks are assembled once instead of repeatedly copying accumulated text.</summary>
+    [Fact]
+    public void AdfProjectionBoundsCumulativeMarkAllocations()
+    {
+        const int markCount = 20_000;
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            type = "doc",
+            version = 1,
+            content = new[]
+            {
+                new
+                {
+                    type = "paragraph",
+                    content = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = "x",
+                            marks = Enumerable.Range(0, markCount).Select(_ => new { type = "strike" }).ToArray(),
+                        },
+                    },
+                },
+            },
+        }));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 256 * 1024);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.Equal(1 + (markCount * 10), result.Body.Length);
+        Assert.StartsWith("[struck: [struck: ", result.Body, StringComparison.Ordinal);
+        Assert.True(result.BodyComplete);
+        Assert.InRange(allocated, 0, 32 * 1024 * 1024);
     }
 
     /// <summary>Empty table rows consume the same bounded projection-work budget as other ADF nodes.</summary>
@@ -346,6 +402,104 @@ public sealed class JiraTests
         Assert.True(result.IsTruncated);
         Assert.Contains("body-byte-limit", result.Limitations);
         Assert.InRange(allocated, 0, 32 * 1024 * 1024);
+    }
+
+    /// <summary>List continuation indentation streams within the body bound for newline-heavy text.</summary>
+    [Fact]
+    public void AdfProjectionBoundsListIndentationExpansion()
+    {
+        const int maximumBodyBytes = 1024 * 1024;
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            type = "doc",
+            version = 1,
+            content = new[]
+            {
+                new
+                {
+                    type = "bulletList",
+                    content = new[]
+                    {
+                        new
+                        {
+                            type = "listItem",
+                            content = new[]
+                            {
+                                new { type = "paragraph", content = new[] { new { type = "text", text = new string('\n', maximumBodyBytes - 1) } } },
+                            },
+                        },
+                    },
+                },
+            },
+        }));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var result = JiraDescriptionReader.Read(document.RootElement, maximumBodyBytes);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith("- \n  ", result.Body, StringComparison.Ordinal);
+        Assert.InRange(Encoding.UTF8.GetByteCount(result.Body), maximumBodyBytes - 2, maximumBodyBytes);
+        Assert.True(result.IsTruncated);
+        Assert.Contains("body-byte-limit", result.Limitations);
+        Assert.InRange(allocated, 0, 40 * 1024 * 1024);
+    }
+
+    /// <summary>Authored line endings and empty blocks retain deterministic plain-text structure.</summary>
+    [Fact]
+    public void AdfProjectionNormalizesLineEndingsAndPreservesEmptyBlocks()
+    {
+        using var document = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"A"}]},{"type":"paragraph","content":[]},{"type":"paragraph","content":[{"type":"text","text":"B\r\nC\rD","marks":[{"type":"alignment","attrs":{"align":"center"}}]}]}]}""");
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
+
+        Assert.Equal("A\n\n\n\nB\nC\nD", result.Body);
+        Assert.True(result.BodyComplete);
+        Assert.Empty(result.Limitations);
+    }
+
+    /// <summary>Ordered-list labels use non-wrapping arithmetic at the accepted Int32 start boundary.</summary>
+    [Fact]
+    public void AdfProjectionDoesNotOverflowOrderedListLabels()
+    {
+        using var document = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"orderedList","attrs":{"order":2147483647},"content":[{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"A"}]}]},{"type":"listItem","content":[{"type":"paragraph","content":[{"type":"text","text":"B"}]}]}]}]}""");
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
+
+        Assert.Equal("2147483647. A\n2147483648. B", result.Body);
+        Assert.True(result.BodyComplete);
+    }
+
+    /// <summary>Known expanding marks retain their sequential nesting semantics after bounded assembly.</summary>
+    [Fact]
+    public void AdfProjectionPreservesKnownMarkOrder()
+    {
+        using var document = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"x","marks":[{"type":"strike"},{"type":"subsup","attrs":{"type":"sub"}},{"type":"link","attrs":{"href":"https://example.org/path"}}]}]}]}""");
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
+
+        Assert.Equal("_{[struck: x]} (https://example.org/path)", result.Body);
+        Assert.True(result.BodyComplete);
+    }
+
+    /// <summary>Malformed panels fail and percent-decoded control links are retained only as plain text.</summary>
+    [Fact]
+    public void AdfProjectionValidatesPanelsAndEncodedLinkControls()
+    {
+        using var malformedPanel = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"panel","content":[]}]}""");
+        Assert.Throws<InvalidDataException>(() =>
+            JiraDescriptionReader.Read(malformedPanel.RootElement, 65536));
+
+        using var unsafeLink = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"label","marks":[{"type":"link","attrs":{"href":"https://example.org/%0Atext"}}]}]}]}""");
+        var result = JiraDescriptionReader.Read(unsafeLink.RootElement, 65536);
+
+        Assert.Equal("label", result.Body);
+        Assert.False(result.BodyComplete);
+        Assert.Contains("unsafe-or-missing-link", result.Limitations);
     }
 
     /// <summary>Media containers retain their child placeholders without inventing another attachment.</summary>
@@ -460,6 +614,7 @@ public sealed class JiraTests
         using var output = JsonDocument.Parse(result.ResultJson);
         Assert.False(output.RootElement.GetProperty("BodyComplete").GetBoolean());
         Assert.Contains("tool-output-limit", output.RootElement.GetProperty("Limitations").EnumerateArray().Select(value => value.GetString()));
+        Assert.Contains("body-byte-limit", output.RootElement.GetProperty("Limitations").EnumerateArray().Select(value => value.GetString()));
         Assert.NotEmpty(output.RootElement.GetProperty("Body").GetString() ?? string.Empty);
         var started = Assert.Single(observed.OfType<ToolInvocationStarted>());
         Assert.Contains("read · APP-123 · work-jira", started.ActivityDetail, StringComparison.Ordinal);
@@ -657,6 +812,24 @@ public sealed class JiraTests
 
         Assert.Contains("Retry after about", error.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("provider-rate-limit-detail", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>A far-future Retry-After date is clamped before conversion to an integer.</summary>
+    [Fact]
+    public async Task FarFutureRateLimitDateReturnsOneDayGuidance()
+    {
+        using var handler = new JiraHandler
+        {
+            StatusCode = HttpStatusCode.TooManyRequests,
+            RetryAfter = DateTimeOffset.UtcNow.AddYears(100),
+        };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
+
+        var error = await Assert.ThrowsAsync<ToolExecutionException>(() =>
+            tool.ExecuteAsync(new JiraInput { Kind = "read", Issue = "APP-123", Provider = "work-jira" }, Context()));
+
+        Assert.Contains("Retry after about 86400 seconds", error.Message, StringComparison.Ordinal);
     }
 
     private static JiraTool CreateTool(HttpClient http, ISecretResolver secrets, JiraOptions options)

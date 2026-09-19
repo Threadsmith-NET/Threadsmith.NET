@@ -134,6 +134,7 @@ public sealed class CodeExploreOutputFormattingTool : ITool, IPostSanitizationTo
         var markdownMaximumBytes = _renderer.ResolveRenderedMarkdownMaximumBytes(
             sanitizedResult,
             CodeExploreModelBudget.GetMaximumResultBytes(context));
+        markdownMaximumBytes = Math.Min(markdownMaximumBytes, maximumOutputBytes);
         var resultWasTruncated = Encoding.UTF8.GetByteCount(resultJson) > maximumBytes;
         var markdownWasTruncated = modelResultContent is not null
             && Encoding.UTF8.GetByteCount(modelResultContent) > markdownMaximumBytes;

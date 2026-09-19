@@ -52,6 +52,23 @@ public sealed class JiraCloudClient
             "Basic",
             Convert.ToBase64String(Encoding.UTF8.GetBytes(provider.Authentication.Username + ":" + token)));
 
+        try
+        {
+            return await ReadResponseAsync(request, maximumBodyBytes, cancellationToken);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException)
+        {
+            throw new ToolExecutionException(
+                "The Jira request failed because the service could not be reached.",
+                exception);
+        }
+    }
+
+    private async Task<JiraIssueData> ReadResponseAsync(
+        HttpRequestMessage request,
+        int maximumBodyBytes,
+        CancellationToken cancellationToken)
+    {
         using var response = await _http.SendAsync(
             request,
             HttpCompletionOption.ResponseHeadersRead,

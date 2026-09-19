@@ -370,6 +370,7 @@ Official sources consulted on 2026-09-18:
 - [Basic authentication for REST APIs](https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/).
 - [Manage Atlassian API tokens](https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/).
 - [Atlassian Document Format structure](https://developer.atlassian.com/cloud/jira/platform/apis/document/structure/).
+- [Atlassian Document Format paragraph node](https://developer.atlassian.com/cloud/jira/platform/apis/document/nodes/paragraph/).
 - [Jira Cloud rate limiting](https://developer.atlassian.com/cloud/jira/platform/rate-limiting/).
 
 Research used official documentation and indexed endpoint extracts. The full issues reference exceeded the browser fetch limit, and a direct OpenAPI download was blocked by the local network connection. The indexed Get issue section confirms the recommended classic `read:jira-work` scope; this plan does not claim an exhaustive granular-scope recipe. Recheck for API changes during implementation and perform the live gates; no live Jira request was made for this draft.
@@ -381,6 +382,8 @@ Implementation adversarial review disposition: body limits now stop ADF traversa
 PR follow-up adversarial review disposition: cumulative mark rendering and newline-heavy list indentation now avoid quadratic or unbounded intermediate expansion; all authored line endings normalize deterministically; empty blocks, table ordinals, and exact-limit suffixes preserve document structure without parsing unreachable content; ordered-list numbering cannot wrap at the accepted input boundary; alignment is treated as a supported presentation-only mark; malformed panels and encoded-control links fail or degrade honestly; far-future rate-limit dates clamp before integer conversion; Jira body projection and post-sanitization code-explore Markdown both honor the effective runtime output cap; and the host validator enforces the schema's non-empty plan file-intent contract. Focused regressions cover each correction, including preserved known-mark nesting and the existing mixed hard/repairable plan-sanity path.
 
 The subsequent table follow-up reserves literal TAB characters for structural cell delimiters, renders authored cell tabs as `\\t`, and streams authored LF-to-` / ` flattening through the UTF-8 body budget with cancellation checks. Fidelity and newline-heavy allocation regressions cover both corrections without changing the plan's row, cell, or merged-cell representation.
+
+The next protocol and work-bound follow-up accepts Atlassian's optional `paragraph.content` representation while still rejecting present non-array content, translates Jira transport `HttpRequestException`/`IOException` failures to one stable tool error without swallowing cancellation, and prevents near-limit single-child container chains from repeatedly fitting and copying the full body during unwind. Pipeline leakage and deep-allocation regressions cover the corrected boundaries.
 
 ## 17 Open Decisions
 

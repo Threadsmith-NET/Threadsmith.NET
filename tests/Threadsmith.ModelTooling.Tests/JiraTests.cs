@@ -522,6 +522,62 @@ public sealed class JiraTests
         Assert.Empty(result.Limitations);
     }
 
+    /// <summary>Paragraph content is optional, while a present non-array value remains malformed.</summary>
+    [Fact]
+    public void AdfProjectionAcceptsContentlessEmptyParagraphs()
+    {
+        using var document = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"A"}]},{"type":"paragraph"},{"type":"paragraph","content":[{"type":"text","text":"B"}]}]}""");
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
+
+        Assert.Equal("A\n\n\n\nB", result.Body);
+        Assert.True(result.BodyComplete);
+
+        using var malformed = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"paragraph","content":false}]}""");
+        Assert.Throws<InvalidDataException>(() =>
+            JiraDescriptionReader.Read(malformed.RootElement, 65536));
+    }
+
+    /// <summary>Deep single-child containers do not repeatedly copy and rescan a near-limit body.</summary>
+    [Fact]
+    public void AdfProjectionBoundsNestedContainerUnwindWork()
+    {
+        const int maximumBodyBytes = 1024 * 1024;
+        object nested = new
+        {
+            type = "paragraph",
+            content = new[] { new { type = "text", text = new string('x', maximumBodyBytes - 64) } },
+        };
+        for (var depth = 0; depth < 24; depth++)
+        {
+            nested = new Dictionary<string, object>
+            {
+                ["type"] = "unsupportedContainer",
+                ["content"] = new[] { nested },
+            };
+        }
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            type = "doc",
+            version = 1,
+            content = new[] { nested },
+        }));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var result = JiraDescriptionReader.Read(document.RootElement, maximumBodyBytes);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith("[unsupported content] ", result.Body, StringComparison.Ordinal);
+        Assert.Equal(1, result.Body.Split("[unsupported content]", StringSplitOptions.None).Length - 1);
+        Assert.False(result.BodyComplete);
+        Assert.False(result.IsTruncated);
+        Assert.Contains("unsupported-adf-content", result.Limitations);
+        Assert.InRange(allocated, 0, 24 * 1024 * 1024);
+    }
+
     /// <summary>Ordered-list labels use non-wrapping arithmetic at the accepted Int32 start boundary.</summary>
     [Fact]
     public void AdfProjectionDoesNotOverflowOrderedListLabels()
@@ -862,6 +918,52 @@ public sealed class JiraTests
         Assert.DoesNotContain("secret-provider-detail", error.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Transport implementation details do not reach pipeline failures or durable events.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PipelineNormalizesTransportFailures(bool useIoException)
+    {
+        const string privateDetail = "private DNS and socket detail";
+        Exception failure = useIoException
+            ? new IOException(privateDetail)
+            : new HttpRequestException(privateDetail);
+        using var handler = new JiraHandler { Failure = failure };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new RotatingSecrets("token"), Options("site"));
+        await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Enqueue(domainEvent);
+            return Task.CompletedTask;
+        });
+        var pipeline = new ToolInvocationPipeline(
+            new ToolRegistry([tool]),
+            new DefaultPolicyEngine(),
+            new DenyApprovalPolicy(),
+            events,
+            new SecretOutputSanitizer(),
+            NullLogger<ToolInvocationPipeline>.Instance);
+
+        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = "jira",
+            ArgumentsJson = "{\"kind\":\"read\",\"issue\":\"APP-123\",\"provider\":\"work-jira\"}",
+            Context = InvocationContext(),
+        });
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ToolErrorClassification.ExecutionFailure, result.ErrorClassification);
+        Assert.Equal("The Jira request failed because the service could not be reached.", result.Error);
+        Assert.DoesNotContain(privateDetail, result.Error, StringComparison.Ordinal);
+        var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
+        Assert.Equal(result.Error, completed.Error);
+        Assert.DoesNotContain(privateDetail, completed.Error, StringComparison.Ordinal);
+    }
+
     /// <summary>Date-form retry guidance is parsed without exposing provider response content.</summary>
     [Fact]
     public async Task RateLimitDateReturnsBoundedRetryGuidance()
@@ -1027,6 +1129,8 @@ public sealed class JiraTests
 
         internal string FailureBody { get; init; } = string.Empty;
 
+        internal Exception? Failure { get; init; }
+
         internal DateTimeOffset? RetryAfter { get; init; }
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -1037,6 +1141,11 @@ public sealed class JiraTests
             Requests++;
             LastUri = request.RequestUri;
             Authorization = request.Headers.Authorization?.Parameter;
+            if (Failure is not null)
+            {
+                return Task.FromException<HttpResponseMessage>(Failure);
+            }
+
             if (StatusCode != HttpStatusCode.OK)
             {
                 var response = new HttpResponseMessage(StatusCode)

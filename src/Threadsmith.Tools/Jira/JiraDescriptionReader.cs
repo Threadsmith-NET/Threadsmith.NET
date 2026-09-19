@@ -105,11 +105,12 @@ internal static class JiraDescriptionReader
         }
 
         var type = ReadRequiredString(node, "type");
-        var rendered = type switch
+        return type switch
         {
-            "paragraph" or "heading" => RenderChildren(node, state, depth, listDepth, requireContent: true),
+            "paragraph" => RenderChildren(node, state, depth, listDepth),
+            "heading" => RenderChildren(node, state, depth, listDepth, requireContent: true),
             "text" => RenderText(node, state),
-            "hardBreak" => "\n",
+            "hardBreak" => state.Fit("\n"),
             "bulletList" => RenderList(node, state, depth, listDepth, ordered: false),
             "orderedList" => RenderList(node, state, depth, listDepth, ordered: true),
             "listItem" => RenderChildren(node, state, depth, listDepth, "\n", requireContent: true),
@@ -118,22 +119,21 @@ internal static class JiraDescriptionReader
                 RenderChildren(node, state, depth, listDepth, "\n\n", requireContent: true),
                 "> ",
                 state),
-            "rule" => "---",
+            "rule" => state.Fit("---"),
             "table" => RenderTable(node, state, depth),
             "tableRow" => RenderChildren(node, state, depth, listDepth, "\t"),
             "tableCell" or "tableHeader" => RenderChildren(node, state, depth, listDepth, "\n"),
             "panel" => RenderPanel(node, state, depth, listDepth),
-            "mention" => RenderLabelNode(node, state, "mention-unavailable", "[mention unavailable]", "text"),
-            "emoji" => RenderEmoji(node, state),
-            "status" => RenderLabelNode(node, state, "status-unavailable", "[status unavailable]", "text"),
-            "date" => RenderDate(node, state),
-            "inlineCard" or "blockCard" or "embedCard" => RenderCard(node, state),
+            "mention" => state.Fit(RenderLabelNode(node, state, "mention-unavailable", "[mention unavailable]", "text")),
+            "emoji" => state.Fit(RenderEmoji(node, state)),
+            "status" => state.Fit(RenderLabelNode(node, state, "status-unavailable", "[status unavailable]", "text")),
+            "date" => state.Fit(RenderDate(node, state)),
+            "inlineCard" or "blockCard" or "embedCard" => state.Fit(RenderCard(node, state)),
             "media" or "mediaInline" => RenderMedia(node, state, depth, listDepth, isContainer: false),
             "mediaSingle" or "mediaGroup" => RenderMedia(node, state, depth, listDepth, isContainer: true),
             "doc" => throw new InvalidDataException("Jira returned a nested ADF document root."),
             _ => RenderUnsupported(node, state, depth, listDepth),
         };
-        return state.Fit(rendered);
     }
 
     private static string RenderChildren(
@@ -157,6 +157,11 @@ internal static class JiraDescriptionReader
         if (content.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidDataException("Jira returned malformed ADF child content.");
+        }
+
+        if (content.GetArrayLength() == 1)
+        {
+            return RenderNode(content[0], state, depth + 1, listDepth);
         }
 
         var children = new StringBuilder();
@@ -554,7 +559,9 @@ internal static class JiraDescriptionReader
         }
 
         var content = RenderChildren(node, state, depth, listDepth, "\n\n");
-        return content.Length == 0 ? $"[{panelType}]" : $"[{panelType}]\n{content}";
+        return content.Length == 0
+            ? state.Fit($"[{panelType}]")
+            : PrefixValueBounded($"[{panelType}]\n", content, state);
     }
 
     private static string RenderLabelNode(
@@ -708,7 +715,19 @@ internal static class JiraDescriptionReader
             pieces.Add("[media not retrieved]");
         }
 
-        return string.Join(' ', pieces);
+        var rendered = new StringBuilder();
+        var renderedBytes = 0;
+        foreach (var piece in pieces)
+        {
+            AppendBounded(
+                rendered,
+                ref renderedBytes,
+                rendered.Length == 0 ? string.Empty : " ",
+                piece,
+                state);
+        }
+
+        return rendered.ToString();
     }
 
     private static string RenderUnsupported(
@@ -718,10 +737,35 @@ internal static class JiraDescriptionReader
         int listDepth)
     {
         state.AddCoverageLimitation("unsupported-adf-content");
-        var descendants = RenderChildren(node, state, depth, listDepth);
-        return descendants.Length == 0
-            ? "[unsupported content]"
-            : $"[unsupported content] {descendants}";
+        var isOutermost = state.UnsupportedContainerDepth == 0;
+        state.UnsupportedContainerDepth++;
+        string descendants;
+        try
+        {
+            descendants = RenderChildren(node, state, depth, listDepth);
+        }
+        finally
+        {
+            state.UnsupportedContainerDepth--;
+        }
+
+        if (descendants.Length == 0)
+        {
+            return state.Fit("[unsupported content]");
+        }
+
+        return isOutermost
+            ? PrefixValueBounded("[unsupported content] ", descendants, state)
+            : descendants;
+    }
+
+    private static string PrefixValueBounded(string prefix, string value, ProjectionState state)
+    {
+        var builder = new StringBuilder(Math.Min(state.MaximumBodyBytes, 4096));
+        var bytesUsed = 0;
+        AppendBounded(builder, ref bytesUsed, string.Empty, prefix, state);
+        AppendBounded(builder, ref bytesUsed, string.Empty, value, state);
+        return builder.ToString();
     }
 
     private static string? RenderLinkSuffix(
@@ -979,6 +1023,8 @@ internal static class JiraDescriptionReader
         internal int MaximumBodyBytes { get; }
 
         internal int ItemsVisited { get; private set; }
+
+        internal int UnsupportedContainerDepth { get; set; }
 
         internal bool WorkLimitReached { get; set; }
 

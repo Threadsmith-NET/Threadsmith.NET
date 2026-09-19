@@ -14,6 +14,14 @@ M5 uses one immutable repository baseline and one private staging view per mutat
 
 Baseline reads never observe staging. A conflict at stage or commit blocks disk writes. Cancellation before or during commit prevents completion and compensating restore returns already-written files to their original bytes.
 
+The planning boundary remains up front: every accepted `propose_plan` payload contains the complete structured implementation plan, and the user or plan policy approves that whole plan before implementation begins. Corrective retries re-emit a complete candidate; incremental execution does not lazily generate or separately approve later plan steps. The host keeps the approved plan identity fixed, selects its earliest incomplete step, and asks the implementation model only for the next small coherent mutation batch within that step. A large step can therefore span several batches; small steps normally finish in one.
+
+Approved execution can span several separately authorized mutation sets. Configured mutation, distinct-file, and mutation-content targets guide model batch size but are soft: tightly coupled or indivisible semantic edits may exceed them while remaining subject to existing hard workspace limits and approved scope. A passing fully applied batch with `stepComplete: true` completes only the active step. `false` or an omitted hint keeps that step active. A no-change completion confirmation requires current passing evidence from a fully applied batch of the same selected step; another step's evidence is insufficient. Corrections preserve the original batch's completion intent.
+
+Each generated set uses the existing private staging, exact-diff policy, transaction, baseline promotion, and validation path. Full authorization followed by passing validation either requests another batch for the same step or advances to the next approved step without a new plan approval. Partial authorization validates applied work and stops at `ContinuationPending`; it neither completes the run nor regenerates omitted work automatically. Explicit resume generates a fresh candidate requiring fresh exact-diff authorization. Interactive execution retains the run guard and uses the existing `/validation retry` route for this decision.
+
+Later implementation model turns restore durable progress without restarting the execution or replaying applied mutations. A restored schema-1 checkpoint is rewritten with schema-2 progress before further work. Final diff artifacts compare original per-path content, retained once through execution artifacts before its first mutation, with the latest promoted workspace snapshot using the same bounded diff renderer as mutation previews. Original dirty content is part of the comparison basis. Historical runs without original content do not present concatenated batch patches as a net final diff.
+
 ## Permissions and paths
 
 - Preview/staging requires `TrustedRead`; commit requires `TrustedMutation` or `FullyTrustedAutomation`.
@@ -21,6 +29,8 @@ Baseline reads never observe staging. A conflict at stage or commit blocks disk 
 - Targets must be within a configured approved root and outside prohibited-path globs.
 - Existing path components may not be symbolic links or junctions.
 - User approval is identified by the approval id emitted for that staged set. Model proposals are forced to explicit review. Host-policy auto-approval is limited to sets independently classified as both low-risk and policy-auto-approved.
+
+At the model proposal boundary, Threadsmith accepts only lossless, deterministic structural normalization before normal validation: an unambiguous omitted `mutationSet` wrapper, one mutation object in place of the array, and exact supported `kind`/`path` aliases when they do not conflict with canonical fields. Duplicate authority-bearing properties, conflicting payloads or aliases, unknown operations, and malformed source content are rejected through the existing corrective-turn path. This normalization never edits proposed source text, invents missing mutation data, widens approved scope, or bypasses resource, path, semantic, staging, and approval checks.
 
 ## Preview settings
 

@@ -1,22 +1,24 @@
 # Execution orchestration and resumption
 
-An approved implementation plan continues in the same run. Approval authorizes the plan only; it does not authorize repository writes. Before approval, every proposed plan passes cheap host-owned sanity checks; repairable plan-scope failures return to the model for bounded plan revision instead of creating a review prompt.
+An approved implementation plan continues in the same run. Every accepted or corrected `propose_plan` payload represents the complete plan, and approval authorizes that whole plan only; it does not authorize repository writes. Implementation is incremental after approval: the host selects the earliest incomplete step and requests separately reviewable mutation batches for that step. Before approval, every proposed plan passes cheap host-owned sanity checks; repairable plan-scope failures return to the model for bounded complete-plan revision instead of creating a review prompt.
 
 ## Normal flow
 
-1. The model proposes plan content through `propose_plan`. The host supplies schema version, revision and step IDs; the model supplies the summary, ordered steps/file intents, validation expectations, risks and questions. Revisions use the same flat content shape. Do not submit the old metadata fields or a `plan` wrapper.
+1. The model proposes the complete plan content through `propose_plan`. The host supplies schema version, revision and step IDs; the model supplies the summary, ordered steps/file intents, validation expectations, risks and questions. Corrective retries and revisions replace the complete candidate using the same flat content shape. Do not submit the old metadata fields or a `plan` wrapper.
 2. The host runs plan sanity checks over structured schema-2 file intents, path confinement, current baseline existence, protected/secret/Git targets, generated/binary risk, lifecycle/configuration/dependency/test-deletion risk, and scope bounds.
 3. Repairable sanity failures are recorded and fed back as plan-revision evidence. Non-repairable path/trust/protected-policy failures fail closed.
 4. A passing plan is manually approved or policy-auto-approved according to `/plan-policy` / `planning:approvalPolicy`; auto-approval records policy, risk, revision, and bounded scope summary.
-5. The host enters implementation, emits visible mutation-preview preparation status, and advertises eligible bounded read-only tools plus `propose_mutations`.
-6. The proposal is validated against approved plan steps, paths, trust, budgets, and the current mutation baseline. C# `RenameSymbol` proposals are expanded through the semantic mutation engine before staging when semantic state is available.
-7. Proposed `.cs` mutations are applied to an in-memory overlay and screened by Roslyn before staging or approval. Blocking syntax/fast compilation diagnostics return to the model for proposal repair; repository files remain unchanged.
-8. The full set stages atomically only after proposal validation and pre-mutation cheap gates pass. The exact diff is recorded and shown before policy evaluation.
-9. A prompted or host-policy mutation decision is recorded separately.
-10. The host builds or semantically evaluates the exact pre-mutation workspace according to configured post-approval `validation:stages` and durably records `BaselineCapture`.
-11. A write-ahead commit intent is recorded, the transaction is applied once, and its result is reconciled.
-12. Configured post-mutation validation runs in order: semantic, compile, diagnostics, and/or affected tests. Build/test validation remains authoritative when configured.
-13. The host records a terminal outcome derived from authoritative artifacts and validation evidence.
+5. The host enters implementation, selects the earliest incomplete approved step, emits visible mutation-preview preparation status, supplies eligible bounded source evidence, and advertises only proposal-only `propose_mutations`. The request carries compact progress and the configured soft mutation, file, and content-size targets; those targets guide model output but do not alter approved scope or hard workspace limits.
+6. The model proposes only the next coherent batch for the active step and may include the optional `stepComplete` hint. A large step can span batches; later plan steps are not generated as mutations yet.
+7. Every batch is validated against the active approved step, paths, trust, budgets, and the current mutation baseline. C# `RenameSymbol` proposals are expanded through the semantic mutation engine before staging when semantic state is available.
+8. Proposed `.cs` mutations are applied to an in-memory overlay and screened by Roslyn before staging or approval. Blocking syntax/fast compilation diagnostics return to the model for proposal repair; repository files remain unchanged.
+9. The batch stages atomically only after proposal validation and pre-mutation cheap gates pass. Its exact diff is recorded and shown before policy evaluation.
+10. A prompted or host-policy mutation decision is recorded separately for that exact batch. Plan approval and earlier mutation decisions do not authorize it.
+11. The host builds or semantically evaluates the exact pre-mutation workspace according to configured post-approval `validation:stages` and durably records `BaselineCapture`.
+12. A write-ahead commit intent is recorded, the authorized transaction is applied once, and its result is reconciled. The transactional mutation baseline is promoted so later batches use current bytes.
+13. Configured post-mutation validation runs in order: semantic, compile, diagnostics, and/or affected tests. Build/test validation remains authoritative when configured. A failure enters the existing bounded correction path for the same active step and preserves the original batch's completion intent.
+14. After a fully authorized passing batch, `stepComplete: true` completes only the active step; `false` or an omitted hint requests another batch for it. A completion-only response requires current passing evidence from a fully applied batch of that same step. A partial authorization validates what applied and pauses at `ContinuationPending` without inheriting the completion hint or automatically regenerating rejected work.
+15. The host advances to the next approved step without another plan approval. Only supported completion of every step produces a terminal successful outcome, whose final diff is the net result relative to execution-start bytes rather than a concatenation of batch patches.
 
 Headless callers must provide a policy-authorized decision or explicit host input. They never self-approve.
 
@@ -26,9 +28,11 @@ Cancellation before application leaves repository bytes unchanged. Cancellation 
 
 ## Explicit resume
 
-Use the shared `ResumeRunCommand` (the interactive `/resume` surface may call the same command) only for a nonterminal interrupted or cancelled execution. Resume revalidates session/run/workspace identity, plan revision and hash, diagnostic baseline, continuation artifact integrity, and operation state.
+Use the shared `ResumeRunCommand` (the interactive `/resume` surface may call the same command) only for a nonterminal interrupted or cancelled execution. Resume revalidates session/run/workspace identity, plan revision and hash, diagnostic and transactional baselines, active/completed step progress, continuation artifact integrity, and operation state.
 
-After revalidation, an interrupted pre-write baseline capture or a cancelled lifecycle commit with proven compensation returns to mutation approval so fresh authorization is required before retrying. A checkpoint proving mutation application advances by rerunning validation and outcome assembly only; it never reapplies the committed mutation. A resumed validation failure may stage a new correction for the same exact-diff review loop.
+After revalidation, an interrupted pre-write baseline capture or a cancelled lifecycle commit with proven compensation returns to mutation approval so fresh authorization is required before retrying. A checkpoint proving mutation application advances by rerunning validation and continuation/outcome assembly only; it never reapplies the committed mutation. Interruption during a later implementation model turn resumes generation for the persisted active step and next batch ordinal without replaying prior proposals, approvals, transactions, or validation. A resumed validation failure may stage a new correction for the same exact-diff review loop.
+
+`ContinuationPending` after partial mutation authorization is a deliberate pause, not an interrupted-effect recovery. In the interactive workflow, `/validation retry` explicitly continues from promoted current bytes. The host generates a fresh candidate and requires a fresh exact-diff decision; it does not revive the partially rejected candidate.
 
 Resume is denied when:
 
@@ -42,4 +46,4 @@ A denial does not adapt or merge repository state. Start a fresh request/plan or
 
 ## Durable evidence
 
-Checkpoint rows contain bounded host-owned DTOs and artifact references. Plan sanity summaries, auto-approval provenance, diffs, continuation state, baseline captures, and validation evidence are sanitized and content-addressed. Terminal outcomes retain the cumulative applied diff across corrections and mark only plan steps explicitly correlated to applied proposals; untouched approved steps remain uncompleted. Hidden reasoning, secrets, raw provider payloads, and unbounded process output are never checkpoint content.
+Checkpoint rows contain bounded host-owned DTOs and artifact references. Schema-2 execution checkpoints retain the active step, step and batch ordinals, batch purpose, completion hint, supported completed-step IDs, promoted mutation-baseline generation, and next legal action; their referenced continuation-state artifacts also retain cumulative budget usage and applied progress. Plan sanity summaries, auto-approval provenance, exact diffs, continuation state, original touched-file evidence, baseline captures, and validation evidence are sanitized and content-addressed. Terminal outcomes report only steps with supported completion evidence and retain one cumulative net final diff when trustworthy original bytes are available; historical state without that evidence does not invent a net diff. Hidden reasoning, secrets, raw provider payloads, and unbounded process output are never checkpoint content.

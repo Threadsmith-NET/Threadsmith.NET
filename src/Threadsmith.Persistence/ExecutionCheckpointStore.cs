@@ -8,7 +8,9 @@ using Threadsmith.Core;
 /// <summary>SQLite-backed atomic execution checkpoint and terminal-outcome store.</summary>
 public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
 {
-    private const int SupportedSchemaVersion = 1;
+    private const int CurrentCheckpointSchemaVersion = 2;
+    private const int MinimumCheckpointSchemaVersion = 1;
+    private const int SupportedOutcomeSchemaVersion = 1;
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         Converters = { new JsonStringEnumConverter() },
@@ -50,7 +52,7 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
             return null;
         }
 
-        if (stored.SchemaVersion != SupportedSchemaVersion)
+        if (stored.SchemaVersion is < MinimumCheckpointSchemaVersion or > CurrentCheckpointSchemaVersion)
         {
             throw new NotSupportedException(
                 $"Execution checkpoint schema {stored.SchemaVersion} is inspectable but cannot resume.");
@@ -69,7 +71,7 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(outcome);
-        if (outcome.SchemaVersion != SupportedSchemaVersion)
+        if (outcome.SchemaVersion != SupportedOutcomeSchemaVersion)
         {
             throw new NotSupportedException($"Unsupported execution outcome schema {outcome.SchemaVersion}.");
         }
@@ -94,7 +96,7 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
             return null;
         }
 
-        if (stored.SchemaVersion != SupportedSchemaVersion)
+        if (stored.SchemaVersion != SupportedOutcomeSchemaVersion)
         {
             throw new NotSupportedException(
                 $"Execution outcome schema {stored.SchemaVersion} is inspectable but unsupported.");
@@ -167,7 +169,7 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
 
     private static void ValidateCheckpoint(ExecutionContinuation checkpoint)
     {
-        if (checkpoint.SchemaVersion != SupportedSchemaVersion)
+        if (checkpoint.SchemaVersion is < MinimumCheckpointSchemaVersion or > CurrentCheckpointSchemaVersion)
         {
             throw new NotSupportedException(
                 $"Unsupported execution checkpoint schema {checkpoint.SchemaVersion}.");

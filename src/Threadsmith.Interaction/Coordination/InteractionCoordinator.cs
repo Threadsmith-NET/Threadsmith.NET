@@ -2052,18 +2052,27 @@ public sealed partial class InteractionCoordinator
     /// <summary>Formats the user-visible post-apply validation outcome.</summary>
     /// <param name="phase">Execution phase returned by post-apply validation.</param>
     /// <param name="suffix">Optional formatted duration suffix including leading space.</param>
+    /// <param name="batchPurpose">Typed purpose of a pending next batch.</param>
     /// <returns>The status line and semantic role to display.</returns>
     internal static (string Message, PresentationTextRole Role) FormatPostApplyValidationResult(
         ExecutionCheckpointPhase phase,
-        string suffix)
+        string suffix,
+        MutationBatchPurpose batchPurpose = MutationBatchPurpose.Correction)
     {
         ArgumentNullException.ThrowIfNull(suffix);
         return phase switch
         {
             ExecutionCheckpointPhase.Completed => ($"Validation completed{suffix}.\n", PresentationTextRole.Status),
-            ExecutionCheckpointPhase.MutationApprovalPending => (
-                $"Validation requires a correction review{suffix}.\n",
+            ExecutionCheckpointPhase.ContinuationPending => (
+                $"Partial changes applied{suffix}; execution is paused. Use /validation retry to resume remaining work.\n",
                 PresentationTextRole.Warning),
+            ExecutionCheckpointPhase.MutationApprovalPending => (
+                batchPurpose == MutationBatchPurpose.Correction
+                    ? $"Validation requires a correction review{suffix}.\n"
+                    : $"Validation passed; the next mutation batch is ready{suffix}.\n",
+                batchPurpose == MutationBatchPurpose.Correction
+                    ? PresentationTextRole.Warning
+                    : PresentationTextRole.Status),
             ExecutionCheckpointPhase.Failed => (
                 $"Validation failed{suffix}; mutation was not accepted.\n",
                 PresentationTextRole.Error),
@@ -4782,7 +4791,8 @@ public sealed partial class InteractionCoordinator
                     : string.Empty;
             (var message, var role) = FormatPostApplyValidationResult(
                 continuation.Phase,
-                suffix);
+                suffix,
+                continuation.BatchPurpose);
             await _surface.WriteAsync(message, role, CancellationToken.None);
             return continuation;
         }

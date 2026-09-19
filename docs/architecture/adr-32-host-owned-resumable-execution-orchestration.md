@@ -27,3 +27,4 @@ Legacy planning-only sessions remain readable and are not retroactively executed
 - SQLite migration 3 stores bounded checkpoint/outcome JSON; large state, diffs, and validation evidence remain content-addressed artifacts.
 - A process interruption never authorizes replay merely because a post-effect checkpoint is absent.
 - Parallel implementation remains excluded until Plan 38 and must compose over this serial contract.
+- Incremental approved-plan execution remains inside this serial state machine: the host selects the earliest incomplete step, persists step/batch progress, and repeats the existing proposal, exact-diff authorization, transaction, and validation path until every approved step has supported completion.

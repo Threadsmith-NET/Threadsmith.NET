@@ -1,6 +1,6 @@
 # Plan 112 - Incremental approved-plan execution
 
-**Status:** Planned.
+**Status:** Active. Incremental execution is implemented in the working tree; targeted review remediation is recorded below. Full-plan acceptance remains separate from these focused fixes.
 **Delivery track:** Maintenance - extend the existing approved-plan execution capability with incremental progress; preserve milestone ownership and completed milestone contracts.
 **Prerequisites:** The implemented serial approved-plan orchestrator, transactional baseline promotion, separate plan/mutation approval policies, conversation-native corrective turns, deployed prompt assets, frontend-neutral interaction coordination, and current mutation-preview reliability work. Reconfirm their production call sites before implementation. No pending parallel-worker or new scheduling framework is required.
 
@@ -474,3 +474,22 @@ Implementing agents should resolve these bounded details after inspecting curren
 - Final target tuning after representative provider measurements. Initial defaults remain configurable and cannot become correctness requirements or hidden retry thresholds.
 
 Any proposed deviation that adds another execution/repair/formatting path needs a concrete technical justification tied to source and observed behavior. Favor a focused extension of the established component.
+
+### Targeted adversarial review follow-up
+
+The eight findings were rechecked against the implementation and this contract:
+
+1. Confirmed: completion-only responses could borrow another step's validation. Host scope now carries same-step eligibility, unsupported claims receive existing bounded corrective feedback, and orchestration independently checks eligibility.
+2. Confirmed: partial approval could produce terminal success with incomplete steps. Applied work now stops at a durable `ContinuationPending` boundary, retains interactive run protection, and resumes through the existing explicit retry command. Newly generated changes still require fresh exact-diff authorization.
+3. Confirmed: interrupted later model turns did not advance on resume. Durable active execution state now resumes next-batch generation instead of restarting or replaying prior mutations. Terminal assembly is shared with normal completion.
+4. Retracted: preserving the original completion hint across validation correction is required by section 6.6. Regression tests now cover conflicting correction hints and missing original hints; the intended policy is retained.
+5. Confirmed: concatenated batch patches are not a net diff. The existing workspace diff algorithm is extracted into `UnifiedTextDiff` and reused by previews and execution reporting. Original touched-file content is retained once through artifact references; reporting compares it with the promoted workspace. Historical runs without original artifacts do not invent that evidence.
+6. Confirmed: schema-1 state could remain labelled schema 1 after migration. Restored state and progress are persisted as schema 2 before further execution.
+7. Confirmed: non-string operation aliases could escape corrective handling. Structured type checks now raise the existing recoverable schema error. Both tool-argument and final-JSON paths are covered.
+8. Confirmed: unrelated formatter changes obscured the implementation. The formatting-only spillover was removed without reverting implementation changes.
+
+Verification uses the solution build and the ExecutionOrchestration, Mutations, CoreRuntime, and Architecture test projects. Coverage includes real workspace repeated edits, create/edit, create/delete, move/edit, dirty starting bytes, restart, partial consent, migration, and conversation-native corrections. These focused checks do not certify every remaining acceptance item in the full plan.
+
+An opt-in live check used the configured `gpt-5.6-terra` profile (`e7fc8c85-d362-445e-b235-709da2cf17f8`) at medium reasoning against a disposable four-file workspace. With soft targets of one mutation and one file per proposal, Terra produced four one-file batches: three for the first approved step with completion hints `false`, `false`, and `true`, followed by one batch for the second step with completion hint `true`. The first exact diff was review-ready after 13.0 seconds; the run completed after 24.0 seconds using four model requests and no corrective turns. All exact diffs were auto-approved by the test harness, final file contents and the cumulative net diff were verified, and every request remained pinned to the selected profile. This is one provider/profile measurement, not evidence of cross-provider latency or cross-platform filesystem behavior.
+
+The durable architecture, user workflow, configuration reference, product acceptance scenarios, and executable manual procedure now state the same boundary: the model proposes and the host approves one complete plan up front, while implementation proceeds through host-selected active steps and separately authorized mutation batches. Scenario B owns the end-to-end behavior; Scenarios C2, J, and AJ cover correction, recovery/partial consent, and presentation. MTP-273 provides the focused executable regression procedure.

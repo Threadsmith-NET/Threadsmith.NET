@@ -87,7 +87,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | `System-Phase-Compilation.md` | System guidance for the `Compilation` phase. | `None` |
 | `System-Phase-Default.md` | System guidance for the `Default` phase. | `None` |
 | `System-Phase-EvidenceCollection.md` | System guidance for the `EvidenceCollection` phase. | `None` |
-| `System-Phase-MutationProposal.md` | System guidance for mutation proposals through an offered tool or final JSON schema. | `None` |
+| `System-Phase-MutationProposal.md` | Active-step guidance for incremental mutation proposals through an offered tool or final JSON schema. The host scope's `CanCompleteWithoutChanges` records same-step validation eligibility; it grants no mutation authority. | `None` |
 | `System-Phase-Validation.md` | System guidance for the `Validation` phase. | `None` |
 
 #### `RepositoryInstructions` family
@@ -637,7 +637,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-propose_mutations-Description.md` | Mutation proposal guidance separating model-authored changes from host-owned identities, lengths, and policy. | `None` |
+| `Tool-propose_mutations-Description.md` | Incremental active-step mutation guidance, completion hints, and host-owned identity/policy boundaries. | `None` |
 
 #### `propose_plan` family
 

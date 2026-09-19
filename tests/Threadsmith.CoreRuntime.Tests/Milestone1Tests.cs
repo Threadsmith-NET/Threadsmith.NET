@@ -982,6 +982,27 @@ public static partial class Milestone1Tests
         Assert.Null(controller.BackgroundValidationRunId);
     }
 
+    /// <summary>A partial-approval pause retains the existing explicit retry route and run guard.</summary>
+    [Fact]
+    public static async Task TuiController_PartialApprovalPause_RemainsResumable()
+    {
+        var fixture = new PostApplyValidationFixture(throwOnResume: false)
+        {
+            ResumePhase = ExecutionCheckpointPhase.ContinuationPending,
+        };
+        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        await StageAndApplyMutationAsync(controller, fixture);
+
+        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
+
+        Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, continuation.Phase);
+        Assert.Equal(fixture.RunId, controller.BackgroundValidationRunId);
+        (var message, var role) = ConversationalShell.FormatPostApplyValidationResult(continuation.Phase, string.Empty);
+        Assert.Contains("/validation retry", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("completed", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(PresentationTextRole.Warning, role);
+    }
+
     /// <summary>Post-apply validation failure is not presented as successful completion.</summary>
     [Fact]
     public static void ConversationalShell_PostApplyValidationFailure_IsReportedSeparately()

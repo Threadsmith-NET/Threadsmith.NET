@@ -21,18 +21,16 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 1. User requests a bounded feature.
 2. Harness gathers relevant semantic evidence.
-3. Model produces a structured plan.
-4. User reviews and approves the plan.
-5. Model proposes a mutation set.
-6. TUI displays exact diff and affected projects.
-7. User approves application.
-8. Harness applies changes transactionally.
-9. Affected projects build.
-10. Selected tests run.
-11. User sees final diff, diagnostics, tests, and residual risks.
-12. User accepts or rolls back.
+3. Model produces the complete ordered structured plan in one proposal.
+4. User reviews and approves the whole plan; this does not authorize repository writes.
+5. Host selects the earliest incomplete step and the model proposes only its next coherent mutation batch using configured soft targets.
+6. TUI displays that batch's exact diff and affected projects; user or mutation policy authorizes only that exact set.
+7. Harness applies the batch transactionally, promotes the mutation baseline, and runs configured affected validation.
+8. If the active step remains incomplete, the host requests another focused batch without generating later-step mutations. A supported completion claim advances to the next approved step without another plan approval.
+9. Repeat exact diff, authorization, application, and validation for every batch and step. A large step may span batches; tightly coupled edits may exceed soft targets while respecting hard limits.
+10. User sees the cumulative net final diff, completed steps, diagnostics, tests, approval provenance, rollback availability, and residual risks only after all approved steps have supported completion.
 
-**Verifies:** model abstraction, tool runtime for evidence collection and implementation, context governor + planning + plan approval, transactional workspace + diff + rollback, build + diagnostics + baseline/introduced classification, test selection/execution, mutation policy, and host-owned end-to-end orchestration/final evidence.
+**Verifies:** model abstraction, complete up-front planning and whole-plan approval, host-selected serial step progression, incremental active-step mutation batches, configurable soft sizing, separate exact-diff authorization, transactional baseline promotion, build + diagnostics + baseline/introduced classification, test selection/execution, rollback, and authoritative cumulative completion.
 
 ---
 
@@ -53,13 +51,14 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario C2 — Conversation-Native Corrective Turns
 
-1. A model emits malformed tool arguments, an unavailable tool, or an invalid sibling in a multi-tool response.
+1. A model emits malformed tool arguments, an unavailable tool, an invalid sibling in a multi-tool response, or an ambiguous/conflicting mutation payload.
 2. The host rejects the invalid request before execution and does not repair arguments.
 3. The next model request contains bounded corrective feedback controlled by `execution:maxCorrectiveTurns`.
-4. A corrected request can proceed; exhausted attempts fail closed with sanitized diagnostics.
-5. For MCP imported tools with provider-unsafe canonical ids, the provider wire name is safely aliased and mapped back before invocation.
+4. Safe documented mutation-shape differences are normalized only when lossless and unambiguous; invalid operations, conflicting aliases, malformed completion values, and duplicate authority-bearing fields receive actionable correction rather than host-authored edits.
+5. A corrected request can proceed; exhausted attempts fail closed with sanitized diagnostics.
+6. For MCP imported tools with provider-unsafe canonical ids, the provider wire name is safely aliased and mapped back before invocation.
 
-**Verifies:** active-turn corrective history, atomic pre-execution batch rejection, purge after successful correction, safe diagnostics without raw malformed arguments/secrets/provider bodies, provider-neutral canonical tool identity, and OpenAI-family tool-name aliasing.
+**Verifies:** active-turn corrective history, atomic pre-execution batch rejection, lossless mutation normalization, actionable incremental-proposal correction, purge after successful correction, safe diagnostics without raw malformed arguments/secrets/provider bodies, provider-neutral canonical tool identity, and OpenAI-family tool-name aliasing.
 
 ---
 
@@ -164,8 +163,10 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 8. On resume, the host reconciles the pending operation against the expected result identity, records the already-completed application instead of reapplying it, classifies the post-mutation build against the preserved `BaselineCapture`, runs explained selected tests, and records one final outcome.
 9. Repeat with repository bytes, selected solution, trust/policy, or a checkpoint artifact changed between interruption and resume.
 10. Repeat cancellation before staging, while approval is pending, during commit, build, test, and correction; make the correction edit a file changed and a file created by the first set to prove it stages against the promoted mutation baseline.
+11. Complete one batch with its step still in progress, then interrupt during the later implementation model turn. Resume and confirm the host restores the same approved plan, completed-step set, active step, batch ordinal, promoted source generation, and consumed budget without replaying prior mutations.
+12. Partially authorize a multi-mutation candidate. Confirm applied work is validated and the run stops at `ContinuationPending` with no stale review candidate. Invoke `/validation retry`; confirm a fresh candidate is generated from current bytes and requires fresh exact-diff authorization.
 
-**Verifies:** deterministic state and legal transitions, transactional/idempotent mutation and exact diff, pre-mutation `BaselineCapture`, build/test cancellation, and late-result abandonment, tolerant persistence/restoration, approval-policy revalidation, and separate diagnostic/mutation baselines, write-ahead side-effect intents, idempotent reconciliation, atomic checkpoints, explicit resume, no duplicate effects, and authoritative completion. Changed or corrupt state fails closed and requires a fresh plan/rebase path; cancellation preserves an inspectable safe repository state.
+**Verifies:** deterministic state and legal transitions, incremental step/batch progress, partial-consent continuation, transactional/idempotent mutation and exact diff, pre-mutation `BaselineCapture`, build/test cancellation and late-result abandonment, tolerant persistence/restoration, approval-policy revalidation, separate diagnostic/mutation baselines, write-ahead side-effect intents, idempotent reconciliation, atomic checkpoints, explicit resume, no duplicate effects, and authoritative completion. Changed or corrupt state fails closed and requires a fresh plan/rebase path; cancellation preserves an inspectable safe repository state.
 
 ---
 
@@ -647,8 +648,9 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 4. Review a governed mutation preview with one or more unified-diff hunks. Confirm each `@@ ... @@` hunk header is followed by exactly one presentation-owned blank line before displayed code, while file headers, metadata, no-newline markers, and raw canonical diff content remain unchanged.
 5. Confirm added and removed diff line styling remains unchanged and neutral/context diff code text can be configured independently through the semantic TUI role system.
 6. Copy visible transcript text and inspect durable/headless outputs. Confirm native selection/copy remains usable and presentation-only hunk spacing/tool formatting does not mutate canonical tool continuations, raw diffs, mutation validation inputs, durable records, or machine-readable outputs.
+7. Run a multi-batch, multi-step approved plan. Confirm both interactive frontends distinguish an ordinary next batch from a validation correction, report a partial-authorization pause with the existing resume command, and do not display batch success as terminal run success. Confirm headless reports the same pending-review versus terminal state.
 
-**Verifies:** centralized completed-tool presentation, bounded sanitized details, duration-enabled/disabled grammar, parallel ordering preservation, presentation-only mutation-diff hunk spacing, neutral diff-code role configurability, and preservation of mutation authority, timing semantics, canonical ordering, and terminal-safe rendering boundaries.
+**Verifies:** centralized completed-tool presentation, bounded sanitized details, duration-enabled/disabled grammar, parallel ordering preservation, presentation-only mutation-diff hunk spacing, incremental batch/correction/run-state presentation, neutral diff-code role configurability, and preservation of mutation authority, timing semantics, canonical ordering, and terminal-safe rendering boundaries.
 
 
 ---

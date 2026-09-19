@@ -1568,6 +1568,12 @@ public sealed partial class SessionApplication :
                     approvedPlan,
                     cancellationToken) ?? throw new InvalidOperationException(
                         "The approved plan cannot execute without a trusted workspace and selected solution.");
+                startRequest = startRequest with
+                {
+                    InitialBudgetUsage = registration.Budget
+                        .Check(new BudgetDimensions(0, 0, TimeSpan.Zero))
+                        .Used,
+                };
 
                 await registration.Machine.TransitionAsync(
                     RunPhase.ImplementationPreparing,

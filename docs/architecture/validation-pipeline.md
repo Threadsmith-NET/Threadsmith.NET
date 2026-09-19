@@ -4,7 +4,7 @@
 
 ## Plan sanity and approval gate
 
-Model-authored plans contain only `summary`, `steps` (title, description, file intents, expected outcome and validation), `risks`, and `outstandingQuestions`. Initial `propose_plan` calls and revision JSON use the same flat content parser. The host constructs schema-2 plans, generates step UUIDs, starts revisions at 1, and advances revisions from the previous host plan. Model-supplied bookkeeping fields and the old `plan` envelope are rejected; no legacy-conversation compatibility path is maintained. Stored plans and approval records retain their host-owned metadata. Schema corrections identify the failing content field or JSON location without echoing rejected values.
+Model-authored plans contain only `summary`, `steps` (title, description, file intents, expected outcome and validation), `risks`, and `outstandingQuestions`. Every accepted `propose_plan` payload contains the complete plan; corrective retries and revision JSON also replace the complete candidate rather than lazily generating later steps during implementation. Initial tool calls and revision JSON use the same flat content parser. The host constructs schema-2 plans, generates step UUIDs, starts revisions at 1, and advances revisions from the previous host plan. Model-supplied bookkeeping fields and the old `plan` envelope are rejected; no legacy-conversation compatibility path is maintained. Stored plans and approval records retain their host-owned metadata. Schema corrections identify the failing content field or JSON location without echoing rejected values.
 
 Before any plan review prompt or plan-policy auto-approval, `Threadsmith.Execution` checks the structured implementation plan against cheap host-owned repository metadata. It flattens schema-2 `ImplementationPlanStep.FileIntents` into source and destination paths, confines paths to the repository, rejects protected/secret/`.git` targets, detects empty, ambiguous, missing, or conflicting modify/create/delete/move/rename scope, classifies generated/binary/lifecycle/configuration/dependency/test-deletion risk from structured intent, and enforces bounded affected-path/path-size limits. These checks do not build, test, restore, execute processes, run Roslyn compilation, stage mutations, or read source contents.
 
@@ -24,6 +24,14 @@ The pre-mutation gate runs in this order:
 6. Publish bounded `PreMutationAnalysisCompleted` summary counts and return blocking diagnostics to the model through bounded corrective messages. Malformed `propose_mutations` schema payloads and repairable proposal validation failures use the same conversation-native corrective budget, not hidden task-constraint evidence. Passing this gate only permits private staging and approval review; it is not acceptance evidence.
 
 Unknown project identity for a trusted `.cs` path degrades to syntax-only analysis. Stale baselines, invalid paths, unsupported lifecycle operations, generated files that cannot be represented safely, and policy/trust violations fail closed before Roslyn.
+
+## Incremental approved-plan execution
+
+Plan approval fixes the complete ordered plan and authorizes implementation scope, not repository writes. The host selects the earliest incomplete approved step and supplies that step plus compact progress and configured soft batch targets to the existing mutation-proposal path. The implementation model proposes only the next coherent batch for that active step. The configured operation, distinct-path, and mutation-content targets guide request size but do not split indivisible semantic edits or relax hard workspace limits.
+
+Every nonempty candidate repeats proposal admission, optional Roslyn screening, private staging, exact-diff authorization, transactional application, baseline promotion, and configured post-apply validation. Passing validation with a supported `stepComplete: true` claim completes only the active step; `false` or an omitted hint requests another batch for that step. A completion-only response is eligible only after current passing evidence from a fully applied batch of the same step. The host then advances to the next step without another plan proposal or plan approval. Terminal success requires supported completion for every approved step.
+
+Partial file or mutation authorization cannot inherit the candidate's completion claim. The host validates what actually applied, clears stale staging, and records `ContinuationPending`. Interactive continuation uses `/validation retry`; resumption asks for a fresh candidate against promoted current bytes and requires a fresh exact-diff decision. Interrupted later proposal turns restore durable step/batch progress and continue from the latest safe boundary rather than restarting the plan or replaying committed writes.
 
 ## Build-half flow
 
@@ -63,7 +71,7 @@ Selection is intentionally conservative and project-level for M6. Projects marke
 
 ## Correction loop
 
-Introduced or possibly introduced compiler/test failures are retryable through the approved-plan execution correction path. Validation failure is summarized into bounded conversation-native corrective feedback, then Plan 37 routes the next mutation proposal through the same proposal validation, pre-mutation Roslyn screening, exact-diff policy, transactional apply, and validation gates. The loop preserves the original diagnostic `BaselineCapture` while promoting a separate transactional mutation baseline after each reconciled application, and it fails closed when `execution:maxCorrectiveTurns` is exhausted.
+Introduced or possibly introduced compiler/test failures are retryable through the approved-plan execution correction path. Validation failure is summarized into bounded conversation-native corrective feedback, then the host routes the next mutation proposal through the same proposal validation, pre-mutation Roslyn screening, exact-diff policy, transactional apply, and validation gates. A correction remains scoped to the active approved step and retains the original batch's completion intent until relevant validation passes; a correction cannot complete another step or widen plan authority. The loop preserves the original diagnostic `BaselineCapture` while promoting a separate transactional mutation baseline after each reconciled application, and it fails closed when `execution:maxCorrectiveTurns` is exhausted.
 
 ## Configuration boundary
 
@@ -77,6 +85,8 @@ Post-approval stages run in order:
 - `tests` discovers and runs selected affected tests.
 
 `planning:approvalPolicy` and `/plan-policy` control whether a sanity-checked valid plan prompts or is host-authorized automatically; they do not disable plan sanity checks or approve mutation proposals, exact diffs, writes, validation, process execution, or external effects. `mutation:approvalPolicy` and `/policy` control whether an exact staged diff prompts or is host-authorized automatically; they do not disable trust, path, baseline, secret-path, `.git`, pre-mutation, transaction, or post-validation guardrails. `execution:maxCorrectiveTurns` is the single correction budget for conversation-native malformed request, plan-sanity, mutation-proposal, pre-mutation, and post-validation correction. Post-apply correction cycles and each mutation-proposal turn are independently bounded by that same key; each correction repeats proposal validation, pre-mutation Roslyn screening, exact-diff policy, transaction, and validation.
+
+`execution:mutationBatching:targetMutations`, `targetFiles`, and `targetMutationCharacters` are positive soft targets included in active-step mutation guidance. They affect proposal granularity only. They do not change plan-step granularity, the up-front whole-plan approval boundary, workspace admission ceilings, validation coverage, or mutation authority.
 
 ## Current boundary
 

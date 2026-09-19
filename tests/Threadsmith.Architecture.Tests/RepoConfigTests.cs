@@ -268,6 +268,9 @@ public static class RepoConfigTests
         Assert.Equal("example-advisory-check", config["hooks:repositoryHandlers:0:id"]);
         Assert.Equal(8_388_608, config.GetValue("execution:maxStructuredOutputCharacters", 0));
         Assert.Equal(4096, config.GetValue("execution:toolResultPreviewCharacters", 0));
+        Assert.Equal(8, config.GetValue("execution:mutationBatching:targetMutations", 0));
+        Assert.Equal(3, config.GetValue("execution:mutationBatching:targetFiles", 0));
+        Assert.Equal(24_000L, config.GetValue<long>("execution:mutationBatching:targetMutationCharacters", 0));
         var validationStages = config.GetSection("validation:stages").Get<string[]>() ?? [];
         Assert.Equal(["semantic", "compile", "diagnostics", "tests"], validationStages);
         Assert.Equal(1_048_576L, config.GetValue<long>("repository:configurationBytes", 0));
@@ -365,6 +368,9 @@ public static class RepoConfigTests
             // The scaffold carries the documented defaults, so the catalog keys bind.
             Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, scaffolded.GetValue("execution:maxModelRounds", 0));
             Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, scaffolded.GetValue("execution:maxPlanningToolRounds", 0));
+            Assert.Equal(8, scaffolded.GetValue("execution:mutationBatching:targetMutations", 0));
+            Assert.Equal(3, scaffolded.GetValue("execution:mutationBatching:targetFiles", 0));
+            Assert.Equal(24_000L, scaffolded.GetValue<long>("execution:mutationBatching:targetMutationCharacters", 0));
             Assert.Equal(200, scaffolded.GetValue("tools:listFiles:defaultEntries", 0));
             Assert.Equal(60, scaffolded.GetValue("tools:runProcess:maxTimeoutSeconds", 0));
 

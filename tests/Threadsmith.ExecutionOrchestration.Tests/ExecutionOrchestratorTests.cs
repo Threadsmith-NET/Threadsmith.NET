@@ -291,6 +291,12 @@ public sealed partial class ExecutionOrchestratorTests
     {
         // Arrange
         var fixture = CreateFixture(includeSecondPlanStep: true);
+        fixture.ProposalHandler.Results.Enqueue(new MutationProposalResult
+        {
+            StagedMutationSet = fixture.CorrectionStaged,
+            StepComplete = true,
+            Rationale = "Implement next step.",
+        });
         await using var events = fixture.Events;
         await fixture.Orchestrator.StartAsync(fixture.StartRequest);
 
@@ -302,6 +308,8 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal([fixture.StepId], outcome.CompletedStepIds);
         Assert.Equal([fixture.SecondStepId], outcome.UncompletedStepIds);
         Assert.DoesNotContain("Untouched behavior changes.", outcome.BehaviorSummary);
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, outcome.Status);
+        Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(fixture.StartRequest.RunId));
     }
 
     /// <summary>Verifies a selectively committed subset cannot complete every step claimed by its proposal.</summary>
@@ -329,7 +337,11 @@ public sealed partial class ExecutionOrchestratorTests
         // Assert
         Assert.Empty(outcome.CompletedStepIds);
         Assert.Equal([fixture.StepId], outcome.UncompletedStepIds);
-        Assert.Empty(outcome.BehaviorSummary);
+        Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, outcome.Status);
+        Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(fixture.StartRequest.RunId));
+        Assert.Single(fixture.ProposalHandler.Commands);
+        Assert.Null(await fixture.Orchestrator.HandleAsync(new GetExecutionMutationCommand(
+            fixture.StartRequest.SessionId, fixture.StartRequest.RunId)));
     }
 
     /// <summary>Verifies lifecycle projections exclude lifecycle mutations omitted by selective approval.</summary>
@@ -573,6 +585,8 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.NotNull(finalDiff);
         Assert.Contains("-old", finalDiff, StringComparison.Ordinal);
         Assert.Contains("+fixed", finalDiff, StringComparison.Ordinal);
+        Assert.DoesNotContain("+new", finalDiff, StringComparison.Ordinal);
+        Assert.DoesNotContain("-new", finalDiff, StringComparison.Ordinal);
         Assert.Equal(2, fixture.CommitHandler.Commands.Count);
         var correctionCommand = Assert.Single(
             fixture.ProposalHandler.Commands,
@@ -970,7 +984,7 @@ public sealed partial class ExecutionOrchestratorTests
             : [validation]);
         var checkpoints = new MemoryCheckpointStore();
         var artifacts = new MemoryArtifactPublisher();
-        var workspaceResolver = new WorkspaceResolver(baseline);
+        var workspaceResolver = new WorkspaceResolver(baseline, () => commitHandler.CommittedCount);
         var orchestrator = new ExecutionOrchestrator(
             proposalHandler,
             commitHandler,
@@ -1096,7 +1110,7 @@ public sealed partial class ExecutionOrchestratorTests
         StepId StepId,
         StepId SecondStepId);
 
-    private sealed class ProposalHandler : ICommandHandler<ProposeMutationSetCommand, StagedMutationSet>
+    private sealed class ProposalHandler : ICommandHandler<ProposeMutationSetCommand, StagedMutationSet>, IIncrementalMutationProposalProvider
     {
         private readonly TaskCompletionSource _firstHandleEntered = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1105,12 +1119,16 @@ public sealed partial class ExecutionOrchestratorTests
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         private readonly bool _blockFirstProposal;
-        private readonly Queue<StagedMutationSet> _staged;
         private bool _firstHandled;
 
         public ProposalHandler(IEnumerable<StagedMutationSet> staged, bool blockFirstProposal = false)
         {
-            _staged = new Queue<StagedMutationSet>(staged);
+            Results = new Queue<MutationProposalResult>(staged.Select(item => new MutationProposalResult
+            {
+                StagedMutationSet = item,
+                StepComplete = item.StepComplete ?? true,
+                Rationale = item.MutationSet.Rationale,
+            }));
             _blockFirstProposal = blockFirstProposal;
             if (!blockFirstProposal)
             {
@@ -1120,6 +1138,10 @@ public sealed partial class ExecutionOrchestratorTests
         }
 
         public List<ProposeMutationSetCommand> Commands { get; } = [];
+
+        public Queue<MutationProposalResult> Results { get; }
+
+        public int? InterruptCall { get; set; }
 
         public Task FirstHandleEntered => _firstHandleEntered.Task;
 
@@ -1132,7 +1154,20 @@ public sealed partial class ExecutionOrchestratorTests
             ProposeMutationSetCommand command,
             CancellationToken cancellationToken = default)
         {
+            var result = await ProposeAsync(command, cancellationToken);
+            return result.StagedMutationSet ?? throw new InvalidOperationException("Completion-only result.");
+        }
+
+        public async Task<MutationProposalResult> ProposeAsync(
+            ProposeMutationSetCommand command,
+            CancellationToken cancellationToken = default)
+        {
             Commands.Add(command);
+            if (InterruptCall == Commands.Count)
+            {
+                throw new OperationCanceledException("Simulated interrupted model turn.");
+            }
+
             if (_blockFirstProposal && !_firstHandled)
             {
                 _firstHandled = true;
@@ -1140,7 +1175,7 @@ public sealed partial class ExecutionOrchestratorTests
                 await _releaseFirstHandle.Task.WaitAsync(cancellationToken);
             }
 
-            return _staged.Dequeue();
+            return Results.Dequeue();
         }
     }
 
@@ -1350,6 +1385,8 @@ public sealed partial class ExecutionOrchestratorTests
 
         public List<CommitMutationSetCommand> Commands { get; } = [];
 
+        public int CommittedCount { get; private set; }
+
         public bool BlockOnNext { get; set; }
 
         public Task Entered => _entered.Task;
@@ -1374,6 +1411,7 @@ public sealed partial class ExecutionOrchestratorTests
                 return CompleteAfterReleaseAsync(cancellationToken);
             }
 
+            CommittedCount++;
             return Task.FromResult(_results.Dequeue());
         }
 
@@ -1386,6 +1424,7 @@ public sealed partial class ExecutionOrchestratorTests
             CancellationToken cancellationToken)
         {
             await _release.Task.WaitAsync(cancellationToken);
+            CommittedCount++;
             return _results.Dequeue();
         }
     }
@@ -1431,6 +1470,19 @@ public sealed partial class ExecutionOrchestratorTests
 
         public bool ThrowOnNext { get; set; }
 
+        public void PassAll()
+        {
+            var results = _results.Select(result => result with
+            {
+                Gate = new AcceptanceGateResult(AcceptanceGateStatus.Passed, []),
+            }).ToArray();
+            _results.Clear();
+            foreach (var result in results)
+            {
+                _results.Enqueue(result);
+            }
+        }
+
         public Task<MutationValidationResult> HandleAsync(
             ValidateMutationCommand command,
             CancellationToken cancellationToken = default)
@@ -1448,18 +1500,25 @@ public sealed partial class ExecutionOrchestratorTests
 
     private sealed class WorkspaceResolver : ITransactionalWorkspaceResolver
     {
+        private readonly Func<int> _committedCount;
         private WorkspaceBaseline _baseline;
 
-        public WorkspaceResolver(WorkspaceBaseline baseline)
+        public WorkspaceResolver(WorkspaceBaseline baseline, Func<int> committedCount)
         {
             _baseline = baseline;
+            _committedCount = committedCount;
         }
 
         public IReadOnlyList<FileLifecycleReconciliation> Reconciliations { get; set; } = [];
 
         public ITransactionalWorkspace GetWorkspace(WorkspaceId workspaceId)
         {
-            return new Workspace(_baseline, Reconciliations);
+            return new Workspace(_baseline, Reconciliations, _committedCount() switch
+            {
+                0 => "old",
+                1 => "new",
+                _ => "fixed",
+            });
         }
 
         public Task<WorkspaceBaseline> PromoteBaselineAsync(
@@ -1482,14 +1541,17 @@ public sealed partial class ExecutionOrchestratorTests
     private sealed class Workspace : ITransactionalWorkspace
     {
         private readonly IReadOnlyList<FileLifecycleReconciliation> _reconciliations;
+        private readonly string _content;
 
         public Workspace(
             WorkspaceBaseline baseline,
-            IReadOnlyList<FileLifecycleReconciliation> reconciliations)
+            IReadOnlyList<FileLifecycleReconciliation> reconciliations,
+            string content)
         {
             Baseline = baseline;
             Isolation = new WorkspaceIsolation(WorkspaceIsolationMode.TrackedInPlace, baseline.RepositoryPath);
             _reconciliations = reconciliations;
+            _content = content;
         }
 
         public WorkspaceBaseline Baseline { get; }
@@ -1513,7 +1575,7 @@ public sealed partial class ExecutionOrchestratorTests
             string relativePath,
             CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException();
+            return Task.FromResult<string?>(relativePath == "src/Example.cs" ? _content : null);
         }
 
         public Task<string?> ReadStagedTextAsync(

@@ -622,7 +622,9 @@ internal static class ApplicationComposition
                 host.Events,
                 host.Sanitizer,
                 host.LoggerFactory.CreateLogger<ExecutionOrchestrator>(),
-                correctiveMessages);
+                correctiveMessages,
+                host.ExecutionLimits,
+                host.OperationalLimits.Workspace);
             if (integration.Models.Catalog.Profiles.Count > 0)
             {
                 if (Enum.GetValues<AgentRole>().Any(role => childModelSelection.CanSelectRole(

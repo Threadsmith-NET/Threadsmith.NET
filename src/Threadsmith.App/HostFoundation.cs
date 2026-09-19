@@ -341,6 +341,14 @@ internal sealed class HostFoundation : IAsyncDisposable
             MaxToolResultPreviewCharacters = configuration.GetValue(
                 "execution:toolResultPreviewCharacters",
                 4096),
+            MutationBatching = new MutationBatchingOptions
+            {
+                TargetMutations = configuration.GetValue("execution:mutationBatching:targetMutations", 8),
+                TargetFiles = configuration.GetValue("execution:mutationBatching:targetFiles", 3),
+                TargetMutationCharacters = configuration.GetValue<long>(
+                    "execution:mutationBatching:targetMutationCharacters",
+                    24_000),
+            },
         };
         var toolLimits = CreateToolLimits(configuration);
         executionLimits.Validate();

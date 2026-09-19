@@ -488,6 +488,11 @@ Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimi
 | `maxAgentDisplayFragments` | `256` | Maximum pending child display fragments. |
 | `maxAgentDisplayFragmentCharacters` | `4096` | Maximum characters per display fragment. |
 | `maxAgentDisplayLineCharacters` | `16384` | Maximum characters per child sanitizer line. |
+| `mutationBatching:targetMutations` | `8` | Soft preferred maximum model-authored operations in one incremental active-step proposal. |
+| `mutationBatching:targetFiles` | `3` | Soft preferred maximum distinct source and destination paths in one incremental active-step proposal. |
+| `mutationBatching:targetMutationCharacters` | `24000` | Soft preferred aggregate mutation-content characters in one incremental active-step proposal. |
+
+Mutation-batching values must be positive. They are model guidance, not admission ceilings or plan-step controls: the model still proposes the complete plan up front, and tightly coupled or indivisible edits may exceed these targets. `limits:workspace:maximumMutations` and `maximumMutationCharacters` remain hard per-set bounds, while approved plan scope, path policy, trust, exact-diff authorization, and validation remain unchanged.
 
 ### `agents:delegation`
 

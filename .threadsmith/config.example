@@ -651,7 +651,14 @@
     // streaming model before it is rejected as malformed. 0 disables this cap.
     "maxStructuredOutputCharacters": 8388608,
     // Maximum characters of a tool result preview retained in session projections.
-    "toolResultPreviewCharacters": 4096
+    "toolResultPreviewCharacters": 4096,
+    // Soft proposal targets for incremental approved-plan execution. Existing
+    // workspace limits remain the hard admission ceilings.
+    "mutationBatching": {
+      "targetMutations": 8,
+      "targetFiles": 3,
+      "targetMutationCharacters": 24000
+    }
   },
 
   // ── Repository configuration safety (§22.2) ───────────────────────────

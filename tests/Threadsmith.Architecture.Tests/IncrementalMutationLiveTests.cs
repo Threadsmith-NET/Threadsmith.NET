@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Channels;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.App;
@@ -33,15 +34,31 @@ public sealed class IncrementalMutationLiveTests
     [Trait("Category", "LiveIntegration")]
     public async Task ApprovedPlan_Terra_ProposesAndAppliesIncrementalBatches()
     {
-        if (Environment.GetEnvironmentVariable("THREADSMITH_LIVE_MUTATION_TESTS") != "1")
+        await RunLiveScenarioAsync(incrementalPlanning: false);
+    }
+
+    /// <summary>Exercises real planning, mutations, receipts and objective completion on one run.</summary>
+    [Fact]
+    [Trait("Category", "LiveIntegration")]
+    public async Task Objective_Terra_PlansAndAppliesMultipleTranches()
+    {
+        await RunLiveScenarioAsync(incrementalPlanning: true);
+    }
+
+    private static async Task RunLiveScenarioAsync(bool incrementalPlanning)
+    {
+        var environmentPrefix = incrementalPlanning ? "THREADSMITH_LIVE_INCREMENTAL_PLAN" : "THREADSMITH_LIVE_MUTATION";
+        if (Environment.GetEnvironmentVariable(environmentPrefix + "_TESTS") != "1")
         {
-            Assert.Skip("Set THREADSMITH_LIVE_MUTATION_TESTS=1 and THREADSMITH_LIVE_MUTATION_PROFILE to run this live test.");
+            Assert.Skip($"Set {environmentPrefix}_TESTS=1 and {environmentPrefix}_PROFILE to run this live test.");
         }
 
-        var configuredProfile = Environment.GetEnvironmentVariable("THREADSMITH_LIVE_MUTATION_PROFILE");
-        Assert.False(string.IsNullOrWhiteSpace(configuredProfile), "THREADSMITH_LIVE_MUTATION_PROFILE is required.");
+        var configuredProfile = Environment.GetEnvironmentVariable(environmentPrefix + "_PROFILE");
+        Assert.False(string.IsNullOrWhiteSpace(configuredProfile), $"{environmentPrefix}_PROFILE is required.");
         var profileId = new ModelProfileId(Guid.Parse(configuredProfile));
-        var cancellationToken = TestContext.Current.CancellationToken;
+        using var runCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var cancellationToken = runCancellation.Token;
+        Task<bool>? sessionCompletion = null;
         var root = Path.Combine(Path.GetTempPath(), "threadsmith-mutation-live-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "src"));
         try
@@ -78,7 +95,7 @@ public sealed class IncrementalMutationLiveTests
             var profile = models.TrustedCatalog.Get(profileId);
             Assert.Contains("terra", profile.ModelId, StringComparison.OrdinalIgnoreCase);
 
-            var timeoutSeconds = ReadPositiveDouble("THREADSMITH_LIVE_MUTATION_TIMEOUT_SECONDS", 600);
+            var timeoutSeconds = ReadPositiveDouble(environmentPrefix + "_TIMEOUT_SECONDS", 600);
             var targetMutations = ReadPositiveInt("THREADSMITH_LIVE_MUTATION_TARGET_MUTATIONS", 1);
             var targetFiles = ReadPositiveInt("THREADSMITH_LIVE_MUTATION_TARGET_FILES", 1);
             var targetCharacters = ReadPositiveLong("THREADSMITH_LIVE_MUTATION_TARGET_CHARACTERS", 4_000);
@@ -91,6 +108,13 @@ public sealed class IncrementalMutationLiveTests
                     TargetMutations = targetMutations,
                     TargetFiles = targetFiles,
                     TargetMutationCharacters = targetCharacters,
+                },
+                IncrementalPlanning = new IncrementalPlanningOptions
+                {
+                    Enabled = incrementalPlanning,
+                    TargetSteps = ReadPositiveInt(environmentPrefix + "_TARGET_STEPS", 1),
+                    TargetFiles = targetFiles,
+                    MaximumPlansPerObjective = ReadPositiveInt(environmentPrefix + "_MAX_PLANS", 6),
                 },
             };
             var budgetLimit = new BudgetDimensions(
@@ -118,11 +142,18 @@ public sealed class IncrementalMutationLiveTests
                 new ModelResolver(models.TrustedCatalog, new InMemoryModelPreferenceSnapshotProvider()),
                 providerInstructionResolver: new ModelProviderInstructionResolver(models.TrustedCatalog, prompts),
                 requestPreparationResolver: models.TrustedProvider as IModelRequestPreparationResolver);
-            var context = new RefreshingContextAssembler(innerContext, evidence);
+            var context = new RefreshingContextAssembler(innerContext, evidence, expectedFiles.Keys.ToArray());
             var recorder = new RecordingProvider(models.TrustedProvider);
             var corrections = new ConcurrentQueue<CorrectionObservation>();
+            var pendingApprovals = Channel.CreateUnbounded<RunId>();
+            var plans = new ConcurrentDictionary<int, ImplementationPlan>();
             await using var correctionSubscription = events.Subscribe((domainEvent, _) =>
             {
+                if (domainEvent is ExecutionCheckpointWritten { Phase: ExecutionCheckpointPhase.MutationApprovalPending } pending)
+                {
+                    pendingApprovals.Writer.TryWrite(pending.RunId);
+                }
+
                 if (domainEvent is ModelCorrectionAttempted correction)
                 {
                     corrections.Enqueue(new CorrectionObservation(
@@ -167,18 +198,118 @@ public sealed class IncrementalMutationLiveTests
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
 
-            var checkpoint = await orchestrator.StartAsync(request, timeout.Token);
-            var firstPreviewSeconds = stopwatch.Elapsed.TotalSeconds;
-            Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, checkpoint.Phase);
-            Assert.Equal(1, checkpoint.CurrentPlanStepOrdinal);
-            ExecutionOutcomeProjection? outcome = null;
-            while (checkpoint.Phase == ExecutionCheckpointPhase.MutationApprovalPending)
+            Task executionFinished;
+            if (incrementalPlanning)
             {
+                var template = request;
+                var registry = new ToolRegistry([]);
+                var pipeline = new ToolInvocationPipeline(
+                    registry,
+                    new DefaultPolicyEngine(),
+                    new DenyApprovalPolicy(),
+                    events,
+                    sanitizer,
+                    NullLogger<ToolInvocationPipeline>.Instance);
+                var approvalConfiguration = new ConfigurationBuilder().AddInMemoryCollection(
+                    new Dictionary<string, string?> { ["planning:approvalPolicy"] = "AutoApproveAllValid" }).Build();
+                using var ownedApprovalConfiguration = approvalConfiguration as IDisposable;
+                var application = new SessionApplication(
+                    events,
+                    recorder,
+                    new ExecutionBudget(budgetLimit),
+                    sanitizer,
+                    NullLogger<SessionApplication>.Instance,
+                    pipeline,
+                    (_, token) =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return Task.FromResult(new ToolInvocationContext
+                        {
+                            RepositoryPath = root,
+                            WorkspaceId = baseline.WorkspaceId,
+                            TrustLevel = RepositoryTrustLevel.TrustedMutation,
+                            ApprovedRoots = ["src"],
+                            RequestedBy = "live incremental planning test",
+                        });
+                    },
+                    contextAssembler: context,
+                    evidenceStore: evidence,
+                    toolRegistry: registry,
+                    defaultModelProfileId: profileId,
+                    limits: limits,
+                    executionOrchestrator: orchestrator,
+                    executionRequestFactory: (session, run, task, plan, token) =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        plans[plan.Revision] = plan;
+                        return Task.FromResult<ExecutionStartRequest?>(template with
+                        {
+                            SessionId = session,
+                            RunId = run,
+                            Task = task,
+                            ApprovedPlan = plan,
+                            AllowPlanContinuation = true,
+                            ValidationRequest = template.ValidationRequest with { SessionId = session, RunId = run },
+                        });
+                    },
+                    budgetFactory: () => new ExecutionBudget(budgetLimit),
+                    planSanityChecker: new PlanSanityChecker(prompts, limits),
+                    planApprovalPolicy: new PlanApprovalPolicyService(approvalConfiguration),
+                    planSanityRequestFactory: (_, plan, token) =>
+                    {
+                        token.ThrowIfCancellationRequested();
+                        return Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
+                        {
+                            Plan = plan,
+                            RepositoryRoot = root,
+                            Baseline = baseline,
+                            TrustLevel = RepositoryTrustLevel.TrustedMutation,
+                        });
+                    },
+                    correctiveMessages: new CorrectiveMessageFactory(prompts),
+                    prompts: prompts);
+                var dispatcher = new CommandDispatcher([application]);
+                var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("live incremental objective"), timeout.Token);
+                var runId = await dispatcher.DispatchAsync(
+                    new SubmitRequestCommand(
+                        sessionId,
+                        "Modernize src/alpha.txt, src/beta.txt, src/gamma.txt and src/delta.txt so each contains "
+                        + "status=modern-<name> followed by one newline. Complete these independent changes serially "
+                        + "using multiple small plans, validating each before planning the next. Finish only after all four are updated."),
+                    timeout.Token);
+                request = request with { SessionId = sessionId, RunId = runId };
+                sessionCompletion = dispatcher.DispatchAsync(new WaitForRunCommand(runId), timeout.Token);
+                executionFinished = sessionCompletion;
+            }
+            else
+            {
+                plans[request.ApprovedPlan.Revision] = request.ApprovedPlan;
+                await orchestrator.StartAsync(request, timeout.Token);
+                executionFinished = orchestrator.WaitForOutcomeAsync(request.RunId, timeout.Token);
+            }
+
+            double firstPreviewSeconds = 0;
+            while (!executionFinished.IsCompleted)
+            {
+                var pending = pendingApprovals.Reader.ReadAsync(timeout.Token).AsTask();
+                if (await Task.WhenAny(pending, executionFinished) == executionFinished)
+                {
+                    break;
+                }
+
+                Assert.Equal(request.RunId, await pending);
+                var checkpoint = await checkpoints.GetCheckpointAsync(request.RunId, timeout.Token)
+                    ?? throw new InvalidOperationException("The mutation checkpoint was not persisted.");
+                if (batches.Count == 0)
+                {
+                    firstPreviewSeconds = stopwatch.Elapsed.TotalSeconds;
+                }
+
                 var staged = await orchestrator.HandleAsync(
                     new GetExecutionMutationCommand(request.SessionId, request.RunId),
                     timeout.Token);
                 Assert.NotNull(staged);
-                var activeStep = request.ApprovedPlan.Steps[checkpoint.CurrentPlanStepOrdinal!.Value - 1];
+                var activeStep = plans[checkpoint.PlanRevision].Steps[checkpoint.CurrentPlanStepOrdinal!.Value - 1];
                 var allowedPaths = activeStep.GetAffectedPaths().ToHashSet(StringComparer.OrdinalIgnoreCase);
                 var mutationPaths = staged.MutationSet.Mutations
                     .SelectMany(mutation => string.IsNullOrWhiteSpace(mutation.DestinationRelativePath)
@@ -202,7 +333,7 @@ public sealed class IncrementalMutationLiveTests
                     $"Approving batch {checkpoint.BatchOrdinal} for step {checkpoint.CurrentPlanStepOrdinal}: "
                     + $"{staged.MutationSet.Mutations.Count} mutations across {mutationPaths.Length} files; "
                     + $"stepComplete={staged.StepComplete}.");
-                outcome = await orchestrator.ContinueAsync(
+                var progress = await orchestrator.ContinueAsync(
                     new ContinueExecutionRequest
                     {
                         SessionId = request.SessionId,
@@ -215,19 +346,22 @@ public sealed class IncrementalMutationLiveTests
                         ApprovalProvenance = "opt-in live test auto-approval",
                     },
                     timeout.Token);
-                if (outcome.Status == ExecutionCheckpointPhase.Completed)
-                {
-                    break;
-                }
-
-                Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, outcome.Status);
-                checkpoint = await checkpoints.GetCheckpointAsync(request.RunId, timeout.Token)
-                    ?? throw new InvalidOperationException("The incremental checkpoint was not persisted.");
+                Assert.NotEqual(ExecutionCheckpointPhase.Failed, progress.Status);
             }
 
+            await executionFinished;
+            if (sessionCompletion is not null)
+            {
+                Assert.True(await sessionCompletion);
+                Assert.InRange(plans.Count, 2, limits.IncrementalPlanning.MaximumPlansPerObjective);
+                Assert.Contains(recorder.Requests, observation => observation.ReceivedExecutionReceipt);
+                Assert.Contains(recorder.Requests, observation => observation.ConfirmedObjective);
+            }
+
+            var outcome = await checkpoints.GetOutcomeAsync(request.RunId, timeout.Token);
             Assert.NotNull(outcome);
             Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
-            Assert.Equal(request.ApprovedPlan.Steps.Count, outcome.CompletedStepIds.Count);
+            Assert.Equal(plans.Values.Sum(plan => plan.Steps.Count), outcome.CompletedStepIds.Count);
             foreach (var expected in expectedFiles)
             {
                 var actual = await File.ReadAllTextAsync(
@@ -237,7 +371,11 @@ public sealed class IncrementalMutationLiveTests
             }
 
             Assert.All(recorder.Requests, item => Assert.Equal(profileId, item.ResolvedProfileId));
-            Assert.Contains(batches, batch => batch.PlanStepOrdinal == 2);
+            if (!incrementalPlanning)
+            {
+                Assert.Contains(batches, batch => batch.PlanStepOrdinal == 2);
+            }
+
             var finalDiff = outcome.FinalDiff is null
                 ? null
                 : await artifacts.ReadAsync(outcome.FinalDiff, timeout.Token);
@@ -259,7 +397,8 @@ public sealed class IncrementalMutationLiveTests
                 outcome.Status,
                 outcome.CompletedStepIds.Count,
                 outcome.ChangedFiles,
-                finalDiff?.Length ?? 0);
+                finalDiff?.Length ?? 0,
+                plans.Count);
             var reportDirectory = Path.GetFullPath(
                 Environment.GetEnvironmentVariable("THREADSMITH_LIVE_MUTATION_REPORT_DIRECTORY")
                 ?? Path.Combine(Path.GetTempPath(), "threadsmith-mutation-live-reports", DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss")));
@@ -273,6 +412,12 @@ public sealed class IncrementalMutationLiveTests
         }
         finally
         {
+            await runCancellation.CancelAsync();
+            if (sessionCompletion is not null)
+            {
+                await ((Task)sessionCompletion).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            }
+
             var normalized = Path.GetFullPath(root);
             var parent = Path.GetFullPath(Path.GetTempPath());
             if (Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(normalized)) != Path.TrimEndingDirectorySeparator(parent)
@@ -400,7 +545,9 @@ public sealed class IncrementalMutationLiveTests
         long EstimatedInputTokens,
         long? InputTokens,
         long? OutputTokens,
-        IReadOnlyList<ToolProposalObservation> ToolProposals);
+        IReadOnlyList<ToolProposalObservation> ToolProposals,
+        bool ReceivedExecutionReceipt,
+        bool ConfirmedObjective);
 
     private sealed record ToolProposalObservation(
         int MutationCount,
@@ -425,18 +572,21 @@ public sealed class IncrementalMutationLiveTests
         ExecutionCheckpointPhase FinalStatus,
         int CompletedSteps,
         IReadOnlyList<string> ChangedFiles,
-        int FinalDiffCharacters);
+        int FinalDiffCharacters,
+        int PlanCount);
 
     private sealed class RefreshingContextAssembler : IContextAssembler
     {
         private readonly Dictionary<string, EvidenceId> _evidenceIds = new(StringComparer.OrdinalIgnoreCase);
         private readonly EvidenceStore _evidence;
         private readonly IContextAssembler _inner;
+        private readonly IReadOnlyList<string> _planningPaths;
 
-        public RefreshingContextAssembler(IContextAssembler inner, EvidenceStore evidence)
+        public RefreshingContextAssembler(IContextAssembler inner, EvidenceStore evidence, IReadOnlyList<string> planningPaths)
         {
             _inner = inner;
             _evidence = evidence;
+            _planningPaths = planningPaths;
         }
 
         public async Task<ContextAssemblyResult> AssembleAsync(
@@ -445,7 +595,7 @@ public sealed class IncrementalMutationLiveTests
         {
             var paths = request.MutationExecutionScope?.ActiveStep.GetAffectedPaths()
                 ?? request.ApprovedPlan?.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray()
-                ?? [];
+                ?? _planningPaths;
             var refreshed = new List<Evidence>();
             foreach (var relativePath in paths.Distinct(StringComparer.OrdinalIgnoreCase))
             {
@@ -535,6 +685,7 @@ public sealed class IncrementalMutationLiveTests
             var stopwatch = Stopwatch.StartNew();
             ModelUsage? usage = null;
             var toolProposals = new List<ToolProposalObservation>();
+            var confirmedObjective = false;
             TestContext.Current.TestOutputHelper?.WriteLine(
                 $"Mutation model request {ordinal}; round {request.ToolContinuationRound}; profile {request.ResolvedProfileId?.Value:D}.");
             try
@@ -542,6 +693,7 @@ public sealed class IncrementalMutationLiveTests
                 await foreach (var chunk in _inner.StreamAsync(request, cancellationToken))
                 {
                     usage = chunk.Usage ?? usage;
+                    confirmedObjective |= chunk.Output is ToolRequestModelOutput { ToolName: "complete_objective" };
                     if (chunk.Output is ToolRequestModelOutput tool
                         && string.Equals(tool.ToolName, "propose_mutations", StringComparison.Ordinal))
                     {
@@ -560,7 +712,10 @@ public sealed class IncrementalMutationLiveTests
                     request.WireEstimate?.WireInputTokens ?? 0,
                     usage?.InputTokens,
                     usage?.OutputTokens,
-                    toolProposals);
+                    toolProposals,
+                    request.Tools.Any(tool => tool.Name == "complete_objective")
+                        && request.Messages.Any(message => message.GetModelVisibleContent().Contains("PlanContinuationPending", StringComparison.Ordinal)),
+                    confirmedObjective);
                 lock (_gate)
                 {
                     _requests.Add(observation);
@@ -646,8 +801,8 @@ public sealed class IncrementalMutationLiveTests
 
     private sealed class MemoryCheckpointStore : IExecutionCheckpointStore
     {
-        private readonly Dictionary<RunId, ExecutionContinuation> _checkpoints = [];
-        private readonly Dictionary<RunId, ExecutionOutcomeProjection> _outcomes = [];
+        private readonly ConcurrentDictionary<RunId, ExecutionContinuation> _checkpoints = new();
+        private readonly ConcurrentDictionary<RunId, ExecutionOutcomeProjection> _outcomes = new();
 
         public Task<ExecutionContinuation?> GetCheckpointAsync(
             RunId runId,

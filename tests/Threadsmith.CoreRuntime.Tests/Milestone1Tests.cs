@@ -1003,6 +1003,29 @@ public static partial class Milestone1Tests
         Assert.Equal(PresentationTextRole.Warning, role);
     }
 
+    /// <summary>A completed plan returns the shared run to active planning and releases the validation guard.</summary>
+    [Fact]
+    public static async Task TuiController_PlanContinuation_RestoresActiveRunAndReleasesValidationGuard()
+    {
+        var fixture = new PostApplyValidationFixture(throwOnResume: false)
+        {
+            ResumePhase = ExecutionCheckpointPhase.PlanContinuationPending,
+        };
+        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        await StageAndApplyMutationAsync(controller, fixture);
+
+        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
+
+        Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, continuation.Phase);
+        Assert.Equal(fixture.RunId, controller.ActiveRunId);
+        Assert.Null(controller.BackgroundValidationRunId);
+        (var message, var role) = ConversationalShell.FormatPostApplyValidationResult(
+            continuation.Phase,
+            string.Empty);
+        Assert.Contains("assessing the remaining objective", message, StringComparison.Ordinal);
+        Assert.Equal(PresentationTextRole.Status, role);
+    }
+
     /// <summary>Post-apply validation failure is not presented as successful completion.</summary>
     [Fact]
     public static void ConversationalShell_PostApplyValidationFailure_IsReportedSeparately()
@@ -4923,6 +4946,7 @@ public static partial class Milestone1Tests
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.Completion };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.Completion };
+        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.EvidenceCollection };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.CompletionPending, RunPhase.Completion };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CorrectionModelTurn, RunPhase.CompletionPending, RunPhase.Completion };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CorrectionModelTurn, RunPhase.MutationProposed };

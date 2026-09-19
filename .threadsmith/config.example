@@ -622,7 +622,15 @@
   // /plan-policy saves every non-session selection only in this repo config.
   // TrustSession leaves the saved policy unchanged; no user-side grant is needed.
   "planning": {
-    "approvalPolicy": "reviewAll"
+    "approvalPolicy": "reviewAll",
+    // A validated plan can return to planning for the next cohesive tranche.
+    // Step/file values are soft model guidance; the plan count is a host safety cap.
+    "incrementalPlans": {
+      "enabled": true,
+      "targetSteps": 4,
+      "targetFiles": 8,
+      "maximumPlansPerObjective": 12
+    }
   },
 
   // ── Mutation approval policy (M7.2 plan 30) ────────────────────────────

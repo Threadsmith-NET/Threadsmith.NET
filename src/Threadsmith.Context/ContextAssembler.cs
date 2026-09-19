@@ -1124,19 +1124,24 @@ public sealed class ContextAssembler : IContextAssembler
     {
         ConversationMessage[] ordered = [.. messages.OrderBy(message => message.Sequence)];
         var turns = new List<IReadOnlyList<ConversationMessage>>();
-        var pendingUsers = new Dictionary<RunId, ConversationMessage>();
+        var pendingTurns = new Dictionary<RunId, List<ConversationMessage>>();
         foreach (var message in ordered)
         {
             if (message.Role == ConversationRole.User)
             {
-                pendingUsers[message.RunId] = message;
+                pendingTurns[message.RunId] = [message];
             }
             else if (message.Role == ConversationRole.Assistant
-                && pendingUsers.Remove(message.RunId, out var user))
+                && pendingTurns.TryGetValue(message.RunId, out var turn))
             {
                 // Overlapping runs may finish in a different order from their requests.
-                // Pair by identity and retain complete exchanges in completion order.
-                turns.Add([user, message]);
+                // A governed run can emit several receipts before its final response.
+                if (turn.Count == 1)
+                {
+                    turns.Add(turn);
+                }
+
+                turn.Add(message);
             }
         }
 
@@ -1163,7 +1168,7 @@ public sealed class ContextAssembler : IContextAssembler
             }
         }
 
-        return [.. turns.OrderBy(turn => turn[1].Sequence)];
+        return [.. turns.OrderBy(turn => turn[^1].Sequence)];
     }
 
     private static PromptAssetReference CreateAssetReference(

@@ -21,16 +21,18 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 1. User requests a bounded feature.
 2. Harness gathers relevant semantic evidence.
-3. Model produces the complete ordered structured plan in one proposal.
-4. User reviews and approves the whole plan; this does not authorize repository writes.
+3. Model produces one complete ordered structured plan tranche in one proposal.
+4. User reviews and approves the whole tranche; this does not authorize repository writes or a later tranche.
 5. Host selects the earliest incomplete step and the model proposes only its next coherent mutation batch using configured soft targets.
 6. TUI displays that batch's exact diff and affected projects; user or mutation policy authorizes only that exact set.
 7. Harness applies the batch transactionally, promotes the mutation baseline, and runs configured affected validation.
 8. If the active step remains incomplete, the host requests another focused batch without generating later-step mutations. A supported completion claim advances to the next approved step without another plan approval.
 9. Repeat exact diff, authorization, application, and validation for every batch and step. A large step may span batches; tightly coupled edits may exceed soft targets while respecting hard limits.
-10. User sees the cumulative net final diff, completed steps, diagnostics, tests, approval provenance, rollback availability, and residual risks only after all approved steps have supported completion.
+10. After all tranche steps validate, the host re-enters evidence/planning with the original objective, current repository, latest cumulative execution receipt regardless of conversation-history mode, completed-plan count, and configured soft tranche targets. After interruption, explicit resume reattaches this same planning loop without replaying completed mutations.
+11. If work remains, the model proposes one next tranche through the same plan formatter and approval path. Otherwise an explicit `complete_objective` call terminalizes the objective. Ordinary text, questions, and cap exhaustion must not claim success.
+12. User sees the cumulative net final diff, completed steps, diagnostics, tests, approval provenance, rollback availability, and residual risks across every completed tranche.
 
-**Verifies:** model abstraction, complete up-front planning and whole-plan approval, host-selected serial step progression, incremental active-step mutation batches, configurable soft sizing, separate exact-diff authorization, transactional baseline promotion, build + diagnostics + baseline/introduced classification, test selection/execution, rollback, and authoritative cumulative completion.
+**Verifies:** model abstraction, complete per-tranche planning and approval, objective-level planning continuation, host-selected serial step progression, incremental active-step mutation batches, configurable soft sizing, separate exact-diff authorization, transactional baseline promotion, build + diagnostics + baseline/introduced classification, test selection/execution, rollback, and authoritative cumulative completion.
 
 ---
 

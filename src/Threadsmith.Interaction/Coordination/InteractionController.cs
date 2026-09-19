@@ -894,6 +894,13 @@ public class InteractionController
                 _activeRunId = runId;
             }
         }
+        else if (continuation.Phase == ExecutionCheckpointPhase.PlanContinuationPending)
+        {
+            lock (_gate)
+            {
+                _activeRunId = runId;
+            }
+        }
 
         if (CanReleasePostApplyValidationGuard(continuation.Phase))
         {
@@ -977,6 +984,7 @@ public class InteractionController
             or ExecutionCheckpointPhase.Failed
             or ExecutionCheckpointPhase.Cancelled
             or ExecutionCheckpointPhase.RolledBack
+            or ExecutionCheckpointPhase.PlanContinuationPending
             or ExecutionCheckpointPhase.MutationApprovalPending;
     }
 

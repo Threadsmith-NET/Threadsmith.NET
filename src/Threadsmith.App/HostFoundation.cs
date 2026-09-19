@@ -349,6 +349,15 @@ internal sealed class HostFoundation : IAsyncDisposable
                     "execution:mutationBatching:targetMutationCharacters",
                     24_000),
             },
+            IncrementalPlanning = new IncrementalPlanningOptions
+            {
+                Enabled = configuration.GetValue("planning:incrementalPlans:enabled", true),
+                TargetSteps = configuration.GetValue("planning:incrementalPlans:targetSteps", 4),
+                TargetFiles = configuration.GetValue("planning:incrementalPlans:targetFiles", 8),
+                MaximumPlansPerObjective = configuration.GetValue(
+                    "planning:incrementalPlans:maximumPlansPerObjective",
+                    12),
+            },
         };
         var toolLimits = CreateToolLimits(configuration);
         executionLimits.Validate();

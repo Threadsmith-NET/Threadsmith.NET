@@ -2066,6 +2066,9 @@ public sealed partial class InteractionCoordinator
             ExecutionCheckpointPhase.ContinuationPending => (
                 $"Partial changes applied{suffix}; execution is paused. Use /validation retry to resume remaining work.\n",
                 PresentationTextRole.Warning),
+            ExecutionCheckpointPhase.PlanContinuationPending => (
+                $"Plan validation completed{suffix}; assessing the remaining objective.\n",
+                PresentationTextRole.Status),
             ExecutionCheckpointPhase.MutationApprovalPending => (
                 batchPurpose == MutationBatchPurpose.Correction
                     ? $"Validation requires a correction review{suffix}.\n"

@@ -880,7 +880,7 @@ public static class Milestone4Tests
         // propose_plan tool call is malformed and must surface as MalformedModelOutputException.
         var reviseException = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new RevisePlanCommand(sessionId, runId, "narrow the scope")));
-        Assert.Contains("outside the initial conversational turn", reviseException.Message, StringComparison.Ordinal);
+        Assert.Contains("planning decision is not available", reviseException.Message, StringComparison.Ordinal);
         Assert.Equal(RunPhase.Failed, (await projections.GetAsync<SessionProjection>(
             new ProjectionKey("session", sessionId.Value.ToString("D")),
             timeout.Token))?.Phase);

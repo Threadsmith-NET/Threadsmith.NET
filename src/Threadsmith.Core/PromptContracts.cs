@@ -206,6 +206,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextExecutionOutcome prompt asset.</summary>
     public const string ContextExecutionOutcome = "Context-ExecutionOutcome.md";
 
+    /// <summary>Gets the incremental objective-planning guidance rendered by the host.</summary>
+    public const string ContextIncrementalPlanning = "Context-IncrementalPlanning.md";
+
     /// <summary>Gets the stable filename for the ContextCurrentTurnHostAuthorizedUserUrl prompt asset.</summary>
     public const string ContextCurrentTurnHostAuthorizedUserUrl = "Context-CurrentTurn-HostAuthorizedUserUrl.md";
 
@@ -397,6 +400,9 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the ToolProposePlanDescription prompt asset.</summary>
     public const string ToolProposePlanDescription = "Tool-propose_plan-Description.md";
+
+    /// <summary>Gets the description of the explicit objective-completion decision.</summary>
+    public const string ToolCompleteObjectiveDescription = "Tool-complete_objective-Description.md";
 
     /// <summary>Gets the stable filename for the ToolProposeMutationsDescription prompt asset.</summary>
     public const string ToolProposeMutationsDescription = "Tool-propose_mutations-Description.md";
@@ -1091,6 +1097,7 @@ public static class PromptFileNames
         ContextActiveTurnSummaryHostFileLists,
         ContextActiveRunSteering,
         ContextExecutionOutcome,
+        ContextIncrementalPlanning,
         ContextCurrentTurnHostAuthorizedUserUrl,
         ToolListFilesDescription,
         ToolReadFileDescription,
@@ -1155,6 +1162,7 @@ public static class PromptFileNames
         ToolInspectSkillGuidance,
         ToolInspectSkillDiscoveryGuidance,
         ToolProposePlanDescription,
+        ToolCompleteObjectiveDescription,
         ToolProposeMutationsDescription,
         ToolDelegateAgentsDescription,
         AdapterMcpExplicitReadPolicyDescription,
@@ -1426,11 +1434,13 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextActiveTurnCompactionOutputContract,
             PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper,
             PromptFileNames.ContextActiveTurnSummaryHostFileLists,
+            PromptFileNames.ContextIncrementalPlanning,
             PromptFileNames.SystemToolInventoryNativeSeparate,
         };
         var executionAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.ToolProposePlanDescription,
+            PromptFileNames.ToolCompleteObjectiveDescription,
             PromptFileNames.ToolProposeMutationsDescription,
             PromptFileNames.ToolDelegateAgentsDescription,
             PromptFileNames.CorrectionProviderInvocationInvalid,
@@ -1650,6 +1660,11 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextActiveTurnSummaryHostFileLists] = Set("FilesRead", "FilesChanged"),
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
                     [PromptFileNames.ContextExecutionOutcome] = Set("OutcomeJson"),
+                    [PromptFileNames.ContextIncrementalPlanning] = Set(
+                        "CompletedPlans",
+                        "TargetSteps",
+                        "TargetFiles",
+                        "MaximumPlans"),
                     [PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl] = Set("Ordinal", "UserUrlId"),
                     [PromptFileNames.SystemToolInventoryTextFallback] = Set("ToolId", "Description", "Schema"),
                     [PromptFileNames.ToolRunProcessDescription] = Set("ShellLanguage"),

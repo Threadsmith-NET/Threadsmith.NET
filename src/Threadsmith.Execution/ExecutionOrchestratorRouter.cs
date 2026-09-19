@@ -26,6 +26,14 @@ public sealed class ExecutionOrchestratorRouter : IExecutionOrchestrator
     }
 
     /// <inheritdoc />
+    public Task<ExecutionContinuation> ContinueWithPlanAsync(
+        ExecutionStartRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return GetInner().ContinueWithPlanAsync(request, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<ExecutionOutcomeProjection> ContinueAsync(
         ContinueExecutionRequest request,
         CancellationToken cancellationToken = default)
@@ -40,6 +48,33 @@ public sealed class ExecutionOrchestratorRouter : IExecutionOrchestrator
         CancellationToken cancellationToken = default)
     {
         return GetInner().ResumeAsync(sessionId, runId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<ExecutionStartRequest> GetResumeRequestAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken = default)
+    {
+        return GetInner().GetResumeRequestAsync(sessionId, runId, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
+        RunId runId,
+        int afterPlanOrdinal,
+        CancellationToken cancellationToken = default)
+    {
+        return GetInner().WaitForPlanCompletionAsync(runId, afterPlanOrdinal, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<ExecutionOutcomeProjection> CompleteObjectiveAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken = default)
+    {
+        return GetInner().CompleteObjectiveAsync(sessionId, runId, cancellationToken);
     }
 
     /// <inheritdoc />

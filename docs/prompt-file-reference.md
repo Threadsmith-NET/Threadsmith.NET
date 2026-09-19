@@ -36,13 +36,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System and phase prompts | 28 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 17 | Active-turn, summary, steering, completed execution outcomes, and delegated-child context framing. |
+| Context prompts | 18 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 199 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 200 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 14 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **312** | Complete deployed catalog. |
+| **Total** | **314** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -122,7 +122,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 ### Context prompts
 
-Active-turn, summary, steering, and delegated-child context framing.
+Active-turn, summary, steering, incremental objective planning, and delegated-child context framing.
 
 #### `ActiveRun` family
 
@@ -130,6 +130,7 @@ Active-turn, summary, steering, and delegated-child context framing.
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
+| `Context-IncrementalPlanning.md` | Current objective plan count, soft tranche targets, explicit completion decision, resumable blockers, and host plan-count cap. | [`CompletedPlans`](#placeholder-completedplans), [`TargetSteps`](#placeholder-targetsteps), [`TargetFiles`](#placeholder-targetfiles), [`MaximumPlans`](#placeholder-maximumplans) |
 
 #### `ActiveTurnCompaction` family
 
@@ -224,13 +225,13 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 | `Correction-Plan-SanityEvidence.md` | Corrective or retry guidance for `Plan-SanityEvidence`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
 | `Correction-Plan-SanityStructuredOutput.md` | Revision correction using the same flat plan-content JSON shape. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
 | `Correction-Plan-Schema.md` | Field-specific plan-content correction (`Reason`); no model-authored bookkeeping fields. | [`Reason`](#placeholder-reason) |
-| `Correction-Plan-WrongPhase.md` | Corrective or retry guidance for `Plan-WrongPhase`. | `None` |
+| `Correction-Plan-WrongPhase.md` | Rejects planning decisions outside their advertised availability, including plan-cap exhaustion. | `None` |
 
 #### `PlanProposal` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-PlanProposal-ExclusiveToolOutput.md` | Corrective guidance requiring a plan proposal to be the only tool-producing output. | `None` |
+| `Correction-PlanProposal-ExclusiveToolOutput.md` | Requires propose_plan or complete_objective to be the sole tool-producing output; inspection belongs in an earlier response. | `None` |
 
 #### `PlanSanity` family
 
@@ -643,7 +644,8 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-propose_plan-Description.md` | Advertised plan-content proposal; the host owns version, revision and step identity. | `None` |
+| `Tool-propose_plan-Description.md` | Advertised complete plan-tranche proposal; the host owns version, revision and step identity. | `None` |
+| `Tool-complete_objective-Description.md` | Explicit no-argument completion decision after validated plan execution; questions and blockers remain resumable. | `None` |
 
 #### `read_file` family
 
@@ -806,6 +808,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-classifications"></a>`Classifications` | Comma-separated source classifications, currently generated and/or linked. |
 | <a id="placeholder-code"></a>`Code` | Stable diagnostic or validation code shown with a result. |
 | <a id="placeholder-completeness"></a>`Completeness` | Host-computed source completeness state, such as complete, partial, drifted, or omitted. |
+| <a id="placeholder-completedplans"></a>`CompletedPlans` | Number of successfully validated plan tranches already completed for the current objective. |
 | <a id="placeholder-confidence"></a>`Confidence` | Host- or child-reported confidence attached to a finding or semantic result. |
 | <a id="placeholder-containingsymbol"></a>`ContainingSymbol` | Symbol that contains the reported diagnostic location. |
 | <a id="placeholder-containingsymbolblock"></a>`ContainingSymbolBlock` | Already-rendered optional containing-symbol block inserted into a diagnostic item. |
@@ -859,6 +862,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-maximumattempts"></a>`MaximumAttempts` | Host-enforced maximum correction or retry attempts. |
 | <a id="placeholder-maximumiterations"></a>`MaximumIterations` | Host-enforced maximum workflow/model-loop iterations. |
 | <a id="placeholder-maximummatches"></a>`MaximumMatches` | Host-enforced maximum number of returned matches. |
+| <a id="placeholder-maximumplans"></a>`MaximumPlans` | Configured maximum number of plan tranches that one objective may propose. |
 | <a id="placeholder-defaultlines"></a>`DefaultLines` | Configured default line count for read_file. |
 | <a id="placeholder-maximumlines"></a>`MaximumLines` | Configured maximum line count for read_file. |
 | <a id="placeholder-maximumcontentbytes"></a>`MaximumContentBytes` | Configured UTF-8 content byte limit for the advertised read_file or write_file tool. |
@@ -947,6 +951,8 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-task"></a>`Task` | Current user task or one delegated-child task statement. |
 | <a id="placeholder-tasks"></a>`Tasks` | Fully rendered list of delegated-child questions or task statements. |
 | <a id="placeholder-taskstate"></a>`TaskState` | Host-owned state describing the current task lifecycle. |
+| <a id="placeholder-targetfiles"></a>`TargetFiles` | Configured soft preferred maximum distinct affected paths in one plan tranche. |
+| <a id="placeholder-targetsteps"></a>`TargetSteps` | Configured soft preferred maximum steps in one plan tranche. |
 | <a id="placeholder-testpluralsuffix"></a>`TestPluralSuffix` | Grammar suffix selected from the test count. |
 | <a id="placeholder-text"></a>`Text` | Bounded text payload identified by the surrounding prompt. |
 | <a id="placeholder-title"></a>`Title` | Display title of the surrounding finding, step, or result. |

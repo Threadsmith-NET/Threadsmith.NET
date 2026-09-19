@@ -54,6 +54,9 @@ public sealed record ExecutionLimits
     /// <summary>Soft targets used to encourage incremental approved-plan mutation proposals.</summary>
     public MutationBatchingOptions MutationBatching { get; init; } = new();
 
+    /// <summary>Controls incremental planning across one user objective.</summary>
+    public IncrementalPlanningOptions IncrementalPlanning { get; init; } = new();
+
     /// <summary>Structured plan admission limits.</summary>
     public PlanResourceLimits Plan { get; init; } = new();
 
@@ -87,11 +90,37 @@ public sealed record ExecutionLimits
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetainedToolCalls);
         ArgumentNullException.ThrowIfNull(MutationBatching);
         MutationBatching.Validate();
+        ArgumentNullException.ThrowIfNull(IncrementalPlanning);
+        IncrementalPlanning.Validate();
         Plan.Validate();
     }
 
     /// <summary>The compiled-in defaults used when no configuration is supplied.</summary>
     public static ExecutionLimits Default { get; } = new();
+}
+
+/// <summary>Configurable sizing guidance and safety limits for incremental plan tranches.</summary>
+public sealed record IncrementalPlanningOptions
+{
+    /// <summary>Whether a completed plan returns to planning until the objective is complete.</summary>
+    public bool Enabled { get; init; } = true;
+
+    /// <summary>Preferred maximum number of steps in one independently valid plan tranche.</summary>
+    public int TargetSteps { get; init; } = 4;
+
+    /// <summary>Preferred maximum number of distinct affected paths in one plan tranche.</summary>
+    public int TargetFiles { get; init; } = 8;
+
+    /// <summary>Maximum number of plan tranches that one objective may propose.</summary>
+    public int MaximumPlansPerObjective { get; init; } = 12;
+
+    /// <summary>Rejects nonpositive targets and limits.</summary>
+    public void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetSteps);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetFiles);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumPlansPerObjective);
+    }
 }
 
 /// <summary>Configurable soft sizing targets for one mutation proposal.</summary>

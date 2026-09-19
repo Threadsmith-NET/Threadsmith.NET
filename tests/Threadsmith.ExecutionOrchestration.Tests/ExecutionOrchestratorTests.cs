@@ -66,6 +66,139 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Single(fixture.ValidationHandler.Commands);
     }
 
+    /// <summary>Verifies multiple ordinary plans can complete one objective without terminalizing the shared run early.</summary>
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    public async Task IncrementalPlans_PreserveCumulativeOutcome(bool failValidation, bool cancelAfterProposal, bool failCommit)
+    {
+        var fixture = CreateFixture();
+        await using var events = fixture.Events;
+        var secondStepId = StepId.New();
+        var secondPlan = fixture.StartRequest.ApprovedPlan with
+        {
+            Revision = fixture.StartRequest.ApprovedPlan.Revision + 1,
+            Summary = "Finish example",
+            Steps =
+            [
+                fixture.StartRequest.ApprovedPlan.Steps[0] with
+                {
+                    StepId = secondStepId,
+                    Title = "Finish example",
+                    ExpectedOutcome = "Example behavior is complete.",
+                },
+            ],
+            Risks = ["Second plan risk."],
+        };
+        var secondStaged = fixture.CorrectionStaged with { PlanStepIds = [secondStepId] };
+        fixture.ProposalHandler.Results.Enqueue(new MutationProposalResult
+        {
+            StagedMutationSet = secondStaged,
+            StepComplete = true,
+            Rationale = secondStaged.MutationSet.Rationale,
+        });
+        fixture.CommitHandler.Enqueue(new MutationCommitResult(
+            secondStaged.MutationSet.MutationSetId,
+            secondStaged.MutationSet.Mutations.Select(mutation => mutation.MutationId).ToArray(),
+            ["src/Example.cs"],
+            "revision",
+            false));
+        var firstRequest = fixture.StartRequest with
+        {
+            ApprovedPlan = fixture.StartRequest.ApprovedPlan with { Risks = ["First plan risk."] },
+            AllowPlanContinuation = true,
+            InitialBudgetUsage = new BudgetDimensions(10, 1, TimeSpan.FromSeconds(1)),
+            CorrectionBudget = 0,
+        };
+        var terminalWait = fixture.Orchestrator.WaitForOutcomeAsync(firstRequest.RunId);
+
+        _ = await fixture.Orchestrator.StartAsync(firstRequest);
+        var firstProgress = await fixture.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged));
+        var firstBoundary = await fixture.Orchestrator.WaitForPlanCompletionAsync(
+            firstRequest.RunId,
+            afterPlanOrdinal: 0);
+
+        Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, firstProgress.Status);
+        Assert.Equal(1, firstBoundary.PlanOrdinal);
+        Assert.False(terminalWait.IsCompleted);
+        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult with
+        {
+            Gate = new AcceptanceGateResult(
+                failValidation ? AcceptanceGateStatus.Failed : AcceptanceGateStatus.Passed,
+                failValidation ? ["Second tranche failed validation."] : []),
+        });
+
+        var currentBaseline = fixture.WorkspaceResolver
+            .GetWorkspace(firstRequest.Baseline.WorkspaceId)
+            .Baseline;
+        var secondRequest = firstRequest with
+        {
+            Baseline = currentBaseline,
+            ApprovedPlan = secondPlan,
+            ValidationRequest = firstRequest.ValidationRequest with { Baseline = currentBaseline },
+            InitialBudgetUsage = new BudgetDimensions(15, 2, TimeSpan.FromSeconds(2)),
+        };
+        using var cancellation = new CancellationTokenSource();
+        fixture.ProposalHandler.AfterProposal = cancelAfterProposal ? cancellation.Cancel : null;
+        var secondPending = await fixture.Orchestrator.ContinueWithPlanAsync(secondRequest, cancellation.Token);
+        if (cancelAfterProposal)
+        {
+            var resumed = await RecreateOrchestrator(fixture).ResumeAsync(firstRequest.SessionId, firstRequest.RunId);
+            Assert.Equal(secondPending.MutationSetId, resumed.MutationSetId);
+            Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
+        }
+
+        ExecutionOutcomeProjection secondProgress;
+        if (failCommit)
+        {
+            fixture.CommitHandler.ThrowOnNext = true;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Orchestrator.ContinueAsync(
+                CreateContinuation(fixture, secondStaged)));
+            secondProgress = await fixture.Checkpoints.GetOutcomeAsync(firstRequest.RunId)
+                ?? throw new InvalidOperationException("The failed commit outcome was not recorded.");
+        }
+        else
+        {
+            secondProgress = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, secondStaged));
+        }
+
+        if (failValidation || failCommit)
+        {
+            Assert.Equal(ExecutionCheckpointPhase.Failed, secondProgress.Status);
+            Assert.Equal([fixture.StepId], secondProgress.CompletedStepIds);
+            Assert.Equal([secondStepId], secondProgress.UncompletedStepIds);
+            Assert.All(firstProgress.BehaviorSummary, behavior => Assert.Contains(behavior, secondProgress.BehaviorSummary));
+            Assert.All(firstProgress.ResidualRisks, risk => Assert.Contains(risk, secondProgress.ResidualRisks));
+            Assert.Contains("First plan risk.", secondProgress.ResidualRisks);
+            Assert.Same(secondProgress, await terminalWait);
+            return;
+        }
+
+        var secondBoundary = await fixture.Orchestrator.WaitForPlanCompletionAsync(
+            firstRequest.RunId,
+            afterPlanOrdinal: 1);
+        var outcome = await fixture.Orchestrator.CompleteObjectiveAsync(
+            firstRequest.SessionId,
+            firstRequest.RunId);
+
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, secondPending.Phase);
+        Assert.Equal(2, secondPending.PlanOrdinal);
+        Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, secondProgress.Status);
+        Assert.Equal(2, secondBoundary.PlanOrdinal);
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.Equal([fixture.StepId, secondStepId], outcome.CompletedStepIds);
+        Assert.Equal(2, outcome.BehaviorSummary.Count);
+        Assert.Equal(["src/Example.cs"], outcome.ChangedFiles);
+        Assert.Same(outcome, await terminalWait);
+        Assert.Equal(2, fixture.CommitHandler.Commands.Count);
+        Assert.Equal(2, fixture.ValidationHandler.Commands.Count);
+        Assert.Equal(15, fixture.ProposalHandler.Commands[1].BudgetUsed?.Tokens);
+        Assert.Equal(2, fixture.ProposalHandler.Commands[1].BudgetUsed?.Calls);
+    }
+
     /// <summary>Verifies early mutation authorization waits for the review-ready checkpoint instead of restoring the start-request artifact as active state.</summary>
     [Fact]
     public async Task ApplyExecutionMutation_WhenReviewEventBeatsCheckpoint_WaitsForMutationApprovalCheckpoint()
@@ -1143,6 +1276,8 @@ public sealed partial class ExecutionOrchestratorTests
 
         public int? InterruptCall { get; set; }
 
+        public Action? AfterProposal { get; set; }
+
         public Task FirstHandleEntered => _firstHandleEntered.Task;
 
         public void ReleaseFirstHandle()
@@ -1175,7 +1310,9 @@ public sealed partial class ExecutionOrchestratorTests
                 await _releaseFirstHandle.Task.WaitAsync(cancellationToken);
             }
 
-            return Results.Dequeue();
+            var result = Results.Dequeue();
+            AfterProposal?.Invoke();
+            return result;
         }
     }
 
@@ -1393,6 +1530,11 @@ public sealed partial class ExecutionOrchestratorTests
 
         public bool ThrowOnNext { get; set; }
 
+        public void Enqueue(MutationCommitResult result)
+        {
+            _results.Enqueue(result);
+        }
+
         public Task<MutationCommitResult> HandleAsync(
             CommitMutationSetCommand command,
             CancellationToken cancellationToken = default)
@@ -1470,6 +1612,13 @@ public sealed partial class ExecutionOrchestratorTests
 
         public bool ThrowOnNext { get; set; }
 
+        public MutationValidationResult LastResult { get; private set; } = null!;
+
+        public void Enqueue(MutationValidationResult result)
+        {
+            _results.Enqueue(result);
+        }
+
         public void PassAll()
         {
             var results = _results.Select(result => result with
@@ -1494,7 +1643,8 @@ public sealed partial class ExecutionOrchestratorTests
                 throw new InvalidOperationException("Simulated validation interruption.");
             }
 
-            return Task.FromResult(_results.Dequeue());
+            LastResult = _results.Dequeue();
+            return Task.FromResult(LastResult);
         }
     }
 

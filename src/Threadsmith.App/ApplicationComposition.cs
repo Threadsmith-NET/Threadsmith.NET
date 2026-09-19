@@ -421,6 +421,7 @@ internal static class ApplicationComposition
                         Stages = validationStages,
                     },
                     CorrectionBudget = host.ExecutionLimits.MaxCorrectiveTurns,
+                    AllowPlanContinuation = host.ExecutionLimits.IncrementalPlanning.Enabled,
                 };
             },
             tools.HookCoordinator,

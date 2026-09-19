@@ -1,1 +1,1 @@
-The model requested propose_plan outside the initial conversational turn.
+The requested planning decision is not available in this turn. Use only advertised tools. At the plan cap, confirm completion only if all work is done; otherwise explain the remaining work in ordinary text.

@@ -61,6 +61,9 @@ public enum ExecutionCheckpointPhase
 
     /// <summary>Applied partial work was validated; explicit resume is required before proposing more.</summary>
     ContinuationPending,
+
+    /// <summary>The current plan completed and the objective is ready for another planning turn.</summary>
+    PlanContinuationPending,
 }
 
 /// <summary>Durable state of one idempotent side-effect operation.</summary>
@@ -292,6 +295,9 @@ public sealed record ExecutionContinuation
     /// <summary>Approved plan revision.</summary>
     public required int PlanRevision { get; init; }
 
+    /// <summary>One-based plan tranche ordinal within the user objective.</summary>
+    public int PlanOrdinal { get; init; } = 1;
+
     /// <summary>Stable approved-plan identity.</summary>
     public required string PlanHash { get; init; }
 
@@ -446,6 +452,19 @@ public sealed record ExecutionStartRequest
 
     /// <summary>Budget already consumed before approved execution begins.</summary>
     public BudgetDimensions InitialBudgetUsage { get; init; } = new(0, 0, TimeSpan.Zero);
+
+    /// <summary>Whether successful completion should pause for another objective-level planning turn.</summary>
+    public bool AllowPlanContinuation { get; init; }
+}
+
+/// <summary>One successfully validated plan boundary within an incremental objective.</summary>
+public sealed record ExecutionPlanBoundary
+{
+    /// <summary>One-based completed plan ordinal.</summary>
+    public required int PlanOrdinal { get; init; }
+
+    /// <summary>Authoritative progress through the completed plan boundary.</summary>
+    public required ExecutionOutcomeProjection Progress { get; init; }
 }
 
 /// <summary>Host authorization for applying one staged execution mutation.</summary>
@@ -534,6 +553,15 @@ public interface IExecutionOrchestrator
         ExecutionStartRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Starts the next approved plan tranche on the existing objective execution.</summary>
+    Task<ExecutionContinuation> ContinueWithPlanAsync(
+        ExecutionStartRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionContinuation>(
+            new NotSupportedException("Incremental plan continuation is not supported by this orchestrator."));
+    }
+
     /// <summary>Continues a staged execution after mutation authorization.</summary>
     Task<ExecutionOutcomeProjection> ContinueAsync(
         ContinueExecutionRequest request,
@@ -544,6 +572,36 @@ public interface IExecutionOrchestrator
         SessionId sessionId,
         RunId runId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the durable approved request and planning budget to reattach the session observer after resume.</summary>
+    Task<ExecutionStartRequest> GetResumeRequestAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionStartRequest>(
+            new NotSupportedException("Session resume is not supported by this orchestrator."));
+    }
+
+    /// <summary>Waits for the next successfully validated plan boundary.</summary>
+    Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
+        RunId runId,
+        int afterPlanOrdinal,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionPlanBoundary>(
+            new NotSupportedException("Incremental plan completion is not supported by this orchestrator."));
+    }
+
+    /// <summary>Records successful objective completion at a validated plan boundary.</summary>
+    Task<ExecutionOutcomeProjection> CompleteObjectiveAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionOutcomeProjection>(
+            new NotSupportedException("Incremental objective completion is not supported by this orchestrator."));
+    }
 
     /// <summary>Waits for the authoritative terminal execution outcome.</summary>
     Task<ExecutionOutcomeProjection> WaitForOutcomeAsync(

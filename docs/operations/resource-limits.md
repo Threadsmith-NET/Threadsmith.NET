@@ -492,7 +492,20 @@ Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimi
 | `mutationBatching:targetFiles` | `3` | Soft preferred maximum distinct source and destination paths in one incremental active-step proposal. |
 | `mutationBatching:targetMutationCharacters` | `24000` | Soft preferred aggregate mutation-content characters in one incremental active-step proposal. |
 
-Mutation-batching values must be positive. They are model guidance, not admission ceilings or plan-step controls: the model still proposes the complete plan up front, and tightly coupled or indivisible edits may exceed these targets. `limits:workspace:maximumMutations` and `maximumMutationCharacters` remain hard per-set bounds, while approved plan scope, path policy, trust, exact-diff authorization, and validation remain unchanged.
+Mutation-batching values must be positive. They are model guidance, not admission ceilings or plan-step controls: the model still proposes every step of the current plan tranche before implementing it, and tightly coupled or indivisible edits may exceed these targets. `limits:workspace:maximumMutations` and `maximumMutationCharacters` remain hard per-set bounds, while approved plan scope, path policy, trust, exact-diff authorization, and validation remain unchanged.
+
+### `planning:incrementalPlans`
+
+Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimits.cs`.
+
+| Field | Default | Purpose |
+|---|---:|---|
+| `enabled` | `true` | Return a successfully validated plan to ordinary planning on the same objective run. |
+| `targetSteps` | `4` | Soft preferred maximum steps in one cohesive, independently valid plan tranche. |
+| `targetFiles` | `8` | Soft preferred maximum distinct affected paths in one plan tranche. |
+| `maximumPlansPerObjective` | `12` | Hard maximum plan tranches proposed for one user objective. At the cap, `propose_plan` is withheld. |
+
+All numeric values must be positive. Step and file targets are model guidance, not admission ceilings: atomic work may exceed them. The maximum plan count is host-enforced and does not change plan, mutation, trust, path, validation, or approval policy.
 
 ### `agents:delegation`
 

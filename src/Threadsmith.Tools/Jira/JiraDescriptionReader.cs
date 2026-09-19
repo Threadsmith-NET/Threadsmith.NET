@@ -103,9 +103,10 @@ internal static class JiraDescriptionReader
             "orderedList" => RenderList(node, state, depth, listDepth, ordered: true),
             "listItem" => RenderChildren(node, state, depth, listDepth, "\n", requireContent: true),
             "codeBlock" => RenderChildren(node, state, depth, listDepth, requireContent: true),
-            "blockquote" => PrefixLines(
+            "blockquote" => PrefixLinesBounded(
                 RenderChildren(node, state, depth, listDepth, "\n\n", requireContent: true),
-                "> "),
+                "> ",
+                state),
             "rule" => "---",
             "table" => RenderTable(node, state, depth),
             "tableRow" => RenderChildren(node, state, depth, listDepth, "\t"),
@@ -116,7 +117,8 @@ internal static class JiraDescriptionReader
             "status" => RenderLabelNode(node, state, "status-unavailable", "[status unavailable]", "text"),
             "date" => RenderDate(node, state),
             "inlineCard" or "blockCard" or "embedCard" => RenderCard(node, state),
-            "media" or "mediaInline" or "mediaSingle" or "mediaGroup" => RenderMedia(node, state, depth, listDepth),
+            "media" or "mediaInline" => RenderMedia(node, state, depth, listDepth, isContainer: false),
+            "mediaSingle" or "mediaGroup" => RenderMedia(node, state, depth, listDepth, isContainer: true),
             "doc" => throw new InvalidDataException("Jira returned a nested ADF document root."),
             _ => RenderUnsupported(node, state, depth, listDepth),
         };
@@ -269,6 +271,7 @@ internal static class JiraDescriptionReader
         var rows = ReadRequiredContent(node);
         var renderedRows = new StringBuilder();
         var rowBytes = 0;
+        var rowIndex = 0;
         foreach (var row in rows.EnumerateArray())
         {
             if (state.LimitReached)
@@ -291,6 +294,7 @@ internal static class JiraDescriptionReader
             var cells = ReadRequiredContent(row);
             var renderedCells = new StringBuilder();
             var cellBytes = 0;
+            var cellIndex = 0;
             foreach (var cell in cells.EnumerateArray())
             {
                 if (state.LimitReached)
@@ -328,17 +332,19 @@ internal static class JiraDescriptionReader
                 AppendBounded(
                     renderedCells,
                     ref cellBytes,
-                    renderedCells.Length == 0 ? string.Empty : "\t",
+                    cellIndex == 0 ? string.Empty : "\t",
                     renderedCell,
                     state);
+                cellIndex++;
             }
 
             AppendBounded(
                 renderedRows,
                 ref rowBytes,
-                renderedRows.Length == 0 ? string.Empty : "\n",
+                rowIndex == 0 ? string.Empty : "\n",
                 renderedCells.ToString(),
                 state);
+            rowIndex++;
         }
 
         return renderedRows.ToString();
@@ -480,7 +486,8 @@ internal static class JiraDescriptionReader
         JsonElement node,
         ProjectionState state,
         int depth,
-        int listDepth)
+        int listDepth,
+        bool isContainer)
     {
         state.AddCoverageLimitation("media-not-retrieved");
         var pieces = new List<string>();
@@ -508,7 +515,11 @@ internal static class JiraDescriptionReader
             pieces.Add(descendants);
         }
 
-        pieces.Add("[media not retrieved]");
+        if (!isContainer || descendants.Length == 0)
+        {
+            pieces.Add("[media not retrieved]");
+        }
+
         return string.Join(' ', pieces);
     }
 
@@ -627,8 +638,67 @@ internal static class JiraDescriptionReader
         return true;
     }
 
-    private static string PrefixLines(string value, string prefix)
-        => string.Join("\n", value.Split('\n').Select(line => prefix + line));
+    private static string PrefixLinesBounded(string value, string prefix, ProjectionState state)
+    {
+        var builder = new StringBuilder(Math.Min(state.MaximumBodyBytes, 4096));
+        var bytesUsed = 0;
+        if (!TryAppendBounded(builder, prefix, ref bytesUsed, state))
+        {
+            return builder.ToString();
+        }
+
+        var runesVisited = 0;
+        Span<char> encoded = stackalloc char[2];
+        foreach (var rune in value.EnumerateRunes())
+        {
+            if ((runesVisited++ & 255) == 0)
+            {
+                state.CheckCancellation();
+            }
+
+            if (rune.Value == '\n')
+            {
+                if (!TryAppendBounded(builder, "\n", ref bytesUsed, state)
+                    || !TryAppendBounded(builder, prefix, ref bytesUsed, state))
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            var runeBytes = rune.Utf8SequenceLength;
+            if (bytesUsed + runeBytes > state.MaximumBodyBytes)
+            {
+                state.BodyLimitReached = true;
+                break;
+            }
+
+            var characters = rune.EncodeToUtf16(encoded);
+            builder.Append(encoded[..characters]);
+            bytesUsed += runeBytes;
+        }
+
+        return builder.ToString();
+    }
+
+    private static bool TryAppendBounded(
+        StringBuilder builder,
+        string value,
+        ref int bytesUsed,
+        ProjectionState state)
+    {
+        var bytes = Encoding.UTF8.GetByteCount(value);
+        if (bytesUsed + bytes > state.MaximumBodyBytes)
+        {
+            state.BodyLimitReached = true;
+            return false;
+        }
+
+        builder.Append(value);
+        bytesUsed += bytes;
+        return true;
+    }
 
     private static string IndentContinuation(string value, int spaces)
         => value.Replace("\n", "\n" + new string(' ', spaces), StringComparison.Ordinal);
@@ -690,9 +760,11 @@ internal static class JiraDescriptionReader
             ItemsVisited++;
             if ((ItemsVisited & 255) == 0)
             {
-                _cancellationToken.ThrowIfCancellationRequested();
+                CheckCancellation();
             }
         }
+
+        internal void CheckCancellation() => _cancellationToken.ThrowIfCancellationRequested();
 
         internal void AddCoverageLimitation(string limitation)
         {

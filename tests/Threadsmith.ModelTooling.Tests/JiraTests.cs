@@ -302,6 +302,67 @@ public sealed class JiraTests
         Assert.Contains("projection-work-limit", result.Limitations);
     }
 
+    /// <summary>Table delimiters preserve leading empty rows and cells instead of shifting later values.</summary>
+    [Fact]
+    public void AdfProjectionPreservesLeadingEmptyTablePositions()
+    {
+        using var document = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"table","content":[{"type":"tableRow","content":[]},{"type":"tableRow","content":[{"type":"tableCell","content":[]},{"type":"tableCell","content":[{"type":"paragraph","content":[{"type":"text","text":"value"}]}]}]}]}]}""");
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
+
+        Assert.Equal("\n\tvalue", result.Body);
+        Assert.True(result.BodyComplete);
+    }
+
+    /// <summary>Blockquote prefixes stop at the output bound without materializing an array of lines.</summary>
+    [Fact]
+    public void AdfProjectionBoundsBlockquotePrefixExpansion()
+    {
+        const int maximumBodyBytes = 1024 * 1024;
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            type = "doc",
+            version = 1,
+            content = new[]
+            {
+                new
+                {
+                    type = "blockquote",
+                    content = new[]
+                    {
+                        new { type = "paragraph", content = new[] { new { type = "text", text = new string('\n', maximumBodyBytes - 1) } } },
+                    },
+                },
+            },
+        }));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var result = JiraDescriptionReader.Read(document.RootElement, maximumBodyBytes);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.StartsWith("> \n> ", result.Body, StringComparison.Ordinal);
+        Assert.InRange(Encoding.UTF8.GetByteCount(result.Body), maximumBodyBytes - 2, maximumBodyBytes);
+        Assert.True(result.IsTruncated);
+        Assert.Contains("body-byte-limit", result.Limitations);
+        Assert.InRange(allocated, 0, 32 * 1024 * 1024);
+    }
+
+    /// <summary>Media containers retain their child placeholders without inventing another attachment.</summary>
+    [Fact]
+    public void AdfProjectionDoesNotDuplicateMediaContainerPlaceholder()
+    {
+        using var document = JsonDocument.Parse(
+            """{"type":"doc","version":1,"content":[{"type":"mediaSingle","content":[{"type":"media","attrs":{"alt":"attachment.png"}}]}]}""");
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 65536);
+
+        Assert.Equal("attachment.png [media not retrieved]", result.Body);
+        Assert.Equal(1, result.Body.Split("[media not retrieved]", StringSplitOptions.None).Length - 1);
+        Assert.False(result.BodyComplete);
+        Assert.Contains("media-not-retrieved", result.Limitations);
+    }
+
     /// <summary>Known ADF containers and label fallbacks preserve honest coverage and table shape.</summary>
     [Fact]
     public void AdfKnownNodesValidateAndPreserveStructure()

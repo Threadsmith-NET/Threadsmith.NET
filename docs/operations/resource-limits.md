@@ -65,6 +65,7 @@ Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.
 | `maximumMutationCharacters` | `4194304` | Maximum aggregate replacement/content characters in one batch. |
 | `maximumRationaleCharacters` | `8192` | Maximum characters in the batch rationale. |
 | `maximumDiffLinesForLcs` | `512` | Line-count scale whose square bounds the LCS diff matrix. Ordinary configuration can only narrow the trusted machine/user/environment ceiling. Uses the existing linear diff fallback above that budget or the runtime array capacity. |
+| `maximumFinalDiffCharacters` | `4194304` | Maximum characters retained for one exact cumulative execution diff. Ordinary configuration can only narrow the trusted machine/user/environment ceiling. If the exact diff exceeds the bound, Threadsmith omits the final-diff artifact instead of publishing truncated evidence. |
 | `maximumConcurrentConflictHashes` | `4` | Maximum concurrent hashes during conflict detection. |
 | `maximumConcurrentBaselineHashes` | `8` | Maximum concurrent hashes during baseline capture. |
 | `maximumBaselineStatusLines` | `1000` | Maximum Git status lines retained with a baseline. |

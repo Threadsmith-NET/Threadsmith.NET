@@ -461,15 +461,15 @@ public sealed partial class ExecutionOrchestratorTests
             }
 
             Assert.Equal(ExecutionCheckpointPhase.Completed, outcome!.Status);
-            var diff = await fixture.Artifacts.ReadAsync(outcome.FinalDiff!);
-            Assert.DoesNotContain("middle", diff, StringComparison.Ordinal);
             if (scenario == "create-delete")
             {
-                Assert.Equal(string.Empty, diff);
+                Assert.Null(outcome.FinalDiff);
                 Assert.False(File.Exists(Path.Combine(root, path)));
             }
             else
             {
+                var diff = await fixture.Artifacts.ReadAsync(outcome.FinalDiff!);
+                Assert.DoesNotContain("middle", diff, StringComparison.Ordinal);
                 Assert.Contains("+final", diff, StringComparison.Ordinal);
                 Assert.Equal("final", await File.ReadAllTextAsync(Path.Combine(root, path)));
                 Assert.Contains(scenario == "create-edit" ? "--- /dev/null" : "-dirty value", diff, StringComparison.Ordinal);
@@ -546,5 +546,6 @@ public sealed partial class ExecutionOrchestratorTests
         fixture.Events,
         new SecretOutputSanitizer(),
         NullLogger<ExecutionOrchestrator>.Instance,
-        new CorrectiveMessageFactory(TestPromptLoader.Instance));
+        new CorrectiveMessageFactory(TestPromptLoader.Instance),
+        workspaceLimits: fixture.WorkspaceLimits);
 }

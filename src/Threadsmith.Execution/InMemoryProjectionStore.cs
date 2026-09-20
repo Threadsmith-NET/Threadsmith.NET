@@ -29,6 +29,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
             var toolActivity = existing?.ToolActivity.ToList() ?? [];
             var diagnostics = existing?.Diagnostics.ToList() ?? [];
             var approvals = existing?.PendingApprovals.ToList() ?? [];
+            var pendingPlans = existing?.PendingPlans.ToList() ?? [];
             var resultPreview = domainEvent is ToolInvocationCompleted { ResultJson: { } resultJson }
                 ? resultJson[..Math.Min(resultJson.Length, _maximumToolResultPreviewCharacters)]
                 : null;
@@ -86,14 +87,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     ContextInspection = CopyInspection(assembled.Inspection),
                 },
                 PlanProposed proposed when existing is not null
-                    && proposed.Plan is not null => existing with
-                    {
-                        Plan = new PlanProjection(
-                            proposed.RunId,
-                            proposed.ApprovalId,
-                            proposed.Plan,
-                            proposed.ReviewStatus),
-                    },
+                    && proposed.Plan is not null => ApplyPlanProposal(existing, pendingPlans, proposed),
                 SemanticMutationWarningObserved warning when existing is not null => existing with
                 {
                     Activity =
@@ -115,18 +109,8 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                             IsApplied: false,
                             IsRolledBack: false),
                     },
-                PlanRevisionRequested revision when existing?.Plan is not null
-                    && existing.Plan.RunId == revision.RunId => existing with
-                    {
-                        PendingApprovals = approvals
-                            .Where(item => item.ApprovalId != existing.Plan.ApprovalId)
-                            .ToArray(),
-                        Plan = existing.Plan with
-                        {
-                            Status = PlanReviewStatus.RevisionRequested,
-                            DecisionReason = revision.Instructions,
-                        },
-                    },
+                PlanRevisionRequested revision when existing is not null =>
+                    ApplyPlanRevision(existing, approvals, pendingPlans, revision),
                 SemanticConfidenceChanged confidence when existing is not null
                     && Enum.TryParse<SemanticConfidenceLevel>(
                         confidence.Confidence,
@@ -190,6 +174,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     PendingApprovals = approvals
                         .Where(item => item.ApprovalId != granted.ApprovalId)
                         .ToArray(),
+                    PendingPlans = RemovePendingPlan(pendingPlans, granted.ApprovalId),
                     Plan = existing.Plan?.ApprovalId == granted.ApprovalId
                         ? existing.Plan with
                         {
@@ -210,6 +195,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     PendingApprovals = approvals
                         .Where(item => item.ApprovalId != denied.ApprovalId)
                         .ToArray(),
+                    PendingPlans = RemovePendingPlan(pendingPlans, denied.ApprovalId),
                     Plan = existing.Plan?.ApprovalId == denied.ApprovalId
                         ? existing.Plan with
                         {
@@ -298,12 +284,8 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                         : CopyTestValidation(value.TestValidation),
                     PendingApprovals = value.PendingApprovals.ToArray(),
                     AcceptanceCriteria = value.AcceptanceCriteria.ToArray(),
-                    Plan = value.Plan is null
-                        ? null
-                        : value.Plan with
-                        {
-                            Plan = CopyPlan(value.Plan.Plan),
-                        },
+                    Plan = value.Plan is null ? null : CopyPlanProjection(value.Plan),
+                    PendingPlans = value.PendingPlans.Select(CopyPlanProjection).ToArray(),
                     ContextInspection = value.ContextInspection is null
                         ? null
                         : CopyInspection(value.ContextInspection),
@@ -333,6 +315,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 Diagnostics = projection.Diagnostics.ToArray(),
                 PendingApprovals = projection.PendingApprovals.ToArray(),
                 AcceptanceCriteria = projection.AcceptanceCriteria.ToArray(),
+                PendingPlans = projection.PendingPlans.Select(CopyPlanProjection).ToArray(),
             };
         }
     }
@@ -357,6 +340,7 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     Diagnostics = projection.Diagnostics.ToArray(),
                     PendingApprovals = projection.PendingApprovals.ToArray(),
                     AcceptanceCriteria = projection.AcceptanceCriteria.ToArray(),
+                    PendingPlans = projection.PendingPlans.Select(CopyPlanProjection).ToArray(),
                 }
                 : null;
         }
@@ -409,6 +393,62 @@ public sealed class InMemoryProjectionStore : IProjectionStore
             Risks = plan.Risks.ToArray(),
             OutstandingQuestions = plan.OutstandingQuestions.ToArray(),
         };
+    }
+
+    private static SessionProjection ApplyPlanProposal(
+        SessionProjection existing,
+        IReadOnlyList<PlanProjection> pendingPlans,
+        PlanProposed proposed)
+    {
+        var plan = new PlanProjection(
+            proposed.RunId,
+            proposed.ApprovalId,
+            proposed.Plan!,
+            proposed.ReviewStatus);
+        return existing with
+        {
+            Plan = plan,
+            PendingPlans = proposed.ReviewStatus == PlanReviewStatus.Pending
+                ? [.. pendingPlans.Where(item => item.RunId != proposed.RunId), plan]
+                : pendingPlans.Where(item => item.RunId != proposed.RunId).ToArray(),
+        };
+    }
+
+    private static SessionProjection ApplyPlanRevision(
+        SessionProjection existing,
+        IReadOnlyList<ApprovalProjection> approvals,
+        IReadOnlyList<PlanProjection> pendingPlans,
+        PlanRevisionRequested revision)
+    {
+        var pending = pendingPlans.LastOrDefault(item => item.RunId == revision.RunId);
+        var approvalId = pending?.ApprovalId
+            ?? (existing.Plan?.RunId == revision.RunId ? existing.Plan.ApprovalId : null);
+        return existing with
+        {
+            PendingApprovals = approvalId is null
+                ? [.. approvals]
+                : [.. approvals.Where(item => item.ApprovalId != approvalId)],
+            PendingPlans = [.. pendingPlans.Where(item => item.RunId != revision.RunId)],
+            Plan = existing.Plan?.RunId == revision.RunId
+                ? existing.Plan with
+                {
+                    Status = PlanReviewStatus.RevisionRequested,
+                    DecisionReason = revision.Instructions,
+                }
+                : existing.Plan,
+        };
+    }
+
+    private static PlanProjection[] RemovePendingPlan(
+        IEnumerable<PlanProjection> pendingPlans,
+        ApprovalId approvalId)
+    {
+        return [.. pendingPlans.Where(item => item.ApprovalId != approvalId)];
+    }
+
+    private static PlanProjection CopyPlanProjection(PlanProjection projection)
+    {
+        return projection with { Plan = CopyPlan(projection.Plan) };
     }
 
     private static MutationPreview CopyPreview(MutationPreview preview)

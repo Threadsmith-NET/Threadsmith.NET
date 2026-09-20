@@ -2,6 +2,7 @@ namespace Threadsmith.ExecutionOrchestration.Tests;
 
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Models;
 using Xunit;
 
 public sealed partial class ExecutionOrchestratorTests
@@ -136,6 +137,31 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(assessedUsage, resumedRequest.InitialBudgetUsage);
     }
 
+    /// <summary>Usage emitted before a failed boundary assessment remains durable for the next resume.</summary>
+    [Fact]
+    public async Task PlanBoundary_FailedAssessmentPersistsReportedUsage()
+    {
+        var fixture = CreateFixture();
+        var request = fixture.StartRequest with { AllowPlanContinuation = true };
+        SetProposals(fixture, Replan());
+        await fixture.Orchestrator.StartAsync(request);
+        var restored = fixture with { StartRequest = request, Orchestrator = RecreateOrchestrator(fixture) };
+        await using var scenario = await ConversationScenario.CreateRestoredAsync(restored);
+        scenario.Model.Usage = new ModelUsage(12, 8, EstimatedCost: 0.25m);
+        scenario.Model.ThrowAfterUsage = true;
+
+        await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(request.SessionId, request.RunId));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
+        var resumeRequest = await RecreateOrchestrator(fixture).GetResumeRequestAsync(
+            request.SessionId,
+            request.RunId);
+
+        Assert.True(resumeRequest.InitialBudgetUsage.Tokens >= 20);
+        Assert.True(resumeRequest.InitialBudgetUsage.Calls >= 1);
+        Assert.True(resumeRequest.InitialBudgetUsage.Cost >= 0.25m);
+    }
+
     /// <summary>A pending replacement plan is restored without repeating its planning turn.</summary>
     [Fact]
     public async Task Replan_PublishedReplacementRestoresForExistingApproval()
@@ -146,18 +172,26 @@ public sealed partial class ExecutionOrchestratorTests
         await fixture.Orchestrator.StartAsync(request);
         var replacement = ReplacementRequest(fixture, request).ApprovedPlan;
         var approvalId = ApprovalId.New();
+        var otherRunId = RunId.New();
+        var otherApprovalId = ApprovalId.New();
+        var otherPlan = replacement with { Revision = replacement.Revision + 1 };
         var projection = new SessionProjection
         {
             Key = new ProjectionKey("session", request.SessionId.Value.ToString("D")),
             SessionId = request.SessionId,
             Name = "restored replacement",
             Phase = RunPhase.AwaitingPlanApproval,
-            Plan = new PlanProjection(
-                request.RunId,
-                approvalId,
-                replacement,
-                PlanReviewStatus.Pending),
-            PendingApprovals = [new ApprovalProjection(approvalId, "Approve replacement plan")],
+            Plan = new PlanProjection(otherRunId, otherApprovalId, otherPlan, PlanReviewStatus.Pending),
+            PendingPlans =
+            [
+                new PlanProjection(request.RunId, approvalId, replacement, PlanReviewStatus.Pending),
+                new PlanProjection(otherRunId, otherApprovalId, otherPlan, PlanReviewStatus.Pending),
+            ],
+            PendingApprovals =
+            [
+                new ApprovalProjection(approvalId, "Approve replacement plan"),
+                new ApprovalProjection(otherApprovalId, "Approve another plan"),
+            ],
         };
         var restored = fixture with { StartRequest = request, Orchestrator = RecreateOrchestrator(fixture) };
         await using var scenario = await ConversationScenario.CreateRestoredAsync(
@@ -176,6 +210,64 @@ public sealed partial class ExecutionOrchestratorTests
         await restored.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
         Assert.Equal(1, scenario.Model.RequestCount);
+    }
+
+    /// <summary>Projection recovery retains and resolves pending plans independently for concurrent runs.</summary>
+    [Fact]
+    public async Task PlanProjection_TracksPendingPlansPerRun()
+    {
+        var fixture = CreateFixture();
+        var sessionId = fixture.StartRequest.SessionId;
+        var firstRunId = fixture.StartRequest.RunId;
+        var secondRunId = RunId.New();
+        var firstApprovalId = ApprovalId.New();
+        var secondApprovalId = ApprovalId.New();
+        var firstPlan = fixture.StartRequest.ApprovedPlan;
+        var secondPlan = firstPlan with { Revision = firstPlan.Revision + 1 };
+        var projections = new InMemoryProjectionStore();
+        await projections.ApplyAsync(new SessionCreated(sessionId, DateTimeOffset.UtcNow, "pending plans"));
+        await projections.ApplyAsync(new PlanProposed(
+            sessionId,
+            DateTimeOffset.UtcNow,
+            firstPlan.Summary,
+            firstRunId,
+            firstPlan,
+            firstApprovalId));
+        await projections.ApplyAsync(new ApprovalRequested(
+            sessionId,
+            DateTimeOffset.UtcNow,
+            firstApprovalId,
+            "Approve first plan",
+            ApprovalRequestKind.Plan));
+        await projections.ApplyAsync(new PlanProposed(
+            sessionId,
+            DateTimeOffset.UtcNow,
+            secondPlan.Summary,
+            secondRunId,
+            secondPlan,
+            secondApprovalId));
+        await projections.ApplyAsync(new ApprovalRequested(
+            sessionId,
+            DateTimeOffset.UtcNow,
+            secondApprovalId,
+            "Approve second plan",
+            ApprovalRequestKind.Plan));
+
+        await projections.ApplyAsync(new ApprovalGranted(sessionId, DateTimeOffset.UtcNow, secondApprovalId));
+        var afterApproval = await projections.GetAsync<SessionProjection>(
+            new ProjectionKey("session", sessionId.Value.ToString("D")));
+        var pending = Assert.Single(afterApproval!.PendingPlans);
+        Assert.Equal(firstRunId, pending.RunId);
+
+        await projections.ApplyAsync(new PlanRevisionRequested(
+            sessionId,
+            DateTimeOffset.UtcNow,
+            firstRunId,
+            "Revise the first plan"));
+        var afterRevision = await projections.GetAsync<SessionProjection>(
+            new ProjectionKey("session", sessionId.Value.ToString("D")));
+        Assert.Empty(afterRevision!.PendingPlans);
+        Assert.Empty(afterRevision.PendingApprovals);
     }
 
     /// <summary>Applied work and introduced failures cannot be forgotten by replacing a plan.</summary>

@@ -627,6 +627,24 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Contains("Correction required.", outcome.ResidualRisks);
     }
 
+    /// <summary>Oversized cumulative diffs are omitted instead of publishing partial or unbounded evidence.</summary>
+    [Fact]
+    public async Task FinalDiff_ExceedingConfiguredOutputLimit_IsOmitted()
+    {
+        var fixture = CreateFixture(workspaceLimits: new WorkspaceResourceLimits
+        {
+            MaximumFinalDiffCharacters = 32,
+        });
+        await using var events = fixture.Events;
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+
+        var outcome = await fixture.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged));
+
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.Null(outcome.FinalDiff);
+    }
+
     /// <summary>Verifies a proven compensated failure does not advertise another rollback.</summary>
     [Fact]
     public async Task CompensatedCommitFailure_DoesNotAdvertiseRollback()
@@ -1102,7 +1120,8 @@ public sealed partial class ExecutionOrchestratorTests
         bool includeRejectedLifecycleMutation = false,
         bool includeBuildValidation = false,
         bool blockFirstProposal = false,
-        bool applyLifecycleMutation = false)
+        bool applyLifecycleMutation = false,
+        WorkspaceResourceLimits? workspaceLimits = null)
     {
         var sessionId = SessionId.New();
         var runId = RunId.New();
@@ -1328,7 +1347,8 @@ public sealed partial class ExecutionOrchestratorTests
             events,
             new SecretOutputSanitizer(),
             NullLogger<ExecutionOrchestrator>.Instance,
-            new CorrectiveMessageFactory(TestPromptLoader.Instance));
+            new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            workspaceLimits: workspaceLimits);
         var start = new ExecutionStartRequest
         {
             SessionId = sessionId,
@@ -1365,7 +1385,8 @@ public sealed partial class ExecutionOrchestratorTests
             staged,
             correctionStaged,
             stepId,
-            secondStepId);
+            secondStepId,
+            workspaceLimits ?? new WorkspaceResourceLimits());
     }
 
     private static string SerializePlanProposal(ImplementationPlan plan)
@@ -1440,7 +1461,8 @@ public sealed partial class ExecutionOrchestratorTests
         StagedMutationSet Staged,
         StagedMutationSet CorrectionStaged,
         StepId StepId,
-        StepId SecondStepId);
+        StepId SecondStepId,
+        WorkspaceResourceLimits WorkspaceLimits);
 
     private sealed class ProposalHandler : ICommandHandler<ProposeMutationSetCommand, StagedMutationSet>, IIncrementalMutationProposalProvider
     {

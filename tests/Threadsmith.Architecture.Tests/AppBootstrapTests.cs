@@ -38,23 +38,37 @@ public static partial class AppBootstrapTests
         }
     }
 
-    /// <summary>Repository options can narrow but cannot enlarge the trusted quadratic diff budget.</summary>
+    /// <summary>Repository options can narrow but cannot enlarge trusted diff resource ceilings.</summary>
     [Theory]
-    [InlineData(20000, null, 512)]
-    [InlineData(20000, 1024, 1024)]
-    [InlineData(64, 1024, 64)]
-    public static void OperationalLimits_ConstrainDiffAllocationToTrustedConfiguration(int requested, int? trusted, int expected)
+    [InlineData("maximumDiffLinesForLcs", 20000, null, 512)]
+    [InlineData("maximumDiffLinesForLcs", 20000, 1024, 1024)]
+    [InlineData("maximumDiffLinesForLcs", 64, 1024, 64)]
+    [InlineData("maximumFinalDiffCharacters", 8000000, null, 4194304)]
+    [InlineData("maximumFinalDiffCharacters", 8000000, 6000000, 6000000)]
+    [InlineData("maximumFinalDiffCharacters", 1000, 6000000, 1000)]
+    public static void OperationalLimits_ConstrainDiffResourcesToTrustedConfiguration(
+        string setting,
+        int requested,
+        int? trusted,
+        int expected)
     {
         var effective = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["limits:workspace:maximumDiffLinesForLcs"] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [$"limits:workspace:{setting}"] = requested.ToString(System.Globalization.CultureInfo.InvariantCulture),
         }).Build();
         var host = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["limits:workspace:maximumDiffLinesForLcs"] = trusted?.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            [$"limits:workspace:{setting}"] = trusted?.ToString(System.Globalization.CultureInfo.InvariantCulture),
         }).Build();
 
-        Assert.Equal(expected, HostFoundation.LoadOperationalLimits(effective, host).Workspace.MaximumDiffLinesForLcs);
+        var workspace = HostFoundation.LoadOperationalLimits(effective, host).Workspace;
+        var actual = setting switch
+        {
+            "maximumDiffLinesForLcs" => workspace.MaximumDiffLinesForLcs,
+            "maximumFinalDiffCharacters" => workspace.MaximumFinalDiffCharacters,
+            _ => throw new ArgumentOutOfRangeException(nameof(setting)),
+        };
+        Assert.Equal(expected, actual);
     }
 
     /// <summary>Repositories may narrow prompt appends but cannot raise trusted admission bounds.</summary>

@@ -14,37 +14,79 @@ public static class UnifiedTextDiff
         out int addedLines,
         out int removedLines)
     {
+        _ = TryCreate(
+            relativePath,
+            before,
+            after,
+            maximumDiffLinesForLcs,
+            int.MaxValue,
+            out var diff,
+            out addedLines,
+            out removedLines);
+        return diff;
+    }
+
+    /// <summary>Attempts to render a unified diff without exceeding the configured output bound.</summary>
+    public static bool TryCreate(
+        string relativePath,
+        string? before,
+        string? after,
+        int maximumDiffLinesForLcs,
+        int maximumOutputCharacters,
+        out string diff,
+        out int addedLines,
+        out int removedLines)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumDiffLinesForLcs);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputCharacters);
         addedLines = 0;
         removedLines = 0;
         if (string.Equals(before, after, StringComparison.Ordinal))
         {
-            return string.Empty;
+            diff = string.Empty;
+            return true;
         }
 
         var oldLines = before?.ReplaceLineEndings("\n").Split('\n') ?? [];
         var newLines = after?.ReplaceLineEndings("\n").Split('\n') ?? [];
         var builder = new StringBuilder();
-        builder.Append("--- ").Append(before is null ? "/dev/null" : $"a/{relativePath}").AppendLine();
-        builder.Append("+++ ").Append(after is null ? "/dev/null" : $"b/{relativePath}").AppendLine();
-        builder.Append("@@ -1,").Append(oldLines.Length)
-            .Append(" +1,").Append(newLines.Length).AppendLine(" @@");
+        if (!TryAppendLine(builder, $"--- {(before is null ? "/dev/null" : $"a/{relativePath}")}", maximumOutputCharacters)
+            || !TryAppendLine(builder, $"+++ {(after is null ? "/dev/null" : $"b/{relativePath}")}", maximumOutputCharacters)
+            || !TryAppendLine(builder, $"@@ -1,{oldLines.Length} +1,{newLines.Length} @@", maximumOutputCharacters))
+        {
+            diff = string.Empty;
+            return false;
+        }
+
         var matrixCells = ((long)oldLines.Length + 1) * ((long)newLines.Length + 1);
         if (matrixCells > Array.MaxLength
             || (long)oldLines.Length * newLines.Length > (long)maximumDiffLinesForLcs * maximumDiffLinesForLcs)
         {
             foreach (var line in oldLines)
             {
-                builder.Append('-').AppendLine(line);
+                if (!TryAppendLine(builder, '-', line, maximumOutputCharacters))
+                {
+                    diff = string.Empty;
+                    return false;
+                }
+
                 removedLines++;
             }
 
             foreach (var line in newLines)
             {
-                builder.Append('+').AppendLine(line);
+                if (!TryAppendLine(builder, '+', line, maximumOutputCharacters))
+                {
+                    diff = string.Empty;
+                    return false;
+                }
+
                 addedLines++;
             }
 
-            return builder.ToString();
+            diff = builder.ToString();
+            return true;
         }
 
         var lengths = new int[oldLines.Length + 1, newLines.Length + 1];
@@ -69,7 +111,12 @@ public static class UnifiedTextDiff
                 && newCursor < newLines.Length
                 && string.Equals(oldLines[oldCursor], newLines[newCursor], StringComparison.Ordinal))
             {
-                builder.Append(' ').AppendLine(oldLines[oldCursor]);
+                if (!TryAppendLine(builder, ' ', oldLines[oldCursor], maximumOutputCharacters))
+                {
+                    diff = string.Empty;
+                    return false;
+                }
+
                 oldCursor++;
                 newCursor++;
             }
@@ -77,17 +124,67 @@ public static class UnifiedTextDiff
                 && (oldCursor == oldLines.Length
                     || lengths[oldCursor, newCursor + 1] >= lengths[oldCursor + 1, newCursor]))
             {
-                builder.Append('+').AppendLine(newLines[newCursor++]);
+                if (!TryAppendLine(builder, '+', newLines[newCursor], maximumOutputCharacters))
+                {
+                    diff = string.Empty;
+                    return false;
+                }
+
+                newCursor++;
                 addedLines++;
             }
             else
             {
-                builder.Append('-').AppendLine(oldLines[oldCursor++]);
+                if (!TryAppendLine(builder, '-', oldLines[oldCursor], maximumOutputCharacters))
+                {
+                    diff = string.Empty;
+                    return false;
+                }
+
+                oldCursor++;
                 removedLines++;
             }
         }
 
-        return builder.ToString();
+        diff = builder.ToString();
+        return true;
+    }
+
+    private static bool TryAppendLine(
+        StringBuilder builder,
+        string value,
+        int maximumOutputCharacters)
+    {
+        return TryAppend(builder, value, maximumOutputCharacters)
+            && TryAppend(builder, Environment.NewLine, maximumOutputCharacters);
+    }
+
+    private static bool TryAppendLine(
+        StringBuilder builder,
+        char prefix,
+        string value,
+        int maximumOutputCharacters)
+    {
+        if (1L + value.Length + Environment.NewLine.Length > maximumOutputCharacters - (long)builder.Length)
+        {
+            return false;
+        }
+
+        builder.Append(prefix).AppendLine(value);
+        return true;
+    }
+
+    private static bool TryAppend(
+        StringBuilder builder,
+        string value,
+        int maximumOutputCharacters)
+    {
+        if (value.Length > maximumOutputCharacters - (long)builder.Length)
+        {
+            return false;
+        }
+
+        builder.Append(value);
+        return true;
     }
 }
-

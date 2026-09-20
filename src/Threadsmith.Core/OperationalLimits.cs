@@ -66,6 +66,9 @@ public sealed record WorkspaceResourceLimits
     /// <summary>Line-count scale whose square bounds the LCS diff matrix.</summary>
     public int MaximumDiffLinesForLcs { get; init; } = 512;
 
+    /// <summary>Maximum characters retained for one cumulative execution diff.</summary>
+    public int MaximumFinalDiffCharacters { get; init; } = 4 * 1024 * 1024;
+
     /// <summary>Maximum concurrent hashes during conflict detection.</summary>
     public int MaximumConcurrentConflictHashes { get; init; } = 4;
 
@@ -103,6 +106,7 @@ public sealed record WorkspaceResourceLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumMutationCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumRationaleCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiffLinesForLcs);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFinalDiffCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumConcurrentConflictHashes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumConcurrentBaselineHashes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumBaselineStatusLines);

@@ -219,6 +219,25 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Contains(scenario.Model.SecondRequest!.Tools, tool => tool.Name == "propose_plan");
     }
 
+    /// <summary>Resuming the same assessed boundary rebuilds context without archiving a duplicate receipt.</summary>
+    [Fact]
+    public async Task IncrementalPlanBoundary_ResumeDoesNotDuplicateBoundaryReceipt()
+    {
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
+        scenario.Model.ConfirmObjective = false;
+        scenario.Model.ResponseText = "More work remains.";
+        var runId = await scenario.SubmitAndApprovePlanAsync();
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(scenario.SessionId, runId));
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        var snapshot = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
+
+        Assert.Single(snapshot.Messages, message =>
+            message.Role == ConversationRole.Assistant
+            && message.Content?.Contains("PlanContinuationPending", StringComparison.Ordinal) == true);
+    }
+
     /// <summary>Completion arguments outside the advertised empty schema receive a corrective turn.</summary>
     [Fact]
     public async Task IncrementalPlanBoundary_MalformedCompletionArgumentsAreCorrected()
@@ -785,6 +804,10 @@ public sealed partial class ExecutionOrchestratorTests
 
         public bool EmitMalformedCompletionOnce { get; set; }
 
+        public ModelUsage? Usage { get; set; }
+
+        public bool ThrowAfterUsage { get; set; }
+
         public int RequestCount => _requests;
 
         public string ResponseText { get; set; } = "Hello from the ordinary conversation.";
@@ -804,6 +827,16 @@ public sealed partial class ExecutionOrchestratorTests
             else if (_requests == 3)
             {
                 ThirdRequest = request;
+            }
+
+            if (Usage is not null)
+            {
+                yield return new ModelChunk { Usage = Usage };
+            }
+
+            if (ThrowAfterUsage)
+            {
+                throw new InvalidOperationException("Simulated planning provider failure after usage.");
             }
 
             if (_requests <= _planProposalCount
@@ -946,7 +979,22 @@ public sealed partial class ExecutionOrchestratorTests
             RunId runId,
             CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException();
+            cancellationToken.ThrowIfCancellationRequested();
+            var request = RequireRequest(sessionId, runId);
+            return Task.FromResult(CreateContinuation(request, _planOrdinal) with
+            {
+                Phase = ExecutionCheckpointPhase.PlanContinuationPending,
+                NextAction = "assess remaining objective work",
+            });
+        }
+
+        public Task<ExecutionStartRequest> GetResumeRequestAsync(
+            SessionId sessionId,
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(RequireRequest(sessionId, runId));
         }
 
         public Task<ExecutionContinuation> StartAsync(
@@ -1038,6 +1086,17 @@ public sealed partial class ExecutionOrchestratorTests
                     PlanOrdinal = planOrdinal,
                     Progress = CreateProgress(request, ExecutionCheckpointPhase.PlanContinuationPending),
                 });
+        }
+
+        private ExecutionStartRequest RequireRequest(SessionId sessionId, RunId runId)
+        {
+            var request = _request ?? throw new InvalidOperationException("Execution did not start.");
+            if (request.SessionId != sessionId || request.RunId != runId)
+            {
+                throw new UnauthorizedAccessException("The execution identity does not match the request.");
+            }
+
+            return request;
         }
     }
 }

@@ -274,12 +274,18 @@ internal sealed class HostFoundation : IAsyncDisposable
         limits.Validate();
         var trustedDiffLines = (trustedConfiguration ?? configuration).GetValue(
             "limits:workspace:maximumDiffLinesForLcs", new WorkspaceResourceLimits().MaximumDiffLinesForLcs);
+        var trustedFinalDiffCharacters = (trustedConfiguration ?? configuration).GetValue(
+            "limits:workspace:maximumFinalDiffCharacters", new WorkspaceResourceLimits().MaximumFinalDiffCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trustedDiffLines);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trustedFinalDiffCharacters);
         return limits with
         {
             Workspace = limits.Workspace with
             {
                 MaximumDiffLinesForLcs = Math.Min(limits.Workspace.MaximumDiffLinesForLcs, trustedDiffLines),
+                MaximumFinalDiffCharacters = Math.Min(
+                    limits.Workspace.MaximumFinalDiffCharacters,
+                    trustedFinalDiffCharacters),
             },
         };
     }

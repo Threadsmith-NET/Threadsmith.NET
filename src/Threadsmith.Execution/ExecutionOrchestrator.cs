@@ -1814,8 +1814,35 @@ public sealed class ExecutionOrchestrator :
             var before = reference is null ? null : await _artifacts.ReadAsync(reference, cancellationToken)
                 ?? throw new InvalidDataException("The original execution file artifact is missing or corrupt.");
             var after = await workspace.ReadBaselineTextAsync(normalized, cancellationToken);
-            diff.Append(UnifiedTextDiff.Create(
-                normalized, before, after, _workspaceLimits.MaximumDiffLinesForLcs, out _, out _));
+            if (string.Equals(before, after, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var remainingCharacters = _workspaceLimits.MaximumFinalDiffCharacters - diff.Length;
+            if (remainingCharacters <= 0
+                || !UnifiedTextDiff.TryCreate(
+                    normalized,
+                    before,
+                    after,
+                    _workspaceLimits.MaximumDiffLinesForLcs,
+                    remainingCharacters,
+                    out var fileDiff,
+                    out _,
+                    out _))
+            {
+                _logger.LogWarning(
+                    "Final diff evidence for run {RunId} exceeded the configured character limit and was omitted.",
+                    active.Request.RunId.Value);
+                return null;
+            }
+
+            diff.Append(fileDiff);
+        }
+
+        if (diff.Length == 0)
+        {
+            return null;
         }
 
         return await _artifacts.PublishAsync(

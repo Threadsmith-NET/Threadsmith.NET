@@ -696,19 +696,25 @@ public sealed partial class SessionApplication :
             var stopwatch = Stopwatch.StartNew();
             try
             {
-                var revisedPublication = await GeneratePlanAsync(
-                    command.RunId,
-                    registration,
-                    RunPhase.AwaitingPlanApproval,
-                    cancellationToken) ?? throw new MalformedModelOutputException(
-                        "The revision response did not contain a structured plan.");
-                stopwatch.Stop();
-                AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
-                await PersistPlanningUsageAsync(
-                    command.RunId,
-                    registration,
-                    _executionOrchestrator,
-                    cancellationToken);
+                PlanPublication revisedPublication;
+                try
+                {
+                    revisedPublication = await GeneratePlanAsync(
+                        command.RunId,
+                        registration,
+                        RunPhase.AwaitingPlanApproval,
+                        cancellationToken) ?? throw new MalformedModelOutputException(
+                            "The revision response did not contain a structured plan.");
+                }
+                finally
+                {
+                    await SettlePlanningUsageAsync(
+                        command.RunId,
+                        registration,
+                        _executionOrchestrator,
+                        stopwatch);
+                }
+
                 await PublishPlanAsync(
                     command.RunId,
                     registration,
@@ -1032,6 +1038,7 @@ public sealed partial class SessionApplication :
             registration.LastPlanBoundaryOrdinal = pendingPlan is null
                 ? checkpoint.PlanOrdinal - 1
                 : checkpoint.PlanOrdinal;
+            registration.LastArchivedPlanBoundaryOrdinal = checkpoint.PlanOrdinal;
             registration.ReplanningPlan = checkpoint.Phase == ExecutionCheckpointPhase.PlanReplanningPending
                 ? request.ApprovedPlan
                 : null;
@@ -1345,11 +1352,16 @@ public sealed partial class SessionApplication :
             var boundary = await boundaryTask;
             registration.LastPlanBoundaryOrdinal = boundary.PlanOrdinal;
             registration.ReplanningPlan = boundary.PlanUnderRevision;
-            await ArchiveExecutionOutcomeAsync(
-                runId,
-                registration,
-                boundary.Progress,
-                CancellationToken.None);
+            if (boundary.PlanOrdinal > registration.LastArchivedPlanBoundaryOrdinal)
+            {
+                await ArchiveExecutionOutcomeAsync(
+                    runId,
+                    registration,
+                    boundary.Progress,
+                    CancellationToken.None);
+                registration.LastArchivedPlanBoundaryOrdinal = boundary.PlanOrdinal;
+            }
+
             registration.PendingPlan = null;
             var boundaryReason = boundary.PlanUnderRevision is null
                 ? "validated plan tranche completed; remaining objective assessment started"
@@ -1372,15 +1384,13 @@ public sealed partial class SessionApplication :
             }
             finally
             {
-                stopwatch.Stop();
+                await SettlePlanningUsageAsync(
+                    runId,
+                    registration,
+                    orchestrator,
+                    stopwatch);
             }
 
-            AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
-            await PersistPlanningUsageAsync(
-                runId,
-                registration,
-                orchestrator,
-                registration.Cancellation.Token);
             if (publication is null)
             {
                 if (!registration.ObjectiveCompletionRequested || registration.ReplanningPlan is not null)
@@ -2167,7 +2177,8 @@ public sealed partial class SessionApplication :
         }
 
         var projection = await _sessionProjectionReader(sessionId, cancellationToken);
-        var plan = projection?.Plan;
+        var plan = projection?.PendingPlans.LastOrDefault(item => item.RunId == runId)
+            ?? projection?.Plan;
         if (plan is null
             || plan.RunId != runId
             || plan.Status != PlanReviewStatus.Pending
@@ -2199,6 +2210,27 @@ public sealed partial class SessionApplication :
             runId,
             usage,
             cancellationToken);
+    }
+
+    private static async Task SettlePlanningUsageAsync(
+        RunId runId,
+        RunRegistration registration,
+        IExecutionOrchestrator? orchestrator,
+        Stopwatch stopwatch)
+    {
+        stopwatch.Stop();
+        try
+        {
+            AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
+        }
+        finally
+        {
+            await PersistPlanningUsageAsync(
+                runId,
+                registration,
+                orchestrator,
+                CancellationToken.None);
+        }
     }
 
     private bool TryGetPendingPlan(
@@ -2289,6 +2321,8 @@ public sealed partial class SessionApplication :
         public ImplementationPlan? ReplanningPlan { get; set; }
 
         public int LastPlanBoundaryOrdinal { get; set; }
+
+        public int LastArchivedPlanBoundaryOrdinal { get; set; }
 
         public bool ExecutionStarted { get; set; }
 

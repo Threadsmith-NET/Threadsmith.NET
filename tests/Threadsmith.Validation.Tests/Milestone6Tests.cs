@@ -970,6 +970,55 @@ public sealed class Milestone6Tests
             path => path.Equals("Services/ExampleService.cs", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>Semantic validation uses the host-owned cumulative path scope when one is supplied.</summary>
+    [Fact]
+    public async Task ValidationPipeline_SemanticValidation_UsesAffectedPathScope()
+    {
+        await using var events = new DomainEventStream();
+        var baseline = CreateBaseline(RepositoryTrustLevel.TrustedBuild);
+        var request = new BuildValidationRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            Baseline = baseline,
+            AffectedPaths = ["src/First.cs", "src/Second.cs"],
+            Confidence = SemanticConfidenceLevel.FullSemantic,
+            Stages = [MutationValidationStage.Semantic],
+        };
+        var resolver = new FixedSemanticResolver([]);
+        var pipeline = new ValidationPipeline(
+            new BuildExecutor(events, new DiagnosticNormalizer(), NullLogger<BuildExecutor>.Instance),
+            new DiagnosticClassifier(),
+            new DiagnosticCorrelator(),
+            new AcceptanceGate(),
+            CreateTestPipeline(events),
+            events,
+            resolver);
+        var mutationSet = CreateMutationSet(MutationId.New(), "symbol") with
+        {
+            SessionId = request.SessionId,
+            RunId = request.RunId,
+            WorkspaceId = baseline.WorkspaceId,
+            BaselineCapturedAt = baseline.CapturedAt,
+        };
+        var capture = new BaselineCapture(
+            baseline.WorkspaceId,
+            baseline.CapturedAt,
+            DateTimeOffset.UtcNow,
+            SemanticConfidenceLevel.FullSemantic,
+            []);
+
+        var result = await pipeline.ValidateAsync(
+            request,
+            capture,
+            mutationSet,
+            requiredApprovalsPresent: true,
+            finalDiffAvailable: true);
+
+        Assert.Equal(AcceptanceGateStatus.Passed, result.Gate.Status);
+        Assert.Equal(request.AffectedPaths, Assert.Single(resolver.ChangedFileRequests));
+    }
+
     /// <summary>A failed build without normalized diagnostics cannot pass the acceptance gate.</summary>
     [Fact]
     public async Task ValidationPipeline_UnnormalizedBuildFailure_RejectsRequiredStages()

@@ -19,6 +19,7 @@ public sealed partial class SessionApplication
         RunPhase phase,
         CancellationToken cancellationToken)
     {
+        registration.ObjectiveCompletionRequested = false;
         var maximumModelRounds = _limits.MaxModelRounds;
         var maximumPlanningToolRounds = _limits.MaxPlanningToolRounds;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
@@ -119,7 +120,7 @@ public sealed partial class SessionApplication
                 outcome.TextOutput,
                 round.Context,
                 phase,
-                registration.PendingPlan,
+                registration.PendingPlan ?? registration.LastPublishedPlan,
                 _sanitizer);
             if (plan is not null)
             {
@@ -144,8 +145,9 @@ public sealed partial class SessionApplication
                 }
             }
 
-            if (!outcome.ToolInvoked)
+            if (!outcome.ToolInvoked || outcome.ObjectiveComplete)
             {
+                registration.ObjectiveCompletionRequested = outcome.ObjectiveComplete;
                 if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
                 {
                     await ArchiveVisibleMessageAsync(
@@ -307,7 +309,11 @@ public sealed partial class SessionApplication
         var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
         await RefreshMemoryContextAsync(registration, invocationContext, memoriesEnabled, loopState, cancellationToken);
 
-        var modelTools = CreateModelTools(conversationDefinitions, workspaceAvailable, phase);
+        var modelTools = CreateModelTools(
+            conversationDefinitions,
+            workspaceAvailable,
+            phase,
+            registration.IncrementalPlanExecution && registration.LastPlanBoundaryOrdinal > 0 && registration.ReplanningPlan is null);
         var modelPreference = _sessionPreferences?.Capture();
         var context = loopState.FrozenContext;
 
@@ -564,7 +570,7 @@ public sealed partial class SessionApplication
                 try
                 {
                     loopState.TransientState.ValidateHistory(round.ModelRequest);
-                    streamState.BudgetUsage.Start(round.Registration.Budget);
+                    streamState.BudgetUsage.Start(round.Registration.Budget, round.ModelRequest);
                     await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
                     {
                         await ProcessModelChunkAsync(
@@ -726,7 +732,8 @@ public sealed partial class SessionApplication
             streamState.Plan,
             streamState.TextOutput.ToString(),
             streamState.ToolInvoked,
-            preToolSteering);
+            preToolSteering,
+            streamState.ObjectiveComplete);
     }
 
     private async Task ProcessModelChunkAsync(
@@ -827,10 +834,7 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var isProposePlanTool = string.Equals(
-            tool.ToolName,
-            ProposePlanToolName,
-            StringComparison.OrdinalIgnoreCase);
+        var isPlanningDecision = IsPlanningDecisionTool(tool.ToolName);
         loopState.AddRetainedOutputCharacters(tool.ToolName.Length + tool.ArgumentsJson.Length);
         loopState.IncrementRetainedToolCalls();
         if (streamState.HasResponseEnvelope)
@@ -840,13 +844,13 @@ public sealed partial class SessionApplication
             return;
         }
 
-        streamState.ObserveToolProducingOutput(isProposePlanTool);
+        streamState.ObserveToolProducingOutput(isPlanningDecision);
 
-        if (isProposePlanTool)
+        if (isPlanningDecision)
         {
             try
             {
-                await ProcessPlanToolRequestAsync(
+                await ProcessPlanningDecisionToolRequestAsync(
                     tool,
                     round,
                     loopState,
@@ -920,10 +924,7 @@ public sealed partial class SessionApplication
         CorrectiveTurnState correctiveTurns,
         CancellationToken cancellationToken)
     {
-        var planCall = streamState.PendingToolCalls.FirstOrDefault(call => string.Equals(
-            call.ToolName,
-            ProposePlanToolName,
-            StringComparison.OrdinalIgnoreCase));
+        var planCall = streamState.PendingToolCalls.FirstOrDefault(call => IsPlanningDecisionTool(call.ToolName));
         MalformedInvocationDiagnostic? diagnostic = null;
         if (planCall is not null && streamState.PendingToolCalls.Count != 1)
         {
@@ -934,7 +935,7 @@ public sealed partial class SessionApplication
                 _prompts.Get(PromptFileNames.CorrectionPlanProposalExclusiveToolOutput),
                 streamState.PendingToolCalls.Count);
         }
-        else if (planCall is not null && round.Phase != RunPhase.EvidenceCollection)
+        else if (planCall is not null && !IsPlanningDecisionAvailable(round, planCall.ToolName))
         {
             diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
                 MalformedInvocationFailureKind.PhaseInvalidTool,
@@ -952,7 +953,7 @@ public sealed partial class SessionApplication
                     ModelOutputValidator.ValidateInvocation(new ToolRequestModelOutput(call.ToolName, call.ArgumentsJson));
                     if (planCall is not null)
                     {
-                        streamState.Plan = ModelOutputValidator.ParsePlan(call.ArgumentsJson, _limits.Plan).Plan;
+                        AcceptPlanningDecision(call.ToolName, call.ArgumentsJson, streamState);
                     }
                 }
                 catch (MalformedInvocationException exception)
@@ -982,14 +983,14 @@ public sealed partial class SessionApplication
                 diagnostic,
                 cancellationToken);
         }
-        else if (streamState.Plan is not null)
+        else if (streamState.Plan is not null || streamState.ObjectiveComplete)
         {
-            // A valid exclusive plan completes this host turn without invoking the tool pipeline.
+            // An exclusive planning decision ends this host turn without a repository tool invocation.
             streamState.PendingToolCalls.Clear();
         }
     }
 
-    private async Task ProcessPlanToolRequestAsync(
+    private async Task ProcessPlanningDecisionToolRequestAsync(
         ToolRequestModelOutput tool,
         ConversationRound round,
         ConversationLoopState loopState,
@@ -999,12 +1000,12 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (round.Phase != RunPhase.EvidenceCollection)
+        if (!IsPlanningDecisionAvailable(round, tool.ToolName))
         {
             var diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
                 MalformedInvocationFailureKind.PhaseInvalidTool,
                 failedOrdinal: 0,
-                failedToolId: ProposePlanToolName,
+                failedToolId: tool.ToolName,
                 RequireCorrectiveMessages().GetPlanWrongPhaseReason(),
                 toolCallCount: 1);
             throw new MalformedInvocationException(diagnostic);
@@ -1040,7 +1041,7 @@ public sealed partial class SessionApplication
 
         try
         {
-            streamState.Plan = ModelOutputValidator.ParsePlan(tool.ArgumentsJson, _limits.Plan).Plan;
+            AcceptPlanningDecision(tool.ToolName, tool.ArgumentsJson, streamState);
         }
         catch (MalformedInvocationException exception)
         {
@@ -1679,10 +1680,37 @@ public sealed partial class SessionApplication
             cancellationToken: CancellationToken.None);
     }
 
+    private static bool IsPlanningDecisionTool(string name)
+    {
+        return string.Equals(name, ProposePlanToolName, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(name, CompleteObjectiveToolName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPlanningDecisionAvailable(ConversationRound round, string name)
+    {
+        return round.Phase == RunPhase.EvidenceCollection
+            && round.ModelTools.Any(tool => string.Equals(tool.Name, name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private void AcceptPlanningDecision(string name, string arguments, ModelRoundStreamState streamState)
+    {
+        if (string.Equals(name, CompleteObjectiveToolName, StringComparison.OrdinalIgnoreCase))
+        {
+            ModelOutputValidator.ValidateNoArgumentInvocation(
+                new ToolRequestModelOutput(name, arguments));
+            streamState.ObjectiveComplete = true;
+        }
+        else
+        {
+            streamState.Plan = ModelOutputValidator.ParsePlan(arguments, _limits.Plan).Plan;
+        }
+    }
+
     private List<ModelToolDefinition> CreateModelTools(
         IReadOnlyList<ToolDefinition> conversationDefinitions,
         bool workspaceAvailable,
-        RunPhase phase)
+        RunPhase phase,
+        bool allowObjectiveCompletion)
     {
         var availableDefinitions = workspaceAvailable
             ? conversationDefinitions
@@ -1701,6 +1729,17 @@ public sealed partial class SessionApplication
                 Name = ProposePlanToolName,
                 Description = RequirePrompts().Get(PromptFileNames.ToolProposePlanDescription),
                 ArgumentsJsonSchema = _proposePlanArgumentsSchema,
+                PreferStrictArguments = true,
+            });
+        }
+
+        if (phase == RunPhase.EvidenceCollection && allowObjectiveCompletion)
+        {
+            modelTools.Add(new ModelToolDefinition
+            {
+                Name = CompleteObjectiveToolName,
+                Description = RequirePrompts().Get(PromptFileNames.ToolCompleteObjectiveDescription),
+                ArgumentsJsonSchema = """{"type":"object","properties":{},"additionalProperties":false}""",
                 PreferStrictArguments = true,
             });
         }
@@ -1739,7 +1778,7 @@ public sealed partial class SessionApplication
             RepositoryPath = repositoryPath,
             WorkingScope = RepositoryWorkingScope.Resolve(
                 repositoryPath,
-                registration.PendingPlan?.Steps.SelectMany(step => step.GetAffectedPaths()),
+                (registration.PendingPlan ?? registration.ReplanningPlan)?.Steps.SelectMany(step => step.GetAffectedPaths()),
                 Directory.GetCurrentDirectory()),
             ProhibitedPaths = invocationContext?.ProhibitedPaths ?? [],
             ToolSchemas = toolSchemas,
@@ -1753,7 +1792,7 @@ public sealed partial class SessionApplication
                 ?? defaultModelProfileId,
             PlanUnderRevision = phase == RunPhase.AwaitingPlanApproval
                 ? registration.PendingPlan
-                : null,
+                : registration.ReplanningPlan,
             CurrentTurnHostContext = registration.CurrentTurnHostContext,
             CurrentMessageId = registration.CurrentMessageId,
             ConversationModeOverride = registration.ConversationMode,
@@ -2240,6 +2279,7 @@ public sealed partial class SessionApplication
         {
             PlanLimits = _limits.Plan,
             RunId = runId,
+            CacheAffinityId = registration.SessionId.Value,
             MemorySubmission = context?.RepositoryMemoryInclusions is { Count: > 0 } inclusions && registration.RepositoryIdentity is { } repositoryPath
                 ? new RepositoryMemorySubmission(registration.SessionId, RepositoryIdentity.Create(repositoryPath), inclusions)
                 : null,
@@ -2489,7 +2529,8 @@ public sealed partial class SessionApplication
         ImplementationPlan? Plan,
         string TextOutput,
         bool ToolInvoked,
-        IReadOnlyList<RunSteeringMessage> PreToolSteering);
+        IReadOnlyList<RunSteeringMessage> PreToolSteering,
+        bool ObjectiveComplete);
 
     private sealed record RequestEnvelope(
         IReadOnlyList<ModelMessage> Messages,
@@ -3120,7 +3161,9 @@ public sealed partial class SessionApplication
 
         public bool ModelSucceeded { get; set; }
 
-        public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || Plan is not null || PendingToolCalls.Count > 0;
+        public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || Plan is not null || ObjectiveComplete || PendingToolCalls.Count > 0;
+
+        public bool ObjectiveComplete { get; set; }
 
         public List<PendingModelToolCall> PendingToolCalls { get; } = [];
 
@@ -3147,6 +3190,7 @@ public sealed partial class SessionApplication
             PendingToolCalls.Clear();
             TextOutput.Clear();
             Plan = null;
+            ObjectiveComplete = false;
             ToolInvoked = true;
             CorrectiveTurnRequested = true;
             CurrentGroupPurgeAfterCorrection = true;

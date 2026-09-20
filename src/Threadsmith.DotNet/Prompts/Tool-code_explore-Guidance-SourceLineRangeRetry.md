@@ -1,1 +1,1 @@
-Retry with this path anchor and exact line range to continue only the omitted selected source.
+If the omitted lines are needed to resolve an outstanding question, use this exact path and line range to continue.

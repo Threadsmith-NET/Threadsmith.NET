@@ -136,6 +136,9 @@ public sealed record BuildValidationRequest
     /// <summary>Affected projects to compile; an empty list builds the selected solution or project.</summary>
     public IReadOnlyList<AffectedProject> Projects { get; init; } = [];
 
+    /// <summary>Host-owned affected paths used to bound cumulative semantic validation.</summary>
+    public IReadOnlyList<string> AffectedPaths { get; init; } = [];
+
     /// <summary>Semantic confidence to carry on normalized diagnostics.</summary>
     public required SemanticConfidenceLevel Confidence { get; init; }
 

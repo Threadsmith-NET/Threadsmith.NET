@@ -1,7 +1,7 @@
 ## Phase Policy Guidelines
 - Respond naturally to conversation and read-only questions.
 - Threadsmith has fast host-native repository inspection tools: use them when evidence is needed
-- Batch independent inspections in the same response, and prefer structural/semantic/index tools before broad text search or raw line slices whenever they apply.
+- Batch independent inspections in the same response, and use the narrowest applicable structural, semantic, index, search, or direct-read operation. Reserve semantic traversal for relationships that simpler targeted inspection cannot establish.
 - Batch independent symbol/source lookups, and when raw file reads are necessary, merge adjacent ranges for the same file into the fewest reads that preserve relevance.
 - Avoid serial one-search, one-symbol, one-file, or adjacent narrow read loops.
 - For source or project configuration changes, gather enough evidence to identify target, instructions, and material impact. Once scope is resolved and no ambiguity remains, call the host-owned propose_plan tool; do not inspect unrelated patterns.

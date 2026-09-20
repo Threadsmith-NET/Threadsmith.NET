@@ -399,9 +399,12 @@ internal static class ApplicationComposition
 
                 var baseline = mutationCoordinator.GetWorkspace(workspaceId).Baseline;
                 var projectInventory = semantic.SemanticEngines.GetProjects(workspaceId);
+                var affectedPaths = plan.Steps
+                    .SelectMany(step => step.GetAffectedPaths())
+                    .ToArray();
                 var affectedProjects = AffectedProjectCalculator.Calculate(
                     baseline.RepositoryPath,
-                    plan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray(),
+                    affectedPaths,
                     projectInventory);
                 return new ExecutionStartRequest
                 {
@@ -416,15 +419,17 @@ internal static class ApplicationComposition
                         RunId = runId,
                         Baseline = baseline,
                         Projects = affectedProjects.Projects,
+                        AffectedPaths = affectedPaths,
                         Confidence = state.SemanticConfidence,
                         ProjectInventory = projectInventory,
                         Stages = validationStages,
                     },
                     CorrectionBudget = host.ExecutionLimits.MaxCorrectiveTurns,
+                    AllowPlanContinuation = host.ExecutionLimits.IncrementalPlanning.Enabled,
                 };
             },
             tools.HookCoordinator,
-            budgetFactory: static () => UnboundedBudget.Instance,
+            budgetFactory: host.Budget.CreateScope,
             userUrlIntake: async (sessionId, runId, messageId, rawMessage, cancellationToken) =>
             {
                 if (!tools.ToolStateManager.IsEnabled("web_fetch")
@@ -478,7 +483,12 @@ internal static class ApplicationComposition
             prompts: host.PromptLoader,
             semanticRefreshCoordinator: semantic.SemanticRefreshCoordinator,
             repositoryMemories: memoryService,
-            repositoryMemoryOptions: memoryOptions);
+            repositoryMemoryOptions: memoryOptions,
+            sessionProjectionReader: async (sessionId, cancellationToken) =>
+            {
+                var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
+                return await host.Projections.GetAsync<SessionProjection>(key, cancellationToken);
+            });
 
         // The foundation-owned coordinator may prepare work before session composition, but publication
         // delegates to this sole run-lifetime authority once it exists.
@@ -622,7 +632,9 @@ internal static class ApplicationComposition
                 host.Events,
                 host.Sanitizer,
                 host.LoggerFactory.CreateLogger<ExecutionOrchestrator>(),
-                correctiveMessages);
+                correctiveMessages,
+                host.ExecutionLimits,
+                host.OperationalLimits.Workspace);
             if (integration.Models.Catalog.Profiles.Count > 0)
             {
                 if (Enum.GetValues<AgentRole>().Any(role => childModelSelection.CanSelectRole(

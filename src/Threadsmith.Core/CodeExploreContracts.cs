@@ -519,7 +519,7 @@ public sealed record CodeExploreLimits
     public int MaximumAssociatedArtifactNameMatches { get; init; } = 8;
 
     /// <summary>Maximum elapsed query time in milliseconds.</summary>
-    public int TimeoutMilliseconds { get; init; } = 10_000;
+    public int TimeoutMilliseconds { get; init; } = 60_000;
 }
 
 /// <summary>Repository-relative C# path anchor for source-bearing code exploration.</summary>
@@ -578,6 +578,9 @@ public sealed record CodeExploreRequest
 
     /// <summary>Exploration intent applied after exact anchors resolve.</summary>
     public CodeExploreMode Mode { get; init; }
+
+    /// <summary>Whether a decoded exact source cursor requests only its remaining source page.</summary>
+    public bool IsSourceContinuation { get; init; }
 
     /// <summary>Associated non-C# artifact discovery policy.</summary>
     public CodeExploreAssociatedArtifactsMode AssociatedArtifacts { get; init; }
@@ -1044,6 +1047,9 @@ public sealed record CodeExploreResult(
     CodeExploreAdaptiveBudget? AdaptiveBudget = null,
     IReadOnlyList<CodeExploreFileRelevanceSummary>? FileRelevance = null)
 {
+    /// <summary>Whether this result is an exact source page without exploration presentation.</summary>
+    public bool IsSourceContinuation { get; init; }
+
     /// <summary>Resolved display allowance retained when verbose adaptive metadata is trimmed.</summary>
     public int? EffectiveMaximumMarkdownBytes { get; init; }
 

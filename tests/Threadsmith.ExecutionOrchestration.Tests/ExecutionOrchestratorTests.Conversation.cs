@@ -1,5 +1,6 @@
 namespace Threadsmith.ExecutionOrchestration.Tests;
 
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
@@ -163,6 +164,268 @@ public sealed partial class ExecutionOrchestratorTests
             });
     }
 
+    /// <summary>Current-run receipts must reach the model even when ordinary history is disabled.</summary>
+    [Theory]
+    [InlineData(ConversationContextMode.ConversationAware)]
+    [InlineData(ConversationContextMode.GovernedMemoryOnly)]
+    [InlineData(ConversationContextMode.Stateless)]
+    public async Task IncrementalPlanBoundary_ProvidesReceipt_AndRequiresExplicitCompletion(ConversationContextMode mode)
+    {
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
+        await scenario.Store.SetModeAsync(scenario.SessionId, mode);
+
+        var runId = await scenario.SubmitAndApprovePlanAsync();
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        var archived = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
+
+        var continuationRequest = scenario.Model.SecondRequest
+            ?? throw new InvalidOperationException("The objective continuation did not reach the model.");
+        Assert.Contains(
+            continuationRequest.Messages,
+            message => message.GetModelVisibleContent().Contains(
+                "ShellRunner declares the requested field.",
+                StringComparison.Ordinal));
+        Assert.Contains(continuationRequest.Tools, tool => tool.Name == "complete_objective");
+        Assert.Contains(continuationRequest.Tools, tool => tool.Name == "propose_plan");
+        Assert.Contains(
+            archived.Messages,
+            message => message.Role == ConversationRole.Assistant
+                && message.Content == "Hello from the ordinary conversation.");
+        Assert.Contains(
+            archived.Messages,
+            message => message.Role == ConversationRole.Assistant
+                && message.Content?.Contains("PlanContinuationPending", StringComparison.Ordinal) == true);
+        Assert.Contains(
+            archived.Messages,
+            message => message.Role == ConversationRole.Assistant
+                && message.Content?.Contains("Completed", StringComparison.Ordinal) == true);
+    }
+
+    /// <summary>Neither a blocker nor a clarification question is objective completion.</summary>
+    [Theory]
+    [InlineData("More work remains, but the dependency is unavailable.")]
+    [InlineData("Which implementation should I use for the remaining work?")]
+    public async Task IncrementalPlanBoundary_OrdinaryTextDoesNotClaimSuccess(string response)
+    {
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
+        scenario.Model.ConfirmObjective = false;
+        scenario.Model.ResponseText = response;
+        var runId = await scenario.SubmitAndApprovePlanAsync();
+
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        var snapshot = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
+        Assert.DoesNotContain(snapshot.Messages, message => message.Content?.Contains("\"Status\":\"Completed\"", StringComparison.Ordinal) == true);
+        Assert.Contains(snapshot.Messages, message => message.Content == response);
+        Assert.Contains(scenario.Model.SecondRequest!.Tools, tool => tool.Name == "propose_plan");
+    }
+
+    /// <summary>Resuming the same assessed boundary rebuilds context without archiving a duplicate receipt.</summary>
+    [Fact]
+    public async Task IncrementalPlanBoundary_ResumeDoesNotDuplicateBoundaryReceipt()
+    {
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
+        scenario.Model.ConfirmObjective = false;
+        scenario.Model.ResponseText = "More work remains.";
+        var runId = await scenario.SubmitAndApprovePlanAsync();
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(scenario.SessionId, runId));
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        var snapshot = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
+
+        Assert.Single(snapshot.Messages, message =>
+            message.Role == ConversationRole.Assistant
+            && message.Content?.Contains("PlanContinuationPending", StringComparison.Ordinal) == true);
+    }
+
+    /// <summary>Same-process resume retains trusted current-turn context without reissuing URL authority.</summary>
+    [Fact]
+    public async Task IncrementalPlanBoundary_ResumePreservesCurrentTurnHostContext()
+    {
+        const string userUrlId = "user-url-reference";
+        var intakeCalls = 0;
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync(
+            userUrlIntake: (sessionId, runId, messageId, _, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Interlocked.Increment(ref intakeCalls);
+                return Task.FromResult<IReadOnlyList<UserUrlReference>>(
+                [
+                    new UserUrlReference
+                    {
+                        Id = userUrlId,
+                        Ordinal = 1,
+                        UrlDigest = "sha256:test",
+                        MessageId = messageId,
+                        SessionId = sessionId,
+                        RunId = runId,
+                        ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+                    },
+                ]);
+            });
+        scenario.Model.ConfirmObjective = false;
+        var runId = await scenario.SubmitAndApprovePlanAsync(
+            "Use https://example.test/reference while completing the objective.");
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        Assert.Contains(
+            scenario.Model.SecondRequest!.Messages,
+            message => message.GetModelVisibleContent().Contains(userUrlId, StringComparison.Ordinal));
+
+        await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(scenario.SessionId, runId));
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Equal(1, Volatile.Read(ref intakeCalls));
+        Assert.Contains(
+            scenario.Model.ThirdRequest!.Messages,
+            message => message.GetModelVisibleContent().Contains(userUrlId, StringComparison.Ordinal));
+    }
+
+    /// <summary>Completion arguments outside the advertised empty schema receive a corrective turn.</summary>
+    [Fact]
+    public async Task IncrementalPlanBoundary_MalformedCompletionArgumentsAreCorrected()
+    {
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
+        scenario.Model.EmitMalformedCompletionOnce = true;
+        var correction = new TaskCompletionSource<ModelCorrectionAttempted>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = scenario.Events.Subscribe((domainEvent, _) =>
+        {
+            if (domainEvent is ModelCorrectionAttempted attempted)
+            {
+                correction.TrySetResult(attempted);
+            }
+
+            return Task.CompletedTask;
+        });
+
+        var runId = await scenario.SubmitAndApprovePlanAsync();
+        var succeeded = await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId));
+        var attempted = await correction.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.True(succeeded);
+        Assert.Equal(ModelCorrectionCategory.PlanSchema, attempted.Category);
+        Assert.Equal(3, scenario.Model.RequestCount);
+        var archived = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
+        Assert.Contains(
+            archived.Messages,
+            message => message.Content?.Contains("\"Status\":\"Completed\"", StringComparison.Ordinal) == true);
+    }
+
+    /// <summary>Fresh session/engine instances and subsequent same-process resumes reattach one observer.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResumeCommand_ReattachesPlanningAcrossProcessAndPauseBoundaries(bool atPlanBoundary)
+    {
+        var fixture = CreateFixture();
+        var request = fixture.StartRequest with { AllowPlanContinuation = true };
+        await fixture.Orchestrator.StartAsync(request);
+        if (atPlanBoundary)
+        {
+            await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
+        }
+
+        var restored = fixture with { Orchestrator = RecreateOrchestrator(fixture) };
+        await using var scenario = await ConversationScenario.CreateRestoredAsync(restored);
+        scenario.Model.ConfirmObjective = false;
+        await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(request.SessionId, request.RunId));
+        if (!atPlanBoundary)
+        {
+            await restored.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
+        }
+
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
+        Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(request.RunId));
+        scenario.Model.ConfirmObjective = true;
+        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult);
+        await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(request.SessionId, request.RunId));
+
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
+        Assert.Single(fixture.ProposalHandler.Commands);
+        Assert.Single(fixture.CommitHandler.Commands);
+        Assert.Contains(scenario.Model.LastRequest!.Messages, message =>
+            message.GetModelVisibleContent().Contains("src/Example.cs", StringComparison.Ordinal));
+        Assert.Equal(ExecutionCheckpointPhase.Completed, (await fixture.Checkpoints.GetOutcomeAsync(request.RunId))!.Status);
+    }
+
+    /// <summary>The public resume command restores cancellation during the first implementation model turn.</summary>
+    [Fact]
+    public async Task ResumeCommand_InitialImplementationCancellation_RestartsFromDurableRequest()
+    {
+        var fixture = CreateFixture(blockFirstProposal: true);
+        using var cancellation = new CancellationTokenSource();
+        var start = fixture.Orchestrator.StartAsync(fixture.StartRequest, cancellation.Token);
+        await fixture.ProposalHandler.FirstHandleEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellation.CancelAsync();
+        fixture.ProposalHandler.ReleaseFirstHandle();
+#pragma warning disable VSTHRD003 // The task was intentionally started before cancellation reached the blocked model turn.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+#pragma warning restore VSTHRD003
+        var cancelled = await fixture.Checkpoints.GetCheckpointAsync(fixture.StartRequest.RunId);
+        Assert.Equal(ExecutionCheckpointPhase.Cancelled, cancelled!.Phase);
+        Assert.Equal("executionStartRequest", cancelled.StateArtifact?.Kind);
+        var restored = fixture with { Orchestrator = RecreateOrchestrator(fixture) };
+        await using var scenario = await ConversationScenario.CreateRestoredAsync(restored);
+
+        var resumed = await scenario.Dispatcher.DispatchAsync(
+            new ResumeRunCommand(fixture.StartRequest.SessionId, fixture.StartRequest.RunId));
+        var outcome = await restored.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged));
+
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(fixture.StartRequest.RunId)));
+        Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
+        Assert.Single(fixture.CommitHandler.Commands);
+    }
+
+    /// <summary>Continuation uses normal approval for each plan, including beyond the former twelve-plan cap.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(13)]
+    public async Task IncrementalPlanBoundary_ProposesAndExecutesPlans_OnSameRun(int planCount)
+    {
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync(planProposalCount: planCount);
+        var approvals = Enumerable.Range(0, planCount)
+            .Select(_ => new TaskCompletionSource<RunTransitioned>(TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
+        var approvalTransitions = 0;
+        await using var subscription = scenario.Events.Subscribe((domainEvent, _) =>
+        {
+            if (domainEvent is RunTransitioned { Destination: RunPhase.AwaitingPlanApproval } transition)
+            {
+                approvals[Interlocked.Increment(ref approvalTransitions) - 1].TrySetResult(transition);
+            }
+
+            return Task.CompletedTask;
+        });
+
+        var runId = await scenario.SubmitAndApprovePlanAsync();
+        foreach (var approval in approvals.Skip(1))
+        {
+            var awaiting = await approval.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(runId, awaiting.RunId);
+            Assert.True(await scenario.Dispatcher.DispatchAsync(new ApprovePlanCommand(scenario.SessionId, runId)));
+        }
+
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        var archived = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
+        Assert.Equal(
+            planCount,
+            archived.Messages.Count(message => message.Role == ConversationRole.Assistant
+                && message.Content?.Contains("PlanContinuationPending", StringComparison.Ordinal) == true));
+        var finalRequest = scenario.Model.LastRequest
+            ?? throw new InvalidOperationException("The final objective assessment did not reach the model.");
+        Assert.Contains(
+            finalRequest.Messages,
+            message => message.GetModelVisibleContent().Contains($"{planCount} plan(s) used", StringComparison.Ordinal));
+        var undoRun = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "undo that change"));
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(undoRun)));
+        Assert.Contains(scenario.Model.LastRequest.Messages, message => message.SectionId == "recent-assistant"
+            && message.GetModelVisibleContent().Contains("\"Status\":\"Completed\"", StringComparison.Ordinal));
+    }
+
     private sealed record ExecutionOutcomeTemplate(
         ExecutionCheckpointPhase Status,
         IReadOnlyList<string> ChangedFiles,
@@ -225,13 +488,58 @@ public sealed partial class ExecutionOrchestratorTests
                 failAssistantArchive: false);
         }
 
+        public static Task<ConversationScenario> CreateRestoredAsync(
+            ExecutionFixture fixture,
+            int planProposalCount = 0,
+            SessionProjection? sessionProjection = null)
+        {
+            return CreateCoreAsync(
+                fixture.Events,
+                fixture.StartRequest.ApprovedPlan,
+                fixture.Orchestrator,
+                CreateStartRequestFactory(fixture),
+                proposePlan: false,
+                failAssistantArchive: false,
+                planProposalCount: planProposalCount,
+                limits: ExecutionLimits.Default,
+                restoredSession: fixture.StartRequest.SessionId,
+                sessionProjection: sessionProjection);
+        }
+
+        public static Task<ConversationScenario> CreateIncrementalAsync(
+            int planProposalCount = 1,
+            Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
+                userUrlIntake = null)
+        {
+            var events = new DomainEventStream();
+            return CreateCoreAsync(
+                events,
+                CreatePlan(),
+                new IncrementalOutcomeOrchestrator(),
+                async (sessionId, runId, task, plan, cancellationToken) =>
+                {
+                    var request = await CreateStartRequest(
+                        sessionId,
+                        runId,
+                        task,
+                        plan,
+                        cancellationToken) ?? throw new InvalidOperationException("The test request was not created.");
+                    return request with { AllowPlanContinuation = true };
+                },
+                proposePlan: true,
+                failAssistantArchive: false,
+                planProposalCount,
+                ExecutionLimits.Default,
+                userUrlIntake: userUrlIntake);
+        }
+
         public async Task<bool> CompletePlannedExecutionAsync()
         {
             var runId = await SubmitAndApprovePlanAsync();
             return await Dispatcher.DispatchAsync(new WaitForRunCommand(runId));
         }
 
-        public async Task<RunId> SubmitAndApprovePlanAsync()
+        public async Task<RunId> SubmitAndApprovePlanAsync(string? request = null)
         {
             var planProposed = new TaskCompletionSource<PlanProposed>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -254,7 +562,7 @@ public sealed partial class ExecutionOrchestratorTests
             });
             var runId = await Dispatcher.DispatchAsync(new SubmitRequestCommand(
                 SessionId,
-                "Add a private const string field to the ShellRunner class named _test with the value tested!."));
+                request ?? "Add a private const string field to the ShellRunner class named _test with the value tested!."));
             var proposed = await planProposed.Task.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal(runId, proposed.RunId);
             var transitioned = await awaitingPlanApproval.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -364,7 +672,13 @@ public sealed partial class ExecutionOrchestratorTests
             Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
                 executionRequestFactory,
             bool proposePlan,
-            bool failAssistantArchive)
+            bool failAssistantArchive,
+            int? planProposalCount = null,
+            ExecutionLimits? limits = null,
+            SessionId? restoredSession = null,
+            SessionProjection? sessionProjection = null,
+            Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
+                userUrlIntake = null)
         {
             var directory = Path.Combine(Path.GetTempPath(), $"threadsmith-conversation-{Guid.NewGuid():N}");
             Directory.CreateDirectory(directory);
@@ -389,7 +703,7 @@ public sealed partial class ExecutionOrchestratorTests
                     events,
                     TestPromptLoader.Instance,
                     conversationStore: conversationStore);
-                var model = new ConversationModel(plan, proposePlan);
+                var model = new ConversationModel(plan, planProposalCount ?? (proposePlan ? 1 : 0));
                 var registry = new ToolRegistry([]);
                 var pipeline = new ToolInvocationPipeline(
                     registry,
@@ -408,13 +722,27 @@ public sealed partial class ExecutionOrchestratorTests
                     (_, cancellationToken) => CreateToolInvocationContextAsync(directory, cancellationToken),
                     contextAssembler: assembler,
                     evidenceStore: evidence,
+                    limits: limits,
                     conversationStore: conversationStore,
                     executionOrchestrator: orchestrator,
                     executionRequestFactory: executionRequestFactory,
                     correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                    prompts: TestPromptLoader.Instance);
+                    prompts: TestPromptLoader.Instance,
+                    userUrlIntake: userUrlIntake,
+                    sessionProjectionReader: sessionProjection is null
+                        ? null
+                        : (_, cancellationToken) =>
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            return Task.FromResult<SessionProjection?>(sessionProjection);
+                        });
                 var dispatcher = new CommandDispatcher([application]);
-                var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("conversation outcome"));
+                var sessionId = restoredSession ?? await dispatcher.DispatchAsync(new CreateSessionCommand("conversation outcome"));
+                if (restoredSession is not null)
+                {
+                    application.RegisterRestoredSession(sessionId);
+                }
+
                 return new ConversationScenario(directory, events, store, dispatcher, sessionId, model);
             }
             catch
@@ -504,16 +832,34 @@ public sealed partial class ExecutionOrchestratorTests
     private sealed class ConversationModel : IModelProvider
     {
         private readonly ImplementationPlan _plan;
-        private readonly bool _proposePlan;
+        private readonly int _planProposalCount;
         private int _requests;
 
-        public ConversationModel(ImplementationPlan plan, bool proposePlan)
+        private bool _malformedCompletionEmitted;
+
+        public ConversationModel(ImplementationPlan plan, int planProposalCount)
         {
             _plan = plan;
-            _proposePlan = proposePlan;
+            _planProposalCount = planProposalCount;
         }
 
         public ModelStreamRequest? SecondRequest { get; private set; }
+
+        public ModelStreamRequest? ThirdRequest { get; private set; }
+
+        public ModelStreamRequest? LastRequest { get; private set; }
+
+        public bool ConfirmObjective { get; set; } = true;
+
+        public bool EmitMalformedCompletionOnce { get; set; }
+
+        public ModelUsage? Usage { get; set; }
+
+        public bool ThrowAfterUsage { get; set; }
+
+        public int RequestCount => _requests;
+
+        public string ResponseText { get; set; } = "Hello from the ordinary conversation.";
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
@@ -521,9 +867,28 @@ public sealed partial class ExecutionOrchestratorTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             _requests++;
+            LastRequest = request;
             await Task.Yield();
-            if (_proposePlan
-                && _requests == 1
+            if (_requests == 2)
+            {
+                SecondRequest = request;
+            }
+            else if (_requests == 3)
+            {
+                ThirdRequest = request;
+            }
+
+            if (Usage is not null)
+            {
+                yield return new ModelChunk { Usage = Usage };
+            }
+
+            if (ThrowAfterUsage)
+            {
+                throw new InvalidOperationException("Simulated planning provider failure after usage.");
+            }
+
+            if (_requests <= _planProposalCount
                 && request.Tools.Any(tool => string.Equals(tool.Name, "propose_plan", StringComparison.Ordinal)))
             {
                 yield return new ModelChunk
@@ -534,10 +899,20 @@ public sealed partial class ExecutionOrchestratorTests
                 yield break;
             }
 
-            SecondRequest = request;
+            SecondRequest ??= request;
+            var completionArguments = "{}";
+            if (EmitMalformedCompletionOnce && !_malformedCompletionEmitted)
+            {
+                _malformedCompletionEmitted = true;
+                completionArguments = "{\"remainingWork\":\"tests\"}";
+            }
+
             yield return new ModelChunk
             {
-                Text = "Hello from the ordinary conversation.",
+                Text = ResponseText,
+                Output = ConfirmObjective && request.Tools.Any(tool => tool.Name == "complete_objective")
+                    ? new ToolRequestModelOutput("complete_objective", completionArguments)
+                    : null,
                 FinishReason = ModelFinishReason.Stop,
             };
         }
@@ -606,6 +981,171 @@ public sealed partial class ExecutionOrchestratorTests
                 ApprovalProvenance = "test",
                 RollbackAvailable = _template.RollbackAvailable,
             });
+        }
+    }
+
+    private sealed class IncrementalOutcomeOrchestrator : IExecutionOrchestrator
+    {
+        private readonly ConcurrentDictionary<int, TaskCompletionSource<ExecutionPlanBoundary>> _boundaries = new();
+        private readonly TaskCompletionSource<ExecutionOutcomeProjection> _terminal = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        private ExecutionStartRequest? _request;
+        private int _planOrdinal;
+
+        public Task<ExecutionOutcomeProjection> ContinueAsync(
+            ContinueExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<ExecutionContinuation> ContinueWithPlanAsync(
+            ExecutionStartRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _request = request;
+            var ordinal = Interlocked.Increment(ref _planOrdinal);
+            CompleteBoundary(ordinal, request);
+            return Task.FromResult(CreateContinuation(request, ordinal));
+        }
+
+        public Task<ExecutionOutcomeProjection> CompleteObjectiveAsync(
+            SessionId sessionId,
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var request = _request ?? throw new InvalidOperationException("Execution did not start.");
+            var outcome = CreateProgress(request, ExecutionCheckpointPhase.Completed);
+            _terminal.TrySetResult(outcome);
+            return Task.FromResult(outcome);
+        }
+
+        public Task<ExecutionContinuation> ResumeAsync(
+            SessionId sessionId,
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var request = RequireRequest(sessionId, runId);
+            return Task.FromResult(CreateContinuation(request, _planOrdinal) with
+            {
+                Phase = ExecutionCheckpointPhase.PlanContinuationPending,
+                NextAction = "assess remaining objective work",
+            });
+        }
+
+        public Task<ExecutionStartRequest> GetResumeRequestAsync(
+            SessionId sessionId,
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(RequireRequest(sessionId, runId));
+        }
+
+        public Task<ExecutionContinuation> StartAsync(
+            ExecutionStartRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _request = request;
+            _planOrdinal = 1;
+            CompleteBoundary(_planOrdinal, request);
+            return Task.FromResult(CreateContinuation(request, _planOrdinal));
+        }
+
+        public Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
+            RunId runId,
+            int afterPlanOrdinal,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var targetOrdinal = checked(afterPlanOrdinal + 1);
+            var boundary = _boundaries.GetOrAdd(
+                targetOrdinal,
+                static _ => new TaskCompletionSource<ExecutionPlanBoundary>(
+                    TaskCreationOptions.RunContinuationsAsynchronously));
+            return boundary.Task.WaitAsync(cancellationToken);
+        }
+
+        public Task RecordPlanningUsageAsync(
+            SessionId sessionId,
+            RunId runId,
+            BudgetDimensions usage,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
+
+        public async Task<ExecutionOutcomeProjection> WaitForOutcomeAsync(
+            RunId runId,
+            CancellationToken cancellationToken = default)
+        {
+            return await _terminal.Task.WaitAsync(cancellationToken);
+        }
+
+        private static ExecutionOutcomeProjection CreateProgress(
+            ExecutionStartRequest request,
+            ExecutionCheckpointPhase status)
+        {
+            return new ExecutionOutcomeProjection
+            {
+                Key = new ProjectionKey("execution-outcome", request.RunId.Value.ToString("D")),
+                SessionId = request.SessionId,
+                RunId = request.RunId,
+                Status = status,
+                CompletedStepIds = request.ApprovedPlan.Steps.Select(step => step.StepId).ToArray(),
+                ChangedFiles = ["src/ShellRunner.cs"],
+                BehaviorSummary = request.ApprovedPlan.Steps.Select(step => step.ExpectedOutcome).ToArray(),
+                ApprovalProvenance = "test",
+                RollbackAvailable = true,
+            };
+        }
+
+        private static ExecutionContinuation CreateContinuation(ExecutionStartRequest request, int planOrdinal)
+        {
+            return new ExecutionContinuation
+            {
+                SessionId = request.SessionId,
+                RunId = request.RunId,
+                WorkspaceId = request.Baseline.WorkspaceId,
+                PlanRevision = request.ApprovedPlan.Revision,
+                PlanOrdinal = planOrdinal,
+                PlanHash = "incremental-conversation-test",
+                Phase = ExecutionCheckpointPhase.MutationApprovalPending,
+                DiagnosticBaselineIdentity = "diagnostic",
+                MutationBaselineIdentity = "mutation",
+                NextAction = "complete test plan",
+                RecordedAt = DateTimeOffset.UtcNow,
+            };
+        }
+
+        private void CompleteBoundary(int planOrdinal, ExecutionStartRequest request)
+        {
+            _boundaries.GetOrAdd(
+                planOrdinal,
+                static _ => new TaskCompletionSource<ExecutionPlanBoundary>(
+                    TaskCreationOptions.RunContinuationsAsynchronously))
+                .TrySetResult(new ExecutionPlanBoundary
+                {
+                    PlanOrdinal = planOrdinal,
+                    Progress = CreateProgress(request, ExecutionCheckpointPhase.PlanContinuationPending),
+                });
+        }
+
+        private ExecutionStartRequest RequireRequest(SessionId sessionId, RunId runId)
+        {
+            var request = _request ?? throw new InvalidOperationException("Execution did not start.");
+            if (request.SessionId != sessionId || request.RunId != runId)
+            {
+                throw new UnauthorizedAccessException("The execution identity does not match the request.");
+            }
+
+            return request;
         }
     }
 }

@@ -227,6 +227,9 @@ public sealed record ContextAssemblyRequest
     /// <summary>Immutable baseline identity and hashes supplied for mutation preparation.</summary>
     public WorkspaceBaseline? MutationBaseline { get; init; }
 
+    /// <summary>Host-selected approved-step and batch progress for mutation preparation.</summary>
+    public MutationExecutionScope? MutationExecutionScope { get; init; }
+
     /// <summary>Transient host context visible only to the current assembled request.</summary>
     public IReadOnlyList<string> CurrentTurnHostContext { get; init; } = [];
 

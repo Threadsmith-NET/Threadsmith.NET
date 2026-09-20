@@ -340,6 +340,40 @@ public sealed record StagedMutationSet(
 {
     /// <summary>Approved plan steps explicitly correlated by the validated proposal source.</summary>
     public IReadOnlyList<StepId> PlanStepIds { get; init; } = [];
+
+    /// <summary>Optional model claim that this batch completes the selected approved step.</summary>
+    public bool? StepComplete { get; init; }
+}
+
+/// <summary>Validated result of one incremental mutation-proposal turn.</summary>
+public sealed record MutationProposalResult
+{
+    /// <summary>Staged exact diff when the proposal contains changes.</summary>
+    public StagedMutationSet? StagedMutationSet { get; init; }
+
+    /// <summary>Optional model claim that the selected approved step is complete.</summary>
+    public bool? StepComplete { get; init; }
+
+    /// <summary>Sanitized explanation of the proposed progress, completion claim, or replanning request.</summary>
+    public required string Rationale { get; init; }
+
+    /// <summary>Cumulative execution-budget usage after this proposal turn.</summary>
+    public BudgetDimensions? BudgetUsed { get; init; }
+
+    /// <summary>Whether the reason requests renewed planning instead of a mutation or completion.</summary>
+    public bool ReplanRequested { get; init; }
+
+    /// <summary>Whether this is a no-change completion candidate.</summary>
+    public bool IsCompletionOnly => !ReplanRequested && StagedMutationSet is null && StepComplete == true;
+}
+
+/// <summary>Produces one validated incremental proposal through the established mutation path.</summary>
+public interface IIncrementalMutationProposalProvider
+{
+    /// <summary>Produces staged changes, a no-change completion candidate, or a replanning request.</summary>
+    Task<MutationProposalResult> ProposeAsync(
+        ProposeMutationSetCommand command,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>Explicit authorization selecting which staged mutations may commit.</summary>
@@ -495,7 +529,20 @@ public sealed record ProposeMutationSetCommand(
     TaskSpecification Task,
     ImplementationPlan ApprovedPlan,
     RunPhase Phase = RunPhase.MutationPreparation,
-    MutationCorrectionContext? Correction = null) : ICommand<StagedMutationSet>;
+    MutationCorrectionContext? Correction = null) : ICommand<StagedMutationSet>
+{
+    /// <summary>Optional host-selected step and batch scope for approved-plan execution.</summary>
+    public MutationExecutionScope? ExecutionScope { get; init; }
+
+    /// <summary>Whether the owning execution can return a request_replan decision to planning.</summary>
+    public bool AllowReplanning { get; init; }
+
+    /// <summary>Cumulative budget usage to restore before this proposal turn.</summary>
+    public BudgetDimensions? BudgetUsed { get; init; }
+
+    /// <summary>Whether failures should carry newly consumed budget usage back to the caller.</summary>
+    public bool ReportBudgetUsageOnFailure { get; init; }
+}
 
 /// <summary>Parameters for compiler-aware symbol rename.</summary>
 public sealed record RenameSymbolMutationRequest

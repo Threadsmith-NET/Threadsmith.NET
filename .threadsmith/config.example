@@ -449,7 +449,7 @@
         "maximumPerAssociatedArtifactCharacters": 4096,
         "maximumAssociatedArtifactBytes": 131072,
         "maximumAssociatedArtifactNameMatches": 8,
-        "timeoutMilliseconds": 10000
+        "timeoutMilliseconds": 60000
       },
       "maximumCurrentSourceFileBytes": 1048576,
       "maximumCodeExploreCatalogEntries": 50000,
@@ -497,7 +497,7 @@
       "maximumArtifactEnumerationEntries": 5000,
       "maximumGitInventoryOutputCharacters": 524288,
       "gitInventoryTimeoutMilliseconds": 10000,
-      "outerTimeoutMilliseconds": 60000,
+      "outerTimeoutMilliseconds": 75000,
       "maximumResultBytes": 1048576,
       "maximumCursorCharacters": 960,
       "maximumCursorPayloadBytes": 4096,
@@ -622,7 +622,14 @@
   // /plan-policy saves every non-session selection only in this repo config.
   // TrustSession leaves the saved policy unchanged; no user-side grant is needed.
   "planning": {
-    "approvalPolicy": "reviewAll"
+    "approvalPolicy": "reviewAll",
+    // A validated plan can return to planning for the next cohesive tranche.
+    // Step/file values are soft model guidance; existing execution budgets remain authoritative.
+    "incrementalPlans": {
+      "enabled": true,
+      "targetSteps": 4,
+      "targetFiles": 8
+    }
   },
 
   // ── Mutation approval policy (M7.2 plan 30) ────────────────────────────
@@ -651,7 +658,14 @@
     // streaming model before it is rejected as malformed. 0 disables this cap.
     "maxStructuredOutputCharacters": 8388608,
     // Maximum characters of a tool result preview retained in session projections.
-    "toolResultPreviewCharacters": 4096
+    "toolResultPreviewCharacters": 4096,
+    // Soft proposal targets for incremental approved-plan execution. Existing
+    // workspace limits remain the hard admission ceilings.
+    "mutationBatching": {
+      "targetMutations": 8,
+      "targetFiles": 3,
+      "targetMutationCharacters": 24000
+    }
   },
 
   // ── Repository configuration safety (§22.2) ───────────────────────────

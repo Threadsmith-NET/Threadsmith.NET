@@ -1,1 +1,1 @@
-Primary compiler-aware tool for interface implementations and derived or overriding symbols. Use the symbolId returned by find_symbol; MUST use before search and fall back only if this tool fails or reports incomplete evidence.
+Primary compiler-aware tool for interface implementations and derived or overriding symbols. Use the symbolId returned by find_symbol. For implementation or inheritance relationships, use this instead of text search; fall back only if it fails or reports incomplete evidence.

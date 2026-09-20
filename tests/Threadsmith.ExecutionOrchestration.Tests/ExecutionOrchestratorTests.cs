@@ -66,6 +66,200 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Single(fixture.ValidationHandler.Commands);
     }
 
+    /// <summary>Verifies multiple ordinary plans can complete one objective without terminalizing the shared run early.</summary>
+    [Theory]
+    [InlineData(false, false, false, false)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, true, false, false)]
+    [InlineData(false, false, true, false)]
+    [InlineData(false, false, false, true)]
+    public async Task IncrementalPlans_PreserveCumulativeOutcome(
+        bool failValidation,
+        bool cancelAfterProposal,
+        bool failCommit,
+        bool failFinalValidation)
+    {
+        var fixture = CreateFixture();
+        await using var events = fixture.Events;
+        var secondStepId = StepId.New();
+        var secondPlan = fixture.StartRequest.ApprovedPlan with
+        {
+            Revision = fixture.StartRequest.ApprovedPlan.Revision + 1,
+            Summary = "Finish example",
+            Steps =
+            [
+                fixture.StartRequest.ApprovedPlan.Steps[0] with
+                {
+                    StepId = secondStepId,
+                    Title = "Finish example",
+                    ExpectedOutcome = "Example behavior is complete.",
+                },
+            ],
+            Risks = ["Second plan risk."],
+        };
+        var secondStaged = fixture.CorrectionStaged with { PlanStepIds = [secondStepId] };
+        fixture.ProposalHandler.Results.Enqueue(new MutationProposalResult
+        {
+            StagedMutationSet = secondStaged,
+            StepComplete = true,
+            Rationale = secondStaged.MutationSet.Rationale,
+        });
+        fixture.CommitHandler.Enqueue(new MutationCommitResult(
+            secondStaged.MutationSet.MutationSetId,
+            secondStaged.MutationSet.Mutations.Select(mutation => mutation.MutationId).ToArray(),
+            ["src/Example.cs"],
+            "revision",
+            false));
+        var firstRequest = fixture.StartRequest with
+        {
+            ApprovedPlan = fixture.StartRequest.ApprovedPlan with { Risks = ["First plan risk."] },
+            AllowPlanContinuation = true,
+            InitialBudgetUsage = new BudgetDimensions(10, 1, TimeSpan.FromSeconds(1)),
+            CorrectionBudget = 0,
+            ValidationRequest = fixture.StartRequest.ValidationRequest with
+            {
+                AffectedPaths = ["src/First.cs"],
+                Projects =
+                [
+                    new AffectedProject(
+                        "First",
+                        "src/First/First.csproj",
+                        ["net10.0"],
+                        SemanticConfidenceLevel.FullSemantic,
+                        true),
+                ],
+            },
+        };
+        var terminalWait = fixture.Orchestrator.WaitForOutcomeAsync(firstRequest.RunId);
+
+        _ = await fixture.Orchestrator.StartAsync(firstRequest);
+        var firstProgress = await fixture.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged));
+        var firstBoundary = await fixture.Orchestrator.WaitForPlanCompletionAsync(
+            firstRequest.RunId,
+            afterPlanOrdinal: 0);
+
+        Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, firstProgress.Status);
+        Assert.Null(firstProgress.FinalDiff);
+        Assert.Equal(1, firstBoundary.PlanOrdinal);
+        Assert.False(terminalWait.IsCompleted);
+        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult with
+        {
+            Gate = new AcceptanceGateResult(
+                failValidation ? AcceptanceGateStatus.Failed : AcceptanceGateStatus.Passed,
+                failValidation ? ["Second tranche failed validation."] : []),
+        });
+        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult with
+        {
+            Gate = new AcceptanceGateResult(
+                failFinalValidation ? AcceptanceGateStatus.Failed : AcceptanceGateStatus.Passed,
+                failFinalValidation ? ["Cumulative validation found a regression."] : []),
+        });
+
+        var currentBaseline = fixture.WorkspaceResolver
+            .GetWorkspace(firstRequest.Baseline.WorkspaceId)
+            .Baseline;
+        var secondRequest = firstRequest with
+        {
+            Baseline = currentBaseline,
+            ApprovedPlan = secondPlan,
+            ValidationRequest = firstRequest.ValidationRequest with
+            {
+                Baseline = currentBaseline,
+                AffectedPaths = ["src/Second.cs"],
+                Projects =
+                [
+                    new AffectedProject(
+                        "Second",
+                        "src/Second/Second.csproj",
+                        ["net10.0"],
+                        SemanticConfidenceLevel.FullSemantic,
+                        true),
+                ],
+            },
+            InitialBudgetUsage = new BudgetDimensions(15, 2, TimeSpan.FromSeconds(2)),
+        };
+        using var cancellation = new CancellationTokenSource();
+        fixture.ProposalHandler.AfterProposal = cancelAfterProposal ? cancellation.Cancel : null;
+        var secondPending = await fixture.Orchestrator.ContinueWithPlanAsync(secondRequest, cancellation.Token);
+        if (cancelAfterProposal)
+        {
+            var resumed = await RecreateOrchestrator(fixture).ResumeAsync(firstRequest.SessionId, firstRequest.RunId);
+            Assert.Equal(secondPending.MutationSetId, resumed.MutationSetId);
+            Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
+        }
+
+        ExecutionOutcomeProjection secondProgress;
+        if (failCommit)
+        {
+            fixture.CommitHandler.ThrowOnNext = true;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => fixture.Orchestrator.ContinueAsync(
+                CreateContinuation(fixture, secondStaged)));
+            secondProgress = await fixture.Checkpoints.GetOutcomeAsync(firstRequest.RunId)
+                ?? throw new InvalidOperationException("The failed commit outcome was not recorded.");
+        }
+        else
+        {
+            secondProgress = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, secondStaged));
+        }
+
+        if (failValidation || failCommit)
+        {
+            Assert.Equal(ExecutionCheckpointPhase.Failed, secondProgress.Status);
+            Assert.Equal([fixture.StepId], secondProgress.CompletedStepIds);
+            Assert.Equal([secondStepId], secondProgress.UncompletedStepIds);
+            Assert.All(firstProgress.BehaviorSummary, behavior => Assert.Contains(behavior, secondProgress.BehaviorSummary));
+            Assert.All(firstProgress.ResidualRisks, risk => Assert.Contains(risk, secondProgress.ResidualRisks));
+            Assert.Contains("First plan risk.", secondProgress.ResidualRisks);
+            Assert.Same(secondProgress, await terminalWait);
+            return;
+        }
+
+        var secondBoundary = await fixture.Orchestrator.WaitForPlanCompletionAsync(
+            firstRequest.RunId,
+            afterPlanOrdinal: 1);
+        var boundaryCheckpoint = await fixture.Checkpoints.GetCheckpointAsync(firstRequest.RunId)
+            ?? throw new InvalidOperationException("The second plan boundary checkpoint is missing.");
+        var compactState = await fixture.Artifacts.ReadAsync(boundaryCheckpoint.StateArtifact!)
+            ?? throw new InvalidOperationException("The second plan boundary state is missing.");
+        Assert.DoesNotContain("\"AppliedDiffs\"", compactState, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"PriorValidations\"", compactState, StringComparison.Ordinal);
+        var outcome = await fixture.Orchestrator.CompleteObjectiveAsync(
+            firstRequest.SessionId,
+            firstRequest.RunId);
+
+        if (failFinalValidation)
+        {
+            Assert.Equal(ExecutionCheckpointPhase.Failed, outcome.Status);
+            Assert.Equal(
+                ["Cumulative validation found a regression."],
+                outcome.Validation?.Gate.Reasons);
+            Assert.Same(outcome, await terminalWait);
+            Assert.Equal(3, fixture.ValidationHandler.Commands.Count);
+            return;
+        }
+
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, secondPending.Phase);
+        Assert.Equal(2, secondPending.PlanOrdinal);
+        Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, secondProgress.Status);
+        Assert.Equal(2, secondBoundary.PlanOrdinal);
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.Equal([fixture.StepId, secondStepId], outcome.CompletedStepIds);
+        Assert.Equal(2, outcome.BehaviorSummary.Count);
+        Assert.Equal(["src/Example.cs"], outcome.ChangedFiles);
+        Assert.Same(outcome, await terminalWait);
+        Assert.Equal(2, fixture.CommitHandler.Commands.Count);
+        Assert.Equal(3, fixture.ValidationHandler.Commands.Count);
+        var finalValidation = fixture.ValidationHandler.Commands[^1].Request;
+        Assert.Contains("src/First.cs", finalValidation.AffectedPaths);
+        Assert.Contains("src/Second.cs", finalValidation.AffectedPaths);
+        Assert.Contains("src/Example.cs", finalValidation.AffectedPaths);
+        Assert.Contains(finalValidation.Projects, project => project.Name == "First");
+        Assert.Contains(finalValidation.Projects, project => project.Name == "Second");
+        Assert.Equal(15, fixture.ProposalHandler.Commands[1].BudgetUsed?.Tokens);
+        Assert.Equal(2, fixture.ProposalHandler.Commands[1].BudgetUsed?.Calls);
+    }
+
     /// <summary>Verifies early mutation authorization waits for the review-ready checkpoint instead of restoring the start-request artifact as active state.</summary>
     [Fact]
     public async Task ApplyExecutionMutation_WhenReviewEventBeatsCheckpoint_WaitsForMutationApprovalCheckpoint()
@@ -291,6 +485,12 @@ public sealed partial class ExecutionOrchestratorTests
     {
         // Arrange
         var fixture = CreateFixture(includeSecondPlanStep: true);
+        fixture.ProposalHandler.Results.Enqueue(new MutationProposalResult
+        {
+            StagedMutationSet = fixture.CorrectionStaged,
+            StepComplete = true,
+            Rationale = "Implement next step.",
+        });
         await using var events = fixture.Events;
         await fixture.Orchestrator.StartAsync(fixture.StartRequest);
 
@@ -302,6 +502,9 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal([fixture.StepId], outcome.CompletedStepIds);
         Assert.Equal([fixture.SecondStepId], outcome.UncompletedStepIds);
         Assert.DoesNotContain("Untouched behavior changes.", outcome.BehaviorSummary);
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, outcome.Status);
+        Assert.Null(outcome.FinalDiff);
+        Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(fixture.StartRequest.RunId));
     }
 
     /// <summary>Verifies a selectively committed subset cannot complete every step claimed by its proposal.</summary>
@@ -329,7 +532,11 @@ public sealed partial class ExecutionOrchestratorTests
         // Assert
         Assert.Empty(outcome.CompletedStepIds);
         Assert.Equal([fixture.StepId], outcome.UncompletedStepIds);
-        Assert.Empty(outcome.BehaviorSummary);
+        Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, outcome.Status);
+        Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(fixture.StartRequest.RunId));
+        Assert.Single(fixture.ProposalHandler.Commands);
+        Assert.Null(await fixture.Orchestrator.HandleAsync(new GetExecutionMutationCommand(
+            fixture.StartRequest.SessionId, fixture.StartRequest.RunId)));
     }
 
     /// <summary>Verifies lifecycle projections exclude lifecycle mutations omitted by selective approval.</summary>
@@ -421,6 +628,24 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Contains("Correction required.", outcome.ResidualRisks);
     }
 
+    /// <summary>Oversized cumulative diffs are omitted instead of publishing partial or unbounded evidence.</summary>
+    [Fact]
+    public async Task FinalDiff_ExceedingConfiguredOutputLimit_IsOmitted()
+    {
+        var fixture = CreateFixture(workspaceLimits: new WorkspaceResourceLimits
+        {
+            MaximumFinalDiffCharacters = 32,
+        });
+        await using var events = fixture.Events;
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+
+        var outcome = await fixture.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged));
+
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.Null(outcome.FinalDiff);
+    }
+
     /// <summary>Verifies a proven compensated failure does not advertise another rollback.</summary>
     [Fact]
     public async Task CompensatedCommitFailure_DoesNotAdvertiseRollback()
@@ -478,6 +703,38 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
         await second;
         Assert.Single(fixture.CommitHandler.Commands);
+    }
+
+    /// <summary>Resume request restoration cannot race an initial proposal already in flight.</summary>
+    [Fact]
+    public async Task ConcurrentResumeRequest_WaitsForInitialProposalGate()
+    {
+        var fixture = CreateFixture(blockFirstProposal: true);
+        await using var events = fixture.Events;
+        var start = fixture.Orchestrator.StartAsync(fixture.StartRequest);
+        await fixture.ProposalHandler.FirstHandleEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        var resumeRequest = fixture.Orchestrator.GetResumeRequestAsync(
+            fixture.StartRequest.SessionId,
+            fixture.StartRequest.RunId);
+        try
+        {
+            Assert.False(resumeRequest.IsCompleted);
+        }
+        finally
+        {
+            fixture.ProposalHandler.ReleaseFirstHandle();
+        }
+
+        var pending = await start.WaitAsync(TimeSpan.FromSeconds(5));
+        var restoredRequest = await resumeRequest.WaitAsync(TimeSpan.FromSeconds(5));
+        var resumed = await fixture.Orchestrator.ResumeAsync(
+            fixture.StartRequest.SessionId,
+            fixture.StartRequest.RunId);
+
+        Assert.Equal(fixture.StartRequest.RunId, restoredRequest.RunId);
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
+        Assert.Equal(pending.MutationSetId, resumed.MutationSetId);
+        Assert.Single(fixture.ProposalHandler.Commands);
     }
 
     /// <summary>Verifies resume waits for an in-flight continuation on the same run.</summary>
@@ -573,7 +830,12 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.NotNull(finalDiff);
         Assert.Contains("-old", finalDiff, StringComparison.Ordinal);
         Assert.Contains("+fixed", finalDiff, StringComparison.Ordinal);
+        Assert.DoesNotContain("+new", finalDiff, StringComparison.Ordinal);
+        Assert.DoesNotContain("-new", finalDiff, StringComparison.Ordinal);
         Assert.Equal(2, fixture.CommitHandler.Commands.Count);
+        var checkpoint = await fixture.Checkpoints.GetCheckpointAsync(fixture.StartRequest.RunId);
+        Assert.Equal(0, checkpoint!.CorrectionAttempts);
+        Assert.Equal(1, outcome.CorrectionAttempts);
         var correctionCommand = Assert.Single(
             fixture.ProposalHandler.Commands,
             command => command.Correction is not null);
@@ -695,6 +957,42 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.DoesNotContain(observed, item => item is RunTransitionFailed failed && failed.RunId == runId);
     }
 
+    /// <summary>Planning usage from a scoped production-style budget is carried into governed execution.</summary>
+    [Fact]
+    public async Task ApprovedPlan_CarriesAccumulatedPlanningUsageIntoExecution()
+    {
+        var fixture = CreateFixture();
+        await using var events = new DomainEventStream();
+        var orchestrator = new CompletingStartOrchestrator();
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1), 10));
+        var application = new SessionApplication(
+            events,
+            new PlanModelProvider(
+                fixture.StartRequest.ApprovedPlan,
+                new ModelUsage(12, 8, EstimatedCost: 0.25m)),
+            budget,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            executionOrchestrator: orchestrator,
+            executionRequestFactory: CreateStartRequestFactory(fixture),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
+            planApprovalPolicy: new AlwaysAutoPlanApprovalPolicy(),
+            planSanityRequestFactory: CreateSanityRequestFactory(fixture),
+            budgetFactory: budget.CreateScope,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("budget propagation"));
+
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change example"));
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        var usage = Assert.IsType<ExecutionStartRequest>(orchestrator.LastStartRequest).InitialBudgetUsage;
+        Assert.Equal(20, usage.Tokens);
+        Assert.Equal(1, usage.Calls);
+        Assert.Equal(0.25m, usage.Cost);
+    }
+
     /// <summary>Verifies auto-approved execution startup failure is terminalized only by the startup path.</summary>
     [Fact]
     public async Task AutoApprovedExecutionStartupFailure_DoesNotDoubleTerminalizeRun()
@@ -764,12 +1062,67 @@ public sealed partial class ExecutionOrchestratorTests
         }
     }
 
+    /// <summary>Checkpoint writes cannot change the independently versioned terminal outcome payload.</summary>
+    [Fact]
+    public async Task ExecutionCheckpointStore_CheckpointWritePreservesReadableOutcomeSchema()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"threadsmith-execution-store-{Guid.NewGuid():N}.db");
+        var connectionString = $"Data Source={databasePath};Pooling=False";
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        try
+        {
+            await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
+            var store = new ExecutionCheckpointStore(connectionString);
+            var outcome = new ExecutionOutcomeProjection
+            {
+                Key = new ProjectionKey("execution-outcome", runId.Value.ToString("D")),
+                SessionId = sessionId,
+                RunId = runId,
+                Status = ExecutionCheckpointPhase.Completed,
+                ApprovalProvenance = "test",
+            };
+            var checkpoint = new ExecutionContinuation
+            {
+                SchemaVersion = 2,
+                SessionId = sessionId,
+                RunId = runId,
+                WorkspaceId = WorkspaceId.New(),
+                PlanRevision = 1,
+                PlanHash = "plan",
+                Phase = ExecutionCheckpointPhase.Completed,
+                DiagnosticBaselineIdentity = "diagnostic",
+                MutationBaselineIdentity = "mutation",
+                NextAction = "inspect outcome",
+                RecordedAt = DateTimeOffset.UtcNow,
+            };
+
+            await store.SaveOutcomeAsync(outcome);
+            await store.SaveCheckpointAsync(checkpoint);
+
+            var reopened = new ExecutionCheckpointStore(connectionString);
+            var restored = await reopened.GetOutcomeAsync(runId);
+            Assert.NotNull(restored);
+            Assert.Equal(outcome.SchemaVersion, restored.SchemaVersion);
+            Assert.Equal(outcome.SessionId, restored.SessionId);
+            Assert.Equal(outcome.RunId, restored.RunId);
+            Assert.Equal(outcome.Status, restored.Status);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            File.Delete(databasePath);
+        }
+    }
+
     private static ExecutionFixture CreateFixture(
         bool includeSecondPlanStep = false,
         bool includeCorrection = false,
         bool includeRejectedLifecycleMutation = false,
         bool includeBuildValidation = false,
-        bool blockFirstProposal = false)
+        bool blockFirstProposal = false,
+        bool applyLifecycleMutation = false,
+        WorkspaceResourceLimits? workspaceLimits = null)
     {
         var sessionId = SessionId.New();
         var runId = RunId.New();
@@ -933,10 +1286,23 @@ public sealed partial class ExecutionOrchestratorTests
             blockFirstProposal);
         var firstCommit = new MutationCommitResult(
             mutationSetId,
-            [mutationId],
-            ["src/Example.cs"],
+            applyLifecycleMutation ? [mutationId, lifecycleMutationId] : [mutationId],
+            applyLifecycleMutation ? ["src/Example.cs", "src/Rejected.cs"] : ["src/Example.cs"],
             "revision",
-            false);
+            false)
+        {
+            LifecycleReconciliations = applyLifecycleMutation
+                ?
+                [
+                    new FileLifecycleReconciliation(
+                        lifecycleMutationId,
+                        FileLifecycleReconciliationState.Applied,
+                        "src/Rejected.cs",
+                        null,
+                        "Created file is present."),
+                ]
+                : [],
+        };
         var correctionCommit = new MutationCommitResult(
             correctionSetId,
             [correctionMutationId],
@@ -970,7 +1336,7 @@ public sealed partial class ExecutionOrchestratorTests
             : [validation]);
         var checkpoints = new MemoryCheckpointStore();
         var artifacts = new MemoryArtifactPublisher();
-        var workspaceResolver = new WorkspaceResolver(baseline);
+        var workspaceResolver = new WorkspaceResolver(baseline, () => commitHandler.CommittedCount);
         var orchestrator = new ExecutionOrchestrator(
             proposalHandler,
             commitHandler,
@@ -982,7 +1348,8 @@ public sealed partial class ExecutionOrchestratorTests
             events,
             new SecretOutputSanitizer(),
             NullLogger<ExecutionOrchestrator>.Instance,
-            new CorrectiveMessageFactory(TestPromptLoader.Instance));
+            new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            workspaceLimits: workspaceLimits);
         var start = new ExecutionStartRequest
         {
             SessionId = sessionId,
@@ -1019,7 +1386,8 @@ public sealed partial class ExecutionOrchestratorTests
             staged,
             correctionStaged,
             stepId,
-            secondStepId);
+            secondStepId,
+            workspaceLimits ?? new WorkspaceResourceLimits());
     }
 
     private static string SerializePlanProposal(ImplementationPlan plan)
@@ -1094,9 +1462,10 @@ public sealed partial class ExecutionOrchestratorTests
         StagedMutationSet Staged,
         StagedMutationSet CorrectionStaged,
         StepId StepId,
-        StepId SecondStepId);
+        StepId SecondStepId,
+        WorkspaceResourceLimits WorkspaceLimits);
 
-    private sealed class ProposalHandler : ICommandHandler<ProposeMutationSetCommand, StagedMutationSet>
+    private sealed class ProposalHandler : ICommandHandler<ProposeMutationSetCommand, StagedMutationSet>, IIncrementalMutationProposalProvider
     {
         private readonly TaskCompletionSource _firstHandleEntered = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1105,12 +1474,16 @@ public sealed partial class ExecutionOrchestratorTests
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         private readonly bool _blockFirstProposal;
-        private readonly Queue<StagedMutationSet> _staged;
         private bool _firstHandled;
 
         public ProposalHandler(IEnumerable<StagedMutationSet> staged, bool blockFirstProposal = false)
         {
-            _staged = new Queue<StagedMutationSet>(staged);
+            Results = new Queue<MutationProposalResult>(staged.Select(item => new MutationProposalResult
+            {
+                StagedMutationSet = item,
+                StepComplete = item.StepComplete ?? true,
+                Rationale = item.MutationSet.Rationale,
+            }));
             _blockFirstProposal = blockFirstProposal;
             if (!blockFirstProposal)
             {
@@ -1120,6 +1493,12 @@ public sealed partial class ExecutionOrchestratorTests
         }
 
         public List<ProposeMutationSetCommand> Commands { get; } = [];
+
+        public Queue<MutationProposalResult> Results { get; }
+
+        public int? InterruptCall { get; set; }
+
+        public Action? AfterProposal { get; set; }
 
         public Task FirstHandleEntered => _firstHandleEntered.Task;
 
@@ -1132,7 +1511,20 @@ public sealed partial class ExecutionOrchestratorTests
             ProposeMutationSetCommand command,
             CancellationToken cancellationToken = default)
         {
+            var result = await ProposeAsync(command, cancellationToken);
+            return result.StagedMutationSet ?? throw new InvalidOperationException("Completion-only result.");
+        }
+
+        public async Task<MutationProposalResult> ProposeAsync(
+            ProposeMutationSetCommand command,
+            CancellationToken cancellationToken = default)
+        {
             Commands.Add(command);
+            if (InterruptCall == Commands.Count)
+            {
+                throw new OperationCanceledException("Simulated interrupted model turn.");
+            }
+
             if (_blockFirstProposal && !_firstHandled)
             {
                 _firstHandled = true;
@@ -1140,7 +1532,9 @@ public sealed partial class ExecutionOrchestratorTests
                 await _releaseFirstHandle.Task.WaitAsync(cancellationToken);
             }
 
-            return _staged.Dequeue();
+            var result = Results.Dequeue();
+            AfterProposal?.Invoke();
+            return result;
         }
     }
 
@@ -1217,12 +1611,15 @@ public sealed partial class ExecutionOrchestratorTests
     {
         public int StartCount { get; private set; }
 
+        public ExecutionStartRequest? LastStartRequest { get; private set; }
+
         public Task<ExecutionContinuation> StartAsync(
             ExecutionStartRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             StartCount++;
+            LastStartRequest = request;
             StepId? currentStepId = request.ApprovedPlan.Steps.Count == 0
                 ? null
                 : request.ApprovedPlan.Steps[0].StepId;
@@ -1278,10 +1675,12 @@ public sealed partial class ExecutionOrchestratorTests
     private sealed class PlanModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
+        private readonly ModelUsage? _usage;
 
-        public PlanModelProvider(ImplementationPlan plan)
+        public PlanModelProvider(ImplementationPlan plan, ModelUsage? usage = null)
         {
             _plan = plan;
+            _usage = usage;
         }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -1295,6 +1694,7 @@ public sealed partial class ExecutionOrchestratorTests
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
                     SerializePlanProposal(_plan)),
+                Usage = _usage,
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }
@@ -1350,11 +1750,18 @@ public sealed partial class ExecutionOrchestratorTests
 
         public List<CommitMutationSetCommand> Commands { get; } = [];
 
+        public int CommittedCount { get; private set; }
+
         public bool BlockOnNext { get; set; }
 
         public Task Entered => _entered.Task;
 
         public bool ThrowOnNext { get; set; }
+
+        public void Enqueue(MutationCommitResult result)
+        {
+            _results.Enqueue(result);
+        }
 
         public Task<MutationCommitResult> HandleAsync(
             CommitMutationSetCommand command,
@@ -1374,6 +1781,7 @@ public sealed partial class ExecutionOrchestratorTests
                 return CompleteAfterReleaseAsync(cancellationToken);
             }
 
+            CommittedCount++;
             return Task.FromResult(_results.Dequeue());
         }
 
@@ -1386,6 +1794,7 @@ public sealed partial class ExecutionOrchestratorTests
             CancellationToken cancellationToken)
         {
             await _release.Task.WaitAsync(cancellationToken);
+            CommittedCount++;
             return _results.Dequeue();
         }
     }
@@ -1431,6 +1840,26 @@ public sealed partial class ExecutionOrchestratorTests
 
         public bool ThrowOnNext { get; set; }
 
+        public MutationValidationResult LastResult { get; private set; } = null!;
+
+        public void Enqueue(MutationValidationResult result)
+        {
+            _results.Enqueue(result);
+        }
+
+        public void PassAll()
+        {
+            var results = _results.Select(result => result with
+            {
+                Gate = new AcceptanceGateResult(AcceptanceGateStatus.Passed, []),
+            }).ToArray();
+            _results.Clear();
+            foreach (var result in results)
+            {
+                _results.Enqueue(result);
+            }
+        }
+
         public Task<MutationValidationResult> HandleAsync(
             ValidateMutationCommand command,
             CancellationToken cancellationToken = default)
@@ -1442,24 +1871,32 @@ public sealed partial class ExecutionOrchestratorTests
                 throw new InvalidOperationException("Simulated validation interruption.");
             }
 
-            return Task.FromResult(_results.Dequeue());
+            LastResult = _results.Dequeue();
+            return Task.FromResult(LastResult);
         }
     }
 
     private sealed class WorkspaceResolver : ITransactionalWorkspaceResolver
     {
+        private readonly Func<int> _committedCount;
         private WorkspaceBaseline _baseline;
 
-        public WorkspaceResolver(WorkspaceBaseline baseline)
+        public WorkspaceResolver(WorkspaceBaseline baseline, Func<int> committedCount)
         {
             _baseline = baseline;
+            _committedCount = committedCount;
         }
 
         public IReadOnlyList<FileLifecycleReconciliation> Reconciliations { get; set; } = [];
 
         public ITransactionalWorkspace GetWorkspace(WorkspaceId workspaceId)
         {
-            return new Workspace(_baseline, Reconciliations);
+            return new Workspace(_baseline, Reconciliations, _committedCount() switch
+            {
+                0 => "old",
+                1 => "new",
+                _ => "fixed",
+            });
         }
 
         public Task<WorkspaceBaseline> PromoteBaselineAsync(
@@ -1482,14 +1919,17 @@ public sealed partial class ExecutionOrchestratorTests
     private sealed class Workspace : ITransactionalWorkspace
     {
         private readonly IReadOnlyList<FileLifecycleReconciliation> _reconciliations;
+        private readonly string _content;
 
         public Workspace(
             WorkspaceBaseline baseline,
-            IReadOnlyList<FileLifecycleReconciliation> reconciliations)
+            IReadOnlyList<FileLifecycleReconciliation> reconciliations,
+            string content)
         {
             Baseline = baseline;
             Isolation = new WorkspaceIsolation(WorkspaceIsolationMode.TrackedInPlace, baseline.RepositoryPath);
             _reconciliations = reconciliations;
+            _content = content;
         }
 
         public WorkspaceBaseline Baseline { get; }
@@ -1513,7 +1953,7 @@ public sealed partial class ExecutionOrchestratorTests
             string relativePath,
             CancellationToken cancellationToken = default)
         {
-            throw new NotSupportedException();
+            return Task.FromResult<string?>(relativePath == "src/Example.cs" ? _content : null);
         }
 
         public Task<string?> ReadStagedTextAsync(

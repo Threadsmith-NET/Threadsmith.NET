@@ -1,1 +1,1 @@
-Primary semantic tool for generated C# documents already present in the semantic workspace. MUST use before search and fall back only if this tool fails or reports incomplete evidence.
+Queries generated C# documents in the semantic workspace. Use instead of repository search because generated source may not be an ordinary file. Fall back only on failure or incomplete evidence.

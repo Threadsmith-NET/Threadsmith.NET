@@ -302,10 +302,14 @@ public sealed class ContextAssembler : IContextAssembler
             sanitizedTask,
             conversation,
             cancellationToken);
-        var affectedPaths = request.ApprovedPlan?.Steps
-            .SelectMany(step => step.GetAffectedPaths())
+        var affectedPaths = (request.MutationExecutionScope is null
+                ? request.ApprovedPlan?.Steps.SelectMany(step => step.GetAffectedPaths())
+                : request.MutationExecutionScope.ActiveStep.GetAffectedPaths()
+                    .Concat(request.MutationExecutionScope.ActivatedPaths))
+            ?? [];
+        var normalizedAffectedPaths = affectedPaths
             .Select(path => path.Replace('\\', '/'))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var mutationBaseline = request.MutationBaseline is null
             ? null
             : new
@@ -314,20 +318,40 @@ public sealed class ContextAssembler : IContextAssembler
                 request.MutationBaseline.CapturedAt,
                 request.MutationBaseline.GitRevision,
                 Files = request.MutationBaseline.Files
-                    .Where(file => affectedPaths.Contains(file.RelativePath))
+                    .Where(file => normalizedAffectedPaths.Contains(file.RelativePath))
                     .ToArray(),
-                PlannedFiles = affectedPaths.OrderBy(path => path, StringComparer.Ordinal).ToArray(),
+                PlannedFiles = normalizedAffectedPaths.OrderBy(path => path, StringComparer.Ordinal).ToArray(),
             };
-        var governedState = JsonSerializer.Serialize(new
+        var governedStateValues = new Dictionary<string, object?>
         {
-            Phase = request.Phase.ToString(),
-            ConversationHistoryIncluded = conversation.Mode == ConversationContextMode.ConversationAware,
-            ConversationMode = conversation.Mode.ToString(),
-            request.PlanUnderRevision,
-            request.ApprovedPlan,
-            CurrentTurnHostContext = currentTurnHostContext,
-            MutationBaseline = mutationBaseline,
-        });
+            ["Phase"] = request.Phase.ToString(),
+            ["ConversationHistoryIncluded"] = conversation.Mode == ConversationContextMode.ConversationAware,
+            ["ConversationMode"] = conversation.Mode.ToString(),
+            ["CurrentTurnHostContext"] = currentTurnHostContext,
+        };
+        if (request.PlanUnderRevision is not null)
+        {
+            governedStateValues["PlanUnderRevision"] = request.PlanUnderRevision;
+        }
+
+        if (request.MutationExecutionScope is null)
+        {
+            if (request.ApprovedPlan is not null)
+            {
+                governedStateValues["ApprovedPlan"] = request.ApprovedPlan;
+            }
+        }
+        else
+        {
+            governedStateValues["MutationExecutionScope"] = request.MutationExecutionScope;
+        }
+
+        if (mutationBaseline is not null)
+        {
+            governedStateValues["MutationBaseline"] = mutationBaseline;
+        }
+
+        var governedState = JsonSerializer.Serialize(governedStateValues);
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(
             request.ToolSchemas.Select(schema => new ModelToolDefinition
             {
@@ -1119,19 +1143,24 @@ public sealed class ContextAssembler : IContextAssembler
     {
         ConversationMessage[] ordered = [.. messages.OrderBy(message => message.Sequence)];
         var turns = new List<IReadOnlyList<ConversationMessage>>();
-        var pendingUsers = new Dictionary<RunId, ConversationMessage>();
+        var pendingTurns = new Dictionary<RunId, List<ConversationMessage>>();
         foreach (var message in ordered)
         {
             if (message.Role == ConversationRole.User)
             {
-                pendingUsers[message.RunId] = message;
+                pendingTurns[message.RunId] = [message];
             }
             else if (message.Role == ConversationRole.Assistant
-                && pendingUsers.Remove(message.RunId, out var user))
+                && pendingTurns.TryGetValue(message.RunId, out var turn))
             {
                 // Overlapping runs may finish in a different order from their requests.
-                // Pair by identity and retain complete exchanges in completion order.
-                turns.Add([user, message]);
+                // A governed run can emit several receipts before its final response.
+                if (turn.Count == 1)
+                {
+                    turns.Add(turn);
+                }
+
+                turn.Add(message);
             }
         }
 
@@ -1158,7 +1187,7 @@ public sealed class ContextAssembler : IContextAssembler
             }
         }
 
-        return [.. turns.OrderBy(turn => turn[1].Sequence)];
+        return [.. turns.OrderBy(turn => turn[^1].Sequence)];
     }
 
     private static PromptAssetReference CreateAssetReference(
@@ -1621,20 +1650,20 @@ public sealed class ContextAssembler : IContextAssembler
 
         private static RepositoryMemoryContextItemProjection CreateProjection(
             RepositoryMemoryRetrievalCandidate candidate, bool included, string reason, int tokens) => new()
-        {
-            Id = candidate.Entry.Id,
-            Origin = candidate.Entry.Origin,
-            MemoryType = candidate.Entry.MemoryType,
-            Revision = candidate.Entry.Revision,
-            Included = included,
-            Rationale = reason,
-            EstimatedTokens = tokens,
-            Score = candidate.Entry.MemoryType == RepositoryMemoryType.StandingPreference ? null : candidate.Score,
-            LexicalRank = candidate.LexicalRank,
-            SemanticRank = candidate.SemanticRank,
-            CosineSimilarity = candidate.CosineSimilarity,
-            CrossEncoderScore = candidate.CrossEncoderScore,
-        };
+            {
+                Id = candidate.Entry.Id,
+                Origin = candidate.Entry.Origin,
+                MemoryType = candidate.Entry.MemoryType,
+                Revision = candidate.Entry.Revision,
+                Included = included,
+                Rationale = reason,
+                EstimatedTokens = tokens,
+                Score = candidate.Entry.MemoryType == RepositoryMemoryType.StandingPreference ? null : candidate.Score,
+                LexicalRank = candidate.LexicalRank,
+                SemanticRank = candidate.SemanticRank,
+                CosineSimilarity = candidate.CosineSimilarity,
+                CrossEncoderScore = candidate.CrossEncoderScore,
+            };
     }
 
     private sealed class ConversationAssemblyState
@@ -1716,14 +1745,14 @@ public sealed class ContextAssembler : IContextAssembler
 
         private static ConversationContextItemProjection CreateMessageProjection(
             ConversationMessage message, bool included, string rationale) => new()
-        {
-            Id = message.Id.Value.ToString("D"),
-            Kind = message.Role.ToString(),
-            Included = included,
-            Rationale = rationale,
-            EstimatedTokens = message.EstimatedTokens,
-            SourceMessageIds = [message.Id],
-            SourceRunIds = [message.RunId],
-        };
+            {
+                Id = message.Id.Value.ToString("D"),
+                Kind = message.Role.ToString(),
+                Included = included,
+                Rationale = rationale,
+                EstimatedTokens = message.EstimatedTokens,
+                SourceMessageIds = [message.Id],
+                SourceRunIds = [message.RunId],
+            };
     }
 }

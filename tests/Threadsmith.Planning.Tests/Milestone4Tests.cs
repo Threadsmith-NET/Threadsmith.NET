@@ -3,6 +3,7 @@ namespace Threadsmith.Planning.Tests;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Security;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -131,7 +132,7 @@ public static class Milestone4Tests
             request.Input,
             StringComparison.Ordinal);
         Assert.Contains(
-            "structural/semantic/index tools before broad text search",
+            "narrowest applicable structural, semantic, index, search, or direct-read operation",
             request.Input,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
@@ -589,6 +590,31 @@ public static class Milestone4Tests
         Assert.Equal(2, model.Requests.Count);
     }
 
+    /// <summary>An estimated request that cannot fit the remaining execution budget is rejected before dispatch.</summary>
+    [Fact]
+    public static async Task SessionApplication_RequestEstimateExceedsBudget_DoesNotDispatchProvider()
+    {
+        await using var events = new DomainEventStream();
+        var model = new ConversationalModelProvider("must not be dispatched");
+        var application = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(1, 10, TimeSpan.FromMinutes(1))),
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("request admission"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "inspect the repository"));
+
+        var exception = await Assert.ThrowsAsync<BudgetExceededException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Contains("cannot admit a model request estimated to require", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(model.Requests);
+    }
+
     /// <summary>Malformed provider-boundary output receives a generic correction-attempt event before retrying.</summary>
     [Fact]
     public static async Task SessionApplication_MalformedProviderOutput_PublishesGenericCorrectionEvent()
@@ -880,7 +906,7 @@ public static class Milestone4Tests
         // propose_plan tool call is malformed and must surface as MalformedModelOutputException.
         var reviseException = await Assert.ThrowsAnyAsync<MalformedModelOutputException>(() =>
             dispatcher.DispatchAsync(new RevisePlanCommand(sessionId, runId, "narrow the scope")));
-        Assert.Contains("outside the initial conversational turn", reviseException.Message, StringComparison.Ordinal);
+        Assert.Contains("planning decision is not available", reviseException.Message, StringComparison.Ordinal);
         Assert.Equal(RunPhase.Failed, (await projections.GetAsync<SessionProjection>(
             new ProjectionKey("session", sessionId.Value.ToString("D")),
             timeout.Token))?.Phase);
@@ -2247,6 +2273,12 @@ public static class Milestone4Tests
             EvidenceKind.SourceExcerpt,
             "duplicate",
             relevance: 0.8));
+        await evidence.AddAsync(CreateEvidence(
+            sessionId,
+            runId,
+            EvidenceKind.SourceExcerpt,
+            new string('x', 2_000),
+            relevance: 0.7));
         var stale = CreateEvidence(
             sessionId,
             runId,
@@ -2259,13 +2291,14 @@ public static class Milestone4Tests
         await evidence.AddAsync(stale);
         evidence.QueueInvalidation(sessionId, "semantic", "confidence demoted");
         Assert.False(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == stale.EvidenceId).IsStale);
-        var assembler = CreateAssembler(events, evidence, maximumTokens: 1000);
+        var assembler = CreateAssembler(events, evidence, maximumTokens: 2_000);
         var result = await assembler.AssembleAsync(CreateAssemblyRequest(sessionId, runId));
 
         Assert.True(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == stale.EvidenceId).IsStale);
         Assert.Contains("must retain this decision", result.ModelInput);
         Assert.Contains(result.Inspection.Reductions, reason => reason.Contains("Duplicate", StringComparison.Ordinal));
         Assert.Contains(result.Inspection.Reductions, reason => reason.Contains("confidence demoted", StringComparison.Ordinal));
+        Assert.Contains(result.Inspection.Reductions, reason => reason.Contains("token budget", StringComparison.Ordinal));
     }
 
     /// <summary>Queued invalidations are applied only at the owning session's turn boundary.</summary>
@@ -3078,10 +3111,12 @@ public static class Milestone4Tests
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
             var workspaceId = WorkspaceId.New();
             var semanticResolver = new FixedSemanticResolver(workspaceId);
+            var codeExplore = new UnexpectedCodeExploreService();
             var registry = new ToolRegistry(
             [
                 new SearchTextTool(TestPromptLoader.Instance),
                 new FindSymbolTool(semanticResolver, TestPromptLoader.Instance),
+                new CodeExploreTool(codeExplore, TestPromptLoader.Instance),
             ]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -3150,6 +3185,7 @@ public static class Milestone4Tests
 
             Assert.Equal(fileScoped ? 2 : 3, model.Requests.Count);
             Assert.Equal(!fileScoped, semanticResolver.FindSymbolsCalled);
+            Assert.False(codeExplore.WasCalled);
             Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "test complete")));
             Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
         }
@@ -3649,10 +3685,16 @@ public static class Milestone4Tests
                 "<phase_instructions>",
                 StringComparison.Ordinal);
             Assert.True(policyPosition < appendPosition && appendPosition < phasePosition);
-            Assert.Contains(
-                $"<system_policy>{TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)}{Environment.NewLine}{TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)}</system_policy>",
-                assembled.ModelInput,
-                StringComparison.Ordinal);
+            var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
+                + Environment.NewLine
+                + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
+            var expectedPolicy = $"<system_policy>{SecurityElement.Escape(policy)}</system_policy>";
+            var policyEnd = assembled.ModelInput.IndexOf(
+                "</system_policy>",
+                policyPosition,
+                StringComparison.Ordinal) + "</system_policy>".Length;
+            var actualPolicy = assembled.ModelInput[policyPosition..policyEnd];
+            Assert.Equal(expectedPolicy, actualPolicy);
             Assert.Equal(2, assembled.ModelInput.Split("<project_context ").Length - 1);
             Assert.Contains(
                 "&lt;/project_context&gt;",
@@ -4193,21 +4235,25 @@ public static class Milestone4Tests
 
     /// <summary>Discovery guidance allows direct known-file inspection without a preliminary semantic call.</summary>
     [Fact]
-    public static void StableSystemPolicy_RequiresSemanticFirstToolSelection()
+    public static void StableSystemPolicy_RequiresNarrowestSufficientToolSelection()
     {
         var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
             + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
 
         Assert.Contains(
-            "For repository-wide C# symbol discovery and compiler-backed relationships, use an applicable semantic tool first",
+            "Choose the narrowest, least expensive tool",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
-            "read_file and file-scoped search can directly answer",
+            "For a known repository-relative file, read_file",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
-            "do not repeat equivalent searches",
+            "For a known type, interface, method, property, field, or event declaration or direct relationship, use find_symbol",
+            policy,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "do not reopen, re-search, or otherwise retrieve equivalent evidence",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(

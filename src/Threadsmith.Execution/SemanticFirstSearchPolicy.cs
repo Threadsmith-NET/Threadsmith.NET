@@ -29,24 +29,25 @@ internal static class SemanticFirstSearchPolicy
             return false;
         }
 
-        var hasCodeExplore = modelTools.Any(static definition => string.Equals(
-            definition.Name,
-            "code_explore",
-            StringComparison.OrdinalIgnoreCase));
         var hasFindSymbol = modelTools.Any(static definition => string.Equals(
             definition.Name,
             "find_symbol",
             StringComparison.OrdinalIgnoreCase));
-        if (!hasCodeExplore && !hasFindSymbol)
-        {
-            return false;
-        }
+        var hasCodeExplore = modelTools.Any(static definition => string.Equals(
+            definition.Name,
+            "code_explore",
+            StringComparison.OrdinalIgnoreCase));
+        var hasReadFile = modelTools.Any(static definition => string.Equals(
+            definition.Name,
+            "read_file",
+            StringComparison.OrdinalIgnoreCase));
 
         var boundedQuery = BoundSingleLine(query, 160);
         var isFileQuery = boundedQuery.Contains(".cs", StringComparison.OrdinalIgnoreCase);
         var isExactPathQuery = isFileQuery && LooksLikeExactCSharpPathQuery(boundedQuery);
         var isExactSymbolQuery = !isFileQuery && LooksLikeExactCSharpSymbolQuery(boundedQuery);
-        if (!isExactPathQuery && !isExactSymbolQuery && !hasFindSymbol)
+        if ((isExactPathQuery && !hasReadFile)
+            || (!isExactPathQuery && !hasFindSymbol && !hasCodeExplore))
         {
             return false;
         }
@@ -56,9 +57,11 @@ internal static class SemanticFirstSearchPolicy
             : isFileQuery
                 ? BoundSingleLine(GetCSharpFileSymbolQuery(query), 160)
                 : BoundSingleLine(GetDiscoverableSymbolQuery(query), 160);
-        var suggestedTool = hasCodeExplore && (isExactPathQuery || isExactSymbolQuery)
-            ? "code_explore"
-            : "find_symbol";
+        var suggestedTool = isExactPathQuery
+            ? "read_file"
+            : hasFindSymbol
+                ? "find_symbol"
+                : "code_explore";
         content = corrections.CreateSemanticFirstSearchReason(
             suggestedTool,
             suggestedQuery,

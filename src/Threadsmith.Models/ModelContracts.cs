@@ -57,6 +57,11 @@ public sealed record ModelStreamRequest
     /// <summary>Request correlation id.</summary>
     public required RunId RunId { get; init; }
 
+    /// <summary>Optional host-owned affinity identity shared by related requests for provider prompt-cache routing.</summary>
+    /// <remarks>Providers fall back to <see cref="RunId"/> when no broader session identity is available.</remarks>
+    [JsonIgnore]
+    public Guid? CacheAffinityId { get; init; }
+
     /// <summary>User input.</summary>
     public required string Input { get; init; }
 

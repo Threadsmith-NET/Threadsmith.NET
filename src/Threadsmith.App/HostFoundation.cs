@@ -274,12 +274,18 @@ internal sealed class HostFoundation : IAsyncDisposable
         limits.Validate();
         var trustedDiffLines = (trustedConfiguration ?? configuration).GetValue(
             "limits:workspace:maximumDiffLinesForLcs", new WorkspaceResourceLimits().MaximumDiffLinesForLcs);
+        var trustedFinalDiffCharacters = (trustedConfiguration ?? configuration).GetValue(
+            "limits:workspace:maximumFinalDiffCharacters", new WorkspaceResourceLimits().MaximumFinalDiffCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trustedDiffLines);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trustedFinalDiffCharacters);
         return limits with
         {
             Workspace = limits.Workspace with
             {
                 MaximumDiffLinesForLcs = Math.Min(limits.Workspace.MaximumDiffLinesForLcs, trustedDiffLines),
+                MaximumFinalDiffCharacters = Math.Min(
+                    limits.Workspace.MaximumFinalDiffCharacters,
+                    trustedFinalDiffCharacters),
             },
         };
     }
@@ -341,6 +347,20 @@ internal sealed class HostFoundation : IAsyncDisposable
             MaxToolResultPreviewCharacters = configuration.GetValue(
                 "execution:toolResultPreviewCharacters",
                 4096),
+            MutationBatching = new MutationBatchingOptions
+            {
+                TargetMutations = configuration.GetValue("execution:mutationBatching:targetMutations", 8),
+                TargetFiles = configuration.GetValue("execution:mutationBatching:targetFiles", 3),
+                TargetMutationCharacters = configuration.GetValue<long>(
+                    "execution:mutationBatching:targetMutationCharacters",
+                    24_000),
+            },
+            IncrementalPlanning = new IncrementalPlanningOptions
+            {
+                Enabled = configuration.GetValue("planning:incrementalPlans:enabled", true),
+                TargetSteps = configuration.GetValue("planning:incrementalPlans:targetSteps", 4),
+                TargetFiles = configuration.GetValue("planning:incrementalPlans:targetFiles", 8),
+            },
         };
         var toolLimits = CreateToolLimits(configuration);
         executionLimits.Validate();
@@ -410,7 +430,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                     : contextLifecycle.ObserveAsync(domainEvent, cancellationToken),
                 subscriberCapacity);
             var budget = new ExecutionBudget(new BudgetDimensions(
-                configuration.GetValue<long>("budget:tokens", 100000),
+                configuration.GetValue<long?>("budget:tokens") ?? long.MaxValue,
                 configuration.GetValue<int>("budget:calls", 1000),
                 TimeSpan.FromSeconds(configuration.GetValue("budget:wallClockSeconds", 3600)),
                 configuration.GetValue<decimal>("budget:cost", 0)));

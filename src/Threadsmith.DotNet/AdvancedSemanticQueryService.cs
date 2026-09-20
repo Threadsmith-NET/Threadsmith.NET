@@ -995,7 +995,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var remainingSourceCharacters = availableSourceCharacters;
         var remainingSourceCharactersWithoutSuppression = availableSourceCharacters;
         var outputBoundReached = false;
-        if (!timeReached && projection is not null)
+        if (!timeReached && projection is not null && !request.IsSourceContinuation)
         {
             try
             {
@@ -1459,7 +1459,14 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 reclaimedCharacters,
                 usedForNewSourceCharacters,
                 dedupReasons.Order(StringComparer.Ordinal).ToArray());
+        var emittedFileDigests = emissionRecords
+            .DistinctBy(emission => emission.FilePath, PathComparer)
+            .ToDictionary(emission => emission.FilePath, emission => emission.FileSha256, PathComparer);
         var continuationTargets = continuations
+            .Select(target => target.ExpectedFileSha256 is null
+                && emittedFileDigests.TryGetValue(target.FilePath ?? target.Anchor, out var digest)
+                    ? target with { ExpectedFileSha256 = digest, WorkspaceGeneration = snapshot.Generation }
+                    : target)
             .DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}")
             .ToArray();
         adaptiveBudget = UpdateAdaptiveBudgetScale(
@@ -1511,7 +1518,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             availability,
             presentation,
             adaptiveBudget,
-            fileRelevance);
+            fileRelevance)
+        {
+            IsSourceContinuation = request.IsSourceContinuation,
+        };
     }
 
     private CodeExploreAvailability? CreateInitialCodeExploreAvailability(

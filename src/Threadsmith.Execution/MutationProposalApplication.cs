@@ -1,7 +1,10 @@
 namespace Threadsmith.Execution;
 
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -11,9 +14,11 @@ using Threadsmith.Models;
 
 /// <summary>Assembles governed mutation context, validates model output, and stages it for review.</summary>
 public sealed class MutationProposalApplication :
-    ICommandHandler<ProposeMutationSetCommand, StagedMutationSet>
+    ICommandHandler<ProposeMutationSetCommand, StagedMutationSet>,
+    IIncrementalMutationProposalProvider
 {
     private const string ProposeMutationsToolName = "propose_mutations";
+    private const string RequestReplanToolName = "request_replan";
     private const string ProposeMutationsArgumentsSchema = """
         {
           "type": "object",
@@ -98,7 +103,7 @@ public sealed class MutationProposalApplication :
               "properties": {
                 "mutations": {
                   "type": "array",
-                  "minItems": 1,
+                  "minItems": 0,
                   "maxItems": 100,
                   "items": {
                     "oneOf": [
@@ -115,6 +120,7 @@ public sealed class MutationProposalApplication :
                 "expectedDiagnosticsResolved": { "type": "array", "items": { "type": "string" } },
                 "expectedTests": { "type": "array", "items": { "type": "string" } },
                 "risk": { "type": "string", "enum": ["Low", "Medium", "High"] }
+                ,"stepComplete": { "type": ["boolean", "null"] }
               }
             }
           }
@@ -188,6 +194,8 @@ public sealed class MutationProposalApplication :
         ArgumentNullException.ThrowIfNull(prompts);
         _workspaceLimits = workspaceLimits ?? new WorkspaceResourceLimits();
         _workspaceLimits.Validate();
+        _limits = limits ?? ExecutionLimits.Default;
+        _limits.Validate();
         var schema = System.Text.Json.Nodes.JsonNode.Parse(ProposeMutationsArgumentsSchema)
             ?? throw new InvalidOperationException("The mutation schema is unavailable.");
         var mutations = schema["properties"]?["mutationSet"]?["properties"]?["mutations"]
@@ -206,7 +214,6 @@ public sealed class MutationProposalApplication :
         _budgetFactory = budgetFactory ?? (() => budget);
         _sanitizer = sanitizer;
         _defaultModelProfileId = defaultModelProfileId;
-        _limits = limits ?? ExecutionLimits.Default;
         _sessionPreferences = sessionPreferences;
         _sessionUsage = sessionUsage;
         _events = events;
@@ -220,8 +227,48 @@ public sealed class MutationProposalApplication :
         ProposeMutationSetCommand command,
         CancellationToken cancellationToken = default)
     {
+        var result = await ProposeAsync(command, cancellationToken);
+        return result.StagedMutationSet
+            ?? throw new InvalidOperationException(
+                "A proposal without mutations cannot be returned through the staged-mutation compatibility handler.");
+    }
+
+    /// <inheritdoc />
+    public async Task<MutationProposalResult> ProposeAsync(
+        ProposeMutationSetCommand command,
+        CancellationToken cancellationToken = default)
+    {
         var prepared = await PrepareAsync(command, cancellationToken);
-        return await StagePreparedAsync(prepared, cancellationToken);
+        if (prepared.IsCompletionOnly || prepared.ReplanRequested)
+        {
+            return new MutationProposalResult
+            {
+                Rationale = prepared.Rationale,
+                StepComplete = prepared.StepComplete,
+                ReplanRequested = prepared.ReplanRequested,
+                BudgetUsed = prepared.BudgetUsed,
+            };
+        }
+
+        StagedMutationSet staged;
+        try
+        {
+            staged = await StagePreparedAsync(prepared, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not MutationProposalBudgetUsageException
+            && command.ReportBudgetUsageOnFailure
+            && HasAdvancedBudgetUsage(prepared.BudgetUsed, command.BudgetUsed))
+        {
+            throw new MutationProposalBudgetUsageException(prepared.BudgetUsed, exception);
+        }
+
+        return new MutationProposalResult
+        {
+            StagedMutationSet = staged,
+            Rationale = prepared.Rationale,
+            StepComplete = prepared.StepComplete,
+            BudgetUsed = prepared.BudgetUsed,
+        };
     }
 
     /// <summary>Runs governed proposal generation and corrections without staging or applying candidate changes.</summary>
@@ -230,44 +277,89 @@ public sealed class MutationProposalApplication :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(command);
+        var operationBudget = _budgetFactory()
+            ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
+        if (command.BudgetUsed is { } consumed)
+        {
+            var restored = operationBudget.Accrue(consumed);
+            if (restored.IsExhausted)
+            {
+                throw new BudgetExceededException(
+                    restored.Reason ?? "Execution budget was exhausted before mutation preparation.");
+            }
+        }
+
+        var restoredUsage = command.BudgetUsed;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var correctiveMessages = new List<ModelMessage>();
-        for (var proposalAttempt = 1; ; proposalAttempt++)
+        try
         {
-            await _events.PublishAsync(
-                new MutationProposalStarted(
-                    command.SessionId,
-                    DateTimeOffset.UtcNow,
-                    command.RunId,
-                    proposalAttempt,
-                    correctiveTurns.MaximumTurns + 1),
-                cancellationToken);
-            try
+            for (var proposalAttempt = 1; ; proposalAttempt++)
             {
-                return await HandleCoreAsync(command, correctiveMessages, cancellationToken);
-            }
-            catch (RepairableMutationProposalException exception)
-            {
-                await AppendCorrectionMessageOrThrowAsync(
-                    command,
-                    correctiveTurns,
-                    correctiveMessages,
-                    exception.Category,
-                    exception.Diagnostic,
-                    exception,
+                await _events.PublishAsync(
+                    new MutationProposalStarted(
+                        command.SessionId,
+                        DateTimeOffset.UtcNow,
+                        command.RunId,
+                        proposalAttempt,
+                        correctiveTurns.MaximumTurns + 1),
                     cancellationToken);
+                try
+                {
+                    var attemptStarted = Stopwatch.GetTimestamp();
+                    PreparedMutationProposal prepared;
+                    try
+                    {
+                        prepared = await HandleCoreAsync(
+                            command,
+                            correctiveMessages,
+                            operationBudget,
+                            cancellationToken);
+                    }
+                    finally
+                    {
+                        var elapsed = operationBudget.Accrue(new BudgetDimensions(
+                            0,
+                            0,
+                            Stopwatch.GetElapsedTime(attemptStarted)));
+                        if (elapsed.IsExhausted)
+                        {
+                            throw new BudgetExceededException(
+                                elapsed.Reason ?? "Execution budget exhausted during mutation preparation.");
+                        }
+                    }
+
+                    return prepared with { BudgetUsed = GetBudgetUsage(operationBudget) };
+                }
+                catch (RepairableMutationProposalException exception)
+                {
+                    await AppendCorrectionMessageOrThrowAsync(
+                        command,
+                        correctiveTurns,
+                        correctiveMessages,
+                        exception.Category,
+                        exception.Diagnostic,
+                        exception,
+                        cancellationToken);
+                }
+                catch (MalformedInvocationException exception)
+                {
+                    await AppendCorrectionMessageOrThrowAsync(
+                        command,
+                        correctiveTurns,
+                        correctiveMessages,
+                        ModelCorrectionCategory.ProviderInvocation,
+                        exception.Diagnostic,
+                        exception,
+                        cancellationToken);
+                }
             }
-            catch (MalformedInvocationException exception)
-            {
-                await AppendCorrectionMessageOrThrowAsync(
-                    command,
-                    correctiveTurns,
-                    correctiveMessages,
-                    ModelCorrectionCategory.ProviderInvocation,
-                    exception.Diagnostic,
-                    exception,
-                    cancellationToken);
-            }
+        }
+        catch (Exception exception) when (exception is not MutationProposalBudgetUsageException
+            && command.ReportBudgetUsageOnFailure
+            && TryGetAdvancedBudgetUsage(operationBudget, restoredUsage, out var usage))
+        {
+            throw new MutationProposalBudgetUsageException(usage, exception);
         }
     }
 
@@ -278,8 +370,14 @@ public sealed class MutationProposalApplication :
     {
         ArgumentNullException.ThrowIfNull(prepared);
         cancellationToken.ThrowIfCancellationRequested();
-        var staged = await _workspaces.StageAsync(prepared.MutationSet, cancellationToken);
-        return staged with { PlanStepIds = prepared.PlanStepIds };
+        var mutationSet = prepared.MutationSet
+            ?? throw new InvalidOperationException("A completion-only proposal cannot be staged.");
+        var staged = await _workspaces.StageAsync(mutationSet, cancellationToken);
+        return staged with
+        {
+            PlanStepIds = prepared.PlanStepIds,
+            StepComplete = prepared.StepComplete,
+        };
     }
 
     private async Task AppendCorrectionMessageOrThrowAsync(
@@ -340,6 +438,7 @@ public sealed class MutationProposalApplication :
     private async Task<PreparedMutationProposal> HandleCoreAsync(
         ProposeMutationSetCommand command,
         IReadOnlyList<ModelMessage> correctiveMessages,
+        IBudget operationBudget,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -353,8 +452,6 @@ public sealed class MutationProposalApplication :
             throw new ArgumentException("Mutation proposal ownership ids cannot be default.", nameof(command));
         }
 
-        var operationBudget = _budgetFactory()
-            ?? throw new InvalidOperationException("The execution budget factory returned no budget.");
         ModelOutputValidator.Validate(new PlanModelOutput(command.ApprovedPlan), planLimits: _limits.Plan);
         if (command.Phase is not RunPhase.MutationPreparation
             and not RunPhase.ImplementationModelTurn
@@ -381,11 +478,12 @@ public sealed class MutationProposalApplication :
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
         var proposalToolObserved = false;
+        string? replanReason = null;
         ModelUsage? reportedUsage = null;
         var budgetUsage = new ModelRequestBudgetUsage();
         try
         {
-            budgetUsage.Start(operationBudget);
+            budgetUsage.Start(operationBudget, modelRequest);
             await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, modelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
             {
                 if (chunk.Usage is not null)
@@ -417,6 +515,14 @@ public sealed class MutationProposalApplication :
 
                 if (chunk.Output is MutationSetModelOutput mutationOutput)
                 {
+                    if (proposalToolObserved || structured is not null)
+                    {
+                        throw CreateRepairableMutationFailure(
+                            ModelCorrectionCategory.MutationProposal,
+                            MalformedInvocationFailureKind.MultipleToolProducingOutputs,
+                            _prompts.Get(PromptFileNames.CorrectionMutationExclusiveDecision));
+                    }
+
                     if (mutationOutput.MutationSet is not null)
                     {
                         FailIfMutationPathPolicyViolation(mutationOutput.MutationSet);
@@ -447,16 +553,19 @@ public sealed class MutationProposalApplication :
                             $"The mutation proposal exceeded the {_limits.MaxStructuredOutputCharacters}-character structured-output limit.");
                     }
 
-                    if (!string.Equals(toolRequest.ToolName, ProposeMutationsToolName, StringComparison.Ordinal)
-                        || proposalToolObserved)
+                    var requestsReplan = string.Equals(toolRequest.ToolName, RequestReplanToolName, StringComparison.OrdinalIgnoreCase)
+                        && modelRequest.Tools.Any(tool => tool.Name == RequestReplanToolName);
+                    if ((!string.Equals(toolRequest.ToolName, ProposeMutationsToolName, StringComparison.Ordinal)
+                            && !requestsReplan)
+                        || proposalToolObserved || structured is not null)
                     {
                         var requestedTool = string.IsNullOrWhiteSpace(toolRequest.ToolName)
                             ? "<missing>"
                             : BoundCorrectionReason(toolRequest.ToolName);
-                        var safeReason = proposalToolObserved
-                            ? "The model called propose_mutations more than once in one turn."
+                        var safeReason = proposalToolObserved || structured is not null
+                            ? _prompts.Get(PromptFileNames.CorrectionMutationExclusiveDecision)
                             : $"Implementation requested unauthorized tool '{requestedTool}'.";
-                        var diagnosticKind = proposalToolObserved
+                        var diagnosticKind = proposalToolObserved || structured is not null
                             ? MalformedInvocationFailureKind.MultipleToolProducingOutputs
                             : MalformedInvocationFailureKind.UnknownTool;
                         throw CreateRepairableMutationFailure(
@@ -466,11 +575,15 @@ public sealed class MutationProposalApplication :
                     }
 
                     proposalToolObserved = true;
+                    if (requestsReplan)
+                    {
+                        replanReason = ReadReplanReason(toolRequest.ArgumentsJson);
+                        continue;
+                    }
+
                     try
                     {
-                        envelope = JsonSerializer.Deserialize<MutationProposalEnvelope>(
-                            toolRequest.ArgumentsJson,
-                            JsonOptions);
+                        envelope = DeserializeEnvelope(toolRequest.ArgumentsJson);
                     }
                     catch (Exception exception) when (exception is JsonException or NotSupportedException)
                     {
@@ -522,12 +635,19 @@ public sealed class MutationProposalApplication :
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (replanReason is not null)
+        {
+            return new PreparedMutationProposal(null, [], replanReason, null, GetBudgetUsage(operationBudget))
+            {
+                ReplanRequested = true,
+            };
+        }
+
         if (envelope is null && structured is null && modelRequest.ResponseFormat is not null)
         {
             try
             {
-                envelope = JsonSerializer.Deserialize<MutationProposalEnvelope>(textOutput.ToString().Trim(), JsonOptions)
-                    ?? throw new JsonException("The final mutation proposal was empty.");
+                envelope = DeserializeEnvelope(textOutput.ToString().Trim());
             }
             catch (Exception exception) when (exception is JsonException or NotSupportedException)
             {
@@ -542,11 +662,35 @@ public sealed class MutationProposalApplication :
         if (envelope is not null)
         {
             ValidateEnvelope(envelope);
+            if (envelope.MutationSet.Mutations.Count == 0)
+            {
+                if (command.ExecutionScope?.CanCompleteWithoutChanges != true)
+                {
+                    throw CreateRepairableMutationFailure(
+                        ModelCorrectionCategory.MutationProposal,
+                        MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                        "The selected step has no fully applied batch with current passing validation. Propose the remaining changes; evidence from another step cannot support a no-change completion.");
+                }
+
+                var rationale = _sanitizer.Sanitize(envelope.MutationSet.Rationale);
+                var activeStepId = command.ExecutionScope?.ActiveStep.StepId
+                    ?? throw CreateRepairableMutationFailure(
+                        ModelCorrectionCategory.MutationProposal,
+                        MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                        "A no-change completion claim requires a host-selected approved step.");
+                return new PreparedMutationProposal(
+                    null,
+                    [activeStepId],
+                    rationale,
+                    true,
+                    GetBudgetUsage(operationBudget));
+            }
+
             var hostOwned = CreateHostOwnedMutationSet(
                 envelope.MutationSet,
                 command,
                 baseline,
-                CreateWorkspacePathComparer(workspace));
+                RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath));
             FailIfMutationPathPolicyViolation(hostOwned);
             FailIfMutationSourceMissingFromBaseline(hostOwned);
             hostOwned = await ResolveSemanticRenameMutationsAsync(
@@ -633,15 +777,16 @@ public sealed class MutationProposalApplication :
                 exception);
         }
 
-        var approvedPlanPathComparer = CreateWorkspacePathComparer(workspace);
+        var approvedPlanPathComparer = RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath);
+        var approvedSteps = ResolveApprovedSteps(command);
         ValidateMutationsWithinPlan(
             proposed.Mutations,
-            command.ApprovedPlan.Steps,
+            approvedSteps,
             approvedPlanPathComparer,
-            "approved plan");
+            command.ExecutionScope is null ? "approved plan" : "active approved step");
         var planStepIds = ResolvePlanStepIds(
             proposed.Mutations,
-            command.ApprovedPlan.Steps,
+            approvedSteps,
             approvedPlanPathComparer);
 
         await AnalyzePreMutationAsync(
@@ -652,7 +797,40 @@ public sealed class MutationProposalApplication :
             cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
-        return new PreparedMutationProposal(proposed, planStepIds);
+        return new PreparedMutationProposal(
+            proposed,
+            planStepIds,
+            proposed.Rationale,
+            envelope?.MutationSet.StepComplete,
+            GetBudgetUsage(operationBudget));
+    }
+
+    private static BudgetDimensions GetBudgetUsage(IBudget budget)
+    {
+        return budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
+    }
+
+    private static bool TryGetAdvancedBudgetUsage(
+        IBudget budget,
+        BudgetDimensions? restoredUsage,
+        [NotNullWhen(true)] out BudgetDimensions? usage)
+    {
+        var current = GetBudgetUsage(budget);
+        var advanced = HasAdvancedBudgetUsage(current, restoredUsage);
+        usage = advanced ? current : null;
+        return advanced;
+    }
+
+    private static bool HasAdvancedBudgetUsage(
+        BudgetDimensions current,
+        BudgetDimensions? restored)
+    {
+        return restored is null
+            ? current.Tokens > 0 || current.Calls > 0 || current.WallClock > TimeSpan.Zero || current.Cost > 0
+            : current.Tokens > restored.Tokens
+                || current.Calls > restored.Calls
+                || current.WallClock > restored.WallClock
+                || current.Cost > restored.Cost;
     }
 
     private async Task<ModelStreamRequest> CreateModelRequestAsync(
@@ -664,9 +842,23 @@ public sealed class MutationProposalApplication :
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requiresToolCall = command.Phase is RunPhase.ImplementationModelTurn or RunPhase.CorrectionModelTurn;
+        List<ModelToolDefinition> modelTools = requiresToolCall ? [_proposeMutationsTool] : [];
+        if (requiresToolCall && command.AllowReplanning && command.ExecutionScope is not null)
+        {
+            modelTools.Add(new ModelToolDefinition
+            {
+                Name = RequestReplanToolName,
+                Description = _prompts.Get(PromptFileNames.ToolRequestReplanDescription),
+                ArgumentsJsonSchema = """{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"],"additionalProperties":false}""",
+                PreferStrictArguments = true,
+            });
+        }
+
         var memoryIdentity = RepositoryIdentity.Create(baseline.RepositoryPath);
         var memoriesEnabled = _repositoryMemoriesEnabled is not null
             && await _repositoryMemoriesEnabled(command.SessionId, command.RunId, cancellationToken);
+        var workingPaths = command.ExecutionScope?.ActiveStep.GetAffectedPaths()
+            ?? command.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray();
         var context = await _contextAssembler.AssembleAsync(
             new ContextAssemblyRequest
             {
@@ -679,7 +871,7 @@ public sealed class MutationProposalApplication :
                 RepositoryMemoryOptions = _repositoryMemoryOptions?.Capture(memoryIdentity),
                 WorkingScope = RepositoryWorkingScope.Resolve(
                     baseline.RepositoryPath,
-                    command.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths())),
+                    workingPaths),
                 ProhibitedPaths = baseline.ProhibitedPaths ?? [],
                 RequiredCapabilities = new ModelCapabilitySet
                 {
@@ -690,25 +882,20 @@ public sealed class MutationProposalApplication :
                 DefaultModelProfileId = _sessionPreferences?.CurrentProfileId ?? _defaultModelProfileId,
                 ApprovedPlan = command.ApprovedPlan,
                 MutationBaseline = baseline,
-                ToolSchemas = requiresToolCall ?
-                [
-                    new ContextToolSchema(
-                        _proposeMutationsTool.Name,
-                        _proposeMutationsTool.Description,
-                        _proposeMutationsTool.ArgumentsJsonSchema,
-                        _proposeMutationsTool.PreferStrictArguments),
-                ] : [],
+                MutationExecutionScope = command.ExecutionScope,
+                ToolSchemas = modelTools.Select(tool => new ContextToolSchema(
+                    tool.Name, tool.Description, tool.ArgumentsJsonSchema, tool.PreferStrictArguments)).ToArray(),
                 AdditionalMessages = additionalMessages,
             },
             cancellationToken);
         var messages = context.Messages ?? [];
-        IReadOnlyList<ModelToolDefinition> modelTools = requiresToolCall ? [_proposeMutationsTool] : [];
         var reasoningFallback = context.ModelResolution?.SupportsReasoningOff == false
             ? context.ModelResolution.DefaultReasoningLevel
             : (ReasoningLevel?)null;
         var modelRequest = new ModelStreamRequest
         {
             RunId = command.RunId,
+            CacheAffinityId = command.SessionId.Value,
             Input = context.ModelInput,
             MemorySubmission = context.RepositoryMemoryInclusions is { Count: > 0 } inclusions
                 ? new RepositoryMemorySubmission(command.SessionId, memoryIdentity, inclusions)
@@ -830,6 +1017,36 @@ public sealed class MutationProposalApplication :
             .ToArray();
     }
 
+    private static IReadOnlyList<ImplementationPlanStep> ResolveApprovedSteps(
+        ProposeMutationSetCommand command)
+    {
+        if (command.ExecutionScope is null)
+        {
+            return command.ApprovedPlan.Steps;
+        }
+
+        var approved = command.ApprovedPlan.Steps.FirstOrDefault(
+            step => step.StepId == command.ExecutionScope.ActiveStep.StepId)
+            ?? throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                "The host-selected step is not part of the approved plan.");
+        var activated = command.ExecutionScope.ActivatedPaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => new PlanFileIntent
+            {
+                Kind = PlanFileChangeKind.Modify,
+                Path = NormalizeProposalPath(path),
+            });
+        return
+        [
+            approved with
+            {
+                FileIntents = approved.FileIntents.Concat(activated).ToArray(),
+            },
+        ];
+    }
+
     private static bool PathsEqual(string? left, string? right, StringComparer pathComparer)
     {
         return !string.IsNullOrWhiteSpace(left)
@@ -843,6 +1060,214 @@ public sealed class MutationProposalApplication :
         return mutation.DestinationRelativePath is null
             ? source
             : $"{source} -> {NormalizeProposalPath(mutation.DestinationRelativePath)}";
+    }
+
+    private static MutationProposalEnvelope DeserializeEnvelope(string json)
+    {
+        var normalized = NormalizeProposalJson(json);
+        return JsonSerializer.Deserialize<MutationProposalEnvelope>(normalized, JsonOptions)
+            ?? throw new JsonException("The mutation proposal was empty.");
+    }
+
+    private string ReadReplanReason(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            RejectDuplicateProperties(document.RootElement, "$", StringComparer.OrdinalIgnoreCase);
+            var request = JsonSerializer.Deserialize<ReplanRequest>(json, JsonOptions);
+            if (string.IsNullOrWhiteSpace(request?.Reason))
+            {
+                throw new JsonException("reason must be a nonempty string.");
+            }
+
+            var reason = _sanitizer.Sanitize(request.Reason).Trim();
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                throw new JsonException("reason must contain a safe explanation.");
+            }
+
+            return reason.Length > _limits.Plan.MaximumSummaryCharacters
+                ? reason[.._limits.Plan.MaximumSummaryCharacters]
+                : reason;
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                _prompts.Get(PromptFileNames.CorrectionMutationReplanArguments),
+                exception,
+                RequestReplanToolName);
+        }
+    }
+
+    private sealed record ReplanRequest
+    {
+        public required string Reason { get; init; }
+    }
+
+    private static string NormalizeProposalJson(string json)
+    {
+        using var document = JsonDocument.Parse(json);
+        RejectDuplicateProperties(document.RootElement, "$", StringComparer.OrdinalIgnoreCase);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("The mutation proposal root must be an object.");
+        }
+
+        var root = JsonNode.Parse(json) as JsonObject
+            ?? throw new JsonException("The mutation proposal root must be an object.");
+        var wrapperProperty = FindProperty(root, "mutationSet");
+        JsonObject envelope;
+        JsonObject mutationSet;
+        if (wrapperProperty is null)
+        {
+            if (FindProperty(root, "mutations") is null || FindProperty(root, "rationale") is null)
+            {
+                throw new JsonException("The mutation proposal has no unambiguous mutationSet payload.");
+            }
+
+            mutationSet = (JsonObject)root.DeepClone();
+            envelope = new JsonObject { ["mutationSet"] = mutationSet };
+        }
+        else
+        {
+            if (FindProperty(root, "mutations") is not null || FindProperty(root, "rationale") is not null)
+            {
+                throw new JsonException("The mutation proposal contains competing wrapped and unwrapped payloads.");
+            }
+
+            mutationSet = wrapperProperty.Value.Value as JsonObject
+                ?? throw new JsonException("mutationSet must be an object.");
+            envelope = root;
+        }
+
+        var mutationsProperty = FindProperty(mutationSet, "mutations")
+            ?? throw new JsonException("mutationSet.mutations is required.");
+        if (mutationsProperty.Value is JsonObject singleMutation)
+        {
+            mutationSet[mutationsProperty.Key] = new JsonArray(singleMutation.DeepClone());
+        }
+
+        if (mutationSet[mutationsProperty.Key] is not JsonArray mutations)
+        {
+            throw new JsonException("mutationSet.mutations must be an array or one mutation object.");
+        }
+
+        foreach (var node in mutations)
+        {
+            if (node is not JsonObject mutation)
+            {
+                throw new JsonException("Every mutation must be an object.");
+            }
+
+            NormalizeAlias(mutation, "kind", "type", validateOperation: true);
+            NormalizeAlias(mutation, "path", "relativePath", validateOperation: false);
+            var operationProperty = FindProperty(mutation, "type");
+            if (operationProperty?.Value is JsonValue operationValue
+                && operationValue.TryGetValue<string>(out var operation)
+                && string.Equals(operation, "ReplaceText", StringComparison.Ordinal))
+            {
+                var legacyLength = FindProperty(mutation, "length");
+                if (legacyLength is not null)
+                {
+                    if (legacyLength.Value.Value is not JsonValue lengthValue
+                        || !lengthValue.TryGetValue<int>(out var length)
+                        || length < 0)
+                    {
+                        throw new JsonException("ReplaceText length must be a nonnegative integer.");
+                    }
+
+                    mutation.Remove(legacyLength.Value.Key);
+                }
+            }
+        }
+
+        return envelope.ToJsonString();
+    }
+
+    private static void RejectDuplicateProperties(
+        JsonElement element,
+        string path,
+        StringComparer comparer)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(comparer);
+            foreach (var property in element.EnumerateObject())
+            {
+                if (!names.Add(property.Name))
+                {
+                    throw new JsonException($"Duplicate property '{property.Name}' at '{path}'.");
+                }
+
+                RejectDuplicateProperties(property.Value, $"{path}.{property.Name}", comparer);
+            }
+        }
+        else if (element.ValueKind == JsonValueKind.Array)
+        {
+            var index = 0;
+            foreach (var item in element.EnumerateArray())
+            {
+                RejectDuplicateProperties(item, $"{path}[{index}]", comparer);
+                index++;
+            }
+        }
+    }
+
+    private static KeyValuePair<string, JsonNode?>? FindProperty(JsonObject value, string name)
+    {
+        foreach (var property in value)
+        {
+            if (string.Equals(property.Key, name, StringComparison.OrdinalIgnoreCase))
+            {
+                return property;
+            }
+        }
+
+        return null;
+    }
+
+    private static void NormalizeAlias(
+        JsonObject mutation,
+        string alias,
+        string canonical,
+        bool validateOperation)
+    {
+        var aliasProperty = FindProperty(mutation, alias);
+        if (aliasProperty is null)
+        {
+            return;
+        }
+
+        var canonicalProperty = FindProperty(mutation, canonical);
+        if (canonicalProperty is not null
+            && !JsonNode.DeepEquals(aliasProperty.Value.Value, canonicalProperty.Value.Value))
+        {
+            throw new JsonException($"Mutation fields '{alias}' and '{canonical}' conflict.");
+        }
+
+        if (validateOperation)
+        {
+            if (aliasProperty.Value.Value is not JsonValue value
+                || !value.TryGetValue<string>(out var operation))
+            {
+                throw new JsonException("Mutation kind must be a supported operation name string.");
+            }
+
+            if (operation is not ("CreateFile" or "DeleteFile" or "ReplaceText" or "RenameSymbol" or "MoveFile"))
+            {
+                throw new JsonException($"Mutation operation '{operation}' is not supported.");
+            }
+        }
+
+        if (canonicalProperty is null)
+        {
+            mutation[canonical] = aliasProperty.Value.Value?.DeepClone();
+        }
+
+        mutation.Remove(aliasProperty.Value.Key);
     }
 
     private static void FailIfMutationPathPolicyViolation(MutationSet mutationSet)
@@ -924,10 +1349,11 @@ public sealed class MutationProposalApplication :
         ModelCorrectionCategory category,
         MalformedInvocationFailureKind kind,
         string safeMessage,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        string toolName = ProposeMutationsToolName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(safeMessage);
-        var diagnostic = CreateRepairableMutationDiagnostic(kind, safeMessage);
+        var diagnostic = CreateRepairableMutationDiagnostic(kind, safeMessage) with { ToolName = toolName };
         return innerException is null
             ? new RepairableMutationProposalException(category, diagnostic)
             : new RepairableMutationProposalException(category, diagnostic, innerException);
@@ -1041,7 +1467,7 @@ public sealed class MutationProposalApplication :
         MutationSet proposed,
         CancellationToken cancellationToken)
     {
-        var pathComparer = CreateWorkspacePathComparer(workspace);
+        var pathComparer = RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath);
         var currentByPath = new Dictionary<string, string?>(pathComparer);
         var mutationByPath = new Dictionary<string, MutationId>(pathComparer);
         foreach (var mutation in proposed.Mutations)
@@ -1110,48 +1536,6 @@ public sealed class MutationProposalApplication :
                 RelatedMutationId = mutationByPath.GetValueOrDefault(item.Key),
             })
             .ToArray();
-    }
-
-    private static StringComparer CreateWorkspacePathComparer(ITransactionalWorkspace workspace)
-    {
-        ArgumentNullException.ThrowIfNull(workspace);
-        return IsCaseSensitiveFileSystem(workspace.Isolation.RepositoryPath)
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
-    }
-
-    private static bool IsCaseSensitiveFileSystem(string repositoryPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        var parent = Path.GetDirectoryName(fullPath);
-        var name = Path.GetFileName(fullPath);
-        var letterIndex = -1;
-        for (var index = 0; index < name.Length; index++)
-        {
-            if (char.IsLetter(name[index]))
-            {
-                letterIndex = index;
-                break;
-            }
-        }
-
-        if (parent is null || letterIndex < 0 || !Directory.Exists(parent))
-        {
-            return !OperatingSystem.IsWindows();
-        }
-
-        var toggledNameCharacters = name.ToCharArray();
-        var letter = toggledNameCharacters[letterIndex];
-        toggledNameCharacters[letterIndex] = char.IsUpper(letter)
-            ? char.ToLowerInvariant(letter)
-            : char.ToUpperInvariant(letter);
-        string toggledName = new(toggledNameCharacters);
-        var distinctToggledEntryExists = Directory.EnumerateFileSystemEntries(parent)
-            .Select(Path.GetFileName)
-            .Any(entry => string.Equals(entry, toggledName, StringComparison.Ordinal));
-        return distinctToggledEntryExists
-            || !Directory.Exists(Path.Combine(parent, toggledName));
     }
 
     private string ApplyReplacement(
@@ -1728,13 +2112,21 @@ public sealed class MutationProposalApplication :
     {
         if (envelope.MutationSet is null
             || envelope.MutationSet.Mutations is null
-            || (envelope.MutationSet.Mutations.Count < 1 || envelope.MutationSet.Mutations.Count > _workspaceLimits.MaximumMutations)
+            || envelope.MutationSet.Mutations.Count > _workspaceLimits.MaximumMutations
             || string.IsNullOrWhiteSpace(envelope.MutationSet.Rationale))
         {
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.MutationSchemaMismatch,
-                $"The mutation proposal requires a rationale and 1..{_workspaceLimits.MaximumMutations} operation-specific mutations.");
+                $"The mutation proposal requires a rationale and no more than {_workspaceLimits.MaximumMutations} operation-specific mutations.");
+        }
+
+        if (envelope.MutationSet.Mutations.Count == 0 && envelope.MutationSet.StepComplete != true)
+        {
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                "An empty mutation proposal must set stepComplete to true and explain why the active step is already satisfied.");
         }
 
         var missingContentText = envelope.MutationSet.Mutations.FirstOrDefault(change => change switch
@@ -1832,4 +2224,35 @@ public sealed class MutationProposalApplication :
 
         public MalformedInvocationDiagnostic Diagnostic { get; }
     }
+}
+
+/// <summary>Wraps a mutation-proposal failure that consumed cumulative execution budget.</summary>
+internal sealed class MutationProposalBudgetUsageException : Exception
+{
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException()
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException(BudgetDimensions budgetUsed, Exception innerException)
+        : base(innerException.Message, innerException)
+    {
+        BudgetUsed = budgetUsed;
+    }
+
+    /// <summary>Gets the cumulative budget usage observed before the proposal failed.</summary>
+    public BudgetDimensions BudgetUsed { get; } = new(0, 0, TimeSpan.Zero);
 }

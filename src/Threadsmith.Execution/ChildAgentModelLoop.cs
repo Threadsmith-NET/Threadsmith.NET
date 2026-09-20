@@ -167,7 +167,7 @@ internal sealed class ChildAgentModelLoop
                         cancellationToken);
                 }
 
-                var fitted = FitRequest(assignment, model, messages, toolDefinitions, toolWireEstimate, round, history.RewriteGeneration, transientState, provider);
+                var fitted = FitRequest(plan.Provenance.SessionId.Value, assignment, model, messages, toolDefinitions, toolWireEstimate, round, history.RewriteGeneration, transientState, provider);
                 model = fitted.Model;
                 childToolContext = childToolContext with
                 {
@@ -359,6 +359,7 @@ internal sealed class ChildAgentModelLoop
     }
 
     private (AgentModelSelection Model, ModelStreamRequest Request) FitRequest(
+        Guid cacheAffinityId,
         AgentAssignment assignment,
         AgentModelSelection model,
         IReadOnlyList<ModelMessage> messages,
@@ -382,6 +383,7 @@ internal sealed class ChildAgentModelLoop
             var request = ModelRequestPreparation.Prepare(provider, new ModelStreamRequest
             {
                 RunId = assignment.ChildRunId,
+                CacheAffinityId = cacheAffinityId,
                 Input = assignment.Objective,
                 Seed = HashCode.Combine(assignment.AssignmentId.Value, round),
                 ToolContinuationRound = round,

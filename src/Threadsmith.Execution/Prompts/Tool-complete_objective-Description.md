@@ -1,0 +1,1 @@
+Confirm that the entire user objective is complete, based on the validated execution receipts and current evidence. Call alone with {} only when advertised and no requested work remains. Do not use for a question or blocker; explain those in ordinary text so the objective remains resumable.

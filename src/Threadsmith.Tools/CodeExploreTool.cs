@@ -164,7 +164,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         if (CodeExploreContinuationCursor.TryCreateRequest(input.Query, limits, maximumFiles, out var continuationRequest, _options)
             && continuationRequest is not null)
         {
-            return continuationRequest with { UseAdaptiveDefaults = true };
+            return continuationRequest with { UseAdaptiveDefaults = !continuationRequest.IsSourceContinuation };
         }
 
         return new CodeExploreRequest
@@ -2854,7 +2854,9 @@ internal sealed class CodeExploreContinuationCursor
     /// <summary>Prefix that marks a pasteable code_explore continuation query cursor.</summary>
     internal const string Prefix = "code_explore:continue:";
 
-    private static readonly JsonSerializerOptions SerializerOptions = new(JsonSerializerDefaults.Web);
+    private const byte FormatVersion = 1;
+    private const int ChecksumBytes = 8;
+    private static readonly Encoding CursorEncoding = new UTF8Encoding(false, true);
 
     private readonly CodeExploreOptions _options;
 
@@ -2901,18 +2903,16 @@ internal sealed class CodeExploreContinuationCursor
         ArgumentNullException.ThrowIfNull(target);
         return Create(new CursorPayload
         {
-            Version = 1,
-            Type = "source",
-            Kind = target.Kind.ToString(),
-            Anchor = target.Anchor,
+            Type = CursorType.Source,
+            Kind = target.Kind,
+            Anchor = string.Equals(target.Anchor, target.FilePath, StringComparison.Ordinal) ? null : target.Anchor,
             Path = target.FilePath,
             StartLine = target.StartLine,
             EndLine = target.EndLine,
             StartAtLine = target.StartAtLine,
-            SelectionMode = target.SelectionMode?.ToString(),
+            SelectionMode = target.SelectionMode,
             ExpectedFileSha256 = target.ExpectedFileSha256,
             WorkspaceGeneration = target.WorkspaceGeneration,
-            Mode = nameof(CodeExploreMode.Auto),
         });
     }
 
@@ -2921,39 +2921,39 @@ internal sealed class CodeExploreContinuationCursor
         ArgumentNullException.ThrowIfNull(target);
         return Create(new CursorPayload
         {
-            Version = 1,
-            Type = "impact",
-            Kind = target.Kind.ToString(),
-            Anchor = target.Anchor,
+            Type = CursorType.Impact,
+            Kind = target.Kind,
+            Anchor = string.Equals(target.Anchor, target.FilePath, StringComparison.Ordinal) ? null : target.Anchor,
             Path = target.FilePath,
             StartLine = target.StartLine,
             EndLine = target.EndLine,
             StartAtLine = target.StartAtLine,
-            SelectionMode = target.SelectionMode?.ToString(),
+            SelectionMode = target.SelectionMode,
             ExpectedFileSha256 = target.ExpectedFileSha256,
             WorkspaceGeneration = target.WorkspaceGeneration,
-            Mode = nameof(CodeExploreMode.Impact),
         });
     }
 
     private string? CreateArtifactCore(CodeExploreArtifactContinuationTarget target, CodeExploreAssociatedArtifact? artifact, string? query)
     {
         ArgumentNullException.ThrowIfNull(target);
+        var originSymbolId = target.OriginSymbolId ?? artifact?.OriginSymbolId;
+        var originPath = target.OriginFilePath ?? artifact?.OriginFilePath;
         var payload = new CursorPayload
         {
-            Version = 1,
-            Type = "artifact",
+            Type = CursorType.Artifact,
             Path = target.FilePath,
             StartLine = target.StartLine,
             EndLine = target.EndLine,
             ExpectedFileSha256 = target.ExpectedFileSha256,
             WorkspaceGeneration = target.WorkspaceGeneration,
-            Query = BoundEmbeddedQuery(query),
-            OriginSymbolId = target.OriginSymbolId ?? artifact?.OriginSymbolId,
-            OriginPath = target.OriginFilePath ?? artifact?.OriginFilePath,
+            Query = string.IsNullOrWhiteSpace(originSymbolId) && string.IsNullOrWhiteSpace(originPath)
+                ? BoundEmbeddedQuery(query)
+                : null,
+            OriginSymbolId = originSymbolId,
+            OriginPath = originPath,
             OriginStartLine = target.OriginRange?.StartLine ?? artifact?.OriginRange.StartLine,
             OriginEndLine = target.OriginRange?.EndLine ?? artifact?.OriginRange.EndLine,
-            Mode = nameof(CodeExploreMode.Auto),
         };
         return Create(payload) ?? Create(payload with { Query = null });
     }
@@ -2962,28 +2962,40 @@ internal sealed class CodeExploreContinuationCursor
     {
         ArgumentNullException.ThrowIfNull(limits);
         request = null;
-        if (!TryReadPayload(query, out var payload) || payload.Version != 1)
+        if (!TryReadPayload(query, out var payload))
         {
             return false;
         }
 
         var boundedLimits = limits with { MaximumFiles = maximumFiles };
-        if (string.Equals(payload.Type, "artifact", StringComparison.Ordinal))
+        if (payload.Type == CursorType.Artifact)
         {
             return TryCreateArtifactRequest(payload, boundedLimits, out request);
         }
 
-        if (string.Equals(payload.Type, "impact", StringComparison.Ordinal))
+        if (payload.Type == CursorType.Impact)
         {
             return TryCreateSourceOrImpactRequest(payload, boundedLimits, CodeExploreMode.Impact, out request);
         }
 
-        if (string.Equals(payload.Type, "source", StringComparison.Ordinal))
+        if (payload.Type == CursorType.Source)
         {
-            var mode = TryParseEnum(payload.Mode, out CodeExploreMode parsedMode)
-                ? parsedMode
-                : CodeExploreMode.Auto;
-            return TryCreateSourceOrImpactRequest(payload, boundedLimits, mode, out request);
+            if (!TryCreateSourceOrImpactRequest(payload, boundedLimits, CodeExploreMode.Auto, out request) || request is null)
+            {
+                return false;
+            }
+
+            if (request.PathAnchors is [{ SelectionMode: CodeExplorePathSelectionMode.ExactLineRange }])
+            {
+                request = request with
+                {
+                    IsSourceContinuation = true,
+                    UseAdaptiveDefaults = false,
+                    AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Disabled,
+                };
+            }
+
+            return true;
         }
 
         return false;
@@ -3065,7 +3077,7 @@ internal sealed class CodeExploreContinuationCursor
         out CodeExploreRequest? request)
     {
         request = null;
-        if (!TryParseEnum(payload.Kind, out CodeExploreAnchorKind kind))
+        if (payload.Kind is not { } kind)
         {
             return false;
         }
@@ -3079,9 +3091,7 @@ internal sealed class CodeExploreContinuationCursor
         if (kind == CodeExploreAnchorKind.Path || !string.IsNullOrWhiteSpace(payload.Path))
         {
             var path = FirstNonWhiteSpace(payload.Path, anchor);
-            var selectionMode = TryParseEnum(payload.SelectionMode, out CodeExplorePathSelectionMode parsedSelectionMode)
-                ? parsedSelectionMode
-                : CodeExplorePathSelectionMode.Auto;
+            var selectionMode = payload.SelectionMode ?? CodeExplorePathSelectionMode.Auto;
             request = new CodeExploreRequest
             {
                 Query = path,
@@ -3128,8 +3138,8 @@ internal sealed class CodeExploreContinuationCursor
 
     private string? Create(CursorPayload payload)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(payload, SerializerOptions);
-        if (bytes.Length > _options.MaximumCursorPayloadBytes)
+        var bytes = Serialize(payload);
+        if (bytes is null || bytes.Length > _options.MaximumCursorPayloadBytes)
         {
             return null;
         }
@@ -3153,25 +3163,7 @@ internal sealed class CodeExploreContinuationCursor
             return false;
         }
 
-        try
-        {
-            var parsed = JsonSerializer.Deserialize<CursorPayload>(bytes, SerializerOptions);
-            if (parsed is null)
-            {
-                return false;
-            }
-
-            payload = parsed;
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
+        return TryDeserialize(bytes, out payload);
     }
 
     private static string? FindCursorToken(string query)
@@ -3219,12 +3211,6 @@ internal sealed class CodeExploreContinuationCursor
         }
     }
 
-    private static bool TryParseEnum<TEnum>(string? value, out TEnum result)
-        where TEnum : struct, Enum
-    {
-        return Enum.TryParse(value, ignoreCase: false, out result) && Enum.IsDefined(result);
-    }
-
     private static string FirstNonWhiteSpace(params string?[] values)
     {
         return values.FirstOrDefault(value => !string.IsNullOrWhiteSpace(value)) ?? string.Empty;
@@ -3258,13 +3244,246 @@ internal sealed class CodeExploreContinuationCursor
         return char.IsAsciiLetterOrDigit(character) || character is '-' or '_';
     }
 
+    private static byte[]? Serialize(CursorPayload payload)
+    {
+        try
+        {
+            using var content = new MemoryStream();
+            using (var writer = new BinaryWriter(content, CursorEncoding, leaveOpen: true))
+            {
+                var fields = GetFields(payload);
+                writer.Write(FormatVersion);
+                writer.Write((byte)payload.Type);
+                writer.Write((ushort)fields);
+                WriteOptional(writer, fields, CursorFields.Kind, payload.Kind, static (output, value) => output.Write((byte)value));
+                WriteOptional(writer, fields, CursorFields.Anchor, payload.Anchor, WriteString);
+                WriteOptional(writer, fields, CursorFields.Path, payload.Path, WriteString);
+                WriteOptional(writer, fields, CursorFields.StartLine, payload.StartLine, static (output, value) => output.Write(value));
+                WriteOptional(writer, fields, CursorFields.EndLine, payload.EndLine, static (output, value) => output.Write(value));
+                WriteOptional(writer, fields, CursorFields.SelectionMode, payload.SelectionMode, static (output, value) => output.Write((byte)value));
+                if (fields.HasFlag(CursorFields.ExpectedFileSha256))
+                {
+                    var digest = Convert.FromHexString(payload.ExpectedFileSha256 ?? string.Empty);
+                    if (digest.Length != SHA256.HashSizeInBytes)
+                    {
+                        return null;
+                    }
+
+                    writer.Write(digest);
+                }
+
+                WriteOptional(writer, fields, CursorFields.WorkspaceGeneration, payload.WorkspaceGeneration, static (output, value) => output.Write(value));
+                WriteOptional(writer, fields, CursorFields.Query, payload.Query, WriteString);
+                WriteOptional(writer, fields, CursorFields.OriginSymbolId, payload.OriginSymbolId, WriteString);
+                WriteOptional(writer, fields, CursorFields.OriginPath, payload.OriginPath, WriteString);
+                WriteOptional(writer, fields, CursorFields.OriginStartLine, payload.OriginStartLine, static (output, value) => output.Write(value));
+                WriteOptional(writer, fields, CursorFields.OriginEndLine, payload.OriginEndLine, static (output, value) => output.Write(value));
+            }
+
+            var contentBytes = content.ToArray();
+            var checksum = SHA256.HashData(contentBytes);
+            var result = new byte[contentBytes.Length + ChecksumBytes];
+            contentBytes.CopyTo(result, 0);
+            checksum.AsSpan(0, ChecksumBytes).CopyTo(result.AsSpan(contentBytes.Length));
+            return result;
+        }
+        catch (Exception exception) when (exception is FormatException
+            or InvalidDataException
+            or EncoderFallbackException)
+        {
+            return null;
+        }
+    }
+
+    private static bool TryDeserialize(byte[] bytes, out CursorPayload payload)
+    {
+        payload = new CursorPayload();
+        if (bytes.Length <= ChecksumBytes)
+        {
+            return false;
+        }
+
+        var content = bytes.AsSpan(0, bytes.Length - ChecksumBytes);
+        var expectedChecksum = SHA256.HashData(content);
+        if (!CryptographicOperations.FixedTimeEquals(
+                expectedChecksum.AsSpan(0, ChecksumBytes),
+                bytes.AsSpan(content.Length, ChecksumBytes)))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = new MemoryStream(bytes, 0, content.Length, writable: false);
+            using var reader = new BinaryReader(stream, CursorEncoding, leaveOpen: true);
+            if (reader.ReadByte() != FormatVersion)
+            {
+                return false;
+            }
+
+            var type = (CursorType)reader.ReadByte();
+            var fields = (CursorFields)reader.ReadUInt16();
+            if (!Enum.IsDefined(type) || (fields & ~CursorFields.All) != 0)
+            {
+                return false;
+            }
+
+            var kind = ReadOptional(reader, fields, CursorFields.Kind, static input => (CodeExploreAnchorKind)input.ReadByte());
+            var anchor = ReadOptional(reader, fields, CursorFields.Anchor, ReadString);
+            var path = ReadOptional(reader, fields, CursorFields.Path, ReadString);
+            var startLine = ReadOptional(reader, fields, CursorFields.StartLine, static input => input.ReadInt32());
+            var endLine = ReadOptional(reader, fields, CursorFields.EndLine, static input => input.ReadInt32());
+            var selectionMode = ReadOptional(reader, fields, CursorFields.SelectionMode, static input => (CodeExplorePathSelectionMode)input.ReadByte());
+            var expectedFileSha256 = fields.HasFlag(CursorFields.ExpectedFileSha256)
+                ? ReadDigest(reader)
+                : null;
+            var workspaceGeneration = ReadOptional(reader, fields, CursorFields.WorkspaceGeneration, static input => input.ReadInt64());
+            var query = ReadOptional(reader, fields, CursorFields.Query, ReadString);
+            var originSymbolId = ReadOptional(reader, fields, CursorFields.OriginSymbolId, ReadString);
+            var originPath = ReadOptional(reader, fields, CursorFields.OriginPath, ReadString);
+            var originStartLine = ReadOptional(reader, fields, CursorFields.OriginStartLine, static input => input.ReadInt32());
+            var originEndLine = ReadOptional(reader, fields, CursorFields.OriginEndLine, static input => input.ReadInt32());
+            if (stream.Position != stream.Length
+                || (kind is { } parsedKind && !Enum.IsDefined(parsedKind))
+                || (selectionMode is { } parsedSelectionMode && !Enum.IsDefined(parsedSelectionMode)))
+            {
+                return false;
+            }
+
+            payload = new CursorPayload
+            {
+                Type = type,
+                Kind = kind,
+                Anchor = anchor,
+                Path = path,
+                StartLine = startLine,
+                EndLine = endLine,
+                StartAtLine = fields.HasFlag(CursorFields.StartAtLine),
+                SelectionMode = selectionMode,
+                ExpectedFileSha256 = expectedFileSha256,
+                WorkspaceGeneration = workspaceGeneration,
+                Query = query,
+                OriginSymbolId = originSymbolId,
+                OriginPath = originPath,
+                OriginStartLine = originStartLine,
+                OriginEndLine = originEndLine,
+            };
+            return true;
+        }
+        catch (Exception exception) when (exception is EndOfStreamException
+            or IOException
+            or DecoderFallbackException
+            or ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static CursorFields GetFields(CursorPayload payload)
+    {
+        var fields = CursorFields.None;
+        fields |= payload.Kind is null ? CursorFields.None : CursorFields.Kind;
+        fields |= payload.Anchor is null ? CursorFields.None : CursorFields.Anchor;
+        fields |= payload.Path is null ? CursorFields.None : CursorFields.Path;
+        fields |= payload.StartLine is null ? CursorFields.None : CursorFields.StartLine;
+        fields |= payload.EndLine is null ? CursorFields.None : CursorFields.EndLine;
+        fields |= payload.StartAtLine ? CursorFields.StartAtLine : CursorFields.None;
+        fields |= payload.SelectionMode is null ? CursorFields.None : CursorFields.SelectionMode;
+        fields |= payload.ExpectedFileSha256 is null ? CursorFields.None : CursorFields.ExpectedFileSha256;
+        fields |= payload.WorkspaceGeneration is null ? CursorFields.None : CursorFields.WorkspaceGeneration;
+        fields |= payload.Query is null ? CursorFields.None : CursorFields.Query;
+        fields |= payload.OriginSymbolId is null ? CursorFields.None : CursorFields.OriginSymbolId;
+        fields |= payload.OriginPath is null ? CursorFields.None : CursorFields.OriginPath;
+        fields |= payload.OriginStartLine is null ? CursorFields.None : CursorFields.OriginStartLine;
+        fields |= payload.OriginEndLine is null ? CursorFields.None : CursorFields.OriginEndLine;
+        return fields;
+    }
+
+    private static void WriteOptional<T>(
+        BinaryWriter writer,
+        CursorFields fields,
+        CursorFields field,
+        T? value,
+        Action<BinaryWriter, T> write)
+        where T : struct
+    {
+        if (fields.HasFlag(field) && value is { } present)
+        {
+            write(writer, present);
+        }
+    }
+
+    private static void WriteOptional(
+        BinaryWriter writer,
+        CursorFields fields,
+        CursorFields field,
+        string? value,
+        Action<BinaryWriter, string> write)
+    {
+        if (fields.HasFlag(field) && value is not null)
+        {
+            write(writer, value);
+        }
+    }
+
+    private static T? ReadOptional<T>(
+        BinaryReader reader,
+        CursorFields fields,
+        CursorFields field,
+        Func<BinaryReader, T> read)
+        where T : struct
+    {
+        return fields.HasFlag(field) ? read(reader) : null;
+    }
+
+    private static string? ReadOptional(
+        BinaryReader reader,
+        CursorFields fields,
+        CursorFields field,
+        Func<BinaryReader, string> read)
+    {
+        return fields.HasFlag(field) ? read(reader) : null;
+    }
+
+    private static string ReadDigest(BinaryReader reader)
+    {
+        var digest = reader.ReadBytes(SHA256.HashSizeInBytes);
+        if (digest.Length != SHA256.HashSizeInBytes)
+        {
+            throw new EndOfStreamException();
+        }
+
+        return Convert.ToHexString(digest).ToLowerInvariant();
+    }
+
+    private static void WriteString(BinaryWriter writer, string value)
+    {
+        var byteCount = CursorEncoding.GetByteCount(value);
+        if (byteCount > ushort.MaxValue)
+        {
+            throw new InvalidDataException("Continuation cursor text is too long.");
+        }
+
+        writer.Write((ushort)byteCount);
+        writer.Write(CursorEncoding.GetBytes(value));
+    }
+
+    private static string ReadString(BinaryReader reader)
+    {
+        var byteCount = reader.ReadUInt16();
+        if (byteCount > reader.BaseStream.Length - reader.BaseStream.Position)
+        {
+            throw new EndOfStreamException();
+        }
+
+        return CursorEncoding.GetString(reader.ReadBytes(byteCount));
+    }
+
     private sealed record CursorPayload
     {
-        public int Version { get; init; }
+        public CursorType Type { get; init; }
 
-        public string Type { get; init; } = string.Empty;
-
-        public string? Kind { get; init; }
+        public CodeExploreAnchorKind? Kind { get; init; }
 
         public string? Anchor { get; init; }
 
@@ -3276,13 +3495,11 @@ internal sealed class CodeExploreContinuationCursor
 
         public bool StartAtLine { get; init; }
 
-        public string? SelectionMode { get; init; }
+        public CodeExplorePathSelectionMode? SelectionMode { get; init; }
 
         public string? ExpectedFileSha256 { get; init; }
 
         public long? WorkspaceGeneration { get; init; }
-
-        public string? Mode { get; init; }
 
         public string? Query { get; init; }
 
@@ -3293,5 +3510,35 @@ internal sealed class CodeExploreContinuationCursor
         public int? OriginStartLine { get; init; }
 
         public int? OriginEndLine { get; init; }
+    }
+
+    private enum CursorType : byte
+    {
+        Source = 1,
+        Impact = 2,
+        Artifact = 3,
+    }
+
+    [Flags]
+    private enum CursorFields : ushort
+    {
+        None = 0,
+        Kind = 1 << 0,
+        Anchor = 1 << 1,
+        Path = 1 << 2,
+        StartLine = 1 << 3,
+        EndLine = 1 << 4,
+        StartAtLine = 1 << 5,
+        SelectionMode = 1 << 6,
+        ExpectedFileSha256 = 1 << 7,
+        WorkspaceGeneration = 1 << 8,
+        Query = 1 << 9,
+        OriginSymbolId = 1 << 10,
+        OriginPath = 1 << 11,
+        OriginStartLine = 1 << 12,
+        OriginEndLine = 1 << 13,
+        All = Kind | Anchor | Path | StartLine | EndLine | StartAtLine | SelectionMode
+            | ExpectedFileSha256 | WorkspaceGeneration | Query | OriginSymbolId | OriginPath
+            | OriginStartLine | OriginEndLine,
     }
 }

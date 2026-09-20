@@ -16,6 +16,12 @@ public sealed record OpenAiCompatibleProviderConfiguration : ModelProviderConfig
     /// <summary>Non-credential request headers applied to each request.</summary>
     public IReadOnlyDictionary<string, string> Headers { get; init; }
         = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether requests include the OpenAI <c>prompt_cache_key</c> affinity hint.
+    /// Null enables it only for the official <c>api.openai.com</c> endpoint.
+    /// </summary>
+    public bool? PromptCacheKeyEnabled { get; init; }
 }
 
 /// <summary>Typed model configuration for an OpenAI-compatible provider.</summary>
@@ -236,12 +242,15 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 nameof(context));
         }
 
+        var promptCacheKeyEnabled = provider.PromptCacheKeyEnabled
+            ?? string.Equals(context.Profile.Endpoint.Host, "api.openai.com", StringComparison.OrdinalIgnoreCase);
         return new OpenAiCompatibleModelProvider(
             context.HttpClient,
             context.Profile,
             context.ResolvedSecret,
             provider.Headers,
-            model.ReasoningCompatibility);
+            model.ReasoningCompatibility,
+            promptCacheKeyEnabled: promptCacheKeyEnabled);
     }
 
     /// <summary>Rejects simultaneous dedicated and legacy model configuration.</summary>

@@ -161,6 +161,9 @@ public sealed record SessionProjection : IProjection
     /// <summary>Current structured plan and review state.</summary>
     public PlanProjection? Plan { get; init; }
 
+    /// <summary>Pending structured plans retained independently for each active run.</summary>
+    public IReadOnlyList<PlanProjection> PendingPlans { get; init; } = [];
+
     /// <summary>Most recent governed context inspection record.</summary>
     public ContextInspectionProjection? ContextInspection { get; init; }
 

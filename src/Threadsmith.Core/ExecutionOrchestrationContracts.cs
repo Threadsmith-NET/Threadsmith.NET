@@ -58,6 +58,15 @@ public enum ExecutionCheckpointPhase
 
     /// <summary>The applied mutation was rolled back.</summary>
     RolledBack,
+
+    /// <summary>Applied partial work was validated; explicit resume is required before proposing more.</summary>
+    ContinuationPending,
+
+    /// <summary>The current plan completed and the objective is ready for another planning turn.</summary>
+    PlanContinuationPending,
+
+    /// <summary>The unfinished plan requires renewed evidence and a separately approved replacement.</summary>
+    PlanReplanningPending,
 }
 
 /// <summary>Durable state of one idempotent side-effect operation.</summary>
@@ -131,6 +140,56 @@ public sealed record MutationProposalSet
 
     /// <summary>Model-supplied risk classification subject to host recomputation.</summary>
     public MutationRisk? Risk { get; init; } = MutationRisk.Medium;
+
+    /// <summary>Whether the model believes this proposal completes the selected approved step.</summary>
+    public bool? StepComplete { get; init; }
+}
+
+/// <summary>Purpose of one proposal within incremental approved-plan execution.</summary>
+public enum MutationBatchPurpose
+{
+    /// <summary>Ordinary forward implementation work.</summary>
+    Implementation,
+
+    /// <summary>A correction responding to failed validation.</summary>
+    Correction,
+}
+
+/// <summary>Host-selected scope and progress supplied to one approved-plan proposal turn.</summary>
+public sealed record MutationExecutionScope
+{
+    /// <summary>Approved step selected by the host.</summary>
+    public required ImplementationPlanStep ActiveStep { get; init; }
+
+    /// <summary>One-based position of the selected step in the approved plan.</summary>
+    public required int StepOrdinal { get; init; }
+
+    /// <summary>Total approved steps.</summary>
+    public required int StepCount { get; init; }
+
+    /// <summary>One-based proposal ordinal across the execution.</summary>
+    public required int BatchOrdinal { get; init; }
+
+    /// <summary>Reason this proposal is being requested.</summary>
+    public MutationBatchPurpose Purpose { get; init; } = MutationBatchPurpose.Implementation;
+
+    /// <summary>Approved steps with supported completion evidence.</summary>
+    public IReadOnlyList<StepId> CompletedStepIds { get; init; } = [];
+
+    /// <summary>Paths activated by authoritative lifecycle effects from earlier batches of this step.</summary>
+    public IReadOnlyList<string> ActivatedPaths { get; init; } = [];
+
+    /// <summary>Whether current passing evidence supports a no-change confirmation for this step.</summary>
+    public bool CanCompleteWithoutChanges { get; init; }
+
+    /// <summary>Effective soft operation target for this proposal.</summary>
+    public required int TargetMutations { get; init; }
+
+    /// <summary>Effective soft distinct-path target for this proposal.</summary>
+    public required int TargetFiles { get; init; }
+
+    /// <summary>Effective soft mutation-content character target for this proposal.</summary>
+    public required long TargetMutationCharacters { get; init; }
 }
 
 /// <summary>Model-authored lifecycle content without host-computed byte identity.</summary>
@@ -225,7 +284,7 @@ public sealed record MoveFileMutationProposal : MutationProposalChange
 public sealed record ExecutionContinuation
 {
     /// <summary>Current checkpoint schema.</summary>
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = 2;
 
     /// <summary>Owning session.</summary>
     public required SessionId SessionId { get; init; }
@@ -239,6 +298,9 @@ public sealed record ExecutionContinuation
     /// <summary>Approved plan revision.</summary>
     public required int PlanRevision { get; init; }
 
+    /// <summary>One-based plan tranche ordinal within the user objective.</summary>
+    public int PlanOrdinal { get; init; } = 1;
+
     /// <summary>Stable approved-plan identity.</summary>
     public required string PlanHash { get; init; }
 
@@ -247,6 +309,24 @@ public sealed record ExecutionContinuation
 
     /// <summary>Current approved plan step when applicable.</summary>
     public StepId? CurrentPlanStepId { get; init; }
+
+    /// <summary>One-based ordinal of the current approved plan step.</summary>
+    public int? CurrentPlanStepOrdinal { get; init; }
+
+    /// <summary>Bounded display title of the current approved plan step.</summary>
+    public string? CurrentPlanStepTitle { get; init; }
+
+    /// <summary>One-based proposal ordinal across the execution.</summary>
+    public int BatchOrdinal { get; init; }
+
+    /// <summary>Purpose of the current proposal.</summary>
+    public MutationBatchPurpose BatchPurpose { get; init; } = MutationBatchPurpose.Implementation;
+
+    /// <summary>Completion hint attached to the current proposal.</summary>
+    public bool? PendingStepComplete { get; init; }
+
+    /// <summary>Approved steps with supported completion evidence.</summary>
+    public IReadOnlyList<StepId> CompletedStepIds { get; init; } = [];
 
     /// <summary>Immutable original diagnostic baseline identity.</summary>
     public required string DiagnosticBaselineIdentity { get; init; }
@@ -339,6 +419,9 @@ public sealed record ExecutionOutcomeProjection : IProjection
     /// <summary>Number of correction attempts performed.</summary>
     public int CorrectionAttempts { get; init; }
 
+    /// <summary>Cumulative execution-budget usage observed at this boundary.</summary>
+    public BudgetDimensions? BudgetUsed { get; init; }
+
     /// <summary>Whether rollback remains available.</summary>
     public bool RollbackAvailable { get; init; }
 
@@ -347,6 +430,9 @@ public sealed record ExecutionOutcomeProjection : IProjection
 
     /// <summary>Cancellation/resumption history.</summary>
     public IReadOnlyList<string> ContinuationHistory { get; init; } = [];
+
+    /// <summary>Sanitized model explanation for a paused, unfinished plan.</summary>
+    public string? ReplanReason { get; init; }
 }
 
 /// <summary>Start input assembled by the host after plan approval.</summary>
@@ -372,6 +458,25 @@ public sealed record ExecutionStartRequest
 
     /// <summary>Combined compiler/test correction limit.</summary>
     public int CorrectionBudget { get; init; } = 3;
+
+    /// <summary>Budget already consumed before approved execution begins.</summary>
+    public BudgetDimensions InitialBudgetUsage { get; init; } = new(0, 0, TimeSpan.Zero);
+
+    /// <summary>Whether successful completion should pause for another objective-level planning turn.</summary>
+    public bool AllowPlanContinuation { get; init; }
+}
+
+/// <summary>A completed or interrupted plan boundary within an incremental objective.</summary>
+public sealed record ExecutionPlanBoundary
+{
+    /// <summary>One-based plan ordinal, including plans interrupted for replanning.</summary>
+    public required int PlanOrdinal { get; init; }
+
+    /// <summary>Authoritative progress through the completed plan boundary.</summary>
+    public required ExecutionOutcomeProjection Progress { get; init; }
+
+    /// <summary>The interrupted approved plan when replacement of unfinished work is required.</summary>
+    public ImplementationPlan? PlanUnderRevision { get; init; }
 }
 
 /// <summary>Host authorization for applying one staged execution mutation.</summary>
@@ -460,6 +565,15 @@ public interface IExecutionOrchestrator
         ExecutionStartRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Starts the next approved plan tranche on the existing objective execution.</summary>
+    Task<ExecutionContinuation> ContinueWithPlanAsync(
+        ExecutionStartRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionContinuation>(
+            new NotSupportedException("Incremental plan continuation is not supported by this orchestrator."));
+    }
+
     /// <summary>Continues a staged execution after mutation authorization.</summary>
     Task<ExecutionOutcomeProjection> ContinueAsync(
         ContinueExecutionRequest request,
@@ -470,6 +584,47 @@ public interface IExecutionOrchestrator
         SessionId sessionId,
         RunId runId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the durable approved request and planning budget to reattach the session observer after resume.</summary>
+    Task<ExecutionStartRequest> GetResumeRequestAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionStartRequest>(
+            new NotSupportedException("Session resume is not supported by this orchestrator."));
+    }
+
+    /// <summary>Durably records planning usage consumed while assessing an incremental plan boundary.</summary>
+    Task RecordPlanningUsageAsync(
+        SessionId sessionId,
+        RunId runId,
+        BudgetDimensions usage,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException(
+            new NotSupportedException("Incremental planning usage persistence is not supported by this orchestrator."));
+    }
+
+    /// <summary>Waits for the next completed-plan or replanning boundary.</summary>
+    Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
+        RunId runId,
+        int afterPlanOrdinal,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionPlanBoundary>(
+            new NotSupportedException("Incremental plan completion is not supported by this orchestrator."));
+    }
+
+    /// <summary>Records successful objective completion at a validated plan boundary.</summary>
+    Task<ExecutionOutcomeProjection> CompleteObjectiveAsync(
+        SessionId sessionId,
+        RunId runId,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException<ExecutionOutcomeProjection>(
+            new NotSupportedException("Incremental objective completion is not supported by this orchestrator."));
+    }
 
     /// <summary>Waits for the authoritative terminal execution outcome.</summary>
     Task<ExecutionOutcomeProjection> WaitForOutcomeAsync(

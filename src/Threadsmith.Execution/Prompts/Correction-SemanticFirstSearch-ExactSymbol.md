@@ -1,1 +1,1 @@
-Call code_explore with query '{{SuggestedQuery}}' before text search.
+Call find_symbol with query '{{SuggestedQuery}}' before text search.

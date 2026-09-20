@@ -1,1 +1,1 @@
-Call code_explore with query '{{SuggestedQuery}}' before text search.
+Call read_file with path '{{SuggestedQuery}}' instead of searching for the filename.

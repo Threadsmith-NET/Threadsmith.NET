@@ -156,6 +156,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     new ModelStreamRequest
                     {
                         RunId = plan.Request.RunId,
+                        CacheAffinityId = plan.Request.SessionId.Value,
                         Input = prompt,
                         Seed = HashCode.Combine(plan.Request.InvocationId, step.StepId, round),
                         ToolContinuationRound = round,

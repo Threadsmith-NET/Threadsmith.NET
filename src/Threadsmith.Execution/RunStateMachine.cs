@@ -26,6 +26,7 @@ public sealed class RunStateMachine : IStateMachine
                 RunPhase.Completion),
             [RunPhase.ImplementationPreparing] = Set(
                 RunPhase.ImplementationModelTurn,
+                RunPhase.EvidenceCollection,
                 RunPhase.Completion),
             [RunPhase.ImplementationModelTurn] = Set(RunPhase.MutationProposed),
             [RunPhase.MutationProposed] = Set(RunPhase.MutationStaged),
@@ -57,12 +58,17 @@ public sealed class RunStateMachine : IStateMachine
     private readonly SessionId _sessionId;
 
     /// <summary>Initializes a new instance of the <see cref="RunStateMachine"/> class.</summary>
-    public RunStateMachine(SessionId sessionId, RunId runId, IDomainEventStream events)
+    public RunStateMachine(
+        SessionId sessionId,
+        RunId runId,
+        IDomainEventStream events,
+        RunPhase initialPhase = RunPhase.Intake)
     {
         ArgumentNullException.ThrowIfNull(events);
         _sessionId = sessionId;
         _runId = runId;
         _events = events;
+        Phase = initialPhase;
     }
 
     /// <inheritdoc />

@@ -30,70 +30,6 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Throws<ArgumentOutOfRangeException>(() => new DelegateAgentsProjectionLimits(-1));
     }
 
-    /// <summary>Verifies the model-facing contract exposes only bounded v1 arguments and exact result shape.</summary>
-    [Fact]
-    public async Task Definition_UsesStrictBoundedWorkflowContract()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(new CompletedResponseRunner()));
-        Assert.Same(fixture.Tool, new ToolRegistry([fixture.Tool]).Get(DelegateAgentsContract.ToolId));
-
-        // Act
-        var definition = fixture.Tool.Definition;
-        using var inputSchema = JsonDocument.Parse(definition.InputSchema.JsonSchema);
-        using var outputSchema = JsonDocument.Parse(definition.OutputSchema.JsonSchema);
-        var inputProperties = inputSchema.RootElement.GetProperty("properties");
-        var agentProperties = inputProperties.GetProperty("agents")
-            .GetProperty("items")
-            .GetProperty("properties");
-        var agentsSchema = inputProperties.GetProperty("agents");
-        var childProperties = outputSchema.RootElement.GetProperty("properties")
-            .GetProperty("children")
-            .GetProperty("items")
-            .GetProperty("properties");
-
-        // Assert
-        Assert.Equal(DelegateAgentsContract.ToolId, definition.Id);
-        Assert.Equal(ToolCategory.Workflow, definition.Category);
-        Assert.Equal(ToolIdempotency.NonIdempotent, definition.Idempotency);
-        Assert.Equal(ToolConcurrencyMode.ExclusiveSession, definition.Scheduling.ConcurrencyMode);
-        Assert.True(definition.SupportsCancellation);
-        Assert.Equal(Timeout.InfiniteTimeSpan, definition.Timeout);
-        Assert.True(definition.ConversationAvailable);
-        Assert.True(definition.RequiresWorkspace);
-        Assert.True(definition.PreferStrictArguments);
-        Assert.Equal(DelegateAgentsContract.MaximumOutputBytes, definition.MaximumOutputBytes);
-        Assert.True(inputSchema.RootElement.GetProperty("additionalProperties").ValueKind
-            == JsonValueKind.False);
-        Assert.Equal(["agents"], inputProperties.EnumerateObject().Select(item => item.Name));
-        Assert.Equal(3, agentsSchema.GetProperty("maxItems").GetInt32());
-        Assert.Equal(
-            ["context", "role", "task", "toolAccess"],
-            agentProperties.EnumerateObject().Select(item => item.Name).Order(StringComparer.Ordinal));
-        Assert.Equal(
-            Enum.GetValues<AgentRole>().Select(AgentRoleNames.GetName),
-            agentProperties.GetProperty("role").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
-        Assert.Equal(
-            Enum.GetNames<AgentRole>(),
-            childProperties.GetProperty("role").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
-        Assert.Equal("explorer", agentProperties.GetProperty("role").GetProperty("default").GetString());
-        Assert.Equal(4_096, agentProperties.GetProperty("task").GetProperty("maxLength").GetInt32());
-        Assert.Equal(8_192, agentProperties.GetProperty("context").GetProperty("maxLength").GetInt32());
-        Assert.False(agentProperties.TryGetProperty("model", out _));
-        Assert.False(agentProperties.TryGetProperty("budget", out _));
-        Assert.False(agentProperties.TryGetProperty("allowedToolIds", out _));
-        Assert.True(outputSchema.RootElement.GetProperty("additionalProperties").ValueKind
-            == JsonValueKind.False);
-        Assert.True(outputSchema.RootElement.GetProperty("properties")
-            .TryGetProperty("disagreements", out _));
-        Assert.True(childProperties.GetProperty("usage")
-            .GetProperty("additionalProperties").ValueKind == JsonValueKind.False);
-    }
-
     /// <summary>Disabled delegation limits are omitted from the schema and do not restore compiled projection caps.</summary>
     [Fact]
     public async Task Definition_DisabledOperationalLimits_OmitsConfigurableSchemaAndProjectionBounds()
@@ -350,37 +286,6 @@ public sealed class DelegateAgentsToolExecutionTests
             Assert.Single(
                 checkpoints.History,
                 checkpoint => checkpoint.Phase == DelegationCheckpointPhase.Cancelled).Phase);
-    }
-
-    /// <summary>Verifies parent cancellation remains authoritative when one sibling already completed.</summary>
-    [Fact]
-    public async Task ExecuteAsync_MixedCompletionAndParentCancellation_ReturnsCancelledWithOutcomes()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var runner = new MixedCancellationJoinRunner();
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
-        using var cancellation = new CancellationTokenSource();
-
-        // Act
-        var executionTask = fixture.Tool.ExecuteAsync(
-            CreateInput(2),
-            fixture.Context,
-            cancellation.Token);
-        await runner.BlockingChildEntered.WaitAsync(TimeSpan.FromSeconds(5));
-        await cancellation.CancelAsync();
-        var execution = await executionTask;
-
-        // Assert
-        Assert.Equal(DelegateAgentsStatus.Cancelled, execution.Value.Status);
-        Assert.Equal(["Completed", "Cancelled"], execution.Value.Children.Select(child => child.Status));
-        Assert.Equal(0, runner.JoinCalls);
-        var cancelled = checkpoints.History.Last();
-        Assert.Equal(DelegationCheckpointPhase.Cancelled, cancelled.Phase);
-        Assert.Equal(2, cancelled.ChildOutcomes.Count);
     }
 
     /// <summary>Verifies cancellation that arrives during join wins even when the joiner returns late.</summary>

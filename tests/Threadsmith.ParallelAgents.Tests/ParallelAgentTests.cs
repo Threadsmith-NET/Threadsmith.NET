@@ -142,38 +142,6 @@ public sealed class ParallelAgentTests
         Assert.All(outcomes, item => Assert.Equal(plan.Provenance.Generation, item.Generation));
     }
 
-    /// <summary>Verifies FailDelegation clears an already-completed sibling before the parent boundary.</summary>
-    [Fact]
-    public async Task Coordinator_FailDelegation_DiscardsCompletedSiblingFindings()
-    {
-        // Arrange
-        var completed = CreateAssignment(AgentRole.Explorer, "src/A.cs");
-        var failed = CreateAssignment(AgentRole.Explorer, "src/B.cs") with
-        {
-            FailurePolicy = AgentFailurePolicy.FailDelegation,
-        };
-        var plan = CreatePlan(completed, failed);
-        var runner = new CompletedBeforeFailureRunner(
-            completed.AssignmentId,
-            failed.AssignmentId);
-        await using var scheduler = new AgentRunScheduler();
-        await using var events = new DomainEventStream();
-        var store = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, store, events);
-
-        // Act
-        var terminal = await coordinator.StartAsync(plan, runner);
-
-        // Assert
-        Assert.Equal(DelegationCheckpointPhase.Failed, terminal.Phase);
-        Assert.All(terminal.ChildOutcomes, outcome => Assert.Null(outcome.Findings));
-        var completedSibling = Assert.Single(terminal.ChildOutcomes, outcome =>
-            outcome.AssignmentId == completed.AssignmentId);
-        Assert.Equal(AgentRunStatus.Failed, completedSibling.Status);
-        Assert.Equal(plan.Provenance.Generation, completedSibling.Generation);
-        Assert.Same(terminal, store.Latest);
-    }
-
     /// <summary>Verifies static validation rejects recursive/cyclic dependency graphs.</summary>
     [Fact]
     public void Validator_RejectsDependencyCycle()

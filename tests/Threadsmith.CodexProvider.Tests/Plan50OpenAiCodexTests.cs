@@ -298,9 +298,11 @@ public sealed class Plan50OpenAiCodexTests
             ResolvedSecret = CreateJwt("account-2"),
         });
 
+        var cacheAffinityId = Guid.NewGuid();
         var streamRequest = WithCapacity(new ModelStreamRequest
         {
             RunId = RunId.New(),
+            CacheAffinityId = cacheAffinityId,
             Input = "hello",
             ReasoningLevel = new ReasoningLevel(reasoning),
             MaximumOutputTokens = 4096,
@@ -330,6 +332,11 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(3, usage.Cache?.CacheReadTokens);
         Assert.Equal(CacheReadInputSemantics.IncludedInInput, usage.Cache?.ReadInputSemantics);
         Assert.Equal(OpenAiCodexProviderRegistration.ResponsesEndpoint, handler.Request?.RequestUri);
+        var expectedCacheAffinityKey = cacheAffinityId.ToString("D");
+        Assert.Equal(expectedCacheAffinityKey, handler.Request?.Headers.GetValues("session-id").Single());
+        var clientRequestId = Assert.Single(handler.ClientRequestIds);
+        Assert.True(Guid.TryParseExact(clientRequestId, "D", out _));
+        Assert.NotEqual(expectedCacheAffinityKey, clientRequestId);
         var requestBody = handler.RequestBody ?? string.Empty;
         Assert.Contains("\"model\":\"dynamic\"", requestBody, StringComparison.Ordinal);
         Assert.Contains($"\"effort\":\"{reasoning}\"", requestBody, StringComparison.Ordinal);
@@ -342,6 +349,9 @@ public sealed class Plan50OpenAiCodexTests
             Assert.Equal(
                 ProviderInstructions,
                 document.RootElement.GetProperty("instructions").GetString());
+            Assert.Equal(
+                expectedCacheAffinityKey,
+                document.RootElement.GetProperty("prompt_cache_key").GetString());
         }
 
         var ordinaryTool = Assert.Single(streamRequest.Tools) with { PreferStrictArguments = false };
@@ -369,6 +379,16 @@ public sealed class Plan50OpenAiCodexTests
             "\"parallel_tool_calls\"",
             handler.RequestBody ?? string.Empty,
             StringComparison.Ordinal);
+
+        var fallbackRunId = RunId.New();
+        _ = await provider.StreamAsync(
+            streamRequest with { RunId = fallbackRunId, CacheAffinityId = null },
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+        var fallbackKey = fallbackRunId.Value.ToString("D");
+        Assert.Equal(fallbackKey, handler.Request?.Headers.GetValues("session-id").Single());
+        Assert.NotEqual(clientRequestId, handler.ClientRequestIds[^1]);
+        using var fallbackBody = JsonDocument.Parse(handler.RequestBody ?? string.Empty);
+        Assert.Equal(fallbackKey, fallbackBody.RootElement.GetProperty("prompt_cache_key").GetString());
     }
 
     /// <summary>Final Responses usage retains optional reasoning without changing output totals.</summary>
@@ -642,6 +662,7 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(1, refreshCount);
         Assert.Equal(2, handler.RequestCount);
         Assert.Equal(["old-token", "new-token"], handler.AuthorizationParameters);
+        Assert.Equal(2, handler.ClientRequestIds.Distinct(StringComparer.Ordinal).Count());
         Assert.Contains(chunks, chunk => chunk.FinishReason == ModelFinishReason.Stop);
     }
 
@@ -972,6 +993,8 @@ public sealed class Plan50OpenAiCodexTests
     {
         public List<string?> AuthorizationParameters { get; } = [];
 
+        public List<string> ClientRequestIds { get; } = [];
+
         public HttpRequestMessage? Request { get; private set; }
 
         public int RequestCount { get; private set; }
@@ -985,6 +1008,11 @@ public sealed class Plan50OpenAiCodexTests
             RequestCount++;
             Request = request;
             AuthorizationParameters.Add(request.Headers.Authorization?.Parameter);
+            if (request.Headers.TryGetValues("x-client-request-id", out var clientRequestIds))
+            {
+                ClientRequestIds.Add(clientRequestIds.Single());
+            }
+
             RequestBody = request.Content is null
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);

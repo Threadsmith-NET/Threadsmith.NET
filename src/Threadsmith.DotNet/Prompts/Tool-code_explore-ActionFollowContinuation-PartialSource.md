@@ -1,1 +1,1 @@
-For omitted or partial source, retry with the exact returned continuation target rather than broad search.
+Follow an exact returned continuation only if the omitted lines are needed to resolve an outstanding question. Use the source already returned; incomplete coverage alone does not require another call.

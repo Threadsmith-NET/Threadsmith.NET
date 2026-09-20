@@ -221,11 +221,11 @@ public sealed class CorrectiveMessageFactory
         bool isExactPathQuery,
         bool isExactSymbolQuery)
     {
-        var suggestedCallFileName = suggestedTool == "code_explore"
-            ? isExactPathQuery
-                ? PromptFileNames.CorrectionSemanticFirstSearchExactPath
-                : PromptFileNames.CorrectionSemanticFirstSearchExactSymbol
-            : PromptFileNames.CorrectionSemanticFirstSearchFindSymbol;
+        var suggestedCallFileName = isExactPathQuery
+            ? PromptFileNames.CorrectionSemanticFirstSearchExactPath
+            : isExactSymbolQuery
+                ? PromptFileNames.CorrectionSemanticFirstSearchExactSymbol
+                : PromptFileNames.CorrectionSemanticFirstSearchFindSymbol;
         var suggestedCall = _prompts.Render(
             suggestedCallFileName,
             new Dictionary<string, string>(StringComparer.Ordinal)

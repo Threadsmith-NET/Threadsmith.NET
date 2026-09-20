@@ -331,7 +331,7 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Contains("symbolId", required);
             Assert.True(tool.Definition.PreferStrictArguments);
             Assert.Contains("{symbolId}", tool.Definition.Description, StringComparison.Ordinal);
-            Assert.Contains("Host owns traversal depth", tool.Definition.Description, StringComparison.Ordinal);
+            Assert.Contains("narrower relationship tool", tool.Definition.Description, StringComparison.Ordinal);
             Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
                 "{\"symbolId\":\"symbol:root\",\"limits\":{\"maximumDepth\":1}}"));
             var input = Assert.IsType<SymbolImpactInput>(tool.DeserializeInput(
@@ -675,7 +675,7 @@ public sealed class Plan43AdvancedSemanticToolTests
                 tool.Definition.Description,
                 StringComparison.Ordinal);
             Assert.Contains(
-                "Host owns capture names, result counts, and time bounds",
+                "Use this when syntax matters",
                 tool.Definition.Description,
                 StringComparison.Ordinal);
             var methodAlias = Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(
@@ -864,7 +864,7 @@ public sealed class Plan43AdvancedSemanticToolTests
         Assert.All(tools, tool => Assert.Equal(ToolCategory.SemanticSearch, tool.Definition.Category));
         Assert.All(
             tools,
-            tool => Assert.Contains("MUST use before search", tool.Definition.Description, StringComparison.Ordinal));
+            tool => Assert.Contains("fall back only", tool.Definition.Description, StringComparison.OrdinalIgnoreCase));
         Assert.All(tools, tool => Assert.DoesNotContain("script", tool.Definition.InputSchema.JsonSchema, StringComparison.OrdinalIgnoreCase));
         Assert.Contains("depth", tools[0].Definition.InputSchema.JsonSchema);
         Assert.DoesNotContain("maximumDepth", tools[0].Definition.InputSchema.JsonSchema);

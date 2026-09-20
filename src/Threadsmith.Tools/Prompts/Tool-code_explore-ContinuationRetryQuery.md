@@ -1,1 +1,1 @@
-  - Retry query: {{Cursor}}
+  - If needed, continue with query: {{Cursor}}

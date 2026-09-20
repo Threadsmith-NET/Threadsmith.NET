@@ -389,6 +389,34 @@ public static partial class Milestone5Tests
         Assert.Contains(
             repository.Baseline.CapturedAt.ToString("yyyy-MM-ddTHH:mm:ss"),
             assembled.ModelInput);
+        Assert.DoesNotContain("MutationExecutionScope", assembled.ModelInput, StringComparison.Ordinal);
+
+        var incremental = await assembler.AssembleAsync(new ContextAssemblyRequest
+        {
+            SessionId = repository.SessionId,
+            RunId = RunId.New(),
+            Phase = RunPhase.ImplementationModelTurn,
+            Task = new TaskSpecification("Change Example", []),
+            RepositoryPath = repository.Root,
+            ApprovedPlan = plan,
+            MutationBaseline = repository.Baseline,
+            MutationExecutionScope = new MutationExecutionScope
+            {
+                ActiveStep = plan.Steps[0],
+                StepOrdinal = 1,
+                StepCount = 1,
+                BatchOrdinal = 1,
+                TargetMutations = 8,
+                TargetFiles = 3,
+                TargetMutationCharacters = 24_000,
+            },
+        });
+
+        Assert.Contains("MutationExecutionScope", incremental.ModelInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("&quot;ApprovedPlan&quot;", incremental.ModelInput, StringComparison.Ordinal);
+        Assert.Equal(
+            1,
+            incremental.ModelInput.Split("Replace the value.", StringSplitOptions.None).Length - 1);
     }
 
     /// <summary>A governed model can propose a bounded set that is staged but never self-applied.</summary>
@@ -3365,6 +3393,31 @@ public static partial class Milestone5Tests
             return _workspaces.GetWorkspace(_workspaceId).CommitAsync(
                 mutationSetId,
                 approval,
+                cancellationToken);
+        }
+
+        public Task<MutationProposalResult> ProposeIncrementalAsync(
+            ImplementationPlan plan,
+            RunPhase phase,
+            bool allowReplanning = true,
+            CancellationToken cancellationToken = default)
+        {
+            return _application.ProposeAsync(
+                new ProposeMutationSetCommand(
+                    _sessionId, RunId.New(), _workspaceId, new TaskSpecification("Update example", []), plan, phase)
+                {
+                    AllowReplanning = allowReplanning,
+                    ExecutionScope = new MutationExecutionScope
+                    {
+                        ActiveStep = plan.Steps[0],
+                        StepOrdinal = 1,
+                        StepCount = plan.Steps.Count,
+                        BatchOrdinal = 1,
+                        TargetMutations = 8,
+                        TargetFiles = 3,
+                        TargetMutationCharacters = 24_000,
+                    },
+                },
                 cancellationToken);
         }
 

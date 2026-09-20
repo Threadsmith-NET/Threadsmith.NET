@@ -147,12 +147,15 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 109 | `plan-109-context-usage-inspector.md` | Ordered context usage inspection with native TUIKit charts and per-source accounting |
 | 110 | `plan-110-provider-backed-pr-fetch.md` | Provider-backed PR retrieval, shared run caching, and common duplicate-invocation policy |
 | 111 | `plan-111-jira-ticket-tool.md` | Jira ticket body retrieval with trusted account profiles and operation-kind extensibility |
+| 112 | `plan-112-incremental-approved-plan-execution.md` | Incremental approved-plan execution with small mutation batches and shared correction/presentation |
+| 113 | `plan-113-supersession-aware-active-context-management.md` | Supersession-aware deterministic active context and budget-aware compaction |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 | Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
 | Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |
 | Maintenance | `maintenance-model-requested-delegation-only.md` | Model-requested subagent launches and parent-run mutation preparation |
 | Maintenance | `maintenance-mutation-preview-reliability.md` | Current approved-file snapshots, text-anchor proposals, and accurate generation status |
 | Maintenance | `maintenance-skills-management-dialog.md` | Hierarchical skill verification and enablement dialog |
+| Maintenance | `maintenance-mid-tranche-replanning.md` | Implementation-requested replanning through the ordinary conversation cycle |
 
 ## Update discipline
 

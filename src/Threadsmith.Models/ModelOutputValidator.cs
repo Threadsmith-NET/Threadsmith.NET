@@ -152,6 +152,38 @@ public static class ModelOutputValidator
         int? toolOrdinal = null,
         int? toolCallCount = null)
     {
+        using var arguments = ParseInvocationArguments(tool, providerFamily, toolOrdinal, toolCallCount);
+    }
+
+    /// <summary>Validates a tool invocation whose schema accepts only an empty JSON object.</summary>
+    public static void ValidateNoArgumentInvocation(
+        ToolRequestModelOutput tool,
+        string? providerFamily = null,
+        int? toolOrdinal = null,
+        int? toolCallCount = null)
+    {
+        using var arguments = ParseInvocationArguments(tool, providerFamily, toolOrdinal, toolCallCount);
+        if (arguments.RootElement.EnumerateObject().Any())
+        {
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                $"The {tool.ToolName} tool does not accept arguments; use an empty JSON object.",
+                tool.ToolName,
+                tool.ArgumentsJson,
+                providerFamily,
+                toolOrdinal,
+                toolCallCount,
+                jsonException: null,
+                innerException: null);
+        }
+    }
+
+    private static JsonDocument ParseInvocationArguments(
+        ToolRequestModelOutput tool,
+        string? providerFamily,
+        int? toolOrdinal,
+        int? toolCallCount)
+    {
         ArgumentNullException.ThrowIfNull(tool);
         if (string.IsNullOrWhiteSpace(tool.ToolName))
         {
@@ -169,20 +201,23 @@ public static class ModelOutputValidator
 
         try
         {
-            using var arguments = JsonDocument.Parse(tool.ArgumentsJson);
-            if (arguments.RootElement.ValueKind != JsonValueKind.Object)
+            var arguments = JsonDocument.Parse(tool.ArgumentsJson);
+            if (arguments.RootElement.ValueKind == JsonValueKind.Object)
             {
-                throw CreateInvocationException(
-                    MalformedInvocationFailureKind.NonObjectArguments,
-                    "Tool arguments must be a JSON object.",
-                    tool.ToolName,
-                    tool.ArgumentsJson,
-                    providerFamily,
-                    toolOrdinal,
-                    toolCallCount,
-                    jsonException: null,
-                    innerException: null);
+                return arguments;
             }
+
+            arguments.Dispose();
+            throw CreateInvocationException(
+                MalformedInvocationFailureKind.NonObjectArguments,
+                "Tool arguments must be a JSON object.",
+                tool.ToolName,
+                tool.ArgumentsJson,
+                providerFamily,
+                toolOrdinal,
+                toolCallCount,
+                jsonException: null,
+                innerException: null);
         }
         catch (MalformedInvocationException)
         {

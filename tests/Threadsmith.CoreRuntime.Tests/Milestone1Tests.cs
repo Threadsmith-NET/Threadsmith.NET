@@ -798,7 +798,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task FakeModel_MissingUsage_DoesNotCrashBudgetLayer()
     {
-        var budget = new ExecutionBudget(new BudgetDimensions(0, 1, TimeSpan.FromMinutes(1)));
+        var budget = new ExecutionBudget(new BudgetDimensions(10_000, 1, TimeSpan.FromMinutes(1)));
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession { Turns = [new ScriptedTurn { Text = "no usage" }] },
             budget: budget);
@@ -980,6 +980,55 @@ public static partial class Milestone1Tests
 
         Assert.Equal(ExecutionCheckpointPhase.Completed, continuation.Phase);
         Assert.Null(controller.BackgroundValidationRunId);
+    }
+
+    /// <summary>A partial-approval pause retains the existing explicit retry route and run guard.</summary>
+    [Fact]
+    public static async Task TuiController_PartialApprovalPause_RemainsResumable()
+    {
+        var fixture = new PostApplyValidationFixture(throwOnResume: false)
+        {
+            ResumePhase = ExecutionCheckpointPhase.ContinuationPending,
+        };
+        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        await StageAndApplyMutationAsync(controller, fixture);
+
+        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
+
+        Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, continuation.Phase);
+        Assert.Equal(fixture.RunId, controller.BackgroundValidationRunId);
+        (var message, var role) = ConversationalShell.FormatPostApplyValidationResult(continuation.Phase, string.Empty);
+        Assert.Contains("/validation retry", message, StringComparison.Ordinal);
+        Assert.DoesNotContain("completed", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(PresentationTextRole.Warning, role);
+    }
+
+    /// <summary>Completed and interrupted plan boundaries reuse active planning and release the validation guard.</summary>
+    [Theory]
+    [InlineData(ExecutionCheckpointPhase.PlanContinuationPending, "assessing the remaining objective", PresentationTextRole.Status)]
+    [InlineData(ExecutionCheckpointPhase.PlanReplanningPending, "applied changes are retained", PresentationTextRole.Warning)]
+    public static async Task TuiController_PlanContinuation_RestoresActiveRunAndReleasesValidationGuard(
+        ExecutionCheckpointPhase phase,
+        string expectedMessage,
+        PresentationTextRole expectedRole)
+    {
+        var fixture = new PostApplyValidationFixture(throwOnResume: false)
+        {
+            ResumePhase = phase,
+        };
+        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        await StageAndApplyMutationAsync(controller, fixture);
+
+        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
+
+        Assert.Equal(phase, continuation.Phase);
+        Assert.Equal(fixture.RunId, controller.ActiveRunId);
+        Assert.Null(controller.BackgroundValidationRunId);
+        (var message, var role) = ConversationalShell.FormatPostApplyValidationResult(
+            continuation.Phase,
+            string.Empty);
+        Assert.Contains(expectedMessage, message, StringComparison.Ordinal);
+        Assert.Equal(expectedRole, role);
     }
 
     /// <summary>Post-apply validation failure is not presented as successful completion.</summary>
@@ -4902,6 +4951,7 @@ public static partial class Milestone1Tests
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.Completion };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.Completion };
+        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.EvidenceCollection };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.CompletionPending, RunPhase.Completion };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CorrectionModelTurn, RunPhase.CompletionPending, RunPhase.Completion };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CorrectionModelTurn, RunPhase.MutationProposed };

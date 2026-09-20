@@ -9,6 +9,7 @@ Use the [user guide](../user-guide.md) for the complete product walkthrough. The
 - [Semantic refresh](semantic-refresh.md)
 
 - [Conversation context](conversation-context.md)
+- [Conversation and execution loop](conversation-loop.md)
 - [Session lifecycle](session-lifecycle.md)
 - [Model providers](model-providers.md)
 - [Secret discovery](secret-discovery.md)

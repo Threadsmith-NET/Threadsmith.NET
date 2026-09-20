@@ -151,7 +151,7 @@ public sealed record CodeExploreOptions
     public int GitInventoryTimeoutMilliseconds { get; init; } = 10_000;
 
     /// <summary>Operational OuterTimeoutMilliseconds allowance; zero disables this cap.</summary>
-    public int OuterTimeoutMilliseconds { get; init; } = 60_000;
+    public int OuterTimeoutMilliseconds { get; init; } = 75_000;
 
     /// <summary>Operational MaximumResultBytes allowance; zero disables this cap.</summary>
     public int MaximumResultBytes { get; init; } = 1024 * 1024;

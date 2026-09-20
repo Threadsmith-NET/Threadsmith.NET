@@ -3368,6 +3368,31 @@ public static partial class Milestone5Tests
                 cancellationToken);
         }
 
+        public Task<MutationProposalResult> ProposeIncrementalAsync(
+            ImplementationPlan plan,
+            RunPhase phase,
+            bool allowReplanning = true,
+            CancellationToken cancellationToken = default)
+        {
+            return _application.ProposeAsync(
+                new ProposeMutationSetCommand(
+                    _sessionId, RunId.New(), _workspaceId, new TaskSpecification("Update example", []), plan, phase)
+                {
+                    AllowReplanning = allowReplanning,
+                    ExecutionScope = new MutationExecutionScope
+                    {
+                        ActiveStep = plan.Steps[0],
+                        StepOrdinal = 1,
+                        StepCount = plan.Steps.Count,
+                        BatchOrdinal = 1,
+                        TargetMutations = 8,
+                        TargetFiles = 3,
+                        TargetMutationCharacters = 24_000,
+                    },
+                },
+                cancellationToken);
+        }
+
         public IReadOnlyList<TEvent> Events<TEvent>()
             where TEvent : IDomainEvent
         {

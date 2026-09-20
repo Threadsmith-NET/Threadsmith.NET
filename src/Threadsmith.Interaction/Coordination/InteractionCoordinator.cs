@@ -2069,6 +2069,9 @@ public sealed partial class InteractionCoordinator
             ExecutionCheckpointPhase.PlanContinuationPending => (
                 $"Plan validation completed{suffix}; assessing the remaining objective.\n",
                 PresentationTextRole.Status),
+            ExecutionCheckpointPhase.PlanReplanningPending => (
+                $"Implementation requested replanning{suffix}; applied changes are retained while the remaining work is reassessed.\n",
+                PresentationTextRole.Warning),
             ExecutionCheckpointPhase.MutationApprovalPending => (
                 batchPurpose == MutationBatchPurpose.Correction
                     ? $"Validation requires a correction review{suffix}.\n"

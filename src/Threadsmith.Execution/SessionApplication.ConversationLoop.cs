@@ -309,14 +309,11 @@ public sealed partial class SessionApplication
         var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
         await RefreshMemoryContextAsync(registration, invocationContext, memoriesEnabled, loopState, cancellationToken);
 
-        var allowPlanProposal = !registration.IncrementalPlanExecution
-            || registration.CompletedPlanCount < _limits.IncrementalPlanning.MaximumPlansPerObjective;
         var modelTools = CreateModelTools(
             conversationDefinitions,
             workspaceAvailable,
             phase,
-            allowPlanProposal,
-            registration.IncrementalPlanExecution && registration.CompletedPlanCount > 0);
+            registration.IncrementalPlanExecution && registration.LastPlanBoundaryOrdinal > 0 && registration.ReplanningPlan is null);
         var modelPreference = _sessionPreferences?.Capture();
         var context = loopState.FrozenContext;
 
@@ -1713,7 +1710,6 @@ public sealed partial class SessionApplication
         IReadOnlyList<ToolDefinition> conversationDefinitions,
         bool workspaceAvailable,
         RunPhase phase,
-        bool allowPlanProposal,
         bool allowObjectiveCompletion)
     {
         var availableDefinitions = workspaceAvailable
@@ -1726,7 +1722,7 @@ public sealed partial class SessionApplication
             ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
             PreferStrictArguments = definition.PreferStrictArguments,
         })];
-        if (phase == RunPhase.EvidenceCollection && allowPlanProposal)
+        if (phase == RunPhase.EvidenceCollection)
         {
             modelTools.Add(new ModelToolDefinition
             {
@@ -1782,7 +1778,7 @@ public sealed partial class SessionApplication
             RepositoryPath = repositoryPath,
             WorkingScope = RepositoryWorkingScope.Resolve(
                 repositoryPath,
-                registration.PendingPlan?.Steps.SelectMany(step => step.GetAffectedPaths()),
+                (registration.PendingPlan ?? registration.ReplanningPlan)?.Steps.SelectMany(step => step.GetAffectedPaths()),
                 Directory.GetCurrentDirectory()),
             ProhibitedPaths = invocationContext?.ProhibitedPaths ?? [],
             ToolSchemas = toolSchemas,
@@ -1796,7 +1792,7 @@ public sealed partial class SessionApplication
                 ?? defaultModelProfileId,
             PlanUnderRevision = phase == RunPhase.AwaitingPlanApproval
                 ? registration.PendingPlan
-                : null,
+                : registration.ReplanningPlan,
             CurrentTurnHostContext = registration.CurrentTurnHostContext,
             CurrentMessageId = registration.CurrentMessageId,
             ConversationModeOverride = registration.ConversationMode,

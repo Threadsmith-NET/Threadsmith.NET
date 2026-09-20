@@ -274,7 +274,6 @@ public static class RepoConfigTests
         Assert.True(config.GetValue("planning:incrementalPlans:enabled", false));
         Assert.Equal(4, config.GetValue("planning:incrementalPlans:targetSteps", 0));
         Assert.Equal(8, config.GetValue("planning:incrementalPlans:targetFiles", 0));
-        Assert.Equal(12, config.GetValue("planning:incrementalPlans:maximumPlansPerObjective", 0));
         var validationStages = config.GetSection("validation:stages").Get<string[]>() ?? [];
         Assert.Equal(["semantic", "compile", "diagnostics", "tests"], validationStages);
         Assert.Equal(1_048_576L, config.GetValue<long>("repository:configurationBytes", 0));
@@ -378,7 +377,6 @@ public static class RepoConfigTests
             Assert.True(scaffolded.GetValue("planning:incrementalPlans:enabled", false));
             Assert.Equal(4, scaffolded.GetValue("planning:incrementalPlans:targetSteps", 0));
             Assert.Equal(8, scaffolded.GetValue("planning:incrementalPlans:targetFiles", 0));
-            Assert.Equal(12, scaffolded.GetValue("planning:incrementalPlans:maximumPlansPerObjective", 0));
             Assert.Equal(200, scaffolded.GetValue("tools:listFiles:defaultEntries", 0));
             Assert.Equal(60, scaffolded.GetValue("tools:runProcess:maxTimeoutSeconds", 0));
 

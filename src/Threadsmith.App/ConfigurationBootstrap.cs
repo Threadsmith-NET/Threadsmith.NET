@@ -185,7 +185,6 @@ internal static class ConfigurationBootstrap
             ["planning:incrementalPlans:enabled"] = "true",
             ["planning:incrementalPlans:targetSteps"] = "4",
             ["planning:incrementalPlans:targetFiles"] = "8",
-            ["planning:incrementalPlans:maximumPlansPerObjective"] = "12",
             ["model:http:pooledConnectionLifetimeSeconds"] = "900",
             ["model:http:pooledConnectionIdleTimeoutSeconds"] = "120",
             ["model:http:connectTimeoutSeconds"] = "30",

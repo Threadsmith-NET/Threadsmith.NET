@@ -985,7 +985,7 @@ public sealed partial class SessionApplication :
 
         registration.ExecutionStarted = true;
         registration.IncrementalPlanExecution = request.AllowPlanContinuation;
-        registration.CompletedPlanCount = checkpoint.PlanOrdinal - 1;
+        registration.LastPlanBoundaryOrdinal = checkpoint.PlanOrdinal - 1;
         registration.LastPublishedPlan = request.ApprovedPlan;
         if (_conversationStore is not null)
         {
@@ -1064,7 +1064,7 @@ public sealed partial class SessionApplication :
             }
 
             registration.BaseCurrentTurnHostContext = registration.CurrentTurnHostContext;
-            SetIncrementalPlanningContext(registration, completedPlans: 0);
+            SetIncrementalPlanningContext(registration, plansUsed: 0);
 
             if (_conversationStore is not null)
             {
@@ -1264,7 +1264,7 @@ public sealed partial class SessionApplication :
         {
             var boundaryTask = orchestrator.WaitForPlanCompletionAsync(
                 runId,
-                registration.CompletedPlanCount,
+                registration.LastPlanBoundaryOrdinal,
                 cancellationToken);
             var completed = await Task.WhenAny(
                 boundaryTask,
@@ -1277,16 +1277,20 @@ public sealed partial class SessionApplication :
             }
 
             var boundary = await boundaryTask;
-            registration.CompletedPlanCount = boundary.PlanOrdinal;
+            registration.LastPlanBoundaryOrdinal = boundary.PlanOrdinal;
+            registration.ReplanningPlan = boundary.PlanUnderRevision;
             await ArchiveExecutionOutcomeAsync(
                 runId,
                 registration,
                 boundary.Progress,
                 CancellationToken.None);
             registration.PendingPlan = null;
+            var boundaryReason = boundary.PlanUnderRevision is null
+                ? "validated plan tranche completed; remaining objective assessment started"
+                : "implementation requested investigation and replacement of unfinished work";
             await registration.Machine.TransitionAsync(
                 RunPhase.EvidenceCollection,
-                "validated plan tranche completed; remaining objective assessment started",
+                boundaryReason,
                 registration.Cancellation.Token);
             SetIncrementalPlanningContext(registration, boundary.PlanOrdinal, boundary.Progress);
 
@@ -1308,7 +1312,7 @@ public sealed partial class SessionApplication :
             AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
             if (publication is null)
             {
-                if (!registration.ObjectiveCompletionRequested)
+                if (!registration.ObjectiveCompletionRequested || registration.ReplanningPlan is not null)
                 {
                     await registration.Machine.TransitionAsync(
                         RunPhase.Cancelled,
@@ -1327,12 +1331,6 @@ public sealed partial class SessionApplication :
                     registration.Cancellation.Token);
                 await FinalizeExecutionOutcomeAsync(runId, registration, outcome);
                 return;
-            }
-
-            if (boundary.PlanOrdinal >= _limits.IncrementalPlanning.MaximumPlansPerObjective)
-            {
-                throw new InvalidOperationException(
-                    $"The objective exceeded the configured limit of {_limits.IncrementalPlanning.MaximumPlansPerObjective} plan tranches.");
             }
 
             await registration.Machine.TransitionAsync(
@@ -1373,7 +1371,7 @@ public sealed partial class SessionApplication :
 
     private void SetIncrementalPlanningContext(
         RunRegistration registration,
-        int completedPlans,
+        int plansUsed,
         ExecutionOutcomeProjection? progress = null)
     {
         if (!_limits.IncrementalPlanning.Enabled || _executionOrchestrator is null)
@@ -1387,17 +1385,16 @@ public sealed partial class SessionApplication :
         [
             .. registration.BaseCurrentTurnHostContext,
             .. progress is null ? Array.Empty<string>() : [CreateExecutionOutcomeContent(registration, progress)],
+            .. registration.ReplanningPlan is null ? Array.Empty<string>() : [RequirePrompts().Get(PromptFileNames.ContextReplanning)],
             RequirePrompts().Render(
                 PromptFileNames.ContextIncrementalPlanning,
                 new Dictionary<string, string>(StringComparer.Ordinal)
                 {
-                    ["CompletedPlans"] = completedPlans.ToString(
+                    ["PlansUsed"] = plansUsed.ToString(
                         System.Globalization.CultureInfo.InvariantCulture),
                     ["TargetSteps"] = options.TargetSteps.ToString(
                         System.Globalization.CultureInfo.InvariantCulture),
                     ["TargetFiles"] = options.TargetFiles.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture),
-                    ["MaximumPlans"] = options.MaximumPlansPerObjective.ToString(
                         System.Globalization.CultureInfo.InvariantCulture),
                 }),
         ];
@@ -1468,6 +1465,7 @@ public sealed partial class SessionApplication :
             outcome.RollbackAvailable,
             outcome.FinalDiff,
             outcome.ResidualRisks,
+            outcome.ReplanReason,
         });
         return RequirePrompts().Render(
             PromptFileNames.ContextExecutionOutcome,
@@ -2171,7 +2169,9 @@ public sealed partial class SessionApplication :
 
         public ImplementationPlan? LastPublishedPlan { get; set; }
 
-        public int CompletedPlanCount { get; set; }
+        public ImplementationPlan? ReplanningPlan { get; set; }
+
+        public int LastPlanBoundaryOrdinal { get; set; }
 
         public bool ExecutionStarted { get; set; }
 

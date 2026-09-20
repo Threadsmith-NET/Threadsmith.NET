@@ -500,12 +500,13 @@ Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimi
 
 | Field | Default | Purpose |
 |---|---:|---|
-| `enabled` | `true` | Return a successfully validated plan to ordinary planning on the same objective run. |
+| `enabled` | `true` | Return a validated plan or an implementation `request_replan` decision to ordinary planning on the same objective run. |
 | `targetSteps` | `4` | Soft preferred maximum steps in one cohesive, independently valid plan tranche. |
 | `targetFiles` | `8` | Soft preferred maximum distinct affected paths in one plan tranche. |
-| `maximumPlansPerObjective` | `12` | Hard maximum plan tranches proposed for one user objective. At the cap, `propose_plan` is withheld. |
 
-All numeric values must be positive. Step and file targets are model guidance, not admission ceilings: atomic work may exceed them. The maximum plan count is host-enforced and does not change plan, mutation, trust, path, validation, or approval policy.
+Step and file targets must be positive and are model guidance, not admission ceilings: atomic work may exceed them. There is no plan-count limit; continuation and replacement plans consume the existing execution budget and remain subject to cancellation, plan approval, mutation authorization, and validation. The former `maximumPlansPerObjective` setting is no longer read and can be removed from existing configuration.
+
+`request_replan` accepts one nonempty `reason` string. The host sanitizes it and truncates it to the existing `limits:plan:maximumSummaryCharacters` bound. Structured output and corrective retries use the existing execution limits; there is no separate replanning budget or correction loop.
 
 ### `agents:delegation`
 

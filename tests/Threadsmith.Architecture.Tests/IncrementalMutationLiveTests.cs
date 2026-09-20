@@ -45,9 +45,19 @@ public sealed class IncrementalMutationLiveTests
         await RunLiveScenarioAsync(incrementalPlanning: true);
     }
 
-    private static async Task RunLiveScenarioAsync(bool incrementalPlanning)
+    /// <summary>Exercises model-selected replanning and replacement-plan completion on one run.</summary>
+    [Fact]
+    [Trait("Category", "LiveIntegration")]
+    public async Task Objective_Terra_ReplansWhenApprovedScopeLacksRequiredEvidence()
     {
-        var environmentPrefix = incrementalPlanning ? "THREADSMITH_LIVE_INCREMENTAL_PLAN" : "THREADSMITH_LIVE_MUTATION";
+        await RunLiveScenarioAsync(incrementalPlanning: true, requireReplan: true);
+    }
+
+    private static async Task RunLiveScenarioAsync(bool incrementalPlanning, bool requireReplan = false)
+    {
+        var environmentPrefix = requireReplan
+            ? "THREADSMITH_LIVE_REPLAN"
+            : incrementalPlanning ? "THREADSMITH_LIVE_INCREMENTAL_PLAN" : "THREADSMITH_LIVE_MUTATION";
         if (Environment.GetEnvironmentVariable(environmentPrefix + "_TESTS") != "1")
         {
             Assert.Skip($"Set {environmentPrefix}_TESTS=1 and {environmentPrefix}_PROFILE to run this live test.");
@@ -77,6 +87,20 @@ public sealed class IncrementalMutationLiveTests
                     Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)),
                     $"status=legacy-{name}\n",
                     cancellationToken);
+            }
+
+            var planningPaths = expectedFiles.Keys.ToList();
+            if (requireReplan)
+            {
+                const string rulesPath = "src/rules.txt";
+                await File.WriteAllTextAsync(
+                    Path.Combine(root, rulesPath.Replace('/', Path.DirectorySeparatorChar)),
+                    "src/alpha.txt => status=modern-alpha\n"
+                    + "src/beta.txt => status=modern-beta\n"
+                    + "src/gamma.txt => status=modern-gamma\n"
+                    + "src/delta.txt => status=modern-delta\n",
+                    cancellationToken);
+                planningPaths.Add(rulesPath);
             }
 
             var paths = ConfigurationBootstrap.ResolvePaths(root);
@@ -114,7 +138,6 @@ public sealed class IncrementalMutationLiveTests
                     Enabled = incrementalPlanning,
                     TargetSteps = ReadPositiveInt(environmentPrefix + "_TARGET_STEPS", 1),
                     TargetFiles = targetFiles,
-                    MaximumPlansPerObjective = ReadPositiveInt(environmentPrefix + "_MAX_PLANS", 6),
                 },
             };
             var budgetLimit = new BudgetDimensions(
@@ -127,7 +150,7 @@ public sealed class IncrementalMutationLiveTests
             await using var workspaces = new TransactionalWorkspaceCoordinator(events);
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
-            var baseline = await CreateBaselineAsync(root, expectedFiles.Keys, cancellationToken);
+            var baseline = await CreateBaselineAsync(root, planningPaths, cancellationToken);
             await workspaces.RegisterBaselineAsync(baseline, cancellationToken: cancellationToken);
             var prompts = TestPromptLoader.Instance;
             var innerContext = new ContextAssembler(
@@ -142,7 +165,7 @@ public sealed class IncrementalMutationLiveTests
                 new ModelResolver(models.TrustedCatalog, new InMemoryModelPreferenceSnapshotProvider()),
                 providerInstructionResolver: new ModelProviderInstructionResolver(models.TrustedCatalog, prompts),
                 requestPreparationResolver: models.TrustedProvider as IModelRequestPreparationResolver);
-            var context = new RefreshingContextAssembler(innerContext, evidence, expectedFiles.Keys.ToArray());
+            var context = new RefreshingContextAssembler(innerContext, evidence, planningPaths);
             var recorder = new RecordingProvider(models.TrustedProvider);
             var corrections = new ConcurrentQueue<CorrectionObservation>();
             var pendingApprovals = Channel.CreateUnbounded<RunId>();
@@ -192,7 +215,7 @@ public sealed class IncrementalMutationLiveTests
                 NullLogger<ExecutionOrchestrator>.Instance,
                 new CorrectiveMessageFactory(prompts),
                 limits);
-            var request = CreateStartRequest(baseline);
+            var request = requireReplan ? CreateReplanningStartRequest(baseline) : CreateStartRequest(baseline);
             var batches = new List<BatchObservation>();
             var stopwatch = Stopwatch.StartNew();
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -269,15 +292,49 @@ public sealed class IncrementalMutationLiveTests
                     correctiveMessages: new CorrectiveMessageFactory(prompts),
                     prompts: prompts);
                 var dispatcher = new CommandDispatcher([application]);
-                var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("live incremental objective"), timeout.Token);
-                var runId = await dispatcher.DispatchAsync(
-                    new SubmitRequestCommand(
-                        sessionId,
-                        "Modernize src/alpha.txt, src/beta.txt, src/gamma.txt and src/delta.txt so each contains "
-                        + "status=modern-<name> followed by one newline. Complete these independent changes serially "
-                        + "using multiple small plans, validating each before planning the next. Finish only after all four are updated."),
+                var sessionId = await dispatcher.DispatchAsync(
+                    new CreateSessionCommand(requireReplan ? "live replanning objective" : "live incremental objective"),
                     timeout.Token);
-                request = request with { SessionId = sessionId, RunId = runId };
+                RunId runId;
+                if (requireReplan)
+                {
+                    runId = RunId.New();
+                    request = request with
+                    {
+                        SessionId = sessionId,
+                        RunId = runId,
+                        ValidationRequest = request.ValidationRequest with { SessionId = sessionId, RunId = runId },
+                    };
+                    plans[request.ApprovedPlan.Revision] = request.ApprovedPlan;
+                    var paused = await orchestrator.StartAsync(request, timeout.Token);
+                    Assert.Equal(ExecutionCheckpointPhase.PlanReplanningPending, paused.Phase);
+                    Assert.Null(await orchestrator.HandleAsync(
+                        new GetExecutionMutationCommand(sessionId, runId),
+                        timeout.Token));
+                    foreach (var path in expectedFiles.Keys)
+                    {
+                        var name = Path.GetFileNameWithoutExtension(path);
+                        var content = await File.ReadAllTextAsync(
+                            Path.Combine(root, path.Replace('/', Path.DirectorySeparatorChar)),
+                            timeout.Token);
+                        Assert.Equal($"status=legacy-{name}\n", content);
+                    }
+
+                    var resumed = await dispatcher.DispatchAsync(new ResumeRunCommand(sessionId, runId), timeout.Token);
+                    Assert.Equal(ExecutionCheckpointPhase.PlanReplanningPending, resumed.Phase);
+                }
+                else
+                {
+                    runId = await dispatcher.DispatchAsync(
+                        new SubmitRequestCommand(
+                            sessionId,
+                            "Modernize src/alpha.txt, src/beta.txt, src/gamma.txt and src/delta.txt so each contains "
+                            + "status=modern-<name> followed by one newline. Complete these independent changes serially "
+                            + "using multiple small plans, validating each before planning the next. Finish only after all four are updated."),
+                        timeout.Token);
+                    request = request with { SessionId = sessionId, RunId = runId };
+                }
+
                 sessionCompletion = dispatcher.DispatchAsync(new WaitForRunCommand(runId), timeout.Token);
                 executionFinished = sessionCompletion;
             }
@@ -353,15 +410,29 @@ public sealed class IncrementalMutationLiveTests
             if (sessionCompletion is not null)
             {
                 Assert.True(await sessionCompletion);
-                Assert.InRange(plans.Count, 2, limits.IncrementalPlanning.MaximumPlansPerObjective);
+                Assert.True(plans.Count >= 2);
                 Assert.Contains(recorder.Requests, observation => observation.ReceivedExecutionReceipt);
                 Assert.Contains(recorder.Requests, observation => observation.ConfirmedObjective);
+                if (requireReplan)
+                {
+                    Assert.Contains(recorder.Requests, observation => observation.RequestedReplan);
+                }
             }
 
             var outcome = await checkpoints.GetOutcomeAsync(request.RunId, timeout.Token);
             Assert.NotNull(outcome);
             Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
-            Assert.Equal(plans.Values.Sum(plan => plan.Steps.Count), outcome.CompletedStepIds.Count);
+            var expectedCompletedSteps = requireReplan
+                ? plans.Values
+                    .Where(plan => plan.Revision != request.ApprovedPlan.Revision)
+                    .Sum(plan => plan.Steps.Count)
+                : plans.Values.Sum(plan => plan.Steps.Count);
+            Assert.Equal(expectedCompletedSteps, outcome.CompletedStepIds.Count);
+            if (requireReplan)
+            {
+                Assert.All(request.ApprovedPlan.Steps, step => Assert.DoesNotContain(step.StepId, outcome.CompletedStepIds));
+            }
+
             foreach (var expected in expectedFiles)
             {
                 var actual = await File.ReadAllTextAsync(
@@ -403,7 +474,9 @@ public sealed class IncrementalMutationLiveTests
                 Environment.GetEnvironmentVariable("THREADSMITH_LIVE_MUTATION_REPORT_DIRECTORY")
                 ?? Path.Combine(Path.GetTempPath(), "threadsmith-mutation-live-reports", DateTimeOffset.UtcNow.ToString("yyyyMMdd-HHmmss")));
             Directory.CreateDirectory(reportDirectory);
-            var reportPath = Path.Combine(reportDirectory, "incremental-mutation-terra.json");
+            var reportPath = Path.Combine(
+                reportDirectory,
+                requireReplan ? "incremental-replanning-terra.json" : "incremental-mutation-terra.json");
             await File.WriteAllTextAsync(reportPath, JsonSerializer.Serialize(report, ReportJson), timeout.Token);
             TestContext.Current.TestOutputHelper?.WriteLine($"Live report: {reportPath}");
             TestContext.Current.TestOutputHelper?.WriteLine(
@@ -483,6 +556,33 @@ public sealed class IncrementalMutationLiveTests
         };
     }
 
+    private static ExecutionStartRequest CreateReplanningStartRequest(WorkspaceBaseline baseline)
+    {
+        var request = CreateStartRequest(baseline);
+        var blockedStep = new ImplementationPlanStep
+        {
+            StepId = StepId.New(),
+            Title = "Apply the authoritative status mappings",
+            Description = "The required target values are owned by src/rules.txt, which is outside this approved step's scope. Do not guess or propose mutations. Request replanning so the source of truth and all affected files can be inspected and covered by a replacement plan.",
+            FileIntents = [new PlanFileIntent { Kind = PlanFileChangeKind.Modify, Path = "src/alpha.txt" }],
+            ExpectedOutcome = "All status files match the authoritative mappings.",
+            Validation = ["Compare every mapped file with src/rules.txt."],
+        };
+        return request with
+        {
+            Task = new TaskSpecification(
+                "Apply every status mapping declared in src/rules.txt, preserving the exact mapped text and one trailing newline.",
+                [new AcceptanceCriterion("Every file named by src/rules.txt matches its declared status value.")],
+                ["Treat src/rules.txt as authoritative and do not guess values that have not been inspected."]),
+            ApprovedPlan = new ImplementationPlan
+            {
+                Summary = "Apply status mappings whose authoritative evidence is missing from the approved scope.",
+                Steps = [blockedStep],
+            },
+            AllowPlanContinuation = true,
+        };
+    }
+
     private static async Task<WorkspaceBaseline> CreateBaselineAsync(
         string root,
         IEnumerable<string> relativePaths,
@@ -546,6 +646,7 @@ public sealed class IncrementalMutationLiveTests
         long? InputTokens,
         long? OutputTokens,
         IReadOnlyList<ToolProposalObservation> ToolProposals,
+        bool RequestedReplan,
         bool ReceivedExecutionReceipt,
         bool ConfirmedObjective);
 
@@ -685,6 +786,7 @@ public sealed class IncrementalMutationLiveTests
             var stopwatch = Stopwatch.StartNew();
             ModelUsage? usage = null;
             var toolProposals = new List<ToolProposalObservation>();
+            var requestedReplan = false;
             var confirmedObjective = false;
             TestContext.Current.TestOutputHelper?.WriteLine(
                 $"Mutation model request {ordinal}; round {request.ToolContinuationRound}; profile {request.ResolvedProfileId?.Value:D}.");
@@ -694,6 +796,7 @@ public sealed class IncrementalMutationLiveTests
                 {
                     usage = chunk.Usage ?? usage;
                     confirmedObjective |= chunk.Output is ToolRequestModelOutput { ToolName: "complete_objective" };
+                    requestedReplan |= chunk.Output is ToolRequestModelOutput { ToolName: "request_replan" };
                     if (chunk.Output is ToolRequestModelOutput tool
                         && string.Equals(tool.ToolName, "propose_mutations", StringComparison.Ordinal))
                     {
@@ -713,8 +816,11 @@ public sealed class IncrementalMutationLiveTests
                     usage?.InputTokens,
                     usage?.OutputTokens,
                     toolProposals,
+                    requestedReplan,
                     request.Tools.Any(tool => tool.Name == "complete_objective")
-                        && request.Messages.Any(message => message.GetModelVisibleContent().Contains("PlanContinuationPending", StringComparison.Ordinal)),
+                        && request.Messages.Any(message =>
+                            message.GetModelVisibleContent().Contains("PlanContinuationPending", StringComparison.Ordinal)
+                            || message.GetModelVisibleContent().Contains("PlanReplanningPending", StringComparison.Ordinal)),
                     confirmedObjective);
                 lock (_gate)
                 {

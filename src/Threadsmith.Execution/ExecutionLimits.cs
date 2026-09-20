@@ -99,7 +99,7 @@ public sealed record ExecutionLimits
     public static ExecutionLimits Default { get; } = new();
 }
 
-/// <summary>Configurable sizing guidance and safety limits for incremental plan tranches.</summary>
+/// <summary>Configurable soft sizing guidance for incremental plan tranches.</summary>
 public sealed record IncrementalPlanningOptions
 {
     /// <summary>Whether a completed plan returns to planning until the objective is complete.</summary>
@@ -111,15 +111,11 @@ public sealed record IncrementalPlanningOptions
     /// <summary>Preferred maximum number of distinct affected paths in one plan tranche.</summary>
     public int TargetFiles { get; init; } = 8;
 
-    /// <summary>Maximum number of plan tranches that one objective may propose.</summary>
-    public int MaximumPlansPerObjective { get; init; } = 12;
-
-    /// <summary>Rejects nonpositive targets and limits.</summary>
+    /// <summary>Rejects nonpositive targets.</summary>
     public void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetSteps);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetFiles);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumPlansPerObjective);
     }
 }
 

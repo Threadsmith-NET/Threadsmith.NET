@@ -16,6 +16,7 @@ public sealed class MutationProposalApplication :
     IIncrementalMutationProposalProvider
 {
     private const string ProposeMutationsToolName = "propose_mutations";
+    private const string RequestReplanToolName = "request_replan";
     private const string ProposeMutationsArgumentsSchema = """
         {
           "type": "object",
@@ -227,7 +228,7 @@ public sealed class MutationProposalApplication :
         var result = await ProposeAsync(command, cancellationToken);
         return result.StagedMutationSet
             ?? throw new InvalidOperationException(
-                "A completion-only proposal cannot be returned through the staged-mutation compatibility handler.");
+                "A proposal without mutations cannot be returned through the staged-mutation compatibility handler.");
     }
 
     /// <inheritdoc />
@@ -236,12 +237,13 @@ public sealed class MutationProposalApplication :
         CancellationToken cancellationToken = default)
     {
         var prepared = await PrepareAsync(command, cancellationToken);
-        if (prepared.IsCompletionOnly)
+        if (prepared.IsCompletionOnly || prepared.ReplanRequested)
         {
             return new MutationProposalResult
             {
                 Rationale = prepared.Rationale,
-                StepComplete = true,
+                StepComplete = prepared.StepComplete,
+                ReplanRequested = prepared.ReplanRequested,
                 BudgetUsed = prepared.BudgetUsed,
             };
         }
@@ -434,6 +436,7 @@ public sealed class MutationProposalApplication :
         MutationSetModelOutput? structured = null;
         MutationProposalEnvelope? envelope = null;
         var proposalToolObserved = false;
+        string? replanReason = null;
         ModelUsage? reportedUsage = null;
         var budgetUsage = new ModelRequestBudgetUsage();
         try
@@ -470,6 +473,14 @@ public sealed class MutationProposalApplication :
 
                 if (chunk.Output is MutationSetModelOutput mutationOutput)
                 {
+                    if (proposalToolObserved || structured is not null)
+                    {
+                        throw CreateRepairableMutationFailure(
+                            ModelCorrectionCategory.MutationProposal,
+                            MalformedInvocationFailureKind.MultipleToolProducingOutputs,
+                            _prompts.Get(PromptFileNames.CorrectionMutationExclusiveDecision));
+                    }
+
                     if (mutationOutput.MutationSet is not null)
                     {
                         FailIfMutationPathPolicyViolation(mutationOutput.MutationSet);
@@ -500,16 +511,19 @@ public sealed class MutationProposalApplication :
                             $"The mutation proposal exceeded the {_limits.MaxStructuredOutputCharacters}-character structured-output limit.");
                     }
 
-                    if (!string.Equals(toolRequest.ToolName, ProposeMutationsToolName, StringComparison.Ordinal)
-                        || proposalToolObserved)
+                    var requestsReplan = string.Equals(toolRequest.ToolName, RequestReplanToolName, StringComparison.OrdinalIgnoreCase)
+                        && modelRequest.Tools.Any(tool => tool.Name == RequestReplanToolName);
+                    if ((!string.Equals(toolRequest.ToolName, ProposeMutationsToolName, StringComparison.Ordinal)
+                            && !requestsReplan)
+                        || proposalToolObserved || structured is not null)
                     {
                         var requestedTool = string.IsNullOrWhiteSpace(toolRequest.ToolName)
                             ? "<missing>"
                             : BoundCorrectionReason(toolRequest.ToolName);
-                        var safeReason = proposalToolObserved
-                            ? "The model called propose_mutations more than once in one turn."
+                        var safeReason = proposalToolObserved || structured is not null
+                            ? _prompts.Get(PromptFileNames.CorrectionMutationExclusiveDecision)
                             : $"Implementation requested unauthorized tool '{requestedTool}'.";
-                        var diagnosticKind = proposalToolObserved
+                        var diagnosticKind = proposalToolObserved || structured is not null
                             ? MalformedInvocationFailureKind.MultipleToolProducingOutputs
                             : MalformedInvocationFailureKind.UnknownTool;
                         throw CreateRepairableMutationFailure(
@@ -519,6 +533,12 @@ public sealed class MutationProposalApplication :
                     }
 
                     proposalToolObserved = true;
+                    if (requestsReplan)
+                    {
+                        replanReason = ReadReplanReason(toolRequest.ArgumentsJson);
+                        continue;
+                    }
+
                     try
                     {
                         envelope = DeserializeEnvelope(toolRequest.ArgumentsJson);
@@ -573,6 +593,14 @@ public sealed class MutationProposalApplication :
         }
 
         cancellationToken.ThrowIfCancellationRequested();
+        if (replanReason is not null)
+        {
+            return new PreparedMutationProposal(null, [], replanReason, null, GetBudgetUsage(operationBudget))
+            {
+                ReplanRequested = true,
+            };
+        }
+
         if (envelope is null && structured is null && modelRequest.ResponseFormat is not null)
         {
             try
@@ -749,6 +777,18 @@ public sealed class MutationProposalApplication :
     {
         cancellationToken.ThrowIfCancellationRequested();
         var requiresToolCall = command.Phase is RunPhase.ImplementationModelTurn or RunPhase.CorrectionModelTurn;
+        List<ModelToolDefinition> modelTools = requiresToolCall ? [_proposeMutationsTool] : [];
+        if (requiresToolCall && command.AllowReplanning && command.ExecutionScope is not null)
+        {
+            modelTools.Add(new ModelToolDefinition
+            {
+                Name = RequestReplanToolName,
+                Description = _prompts.Get(PromptFileNames.ToolRequestReplanDescription),
+                ArgumentsJsonSchema = """{"type":"object","properties":{"reason":{"type":"string"}},"required":["reason"],"additionalProperties":false}""",
+                PreferStrictArguments = true,
+            });
+        }
+
         var memoryIdentity = RepositoryIdentity.Create(baseline.RepositoryPath);
         var memoriesEnabled = _repositoryMemoriesEnabled is not null
             && await _repositoryMemoriesEnabled(command.SessionId, command.RunId, cancellationToken);
@@ -778,19 +818,12 @@ public sealed class MutationProposalApplication :
                 ApprovedPlan = command.ApprovedPlan,
                 MutationBaseline = baseline,
                 MutationExecutionScope = command.ExecutionScope,
-                ToolSchemas = requiresToolCall ?
-                [
-                    new ContextToolSchema(
-                        _proposeMutationsTool.Name,
-                        _proposeMutationsTool.Description,
-                        _proposeMutationsTool.ArgumentsJsonSchema,
-                        _proposeMutationsTool.PreferStrictArguments),
-                ] : [],
+                ToolSchemas = modelTools.Select(tool => new ContextToolSchema(
+                    tool.Name, tool.Description, tool.ArgumentsJsonSchema, tool.PreferStrictArguments)).ToArray(),
                 AdditionalMessages = additionalMessages,
             },
             cancellationToken);
         var messages = context.Messages ?? [];
-        IReadOnlyList<ModelToolDefinition> modelTools = requiresToolCall ? [_proposeMutationsTool] : [];
         var reasoningFallback = context.ModelResolution?.SupportsReasoningOff == false
             ? context.ModelResolution.DefaultReasoningLevel
             : (ReasoningLevel?)null;
@@ -968,6 +1001,44 @@ public sealed class MutationProposalApplication :
         var normalized = NormalizeProposalJson(json);
         return JsonSerializer.Deserialize<MutationProposalEnvelope>(normalized, JsonOptions)
             ?? throw new JsonException("The mutation proposal was empty.");
+    }
+
+    private string ReadReplanReason(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            RejectDuplicateProperties(document.RootElement, "$", StringComparer.OrdinalIgnoreCase);
+            var request = JsonSerializer.Deserialize<ReplanRequest>(json, JsonOptions);
+            if (string.IsNullOrWhiteSpace(request?.Reason))
+            {
+                throw new JsonException("reason must be a nonempty string.");
+            }
+
+            var reason = _sanitizer.Sanitize(request.Reason).Trim();
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                throw new JsonException("reason must contain a safe explanation.");
+            }
+
+            return reason.Length > _limits.Plan.MaximumSummaryCharacters
+                ? reason[.._limits.Plan.MaximumSummaryCharacters]
+                : reason;
+        }
+        catch (Exception exception) when (exception is JsonException or NotSupportedException)
+        {
+            throw CreateRepairableMutationFailure(
+                ModelCorrectionCategory.MutationProposal,
+                MalformedInvocationFailureKind.ArgumentSchemaMismatch,
+                _prompts.Get(PromptFileNames.CorrectionMutationReplanArguments),
+                exception,
+                RequestReplanToolName);
+        }
+    }
+
+    private sealed record ReplanRequest
+    {
+        public required string Reason { get; init; }
     }
 
     private static string NormalizeProposalJson(string json)
@@ -1194,10 +1265,11 @@ public sealed class MutationProposalApplication :
         ModelCorrectionCategory category,
         MalformedInvocationFailureKind kind,
         string safeMessage,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        string toolName = ProposeMutationsToolName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(safeMessage);
-        var diagnostic = CreateRepairableMutationDiagnostic(kind, safeMessage);
+        var diagnostic = CreateRepairableMutationDiagnostic(kind, safeMessage) with { ToolName = toolName };
         return innerException is null
             ? new RepairableMutationProposalException(category, diagnostic)
             : new RepairableMutationProposalException(category, diagnostic, innerException);

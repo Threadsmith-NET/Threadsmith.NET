@@ -22,6 +22,12 @@ Each generated set uses the existing private staging, exact-diff policy, transac
 
 Later implementation model turns and later approved plan tranches restore durable progress without restarting the objective execution or replaying applied mutations. A restored schema-1 checkpoint is rewritten with schema-2 progress before further work. `PlanContinuationPending` preserves cumulative original-file artifacts, changed files, lifecycle evidence, affected validation scope, compact validation status, budget use, behavior summaries, and risks while current-plan scope is replaced. Detailed historical validation payloads and batch diffs stay in their own artifacts and are not copied through every active-state snapshot. Final diff artifacts compare original per-path content, retained once before that path's first objective mutation, with the latest promoted workspace snapshot using the same bounded diff renderer as mutation previews. Original dirty content is part of the comparison basis. Historical runs without original content do not present concatenated batch patches as a net final diff.
 
+## Mid-tranche replanning
+
+With incremental planning enabled, implementation and correction turns may instead emit the exclusive `request_replan` decision with a nonempty `reason`. This creates a nonterminal `PlanReplanningPending` checkpoint and reuses the session's evidence/planning cycle, inspection tools, plan publication, and approval. No new mutation/inspection loop is introduced. The reason and interrupted plan accompany the authoritative receipt; `complete_objective` is unavailable while the plan is unfinished. Safe property casing is tolerated, while duplicate/conflicting decisions or fields receive existing corrective feedback before any staging.
+
+Replanning retains applied bytes, completed-step evidence, cumulative scope/budgets/net diff, and outstanding validation results. A replacement plan gets a new revision and ordinary approval; its mutations get new exact-diff authorization. If diagnostic baseline evidence already exists, it remains the diagnostic basis across replacement and later tranches so introduced failures cannot become ignored baseline failures. The transactional baseline still advances to current bytes. Reversals require explicit approved mutations. Neither ordinary continuation nor replacement is limited by plan count; execution budgets, cancellation, and normal policy remain authoritative.
+
 ## Permissions and paths
 
 - Preview/staging requires `TrustedRead`; commit requires `TrustedMutation` or `FullyTrustedAutomation`.

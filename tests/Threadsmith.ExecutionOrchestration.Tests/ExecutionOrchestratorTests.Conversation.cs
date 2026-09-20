@@ -171,7 +171,7 @@ public sealed partial class ExecutionOrchestratorTests
     [InlineData(ConversationContextMode.Stateless)]
     public async Task IncrementalPlanBoundary_ProvidesReceipt_AndRequiresExplicitCompletion(ConversationContextMode mode)
     {
-        await using var scenario = await ConversationScenario.CreateIncrementalAsync(maximumPlans: 1);
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
         await scenario.Store.SetModeAsync(scenario.SessionId, mode);
 
         var runId = await scenario.SubmitAndApprovePlanAsync();
@@ -186,7 +186,7 @@ public sealed partial class ExecutionOrchestratorTests
                 "ShellRunner declares the requested field.",
                 StringComparison.Ordinal));
         Assert.Contains(continuationRequest.Tools, tool => tool.Name == "complete_objective");
-        Assert.DoesNotContain(continuationRequest.Tools, tool => tool.Name == "propose_plan");
+        Assert.Contains(continuationRequest.Tools, tool => tool.Name == "propose_plan");
         Assert.Contains(
             archived.Messages,
             message => message.Role == ConversationRole.Assistant
@@ -201,13 +201,13 @@ public sealed partial class ExecutionOrchestratorTests
                 && message.Content?.Contains("Completed", StringComparison.Ordinal) == true);
     }
 
-    /// <summary>Neither exhaustion nor a clarification question is objective completion.</summary>
+    /// <summary>Neither a blocker nor a clarification question is objective completion.</summary>
     [Theory]
-    [InlineData(1, "More work remains, but the plan cap was reached.")]
-    [InlineData(4, "Which implementation should I use for the remaining work?")]
-    public async Task IncrementalPlanBoundary_OrdinaryTextDoesNotClaimSuccess(int maximumPlans, string response)
+    [InlineData("More work remains, but the dependency is unavailable.")]
+    [InlineData("Which implementation should I use for the remaining work?")]
+    public async Task IncrementalPlanBoundary_OrdinaryTextDoesNotClaimSuccess(string response)
     {
-        await using var scenario = await ConversationScenario.CreateIncrementalAsync(maximumPlans: maximumPlans);
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
         scenario.Model.ConfirmObjective = false;
         scenario.Model.ResponseText = response;
         var runId = await scenario.SubmitAndApprovePlanAsync();
@@ -216,14 +216,14 @@ public sealed partial class ExecutionOrchestratorTests
         var snapshot = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
         Assert.DoesNotContain(snapshot.Messages, message => message.Content?.Contains("\"Status\":\"Completed\"", StringComparison.Ordinal) == true);
         Assert.Contains(snapshot.Messages, message => message.Content == response);
-        Assert.Equal(maximumPlans > 1, scenario.Model.SecondRequest!.Tools.Any(tool => tool.Name == "propose_plan"));
+        Assert.Contains(scenario.Model.SecondRequest!.Tools, tool => tool.Name == "propose_plan");
     }
 
     /// <summary>Completion arguments outside the advertised empty schema receive a corrective turn.</summary>
     [Fact]
     public async Task IncrementalPlanBoundary_MalformedCompletionArgumentsAreCorrected()
     {
-        await using var scenario = await ConversationScenario.CreateIncrementalAsync(maximumPlans: 1);
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync();
         scenario.Model.EmitMalformedCompletionOnce = true;
         var correction = new TaskCompletionSource<ModelCorrectionAttempted>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -287,51 +287,50 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(ExecutionCheckpointPhase.Completed, (await fixture.Checkpoints.GetOutcomeAsync(request.RunId))!.Status);
     }
 
-    /// <summary>Verifies the conversation entry point can approve and execute a second plan on the same run.</summary>
-    [Fact]
-    public async Task IncrementalPlanBoundary_ProposesAndExecutesSecondPlan_OnSameRun()
+    /// <summary>Continuation uses normal approval for each plan, including beyond the former twelve-plan cap.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(13)]
+    public async Task IncrementalPlanBoundary_ProposesAndExecutesPlans_OnSameRun(int planCount)
     {
-        await using var scenario = await ConversationScenario.CreateIncrementalAsync(planProposalCount: 2);
-        var secondPlan = new TaskCompletionSource<PlanProposed>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondApproval = new TaskCompletionSource<RunTransitioned>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync(planProposalCount: planCount);
+        var approvals = Enumerable.Range(0, planCount)
+            .Select(_ => new TaskCompletionSource<RunTransitioned>(TaskCreationOptions.RunContinuationsAsynchronously))
+            .ToArray();
         var approvalTransitions = 0;
         await using var subscription = scenario.Events.Subscribe((domainEvent, _) =>
         {
-            if (domainEvent is PlanProposed { Plan.Revision: 2 } proposed)
+            if (domainEvent is RunTransitioned { Destination: RunPhase.AwaitingPlanApproval } transition)
             {
-                secondPlan.TrySetResult(proposed);
-            }
-
-            if (domainEvent is RunTransitioned { Destination: RunPhase.AwaitingPlanApproval } transition
-                && Interlocked.Increment(ref approvalTransitions) == 2)
-            {
-                secondApproval.TrySetResult(transition);
+                approvals[Interlocked.Increment(ref approvalTransitions) - 1].TrySetResult(transition);
             }
 
             return Task.CompletedTask;
         });
 
         var runId = await scenario.SubmitAndApprovePlanAsync();
-        var proposed = await secondPlan.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        var awaiting = await secondApproval.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.Equal(runId, proposed.RunId);
-        Assert.Equal(runId, awaiting.RunId);
-        Assert.True(await scenario.Dispatcher.DispatchAsync(new ApprovePlanCommand(scenario.SessionId, runId)));
+        foreach (var approval in approvals.Skip(1))
+        {
+            var awaiting = await approval.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            Assert.Equal(runId, awaiting.RunId);
+            Assert.True(await scenario.Dispatcher.DispatchAsync(new ApprovePlanCommand(scenario.SessionId, runId)));
+        }
+
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
 
         var archived = await scenario.Store.GetSnapshotAsync(scenario.SessionId);
         Assert.Equal(
-            2,
+            planCount,
             archived.Messages.Count(message => message.Role == ConversationRole.Assistant
                 && message.Content?.Contains("PlanContinuationPending", StringComparison.Ordinal) == true));
-        var finalRequest = scenario.Model.ThirdRequest
+        var finalRequest = scenario.Model.LastRequest
             ?? throw new InvalidOperationException("The final objective assessment did not reach the model.");
         Assert.Contains(
             finalRequest.Messages,
-            message => message.GetModelVisibleContent().Contains("2 tranche(s) complete", StringComparison.Ordinal));
+            message => message.GetModelVisibleContent().Contains($"{planCount} plan(s) used", StringComparison.Ordinal));
         var undoRun = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "undo that change"));
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(undoRun)));
-        Assert.Contains(scenario.Model.LastRequest!.Messages, message => message.SectionId == "recent-assistant"
+        Assert.Contains(scenario.Model.LastRequest.Messages, message => message.SectionId == "recent-assistant"
             && message.GetModelVisibleContent().Contains("\"Status\":\"Completed\"", StringComparison.Ordinal));
     }
 
@@ -397,7 +396,7 @@ public sealed partial class ExecutionOrchestratorTests
                 failAssistantArchive: false);
         }
 
-        public static Task<ConversationScenario> CreateRestoredAsync(ExecutionFixture fixture)
+        public static Task<ConversationScenario> CreateRestoredAsync(ExecutionFixture fixture, int planProposalCount = 0)
         {
             return CreateCoreAsync(
                 fixture.Events,
@@ -406,10 +405,12 @@ public sealed partial class ExecutionOrchestratorTests
                 CreateStartRequestFactory(fixture),
                 proposePlan: false,
                 failAssistantArchive: false,
+                planProposalCount: planProposalCount,
+                limits: ExecutionLimits.Default,
                 restoredSession: fixture.StartRequest.SessionId);
         }
 
-        public static Task<ConversationScenario> CreateIncrementalAsync(int planProposalCount = 1, int maximumPlans = 12)
+        public static Task<ConversationScenario> CreateIncrementalAsync(int planProposalCount = 1)
         {
             var events = new DomainEventStream();
             return CreateCoreAsync(
@@ -429,7 +430,7 @@ public sealed partial class ExecutionOrchestratorTests
                 proposePlan: true,
                 failAssistantArchive: false,
                 planProposalCount,
-                new ExecutionLimits { IncrementalPlanning = new IncrementalPlanningOptions { MaximumPlansPerObjective = maximumPlans } });
+                ExecutionLimits.Default);
         }
 
         public async Task<bool> CompletePlannedExecutionAsync()

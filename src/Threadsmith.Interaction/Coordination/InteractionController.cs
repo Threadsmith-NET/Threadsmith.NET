@@ -894,7 +894,7 @@ public class InteractionController
                 _activeRunId = runId;
             }
         }
-        else if (continuation.Phase == ExecutionCheckpointPhase.PlanContinuationPending)
+        else if (continuation.Phase is ExecutionCheckpointPhase.PlanContinuationPending or ExecutionCheckpointPhase.PlanReplanningPending)
         {
             lock (_gate)
             {
@@ -985,6 +985,7 @@ public class InteractionController
             or ExecutionCheckpointPhase.Cancelled
             or ExecutionCheckpointPhase.RolledBack
             or ExecutionCheckpointPhase.PlanContinuationPending
+            or ExecutionCheckpointPhase.PlanReplanningPending
             or ExecutionCheckpointPhase.MutationApprovalPending;
     }
 

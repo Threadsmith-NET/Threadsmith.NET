@@ -154,6 +154,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-model-requested-delegation-only.md` | Model-requested subagent launches and parent-run mutation preparation |
 | Maintenance | `maintenance-mutation-preview-reliability.md` | Current approved-file snapshots, text-anchor proposals, and accurate generation status |
 | Maintenance | `maintenance-skills-management-dialog.md` | Hierarchical skill verification and enablement dialog |
+| Maintenance | `maintenance-mid-tranche-replanning.md` | Implementation-requested replanning through the ordinary conversation cycle |
 
 ## Update discipline
 

@@ -36,13 +36,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System and phase prompts | 28 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 18 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
-| Correction prompts | 51 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 200 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Context prompts | 19 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
+| Correction prompts | 53 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
+| Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 14 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **314** | Complete deployed catalog. |
+| **Total** | **318** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -87,7 +87,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | `System-Phase-Compilation.md` | System guidance for the `Compilation` phase. | `None` |
 | `System-Phase-Default.md` | System guidance for the `Default` phase. | `None` |
 | `System-Phase-EvidenceCollection.md` | System guidance for the `EvidenceCollection` phase. | `None` |
-| `System-Phase-MutationProposal.md` | Active-step guidance for incremental mutation proposals through an offered tool or final JSON schema. The host scope's `CanCompleteWithoutChanges` records same-step validation eligibility; it grants no mutation authority. | `None` |
+| `System-Phase-MutationProposal.md` | Active-step guidance for incremental mutation proposals or an advertised exclusive replan request. The host scope's `CanCompleteWithoutChanges` records same-step validation eligibility; it grants no mutation authority. | `None` |
 | `System-Phase-Validation.md` | System guidance for the `Validation` phase. | `None` |
 
 #### `RepositoryInstructions` family
@@ -103,7 +103,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | `None` |
-| `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields, host-owned bookkeeping exclusions, and offered-tool versus final-JSON output guidance. | `None` |
+| `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields, host-owned bookkeeping exclusions, and exclusive replan output guidance when advertised. | `None` |
 | `System-RequiredOutput-Plan.md` | Flat plan-content JSON guidance; the host assigns schema version, revision and step IDs. | `None` |
 
 #### `SystemPrompt` family
@@ -130,7 +130,8 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
-| `Context-IncrementalPlanning.md` | Current objective plan count, soft tranche targets, explicit completion decision, resumable blockers, and host plan-count cap. | [`CompletedPlans`](#placeholder-completedplans), [`TargetSteps`](#placeholder-targetsteps), [`TargetFiles`](#placeholder-targetfiles), [`MaximumPlans`](#placeholder-maximumplans) |
+| `Context-IncrementalPlanning.md` | Plans used including interrupted plans, soft tranche targets, explicit completion when available, and resumable blockers; no plan-count limit. | [`PlansUsed`](#placeholder-plansused), [`TargetSteps`](#placeholder-targetsteps), [`TargetFiles`](#placeholder-targetfiles) |
+| `Context-Replanning.md` | Carries unfinished-plan investigation, retained applied work/failures, replacement scope, and unavailable completion into ordinary planning. | `None` |
 
 #### `ActiveTurnCompaction` family
 
@@ -211,7 +212,9 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-Mutation-ImplementationRequiresTool.md` | Corrective guidance when a requested mutation requires the proposal tool. | `None` |
+| `Correction-Mutation-ImplementationRequiresTool.md` | Corrective guidance requiring a proposal tool or an advertised exclusive replan request. | `None` |
+| `Correction-Mutation-ExclusiveDecision.md` | Rejects mixed or repeated implementation decisions before staging. | `None` |
+| `Correction-Mutation-ReplanArguments.md` | Requests a single nonempty reason object through existing corrective feedback. | `None` |
 | `Correction-Mutation-PostApplyValidation.md` | Corrective or retry guidance for `Mutation-PostApplyValidation`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
 | `Correction-Mutation-Proposal.md` | Corrective or retry guidance for `Mutation-Proposal`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
 | `Correction-Mutation-RenameSymbolOverlap.md` | Corrective guidance for overlapping semantic and text mutations. | [`RelativePath`](#placeholder-relativepath) |
@@ -225,7 +228,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 | `Correction-Plan-SanityEvidence.md` | Corrective or retry guidance for `Plan-SanityEvidence`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
 | `Correction-Plan-SanityStructuredOutput.md` | Revision correction using the same flat plan-content JSON shape. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
 | `Correction-Plan-Schema.md` | Field-specific plan-content correction (`Reason`); no model-authored bookkeeping fields. | [`Reason`](#placeholder-reason) |
-| `Correction-Plan-WrongPhase.md` | Rejects planning decisions outside their advertised availability, including plan-cap exhaustion. | `None` |
+| `Correction-Plan-WrongPhase.md` | Rejects planning decisions outside their advertised availability, including completion of unfinished plans. | `None` |
 
 #### `PlanProposal` family
 
@@ -638,7 +641,8 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-propose_mutations-Description.md` | Incremental active-step mutation guidance, completion hints, and host-owned identity/policy boundaries. | `None` |
+| `Tool-propose_mutations-Description.md` | Incremental active-step mutation guidance, completion hints, advertised replanning, and host-owned identity/policy boundaries. | `None` |
+| `Tool-request_replan-Description.md` | Exclusive implementation/correction decision returning to the existing evidence/planning/approval cycle without writes or completion. | `None` |
 
 #### `propose_plan` family
 
@@ -808,7 +812,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-classifications"></a>`Classifications` | Comma-separated source classifications, currently generated and/or linked. |
 | <a id="placeholder-code"></a>`Code` | Stable diagnostic or validation code shown with a result. |
 | <a id="placeholder-completeness"></a>`Completeness` | Host-computed source completeness state, such as complete, partial, drifted, or omitted. |
-| <a id="placeholder-completedplans"></a>`CompletedPlans` | Number of successfully validated plan tranches already completed for the current objective. |
+| <a id="placeholder-plansused"></a>`PlansUsed` | Number of approved plan tranches used by the current objective, including interrupted plans. |
 | <a id="placeholder-confidence"></a>`Confidence` | Host- or child-reported confidence attached to a finding or semantic result. |
 | <a id="placeholder-containingsymbol"></a>`ContainingSymbol` | Symbol that contains the reported diagnostic location. |
 | <a id="placeholder-containingsymbolblock"></a>`ContainingSymbolBlock` | Already-rendered optional containing-symbol block inserted into a diagnostic item. |
@@ -862,7 +866,6 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-maximumattempts"></a>`MaximumAttempts` | Host-enforced maximum correction or retry attempts. |
 | <a id="placeholder-maximumiterations"></a>`MaximumIterations` | Host-enforced maximum workflow/model-loop iterations. |
 | <a id="placeholder-maximummatches"></a>`MaximumMatches` | Host-enforced maximum number of returned matches. |
-| <a id="placeholder-maximumplans"></a>`MaximumPlans` | Configured maximum number of plan tranches that one objective may propose. |
 | <a id="placeholder-defaultlines"></a>`DefaultLines` | Configured default line count for read_file. |
 | <a id="placeholder-maximumlines"></a>`MaximumLines` | Configured maximum line count for read_file. |
 | <a id="placeholder-maximumcontentbytes"></a>`MaximumContentBytes` | Configured UTF-8 content byte limit for the advertised read_file or write_file tool. |

@@ -209,6 +209,9 @@ public static class PromptFileNames
     /// <summary>Gets the incremental objective-planning guidance rendered by the host.</summary>
     public const string ContextIncrementalPlanning = "Context-IncrementalPlanning.md";
 
+    /// <summary>Gets guidance for replacing unfinished work after a replan request.</summary>
+    public const string ContextReplanning = "Context-Replanning.md";
+
     /// <summary>Gets the stable filename for the ContextCurrentTurnHostAuthorizedUserUrl prompt asset.</summary>
     public const string ContextCurrentTurnHostAuthorizedUserUrl = "Context-CurrentTurn-HostAuthorizedUserUrl.md";
 
@@ -407,6 +410,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolProposeMutationsDescription prompt asset.</summary>
     public const string ToolProposeMutationsDescription = "Tool-propose_mutations-Description.md";
 
+    /// <summary>Gets the description of the implementation replanning decision.</summary>
+    public const string ToolRequestReplanDescription = "Tool-request_replan-Description.md";
+
     /// <summary>Gets the stable filename for the ToolDelegateAgentsDescription prompt asset.</summary>
     public const string ToolDelegateAgentsDescription = "Tool-delegate_agents-Description.md";
 
@@ -517,6 +523,12 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the CorrectionMutationImplementationRequiresTool prompt asset.</summary>
     public const string CorrectionMutationImplementationRequiresTool = "Correction-Mutation-ImplementationRequiresTool.md";
+
+    /// <summary>Requires one exclusive implementation decision.</summary>
+    public const string CorrectionMutationExclusiveDecision = "Correction-Mutation-ExclusiveDecision.md";
+
+    /// <summary>Explains the minimal replanning request shape.</summary>
+    public const string CorrectionMutationReplanArguments = "Correction-Mutation-ReplanArguments.md";
 
     /// <summary>Gets the stable filename for the CorrectionMutationRenameSymbolSemanticUnavailable prompt asset.</summary>
     public const string CorrectionMutationRenameSymbolSemanticUnavailable = "Correction-Mutation-RenameSymbolSemanticUnavailable.md";
@@ -1098,6 +1110,7 @@ public static class PromptFileNames
         ContextActiveRunSteering,
         ContextExecutionOutcome,
         ContextIncrementalPlanning,
+        ContextReplanning,
         ContextCurrentTurnHostAuthorizedUserUrl,
         ToolListFilesDescription,
         ToolReadFileDescription,
@@ -1164,6 +1177,7 @@ public static class PromptFileNames
         ToolProposePlanDescription,
         ToolCompleteObjectiveDescription,
         ToolProposeMutationsDescription,
+        ToolRequestReplanDescription,
         ToolDelegateAgentsDescription,
         AdapterMcpExplicitReadPolicyDescription,
         AdapterMcpImportedToolFallbackDescription,
@@ -1214,6 +1228,8 @@ public static class PromptFileNames
         CorrectionSearchBounds,
         CorrectionRunProcessUnsupportedShell,
         CorrectionMutationImplementationRequiresTool,
+        CorrectionMutationExclusiveDecision,
+        CorrectionMutationReplanArguments,
         CorrectionMutationRenameSymbolSemanticUnavailable,
         CorrectionMutationRenameSymbolOverlap,
         CorrectionMutationReplaceTextAmbiguousExpectedText,
@@ -1435,6 +1451,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper,
             PromptFileNames.ContextActiveTurnSummaryHostFileLists,
             PromptFileNames.ContextIncrementalPlanning,
+            PromptFileNames.ContextReplanning,
             PromptFileNames.SystemToolInventoryNativeSeparate,
         };
         var executionAssets = new HashSet<string>(StringComparer.Ordinal)
@@ -1442,6 +1459,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolProposePlanDescription,
             PromptFileNames.ToolCompleteObjectiveDescription,
             PromptFileNames.ToolProposeMutationsDescription,
+            PromptFileNames.ToolRequestReplanDescription,
             PromptFileNames.ToolDelegateAgentsDescription,
             PromptFileNames.CorrectionProviderInvocationInvalid,
             PromptFileNames.CorrectionEmptyResponse,
@@ -1484,6 +1502,8 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionSemanticFirstSearchFindSymbol,
             PromptFileNames.CorrectionSemanticFirstSearchRejected,
             PromptFileNames.CorrectionMutationImplementationRequiresTool,
+            PromptFileNames.CorrectionMutationExclusiveDecision,
+            PromptFileNames.CorrectionMutationReplanArguments,
             PromptFileNames.CorrectionMutationRenameSymbolSemanticUnavailable,
             PromptFileNames.CorrectionMutationRenameSymbolOverlap,
             PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
@@ -1661,10 +1681,9 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
                     [PromptFileNames.ContextExecutionOutcome] = Set("OutcomeJson"),
                     [PromptFileNames.ContextIncrementalPlanning] = Set(
-                        "CompletedPlans",
+                        "PlansUsed",
                         "TargetSteps",
-                        "TargetFiles",
-                        "MaximumPlans"),
+                        "TargetFiles"),
                     [PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl] = Set("Ordinal", "UserUrlId"),
                     [PromptFileNames.SystemToolInventoryTextFallback] = Set("ToolId", "Description", "Schema"),
                     [PromptFileNames.ToolRunProcessDescription] = Set("ShellLanguage"),

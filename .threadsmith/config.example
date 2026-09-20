@@ -624,12 +624,11 @@
   "planning": {
     "approvalPolicy": "reviewAll",
     // A validated plan can return to planning for the next cohesive tranche.
-    // Step/file values are soft model guidance; the plan count is a host safety cap.
+    // Step/file values are soft model guidance; existing execution budgets remain authoritative.
     "incrementalPlans": {
       "enabled": true,
       "targetSteps": 4,
-      "targetFiles": 8,
-      "maximumPlansPerObjective": 12
+      "targetFiles": 8
     }
   },
 

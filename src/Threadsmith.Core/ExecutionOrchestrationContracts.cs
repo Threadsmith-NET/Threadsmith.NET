@@ -64,6 +64,9 @@ public enum ExecutionCheckpointPhase
 
     /// <summary>The current plan completed and the objective is ready for another planning turn.</summary>
     PlanContinuationPending,
+
+    /// <summary>The unfinished plan requires renewed evidence and a separately approved replacement.</summary>
+    PlanReplanningPending,
 }
 
 /// <summary>Durable state of one idempotent side-effect operation.</summary>
@@ -424,6 +427,9 @@ public sealed record ExecutionOutcomeProjection : IProjection
 
     /// <summary>Cancellation/resumption history.</summary>
     public IReadOnlyList<string> ContinuationHistory { get; init; } = [];
+
+    /// <summary>Sanitized model explanation for a paused, unfinished plan.</summary>
+    public string? ReplanReason { get; init; }
 }
 
 /// <summary>Start input assembled by the host after plan approval.</summary>
@@ -457,14 +463,17 @@ public sealed record ExecutionStartRequest
     public bool AllowPlanContinuation { get; init; }
 }
 
-/// <summary>One successfully validated plan boundary within an incremental objective.</summary>
+/// <summary>A completed or interrupted plan boundary within an incremental objective.</summary>
 public sealed record ExecutionPlanBoundary
 {
-    /// <summary>One-based completed plan ordinal.</summary>
+    /// <summary>One-based plan ordinal, including plans interrupted for replanning.</summary>
     public required int PlanOrdinal { get; init; }
 
     /// <summary>Authoritative progress through the completed plan boundary.</summary>
     public required ExecutionOutcomeProjection Progress { get; init; }
+
+    /// <summary>The interrupted approved plan when replacement of unfinished work is required.</summary>
+    public ImplementationPlan? PlanUnderRevision { get; init; }
 }
 
 /// <summary>Host authorization for applying one staged execution mutation.</summary>
@@ -583,7 +592,7 @@ public interface IExecutionOrchestrator
             new NotSupportedException("Session resume is not supported by this orchestrator."));
     }
 
-    /// <summary>Waits for the next successfully validated plan boundary.</summary>
+    /// <summary>Waits for the next completed-plan or replanning boundary.</summary>
     Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
         RunId runId,
         int afterPlanOrdinal,

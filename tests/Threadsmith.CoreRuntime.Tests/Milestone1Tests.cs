@@ -1003,27 +1003,32 @@ public static partial class Milestone1Tests
         Assert.Equal(PresentationTextRole.Warning, role);
     }
 
-    /// <summary>A completed plan returns the shared run to active planning and releases the validation guard.</summary>
-    [Fact]
-    public static async Task TuiController_PlanContinuation_RestoresActiveRunAndReleasesValidationGuard()
+    /// <summary>Completed and interrupted plan boundaries reuse active planning and release the validation guard.</summary>
+    [Theory]
+    [InlineData(ExecutionCheckpointPhase.PlanContinuationPending, "assessing the remaining objective", PresentationTextRole.Status)]
+    [InlineData(ExecutionCheckpointPhase.PlanReplanningPending, "applied changes are retained", PresentationTextRole.Warning)]
+    public static async Task TuiController_PlanContinuation_RestoresActiveRunAndReleasesValidationGuard(
+        ExecutionCheckpointPhase phase,
+        string expectedMessage,
+        PresentationTextRole expectedRole)
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: false)
         {
-            ResumePhase = ExecutionCheckpointPhase.PlanContinuationPending,
+            ResumePhase = phase,
         };
         var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
         await StageAndApplyMutationAsync(controller, fixture);
 
         var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
 
-        Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, continuation.Phase);
+        Assert.Equal(phase, continuation.Phase);
         Assert.Equal(fixture.RunId, controller.ActiveRunId);
         Assert.Null(controller.BackgroundValidationRunId);
         (var message, var role) = ConversationalShell.FormatPostApplyValidationResult(
             continuation.Phase,
             string.Empty);
-        Assert.Contains("assessing the remaining objective", message, StringComparison.Ordinal);
-        Assert.Equal(PresentationTextRole.Status, role);
+        Assert.Contains(expectedMessage, message, StringComparison.Ordinal);
+        Assert.Equal(expectedRole, role);
     }
 
     /// <summary>Post-apply validation failure is not presented as successful completion.</summary>

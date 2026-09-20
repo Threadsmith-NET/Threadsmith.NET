@@ -354,20 +354,23 @@ public sealed record MutationProposalResult
     /// <summary>Optional model claim that the selected approved step is complete.</summary>
     public bool? StepComplete { get; init; }
 
-    /// <summary>Sanitized explanation of the proposed progress or completion claim.</summary>
+    /// <summary>Sanitized explanation of the proposed progress, completion claim, or replanning request.</summary>
     public required string Rationale { get; init; }
 
     /// <summary>Cumulative execution-budget usage after this proposal turn.</summary>
     public BudgetDimensions? BudgetUsed { get; init; }
 
+    /// <summary>Whether the reason requests renewed planning instead of a mutation or completion.</summary>
+    public bool ReplanRequested { get; init; }
+
     /// <summary>Whether this is a no-change completion candidate.</summary>
-    public bool IsCompletionOnly => StagedMutationSet is null && StepComplete == true;
+    public bool IsCompletionOnly => !ReplanRequested && StagedMutationSet is null && StepComplete == true;
 }
 
 /// <summary>Produces one validated incremental proposal through the established mutation path.</summary>
 public interface IIncrementalMutationProposalProvider
 {
-    /// <summary>Produces staged changes or a no-change completion candidate.</summary>
+    /// <summary>Produces staged changes, a no-change completion candidate, or a replanning request.</summary>
     Task<MutationProposalResult> ProposeAsync(
         ProposeMutationSetCommand command,
         CancellationToken cancellationToken = default);
@@ -530,6 +533,9 @@ public sealed record ProposeMutationSetCommand(
 {
     /// <summary>Optional host-selected step and batch scope for approved-plan execution.</summary>
     public MutationExecutionScope? ExecutionScope { get; init; }
+
+    /// <summary>Whether the owning execution can return a request_replan decision to planning.</summary>
+    public bool AllowReplanning { get; init; }
 
     /// <summary>Cumulative budget usage to restore before this proposal turn.</summary>
     public BudgetDimensions? BudgetUsed { get; init; }

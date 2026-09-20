@@ -483,7 +483,7 @@ public sealed class MutationProposalApplication :
         var budgetUsage = new ModelRequestBudgetUsage();
         try
         {
-            budgetUsage.Start(operationBudget);
+            budgetUsage.Start(operationBudget, modelRequest);
             await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, modelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
             {
                 if (chunk.Usage is not null)
@@ -895,6 +895,7 @@ public sealed class MutationProposalApplication :
         var modelRequest = new ModelStreamRequest
         {
             RunId = command.RunId,
+            CacheAffinityId = command.SessionId.Value,
             Input = context.ModelInput,
             MemorySubmission = context.RepositoryMemoryInclusions is { Count: > 0 } inclusions
                 ? new RepositoryMemorySubmission(command.SessionId, memoryIdentity, inclusions)

@@ -570,7 +570,7 @@ public sealed partial class SessionApplication
                 try
                 {
                     loopState.TransientState.ValidateHistory(round.ModelRequest);
-                    streamState.BudgetUsage.Start(round.Registration.Budget);
+                    streamState.BudgetUsage.Start(round.Registration.Budget, round.ModelRequest);
                     await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
                     {
                         await ProcessModelChunkAsync(
@@ -2279,6 +2279,7 @@ public sealed partial class SessionApplication
         {
             PlanLimits = _limits.Plan,
             RunId = runId,
+            CacheAffinityId = registration.SessionId.Value,
             MemorySubmission = context?.RepositoryMemoryInclusions is { Count: > 0 } inclusions && registration.RepositoryIdentity is { } repositoryPath
                 ? new RepositoryMemorySubmission(registration.SessionId, RepositoryIdentity.Create(repositoryPath), inclusions)
                 : null,

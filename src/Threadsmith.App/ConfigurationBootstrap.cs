@@ -170,7 +170,6 @@ internal static class ConfigurationBootstrap
             ["diagnostics:maxBytes"] = (64 * 1024 * 1024).ToString(CultureInfo.InvariantCulture),
             ["diagnostics:recentEventsPerSession"] = "1000",
             ["mcp:defaultDrainKillTimeoutSeconds"] = "10",
-            ["budget:tokens"] = "100000",
             ["budget:calls"] = "1000",
             ["budget:wallClockSeconds"] = "3600",
             ["budget:cost"] = "0",

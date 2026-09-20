@@ -11,6 +11,8 @@ using Xunit;
 /// <summary>Verifies semantic freshness is established before a model run is admitted.</summary>
 public static class SessionApplicationSemanticAdmissionTests
 {
+    private const int NonBudgetTestTokenLimit = 10_000;
+
     /// <summary>A pending freshness check precedes run budget, registration, and durable activity.</summary>
     [Fact]
     public static async Task HandleAsync_PendingSemanticRefresh_WaitsBeforeRunAdmission()
@@ -27,7 +29,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             new FakeModelProvider(new ScriptedSession()),
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -35,7 +37,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
             },
             semanticRefreshCoordinator: refresh);
         var sessionId = await application.HandleAsync(new CreateSessionCommand("semantic admission"));
@@ -78,7 +80,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             new FakeModelProvider(new ScriptedSession()),
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -86,7 +88,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
             },
             semanticRefreshCoordinator: refresh);
         var sessionId = await application.HandleAsync(new CreateSessionCommand("semantic admission"));
@@ -110,7 +112,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             provider,
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -148,7 +150,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             provider,
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -279,7 +281,7 @@ public static class SessionApplicationSemanticAdmissionTests
                     new ScriptedTurn { Text = "alias complete" },
                 ],
             }),
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -287,7 +289,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
             },
             semanticRefreshCoordinator: refresh);
         var publisherSessionId = await application.HandleAsync(new CreateSessionCommand("publisher alias"));
@@ -349,7 +351,7 @@ public static class SessionApplicationSemanticAdmissionTests
             {
                 Turns = [new ScriptedTurn { Text = "complete" }],
             }),
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -357,7 +359,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
             },
             semanticRefreshCoordinator: refresh);
         var publisherSessionId = await application.HandleAsync(new CreateSessionCommand("unbound publisher"));
@@ -405,7 +407,7 @@ public static class SessionApplicationSemanticAdmissionTests
             {
                 Turns = [new ScriptedTurn { Text = "complete" }],
             }),
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -413,7 +415,7 @@ public static class SessionApplicationSemanticAdmissionTests
             budgetFactory: () =>
             {
                 Interlocked.Increment(ref budgetFactoryCalls);
-                return new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1)));
+                return new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1)));
             },
             semanticRefreshCoordinator: refresh);
         var sessionId = await application.HandleAsync(new CreateSessionCommand("semantic race"));
@@ -456,7 +458,7 @@ public static class SessionApplicationSemanticAdmissionTests
         var application = new SessionApplication(
             events,
             new FakeModelProvider(new ScriptedSession()),
-            new ExecutionBudget(new BudgetDimensions(100, 10, TimeSpan.FromMinutes(1))),
+            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             executionOrchestrator: orchestrator,

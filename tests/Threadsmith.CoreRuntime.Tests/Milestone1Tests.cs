@@ -798,7 +798,7 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task FakeModel_MissingUsage_DoesNotCrashBudgetLayer()
     {
-        var budget = new ExecutionBudget(new BudgetDimensions(0, 1, TimeSpan.FromMinutes(1)));
+        var budget = new ExecutionBudget(new BudgetDimensions(10_000, 1, TimeSpan.FromMinutes(1)));
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession { Turns = [new ScriptedTurn { Text = "no usage" }] },
             budget: budget);

@@ -255,6 +255,57 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.False(client.DefaultRequestHeaders.Contains("X-Tenant"));
     }
 
+    /// <summary>Official OpenAI endpoints get cache affinity by default while other compatible servers require opt-in.</summary>
+    [Theory]
+    [InlineData("https://api.openai.com/v1/", null, true)]
+    [InlineData("https://models.example/v1/", null, false)]
+    [InlineData("https://models.example/v1/", true, true)]
+    [InlineData("https://api.openai.com/v1/", false, false)]
+    public static async Task ConfiguredProvider_PromptCacheKey_UsesSafeCompatibilityDefault(
+        string baseUri,
+        bool? configuredValue,
+        bool expected)
+    {
+        string? requestJson = null;
+        using var client = new HttpClient(new RecordingHandler(request =>
+        {
+            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
+            };
+        }));
+        var configured = CreateProvider(
+            "cache-affinity",
+            new Uri(baseUri),
+            [CreateModel(FirstModelId, "model")]) with
+        {
+            PromptCacheKeyEnabled = configuredValue,
+        };
+        var catalog = new EffectiveModelProviderCatalog(
+            new ModelProviderCatalogConfiguration { Providers = [configured] },
+            new ModelProviderRegistry([new OpenAiCompatibleProviderRegistration()]));
+        var provider = new ConfiguredModelProvider(client, catalog, (_, _) => Task.FromResult<string?>(null));
+        var cacheAffinityId = Guid.NewGuid();
+
+        _ = await provider.StreamAsync(
+            new ModelStreamRequest
+            {
+                RunId = RunId.New(),
+                CacheAffinityId = cacheAffinityId,
+                ResolvedProfileId = FirstModelId,
+                Input = "hello",
+            },
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        using var body = JsonDocument.Parse(Assert.IsType<string>(requestJson));
+        Assert.Equal(expected, body.RootElement.TryGetProperty("prompt_cache_key", out var key));
+        if (expected)
+        {
+            Assert.Equal(cacheAffinityId.ToString("D"), key.GetString());
+        }
+    }
+
     /// <summary>Adapted catalog profiles include provider display metadata without changing request settings.</summary>
     [Fact]
     public static async Task AdaptedCatalog_ProfileIncludesProviderDisplayName()

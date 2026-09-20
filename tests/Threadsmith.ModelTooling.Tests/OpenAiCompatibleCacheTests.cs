@@ -17,10 +17,11 @@ public static class OpenAiCompatibleCacheTests
     {
         var handler = new CaptureHandler("{}");
         using var client = new HttpClient(handler);
-        var provider = Provider(client);
+        var provider = Provider(client, promptCacheKeyEnabled: true);
+        var cacheAffinityId = Guid.NewGuid();
         var request = new ModelStreamRequest
         {
-            RunId = RunId.New(), Input = "legacy must not leak",
+            RunId = RunId.New(), CacheAffinityId = cacheAffinityId, Input = "legacy must not leak",
             Messages =
             [
                 Message(ModelMessageRole.System, "host-policy", "stable host"),
@@ -64,6 +65,21 @@ public static class OpenAiCompatibleCacheTests
         Assert.Equal("call-1", tail[4].GetProperty("tool_calls")[0].GetProperty("id").GetString());
         Assert.Equal("call-1", tail[5].GetProperty("tool_call_id").GetString());
         Assert.All(handler.Requests, body => Assert.True(body.GetProperty("stream_options").GetProperty("include_usage").GetBoolean()));
+        Assert.All(handler.Requests, body => Assert.Equal(cacheAffinityId.ToString("D"), body.GetProperty("prompt_cache_key").GetString()));
+    }
+
+    /// <summary>Unknown compatible endpoints omit the optional OpenAI cache-routing extension by default.</summary>
+    [Fact]
+    public static async Task PromptCacheKeyIsOptInForCompatibleEndpoints()
+    {
+        var handler = new CaptureHandler("{}");
+        using var client = new HttpClient(handler);
+
+        _ = await Provider(client).StreamAsync(
+            new ModelStreamRequest { RunId = RunId.New(), Input = "synthetic" },
+            TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(Assert.Single(handler.Requests).TryGetProperty("prompt_cache_key", out _));
     }
 
     /// <summary>Both standard read counters and vLLM creation counters survive the final streaming usage chunk.</summary>
@@ -128,13 +144,16 @@ public static class OpenAiCompatibleCacheTests
         Role = role, SectionId = section, Content = [new ModelContentPart { Content = text }],
     };
 
-    private static OpenAiCompatibleModelProvider Provider(HttpClient client) => new(client, new ModelProfile
-    {
-        Id = ModelProfileId.New(), Name = "synthetic", Provider = "openai-compatible", ModelId = "synthetic",
-        Endpoint = new Uri("https://models.example/v1/chat/completions"), ContextWindow = 32000, MaximumOutputTokens = 4000,
-        Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-        RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1 },
-    });
+    private static OpenAiCompatibleModelProvider Provider(HttpClient client, bool promptCacheKeyEnabled = false) => new(
+        client,
+        new ModelProfile
+        {
+            Id = ModelProfileId.New(), Name = "synthetic", Provider = "openai-compatible", ModelId = "synthetic",
+            Endpoint = new Uri("https://models.example/v1/chat/completions"), ContextWindow = 32000, MaximumOutputTokens = 4000,
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1 },
+        },
+        promptCacheKeyEnabled: promptCacheKeyEnabled);
 
     private sealed class CaptureHandler : HttpMessageHandler
     {

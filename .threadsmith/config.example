@@ -449,7 +449,7 @@
         "maximumPerAssociatedArtifactCharacters": 4096,
         "maximumAssociatedArtifactBytes": 131072,
         "maximumAssociatedArtifactNameMatches": 8,
-        "timeoutMilliseconds": 10000
+        "timeoutMilliseconds": 60000
       },
       "maximumCurrentSourceFileBytes": 1048576,
       "maximumCodeExploreCatalogEntries": 50000,
@@ -497,7 +497,7 @@
       "maximumArtifactEnumerationEntries": 5000,
       "maximumGitInventoryOutputCharacters": 524288,
       "gitInventoryTimeoutMilliseconds": 10000,
-      "outerTimeoutMilliseconds": 60000,
+      "outerTimeoutMilliseconds": 75000,
       "maximumResultBytes": 1048576,
       "maximumCursorCharacters": 960,
       "maximumCursorPayloadBytes": 4096,

@@ -2124,29 +2124,26 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Model-facing tool descriptions enforce semantic-first selection.</summary>
+    /// <summary>Model-facing tool descriptions route known symbols to the narrow matching semantic operation.</summary>
     [Fact]
-    public static void SemanticToolDescriptions_RequireSemanticFirstSelection()
+    public static void SemanticToolDescriptions_RouteKnownSymbolRelationships()
     {
         var resolver = new DescriptionSemanticResolver();
-        string[] descriptions =
-        [
-            new FindSymbolTool(resolver, TestPromptLoader.Instance).Definition.Description,
-            new FindReferencesTool(resolver, TestPromptLoader.Instance).Definition.Description,
-            new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description,
-        ];
+        var symbol = new FindSymbolTool(resolver, TestPromptLoader.Instance).Definition.Description;
+        var references = new FindReferencesTool(resolver, TestPromptLoader.Instance).Definition.Description;
+        var implementations = new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description;
 
-        Assert.All(descriptions, description =>
-        {
-            Assert.Contains("MUST use", description, StringComparison.Ordinal);
-            Assert.Contains("before search", description, StringComparison.Ordinal);
-        });
+        Assert.Contains("known or likely C# declaration", symbol, StringComparison.Ordinal);
+        Assert.Contains("Use read_file for a known file", symbol, StringComparison.Ordinal);
+        Assert.Contains("Use code_explore only", symbol, StringComparison.Ordinal);
+        Assert.Contains("reference or usage relationships", references, StringComparison.Ordinal);
+        Assert.Contains("implementation or inheritance relationships", implementations, StringComparison.Ordinal);
         Assert.Contains(
             "interface implementations",
-            new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description,
+            implementations,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Use this directly to locate relevant text within a known file",
+            "Use directly for text in a known file",
             new SearchTextTool(TestPromptLoader.Instance).Definition.Description,
             StringComparison.Ordinal);
     }

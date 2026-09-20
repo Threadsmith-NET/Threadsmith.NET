@@ -132,7 +132,7 @@ public static class Milestone4Tests
             request.Input,
             StringComparison.Ordinal);
         Assert.Contains(
-            "structural/semantic/index tools before broad text search",
+            "narrowest applicable structural, semantic, index, search, or direct-read operation",
             request.Input,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
@@ -588,6 +588,31 @@ public static class Milestone4Tests
         Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(first)));
         Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(second)));
         Assert.Equal(2, model.Requests.Count);
+    }
+
+    /// <summary>An estimated request that cannot fit the remaining execution budget is rejected before dispatch.</summary>
+    [Fact]
+    public static async Task SessionApplication_RequestEstimateExceedsBudget_DoesNotDispatchProvider()
+    {
+        await using var events = new DomainEventStream();
+        var model = new ConversationalModelProvider("must not be dispatched");
+        var application = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(1, 10, TimeSpan.FromMinutes(1))),
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("request admission"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "inspect the repository"));
+
+        var exception = await Assert.ThrowsAsync<BudgetExceededException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Contains("cannot admit a model request estimated to require", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(model.Requests);
     }
 
     /// <summary>Malformed provider-boundary output receives a generic correction-attempt event before retrying.</summary>
@@ -3086,10 +3111,12 @@ public static class Milestone4Tests
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
             var workspaceId = WorkspaceId.New();
             var semanticResolver = new FixedSemanticResolver(workspaceId);
+            var codeExplore = new UnexpectedCodeExploreService();
             var registry = new ToolRegistry(
             [
                 new SearchTextTool(TestPromptLoader.Instance),
                 new FindSymbolTool(semanticResolver, TestPromptLoader.Instance),
+                new CodeExploreTool(codeExplore, TestPromptLoader.Instance),
             ]);
             var pipeline = new ToolInvocationPipeline(
                 registry,
@@ -3158,6 +3185,7 @@ public static class Milestone4Tests
 
             Assert.Equal(fileScoped ? 2 : 3, model.Requests.Count);
             Assert.Equal(!fileScoped, semanticResolver.FindSymbolsCalled);
+            Assert.False(codeExplore.WasCalled);
             Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(sessionId, runId, "test complete")));
             Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
         }
@@ -4207,17 +4235,21 @@ public static class Milestone4Tests
 
     /// <summary>Discovery guidance allows direct known-file inspection without a preliminary semantic call.</summary>
     [Fact]
-    public static void StableSystemPolicy_RequiresSemanticFirstToolSelection()
+    public static void StableSystemPolicy_RequiresNarrowestSufficientToolSelection()
     {
         var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
             + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
 
         Assert.Contains(
-            "For repository-wide C# symbol discovery and compiler-backed relationships, use an applicable semantic tool first",
+            "Choose the narrowest, least expensive tool",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
-            "read_file and file-scoped search can directly answer",
+            "For a known repository-relative file, read_file",
+            policy,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "For a known type, interface, method, property, field, or event, use find_symbol",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(

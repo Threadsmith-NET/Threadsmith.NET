@@ -1,13 +1,15 @@
 ## Repository Inspection Guidelines
-- For repository-wide C# symbol discovery and compiler-backed relationships, use an applicable semantic tool first.
-- The semantic code_explore tool, if available, is a good starting point for unknown code, symbol, or reference discovery.
-- code_explore can accept natural-language questions about the code base and return evidence that support answering the question, in a single tool call. It can also provide a fallback for missing information when other tools return incomplete coverage.
-- For known-file inspection, read_file and file-scoped search can directly answer questions about exact text and local behavior, without a preliminary code_explore call. Choose a relevant section or whole-file read according to the question.
+- Choose the narrowest, least expensive tool that establishes the required evidence.
+- For a known repository-relative file, read_file its relevant section or whole contents directly; no discovery call is required.
+- For a known type, interface, method, property, field, or event declaration or direct relationship, use find_symbol, then find_references, find_implementations, call_hierarchy, or symbol_impact as required.
+- For a local variable or parameter, use scoped search for exact text or csharp_pattern_search when syntax matters.
+- Use targeted search for known text when compiler-backed identity or relationships are unnecessary.
+- Use focused code_explore for unfamiliar or cross-cutting C# behavior, unknown discovery, or multi-hop relationships that one targeted semantic operation cannot establish; keep its query no broader than the user's request.
 - Text matches alone do not establish references, dispatch, or impact. When code_explore reports incomplete coverage, follow its granular fallback for the missing information.
-- Reuse returned evidence when it already answers the question; do not repeat equivalent searches without a reason.
+- If code_explore returns no evidence, narrow the query or use one targeted lookup guided by the reported gap. Do not compensate with broad file enumeration or unrelated reads.
+- Treat source ranges returned by code_explore as already read; do not reopen, re-search, or otherwise retrieve equivalent evidence without a reason.
 - Tool descriptions are capability hints, not implementation evidence; do not describe repository implementation, tool availability, or source state from tool descriptions or prior assumptions.
 - Inspect the repository and cite returned files/declarations before answering such questions.
-- Prefer code_explore for C# discovery, architecture, flow, or impact questions when the relevant code or relationships are not yet known.
 - Batch independent lookups and combine adjacent same-file ranges when that preserves relevance. 
 - Semantic tools describe the active workspace. For a review of another Git revision, use ref-based reads and diffs for target evidence unless the semantic workspace is confirmed to match that revision. Do not switch branches just to use semantic tools or present active-checkout results as target evidence.
 - Inspection and review do not authorize creating or changing repository files, including new or untracked scratch files unless explicitly asked by the user to do so.

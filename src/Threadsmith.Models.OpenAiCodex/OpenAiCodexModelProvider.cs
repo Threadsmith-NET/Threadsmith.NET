@@ -205,11 +205,13 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         IReadOnlyList<ModelToolDefinition> canonicalTools,
         ModelToolWireNameMap toolNameMap)
     {
+        var cacheAffinityKey = (request.CacheAffinityId ?? request.RunId.Value).ToString("D");
         JsonObject body = new()
         {
             ["model"] = _profile.ModelId,
             ["store"] = false,
             ["stream"] = true,
+            ["prompt_cache_key"] = cacheAffinityKey,
             ["instructions"] = request.ProviderInstructions?.Content
                 ?? throw new InvalidOperationException(
                     "Native Codex requests require request-owned provider instructions."),
@@ -260,6 +262,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         message.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("text/event-stream"));
         message.Headers.TryAddWithoutValidation("originator", "threadsmith");
         message.Headers.TryAddWithoutValidation("OpenAI-Beta", "responses=experimental");
+        message.Headers.TryAddWithoutValidation("session-id", cacheAffinityKey);
+        message.Headers.TryAddWithoutValidation("x-client-request-id", Guid.NewGuid().ToString("D"));
         var accountId = OpenAiCodexTokenClaims.TryGetAccountId(accessToken);
         if (accountId is not null)
         {

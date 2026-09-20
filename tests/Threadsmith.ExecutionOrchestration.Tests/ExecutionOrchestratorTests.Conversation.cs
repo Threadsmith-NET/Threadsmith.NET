@@ -238,6 +238,48 @@ public sealed partial class ExecutionOrchestratorTests
             && message.Content?.Contains("PlanContinuationPending", StringComparison.Ordinal) == true);
     }
 
+    /// <summary>Same-process resume retains trusted current-turn context without reissuing URL authority.</summary>
+    [Fact]
+    public async Task IncrementalPlanBoundary_ResumePreservesCurrentTurnHostContext()
+    {
+        const string userUrlId = "user-url-reference";
+        var intakeCalls = 0;
+        await using var scenario = await ConversationScenario.CreateIncrementalAsync(
+            userUrlIntake: (sessionId, runId, messageId, _, cancellationToken) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                Interlocked.Increment(ref intakeCalls);
+                return Task.FromResult<IReadOnlyList<UserUrlReference>>(
+                [
+                    new UserUrlReference
+                    {
+                        Id = userUrlId,
+                        Ordinal = 1,
+                        UrlDigest = "sha256:test",
+                        MessageId = messageId,
+                        SessionId = sessionId,
+                        RunId = runId,
+                        ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(5),
+                    },
+                ]);
+            });
+        scenario.Model.ConfirmObjective = false;
+        var runId = await scenario.SubmitAndApprovePlanAsync(
+            "Use https://example.test/reference while completing the objective.");
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+        Assert.Contains(
+            scenario.Model.SecondRequest!.Messages,
+            message => message.GetModelVisibleContent().Contains(userUrlId, StringComparison.Ordinal));
+
+        await scenario.Dispatcher.DispatchAsync(new ResumeRunCommand(scenario.SessionId, runId));
+        Assert.False(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Equal(1, Volatile.Read(ref intakeCalls));
+        Assert.Contains(
+            scenario.Model.ThirdRequest!.Messages,
+            message => message.GetModelVisibleContent().Contains(userUrlId, StringComparison.Ordinal));
+    }
+
     /// <summary>Completion arguments outside the advertised empty schema receive a corrective turn.</summary>
     [Fact]
     public async Task IncrementalPlanBoundary_MalformedCompletionArgumentsAreCorrected()
@@ -464,7 +506,10 @@ public sealed partial class ExecutionOrchestratorTests
                 sessionProjection: sessionProjection);
         }
 
-        public static Task<ConversationScenario> CreateIncrementalAsync(int planProposalCount = 1)
+        public static Task<ConversationScenario> CreateIncrementalAsync(
+            int planProposalCount = 1,
+            Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
+                userUrlIntake = null)
         {
             var events = new DomainEventStream();
             return CreateCoreAsync(
@@ -484,7 +529,8 @@ public sealed partial class ExecutionOrchestratorTests
                 proposePlan: true,
                 failAssistantArchive: false,
                 planProposalCount,
-                ExecutionLimits.Default);
+                ExecutionLimits.Default,
+                userUrlIntake: userUrlIntake);
         }
 
         public async Task<bool> CompletePlannedExecutionAsync()
@@ -493,7 +539,7 @@ public sealed partial class ExecutionOrchestratorTests
             return await Dispatcher.DispatchAsync(new WaitForRunCommand(runId));
         }
 
-        public async Task<RunId> SubmitAndApprovePlanAsync()
+        public async Task<RunId> SubmitAndApprovePlanAsync(string? request = null)
         {
             var planProposed = new TaskCompletionSource<PlanProposed>(
                 TaskCreationOptions.RunContinuationsAsynchronously);
@@ -516,7 +562,7 @@ public sealed partial class ExecutionOrchestratorTests
             });
             var runId = await Dispatcher.DispatchAsync(new SubmitRequestCommand(
                 SessionId,
-                "Add a private const string field to the ShellRunner class named _test with the value tested!."));
+                request ?? "Add a private const string field to the ShellRunner class named _test with the value tested!."));
             var proposed = await planProposed.Task.WaitAsync(TimeSpan.FromSeconds(3));
             Assert.Equal(runId, proposed.RunId);
             var transitioned = await awaitingPlanApproval.Task.WaitAsync(TimeSpan.FromSeconds(3));
@@ -630,7 +676,9 @@ public sealed partial class ExecutionOrchestratorTests
             int? planProposalCount = null,
             ExecutionLimits? limits = null,
             SessionId? restoredSession = null,
-            SessionProjection? sessionProjection = null)
+            SessionProjection? sessionProjection = null,
+            Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
+                userUrlIntake = null)
         {
             var directory = Path.Combine(Path.GetTempPath(), $"threadsmith-conversation-{Guid.NewGuid():N}");
             Directory.CreateDirectory(directory);
@@ -680,6 +728,7 @@ public sealed partial class ExecutionOrchestratorTests
                     executionRequestFactory: executionRequestFactory,
                     correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                     prompts: TestPromptLoader.Instance,
+                    userUrlIntake: userUrlIntake,
                     sessionProjectionReader: sessionProjection is null
                         ? null
                         : (_, cancellationToken) =>

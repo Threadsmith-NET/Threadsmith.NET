@@ -9,6 +9,17 @@ using Xunit;
 
 public sealed partial class Plan89CodeExploreTests
 {
+    /// <summary>The outer deadline leaves enough time for the default semantic timeout to return a partial result.</summary>
+    [Fact]
+    public void CodeExplore_DefaultTimeouts_PreserveGracefulSemanticTimeout()
+    {
+        var options = new CodeExploreOptions();
+
+        Assert.Equal(60_000, options.Limits.TimeoutMilliseconds);
+        Assert.Equal(75_000, options.OuterTimeoutMilliseconds);
+        Assert.True(options.OuterTimeoutMilliseconds > options.Limits.TimeoutMilliseconds);
+    }
+
     /// <summary>Configured higher and disabled caps flow through the public adapter and semantic projection.</summary>
     [Theory]
     [InlineData(200_000, 80_000)]

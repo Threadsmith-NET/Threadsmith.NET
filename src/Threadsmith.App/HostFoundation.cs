@@ -430,7 +430,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                     : contextLifecycle.ObserveAsync(domainEvent, cancellationToken),
                 subscriberCapacity);
             var budget = new ExecutionBudget(new BudgetDimensions(
-                configuration.GetValue<long>("budget:tokens", 100000),
+                configuration.GetValue<long?>("budget:tokens") ?? long.MaxValue,
                 configuration.GetValue<int>("budget:calls", 1000),
                 TimeSpan.FromSeconds(configuration.GetValue("budget:wallClockSeconds", 3600)),
                 configuration.GetValue<decimal>("budget:cost", 0)));

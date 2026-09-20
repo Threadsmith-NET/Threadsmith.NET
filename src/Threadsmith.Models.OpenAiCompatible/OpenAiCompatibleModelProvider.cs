@@ -24,6 +24,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     private readonly HttpClient _httpClient;
     private readonly int? _maximumStreamedCharacters;
     private readonly ModelProfile _profile;
+    private readonly bool _promptCacheKeyEnabled;
     private readonly OpenAiReasoningCompatibilityConfiguration? _reasoningCompatibility;
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCompatibleModelProvider"/> class.</summary>
@@ -34,7 +35,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         string? apiKey = null,
         IReadOnlyDictionary<string, string>? headers = null,
         OpenAiReasoningCompatibilityConfiguration? reasoningCompatibility = null,
-        int? maximumStreamedCharacters = null)
+        int? maximumStreamedCharacters = null,
+        bool promptCacheKeyEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
@@ -53,6 +55,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         _apiKey = apiKey;
         _headers = headers ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _reasoningCompatibility = reasoningCompatibility;
+        _promptCacheKeyEnabled = promptCacheKeyEnabled;
     }
 
     /// <inheritdoc />
@@ -177,6 +180,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             var body = new OpenAiChatRequest
             {
                 Model = _profile.ModelId,
+                PromptCacheKey = _promptCacheKeyEnabled
+                    ? (request.CacheAffinityId ?? request.RunId.Value).ToString("D")
+                    : null,
                 Messages = CreateMessages(request, toolNameMap),
                 Stream = true,
                 StreamOptions = new OpenAiStreamOptions { IncludeUsage = true },
@@ -944,6 +950,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     {
         [JsonPropertyName("model")]
         public required string Model { get; init; }
+
+        [JsonPropertyName("prompt_cache_key")]
+        public string? PromptCacheKey { get; init; }
 
         [JsonPropertyName("messages")]
         public IReadOnlyList<OpenAiMessage> Messages { get; init; } = [];

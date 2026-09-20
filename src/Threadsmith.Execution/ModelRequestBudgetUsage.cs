@@ -12,23 +12,26 @@ internal sealed class ModelRequestBudgetUsage
     /// <summary>Gets whether this request was admitted for provider execution.</summary>
     public bool HasStarted { get; private set; }
 
-    /// <summary>Charges the request once even if the provider never reports token usage.</summary>
-    public void Start(IBudget budget)
+    /// <summary>Admits one estimated provider request and charges its call once.</summary>
+    public void Start(IBudget budget, ModelStreamRequest request)
     {
         ArgumentNullException.ThrowIfNull(budget);
+        ArgumentNullException.ThrowIfNull(request);
         if (HasStarted)
         {
             return;
         }
 
-        var delta = new BudgetDimensions(0, 1, TimeSpan.Zero);
-        var status = budget.Check(delta);
+        var estimatedInputTokens = EstimateInputTokens(request);
+        var admission = new BudgetDimensions(estimatedInputTokens, 1, TimeSpan.Zero);
+        var status = budget.Check(admission);
         if (status.IsExhausted)
         {
-            throw new BudgetExceededException(status.Reason ?? "Execution budget exhausted.");
+            throw new BudgetExceededException(
+                $"Execution budget cannot admit a model request estimated to require {estimatedInputTokens} input tokens.");
         }
 
-        budget.Accrue(delta);
+        budget.Accrue(new BudgetDimensions(0, 1, TimeSpan.Zero));
         HasStarted = true;
     }
 
@@ -50,5 +53,35 @@ internal sealed class ModelRequestBudgetUsage
         _chargedTokens = Math.Max(_chargedTokens, tokens);
         _chargedCost = Math.Max(_chargedCost, usage.EstimatedCost);
         return budget.Accrue(delta);
+    }
+
+    private static int EstimateInputTokens(ModelStreamRequest request)
+    {
+        if (request.WireEstimate is { } prepared)
+        {
+            return prepared.WireInputTokens;
+        }
+
+        IReadOnlyList<ModelMessage> messages = request.Messages.Count > 0
+            ? request.Messages
+            :
+            [
+                new ModelMessage
+                {
+                    Role = ModelMessageRole.User,
+                    SectionId = "current-user",
+                    Content = [new ModelContentPart { Content = request.Input }],
+                },
+            ];
+        var stablePrefixMessageCount = Math.Min(
+            request.Layout?.StablePrefixMessageCount ?? 0,
+            messages.Count);
+        return ModelWireEstimator.Estimate(
+            messages,
+            request.Tools,
+            request.ToolTransportMode,
+            stablePrefixMessageCount,
+            request.MaximumOutputTokens ?? 0,
+            request.ProviderInstructions).WireInputTokens;
     }
 }

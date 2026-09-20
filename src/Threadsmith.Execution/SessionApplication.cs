@@ -71,6 +71,10 @@ public sealed partial class SessionApplication :
     private readonly ILogger<SessionApplication> _logger;
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
+
+    // Keep same-process continuation context outside completed registrations. This is deliberately
+    // non-durable: restored conversation text must never mint or restore transient URL authority.
+    private readonly ConcurrentDictionary<RunId, IReadOnlyList<string>> _resumableCurrentTurnHostContexts = new();
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
     private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
     private readonly RunSteeringCoordinator _steering;
@@ -1004,6 +1008,11 @@ public sealed partial class SessionApplication :
             request.Task,
             pendingPlan is null ? RunPhase.ImplementationPreparing : RunPhase.AwaitingPlanApproval,
             cancellationToken);
+        registration.BaseCurrentTurnHostContext = previous?.BaseCurrentTurnHostContext
+            ?? (_resumableCurrentTurnHostContexts.TryGetValue(command.RunId, out var resumableHostContext)
+                ? resumableHostContext
+                : []);
+        registration.CurrentTurnHostContext = registration.BaseCurrentTurnHostContext;
         var usage = registration.Budget.Accrue(request.InitialBudgetUsage);
         if (usage.IsExhausted)
         {
@@ -1445,6 +1454,7 @@ public sealed partial class SessionApplication :
         ExecutionOutcomeProjection outcome)
     {
         var succeeded = outcome.Status == ExecutionCheckpointPhase.Completed;
+        _resumableCurrentTurnHostContexts.TryRemove(runId, out _);
 
         // Complete the archived exchange before another request can observe this run as finished.
         await ArchiveExecutionOutcomeAsync(runId, registration, outcome, CancellationToken.None);
@@ -2060,6 +2070,12 @@ public sealed partial class SessionApplication :
                     "approved plan entered governed execution",
                     cancellationToken);
                 registration.IncrementalPlanExecution = startRequest.AllowPlanContinuation;
+                if (registration.IncrementalPlanExecution
+                    && registration.BaseCurrentTurnHostContext.Count > 0)
+                {
+                    _resumableCurrentTurnHostContexts[runId] = registration.BaseCurrentTurnHostContext;
+                }
+
                 if (!registration.SteeringRegistered)
                 {
                     _steering.RegisterRun(registration.SessionId, runId);

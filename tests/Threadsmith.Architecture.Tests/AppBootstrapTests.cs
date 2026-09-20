@@ -14,6 +14,16 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static partial class AppBootstrapTests
 {
+    /// <summary>Cumulative execution tokens are unlimited unless the user configures a ceiling.</summary>
+    [Fact]
+    public static void ConfigurationBootstrap_DefaultExecutionTokenBudget_IsNotConfigured()
+    {
+        using var temporary = new TemporaryDirectory("budget-default");
+        var configuration = ConfigurationBootstrap.Build([], CreatePaths(temporary.Root));
+
+        Assert.Null(configuration.GetValue<long?>("budget:tokens"));
+    }
+
     /// <summary>Repository settings cannot change limits governing user-wide approval and skill stores.</summary>
     [Theory]
     [InlineData(1)]

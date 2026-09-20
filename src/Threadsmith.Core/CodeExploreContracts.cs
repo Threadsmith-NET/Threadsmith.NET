@@ -519,7 +519,7 @@ public sealed record CodeExploreLimits
     public int MaximumAssociatedArtifactNameMatches { get; init; } = 8;
 
     /// <summary>Maximum elapsed query time in milliseconds.</summary>
-    public int TimeoutMilliseconds { get; init; } = 10_000;
+    public int TimeoutMilliseconds { get; init; } = 60_000;
 }
 
 /// <summary>Repository-relative C# path anchor for source-bearing code exploration.</summary>

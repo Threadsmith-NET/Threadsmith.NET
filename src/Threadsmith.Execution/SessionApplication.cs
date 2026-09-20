@@ -746,6 +746,13 @@ public sealed partial class SessionApplication :
                         command.RunId,
                         false),
                     CancellationToken.None);
+                await registration.Cancellation.CancelAsync();
+                if (registration.SteeringRegistered)
+                {
+                    _steering.CompleteRun(registration.SessionId, command.RunId);
+                    registration.SteeringRegistered = false;
+                }
+
                 if (exception is OperationCanceledException cancellation)
                 {
                     registration.Completion.TrySetCanceled(cancellation.CancellationToken);
@@ -1038,7 +1045,11 @@ public sealed partial class SessionApplication :
             registration.LastPlanBoundaryOrdinal = pendingPlan is null
                 ? checkpoint.PlanOrdinal - 1
                 : checkpoint.PlanOrdinal;
-            registration.LastArchivedPlanBoundaryOrdinal = checkpoint.PlanOrdinal;
+            registration.LastArchivedPlanBoundaryOrdinal = checkpoint.Phase is
+                ExecutionCheckpointPhase.PlanContinuationPending
+                or ExecutionCheckpointPhase.PlanReplanningPending
+                    ? checkpoint.PlanOrdinal
+                    : checkpoint.PlanOrdinal - 1;
             registration.ReplanningPlan = checkpoint.Phase == ExecutionCheckpointPhase.PlanReplanningPending
                 ? request.ApprovedPlan
                 : null;
@@ -1352,6 +1363,7 @@ public sealed partial class SessionApplication :
             var boundary = await boundaryTask;
             registration.LastPlanBoundaryOrdinal = boundary.PlanOrdinal;
             registration.ReplanningPlan = boundary.PlanUnderRevision;
+            AccrueBudgetAtLeastOrThrow(registration, boundary.Progress.BudgetUsed);
             if (boundary.PlanOrdinal > registration.LastArchivedPlanBoundaryOrdinal)
             {
                 await ArchiveExecutionOutcomeAsync(
@@ -1579,6 +1591,40 @@ public sealed partial class SessionApplication :
         if (elapsedStatus.IsExhausted)
         {
             throw new BudgetExceededException(elapsedStatus.Reason ?? "Execution budget exhausted.");
+        }
+    }
+
+    private static void AccrueBudgetAtLeastOrThrow(
+        RunRegistration registration,
+        BudgetDimensions? targetUsage)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        if (targetUsage is null)
+        {
+            return;
+        }
+
+        ExecutionBudget.ValidateDimensions(targetUsage, nameof(targetUsage));
+        var currentUsage = registration.Budget
+            .Check(new BudgetDimensions(0, 0, TimeSpan.Zero))
+            .Used;
+        var delta = new BudgetDimensions(
+            targetUsage.Tokens > currentUsage.Tokens ? targetUsage.Tokens - currentUsage.Tokens : 0,
+            targetUsage.Calls > currentUsage.Calls ? targetUsage.Calls - currentUsage.Calls : 0,
+            targetUsage.WallClock > currentUsage.WallClock ? targetUsage.WallClock - currentUsage.WallClock : TimeSpan.Zero,
+            targetUsage.Cost > currentUsage.Cost ? targetUsage.Cost - currentUsage.Cost : 0);
+        if (delta.Tokens == 0
+            && delta.Calls == 0
+            && delta.WallClock == TimeSpan.Zero
+            && delta.Cost == 0)
+        {
+            return;
+        }
+
+        var status = registration.Budget.Accrue(delta);
+        if (status.IsExhausted)
+        {
+            throw new BudgetExceededException(status.Reason ?? "Execution budget exhausted.");
         }
     }
 

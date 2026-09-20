@@ -137,6 +137,40 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(assessedUsage, resumedRequest.InitialBudgetUsage);
     }
 
+    /// <summary>Planning after a completed tranche is charged against cumulative execution usage.</summary>
+    [Fact]
+    public async Task PlanBoundary_CumulativeUsageSeedsReplacementPlan()
+    {
+        var fixture = CreateFixture();
+        await using var events = fixture.Events;
+        var request = fixture.StartRequest with
+        {
+            AllowPlanContinuation = true,
+            InitialBudgetUsage = new BudgetDimensions(10, 1, TimeSpan.Zero),
+        };
+        SetProposals(
+            fixture,
+            Proposal(fixture.Staged, true) with
+            {
+                BudgetUsed = new BudgetDimensions(25, 2, TimeSpan.Zero),
+            });
+        await fixture.Orchestrator.StartAsync(request);
+        var progress = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
+        var cumulativeUsage = new BudgetDimensions(30, 3, TimeSpan.Zero);
+        await fixture.Orchestrator.RecordPlanningUsageAsync(request.SessionId, request.RunId, cumulativeUsage);
+        var replacement = ReplacementRequest(fixture, request) with { InitialBudgetUsage = cumulativeUsage };
+        var replacementStepId = replacement.ApprovedPlan.Steps[0].StepId;
+        fixture.ProposalHandler.Results.Enqueue(Proposal(
+            fixture.CorrectionStaged with { PlanStepIds = [replacementStepId] },
+            true));
+
+        await fixture.Orchestrator.ContinueWithPlanAsync(replacement);
+
+        Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, progress.Status);
+        Assert.Equal(25, progress.BudgetUsed!.Tokens);
+        Assert.Equal(cumulativeUsage, fixture.ProposalHandler.Commands[^1].BudgetUsed);
+    }
+
     /// <summary>Usage emitted before a failed boundary assessment remains durable for the next resume.</summary>
     [Fact]
     public async Task PlanBoundary_FailedAssessmentPersistsReportedUsage()

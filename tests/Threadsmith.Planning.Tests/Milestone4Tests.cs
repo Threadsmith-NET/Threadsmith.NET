@@ -3,6 +3,7 @@ namespace Threadsmith.Planning.Tests;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Security;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -2247,6 +2248,12 @@ public static class Milestone4Tests
             EvidenceKind.SourceExcerpt,
             "duplicate",
             relevance: 0.8));
+        await evidence.AddAsync(CreateEvidence(
+            sessionId,
+            runId,
+            EvidenceKind.SourceExcerpt,
+            new string('x', 2_000),
+            relevance: 0.7));
         var stale = CreateEvidence(
             sessionId,
             runId,
@@ -2259,13 +2266,14 @@ public static class Milestone4Tests
         await evidence.AddAsync(stale);
         evidence.QueueInvalidation(sessionId, "semantic", "confidence demoted");
         Assert.False(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == stale.EvidenceId).IsStale);
-        var assembler = CreateAssembler(events, evidence, maximumTokens: 1000);
+        var assembler = CreateAssembler(events, evidence, maximumTokens: 2_000);
         var result = await assembler.AssembleAsync(CreateAssemblyRequest(sessionId, runId));
 
         Assert.True(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == stale.EvidenceId).IsStale);
         Assert.Contains("must retain this decision", result.ModelInput);
         Assert.Contains(result.Inspection.Reductions, reason => reason.Contains("Duplicate", StringComparison.Ordinal));
         Assert.Contains(result.Inspection.Reductions, reason => reason.Contains("confidence demoted", StringComparison.Ordinal));
+        Assert.Contains(result.Inspection.Reductions, reason => reason.Contains("token budget", StringComparison.Ordinal));
     }
 
     /// <summary>Queued invalidations are applied only at the owning session's turn boundary.</summary>
@@ -3649,10 +3657,16 @@ public static class Milestone4Tests
                 "<phase_instructions>",
                 StringComparison.Ordinal);
             Assert.True(policyPosition < appendPosition && appendPosition < phasePosition);
-            Assert.Contains(
-                $"<system_policy>{TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)}{Environment.NewLine}{TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection)}</system_policy>",
-                assembled.ModelInput,
-                StringComparison.Ordinal);
+            var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
+                + Environment.NewLine
+                + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
+            var expectedPolicy = $"<system_policy>{SecurityElement.Escape(policy)}</system_policy>";
+            var policyEnd = assembled.ModelInput.IndexOf(
+                "</system_policy>",
+                policyPosition,
+                StringComparison.Ordinal) + "</system_policy>".Length;
+            var actualPolicy = assembled.ModelInput[policyPosition..policyEnd];
+            Assert.Equal(expectedPolicy, actualPolicy);
             Assert.Equal(2, assembled.ModelInput.Split("<project_context ").Length - 1);
             Assert.Contains(
                 "&lt;/project_context&gt;",

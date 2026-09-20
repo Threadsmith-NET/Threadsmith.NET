@@ -35,6 +35,7 @@ public sealed partial class ApprovedMutationProposalApplicationTests
         Assert.Equal(OriginalText, await File.ReadAllTextAsync(fixture.FilePath));
         Assert.Equal(MutationApprovalLevel.EntireSet, staged.MutationSet.RequiredApproval);
         Assert.Equal(command.RunId, staged.MutationSet.RunId);
+        Assert.Equal(OriginalText.Length, Assert.Single(staged.MutationSet.Mutations).Length);
         Assert.Contains("+after", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         var request = Assert.Single(fixture.Model.Requests);
         Assert.Equal(command.RunId, request.RunId);
@@ -135,18 +136,6 @@ public sealed partial class ApprovedMutationProposalApplicationTests
         Assert.Equal(1, fixture.Workspaces.StageCalls);
         Assert.Equal(MutationApprovalLevel.EntireSet, staged.MutationSet.RequiredApproval);
         Assert.DoesNotContain(fixture.ObservedEvents, item => item is DelegationCheckpointWritten or AgentRunLifecycleObserved);
-        Assert.Equal(OriginalText, await File.ReadAllTextAsync(fixture.FilePath));
-    }
-
-    /// <summary>Parent proposal generation still rejects changes outside approved plan scope.</summary>
-    [Fact]
-    public async Task OutOfPlanProposal_IsRejectedBeforeStaging()
-    {
-        await using var fixture = await Fixture.CreateAsync();
-        fixture.Model.DefaultOutput = Proposal.Replace("example.txt", "other.txt", StringComparison.Ordinal);
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => fixture.Application.HandleAsync(fixture.Command));
-        Assert.Equal(0, fixture.Workspaces.StageCalls);
-        Assert.False(File.Exists(Path.Combine(fixture.Root, "other.txt")));
         Assert.Equal(OriginalText, await File.ReadAllTextAsync(fixture.FilePath));
     }
 

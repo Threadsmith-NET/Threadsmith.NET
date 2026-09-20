@@ -1,5 +1,7 @@
 namespace Threadsmith.Execution;
 
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -248,7 +250,18 @@ public sealed class MutationProposalApplication :
             };
         }
 
-        var staged = await StagePreparedAsync(prepared, cancellationToken);
+        StagedMutationSet staged;
+        try
+        {
+            staged = await StagePreparedAsync(prepared, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not MutationProposalBudgetUsageException
+            && command.ReportBudgetUsageOnFailure
+            && HasAdvancedBudgetUsage(prepared.BudgetUsed, command.BudgetUsed))
+        {
+            throw new MutationProposalBudgetUsageException(prepared.BudgetUsed, exception);
+        }
+
         return new MutationProposalResult
         {
             StagedMutationSet = staged,
@@ -276,48 +289,77 @@ public sealed class MutationProposalApplication :
             }
         }
 
+        var restoredUsage = command.BudgetUsed;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var correctiveMessages = new List<ModelMessage>();
-        for (var proposalAttempt = 1; ; proposalAttempt++)
+        try
         {
-            await _events.PublishAsync(
-                new MutationProposalStarted(
-                    command.SessionId,
-                    DateTimeOffset.UtcNow,
-                    command.RunId,
-                    proposalAttempt,
-                    correctiveTurns.MaximumTurns + 1),
-                cancellationToken);
-            try
+            for (var proposalAttempt = 1; ; proposalAttempt++)
             {
-                return await HandleCoreAsync(
-                    command,
-                    correctiveMessages,
-                    operationBudget,
+                await _events.PublishAsync(
+                    new MutationProposalStarted(
+                        command.SessionId,
+                        DateTimeOffset.UtcNow,
+                        command.RunId,
+                        proposalAttempt,
+                        correctiveTurns.MaximumTurns + 1),
                     cancellationToken);
+                try
+                {
+                    var attemptStarted = Stopwatch.GetTimestamp();
+                    PreparedMutationProposal prepared;
+                    try
+                    {
+                        prepared = await HandleCoreAsync(
+                            command,
+                            correctiveMessages,
+                            operationBudget,
+                            cancellationToken);
+                    }
+                    finally
+                    {
+                        var elapsed = operationBudget.Accrue(new BudgetDimensions(
+                            0,
+                            0,
+                            Stopwatch.GetElapsedTime(attemptStarted)));
+                        if (elapsed.IsExhausted)
+                        {
+                            throw new BudgetExceededException(
+                                elapsed.Reason ?? "Execution budget exhausted during mutation preparation.");
+                        }
+                    }
+
+                    return prepared with { BudgetUsed = GetBudgetUsage(operationBudget) };
+                }
+                catch (RepairableMutationProposalException exception)
+                {
+                    await AppendCorrectionMessageOrThrowAsync(
+                        command,
+                        correctiveTurns,
+                        correctiveMessages,
+                        exception.Category,
+                        exception.Diagnostic,
+                        exception,
+                        cancellationToken);
+                }
+                catch (MalformedInvocationException exception)
+                {
+                    await AppendCorrectionMessageOrThrowAsync(
+                        command,
+                        correctiveTurns,
+                        correctiveMessages,
+                        ModelCorrectionCategory.ProviderInvocation,
+                        exception.Diagnostic,
+                        exception,
+                        cancellationToken);
+                }
             }
-            catch (RepairableMutationProposalException exception)
-            {
-                await AppendCorrectionMessageOrThrowAsync(
-                    command,
-                    correctiveTurns,
-                    correctiveMessages,
-                    exception.Category,
-                    exception.Diagnostic,
-                    exception,
-                    cancellationToken);
-            }
-            catch (MalformedInvocationException exception)
-            {
-                await AppendCorrectionMessageOrThrowAsync(
-                    command,
-                    correctiveTurns,
-                    correctiveMessages,
-                    ModelCorrectionCategory.ProviderInvocation,
-                    exception.Diagnostic,
-                    exception,
-                    cancellationToken);
-            }
+        }
+        catch (Exception exception) when (exception is not MutationProposalBudgetUsageException
+            && command.ReportBudgetUsageOnFailure
+            && TryGetAdvancedBudgetUsage(operationBudget, restoredUsage, out var usage))
+        {
+            throw new MutationProposalBudgetUsageException(usage, exception);
         }
     }
 
@@ -768,6 +810,29 @@ public sealed class MutationProposalApplication :
         return budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
     }
 
+    private static bool TryGetAdvancedBudgetUsage(
+        IBudget budget,
+        BudgetDimensions? restoredUsage,
+        [NotNullWhen(true)] out BudgetDimensions? usage)
+    {
+        var current = GetBudgetUsage(budget);
+        var advanced = HasAdvancedBudgetUsage(current, restoredUsage);
+        usage = advanced ? current : null;
+        return advanced;
+    }
+
+    private static bool HasAdvancedBudgetUsage(
+        BudgetDimensions current,
+        BudgetDimensions? restored)
+    {
+        return restored is null
+            ? current.Tokens > 0 || current.Calls > 0 || current.WallClock > TimeSpan.Zero || current.Cost > 0
+            : current.Tokens > restored.Tokens
+                || current.Calls > restored.Calls
+                || current.WallClock > restored.WallClock
+                || current.Cost > restored.Cost;
+    }
+
     private async Task<ModelStreamRequest> CreateModelRequestAsync(
         ProposeMutationSetCommand command,
         WorkspaceBaseline baseline,
@@ -1098,6 +1163,24 @@ public sealed class MutationProposalApplication :
 
             NormalizeAlias(mutation, "kind", "type", validateOperation: true);
             NormalizeAlias(mutation, "path", "relativePath", validateOperation: false);
+            var operationProperty = FindProperty(mutation, "type");
+            if (operationProperty?.Value is JsonValue operationValue
+                && operationValue.TryGetValue<string>(out var operation)
+                && string.Equals(operation, "ReplaceText", StringComparison.Ordinal))
+            {
+                var legacyLength = FindProperty(mutation, "length");
+                if (legacyLength is not null)
+                {
+                    if (legacyLength.Value.Value is not JsonValue lengthValue
+                        || !lengthValue.TryGetValue<int>(out var length)
+                        || length < 0)
+                    {
+                        throw new JsonException("ReplaceText length must be a nonnegative integer.");
+                    }
+
+                    mutation.Remove(legacyLength.Value.Key);
+                }
+            }
         }
 
         return envelope.ToJsonString();
@@ -2140,4 +2223,35 @@ public sealed class MutationProposalApplication :
 
         public MalformedInvocationDiagnostic Diagnostic { get; }
     }
+}
+
+/// <summary>Wraps a mutation-proposal failure that consumed cumulative execution budget.</summary>
+internal sealed class MutationProposalBudgetUsageException : Exception
+{
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException()
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="MutationProposalBudgetUsageException"/> class.</summary>
+    public MutationProposalBudgetUsageException(BudgetDimensions budgetUsed, Exception innerException)
+        : base(innerException.Message, innerException)
+    {
+        BudgetUsed = budgetUsed;
+    }
+
+    /// <summary>Gets the cumulative budget usage observed before the proposal failed.</summary>
+    public BudgetDimensions BudgetUsed { get; } = new(0, 0, TimeSpan.Zero);
 }

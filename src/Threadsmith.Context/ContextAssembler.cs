@@ -322,17 +322,36 @@ public sealed class ContextAssembler : IContextAssembler
                     .ToArray(),
                 PlannedFiles = normalizedAffectedPaths.OrderBy(path => path, StringComparer.Ordinal).ToArray(),
             };
-        var governedState = JsonSerializer.Serialize(new
+        var governedStateValues = new Dictionary<string, object?>
         {
-            Phase = request.Phase.ToString(),
-            ConversationHistoryIncluded = conversation.Mode == ConversationContextMode.ConversationAware,
-            ConversationMode = conversation.Mode.ToString(),
-            request.PlanUnderRevision,
-            request.ApprovedPlan,
-            request.MutationExecutionScope,
-            CurrentTurnHostContext = currentTurnHostContext,
-            MutationBaseline = mutationBaseline,
-        });
+            ["Phase"] = request.Phase.ToString(),
+            ["ConversationHistoryIncluded"] = conversation.Mode == ConversationContextMode.ConversationAware,
+            ["ConversationMode"] = conversation.Mode.ToString(),
+            ["CurrentTurnHostContext"] = currentTurnHostContext,
+        };
+        if (request.PlanUnderRevision is not null)
+        {
+            governedStateValues["PlanUnderRevision"] = request.PlanUnderRevision;
+        }
+
+        if (request.MutationExecutionScope is null)
+        {
+            if (request.ApprovedPlan is not null)
+            {
+                governedStateValues["ApprovedPlan"] = request.ApprovedPlan;
+            }
+        }
+        else
+        {
+            governedStateValues["MutationExecutionScope"] = request.MutationExecutionScope;
+        }
+
+        if (mutationBaseline is not null)
+        {
+            governedStateValues["MutationBaseline"] = mutationBaseline;
+        }
+
+        var governedState = JsonSerializer.Serialize(governedStateValues);
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(
             request.ToolSchemas.Select(schema => new ModelToolDefinition
             {

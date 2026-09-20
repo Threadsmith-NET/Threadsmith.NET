@@ -539,6 +539,9 @@ public sealed record ProposeMutationSetCommand(
 
     /// <summary>Cumulative budget usage to restore before this proposal turn.</summary>
     public BudgetDimensions? BudgetUsed { get; init; }
+
+    /// <summary>Whether failures should carry newly consumed budget usage back to the caller.</summary>
+    public bool ReportBudgetUsageOnFailure { get; init; }
 }
 
 /// <summary>Parameters for compiler-aware symbol rename.</summary>

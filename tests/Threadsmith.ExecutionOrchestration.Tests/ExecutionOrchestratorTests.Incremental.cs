@@ -302,6 +302,69 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Single(fixture.CommitHandler.Commands);
     }
 
+    /// <summary>Failed partial authorization resumes through validation correction before ordinary remaining work.</summary>
+    [Fact]
+    public async Task PartialApproval_FailedValidationResumesThroughCorrection()
+    {
+        var fixture = CreateFixture(includeCorrection: true, includeRejectedLifecycleMutation: true);
+        await using var events = fixture.Events;
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+        var request = CreateContinuation(fixture, fixture.Staged) with
+        {
+            Approval = new MutationApproval
+            {
+                Level = MutationApprovalLevel.SelectedMutations,
+                ApprovalId = fixture.Staged.ApprovalId,
+                SelectedMutations = [fixture.Staged.MutationSet.Mutations[0].MutationId],
+            },
+        };
+
+        var progress = await fixture.Orchestrator.ContinueAsync(request);
+        var resumed = await RecreateOrchestrator(fixture).ResumeAsync(
+            fixture.StartRequest.SessionId,
+            fixture.StartRequest.RunId);
+
+        Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, progress.Status);
+        Assert.Equal(AcceptanceGateStatus.Failed, progress.Validation!.Gate.Status);
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
+        Assert.Equal(MutationBatchPurpose.Correction, resumed.BatchPurpose);
+        Assert.Equal(fixture.CorrectionStaged.MutationSet.MutationSetId, resumed.MutationSetId);
+        Assert.NotNull(fixture.ProposalHandler.Commands[^1].Correction);
+        Assert.Equal(RunPhase.CorrectionModelTurn, fixture.ProposalHandler.Commands[^1].Phase);
+        Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
+        Assert.Single(fixture.CommitHandler.Commands);
+    }
+
+    /// <summary>A failed partial authorization cannot create a correction when its budget is exhausted.</summary>
+    [Fact]
+    public async Task PartialApproval_ExhaustedCorrectionBudgetTerminatesWithoutProposal()
+    {
+        var fixture = CreateFixture(includeCorrection: true, includeRejectedLifecycleMutation: true);
+        await using var events = fixture.Events;
+        var request = fixture.StartRequest with { CorrectionBudget = 0 };
+        await fixture.Orchestrator.StartAsync(request);
+        var continuation = CreateContinuation(fixture, fixture.Staged) with
+        {
+            Approval = new MutationApproval
+            {
+                Level = MutationApprovalLevel.SelectedMutations,
+                ApprovalId = fixture.Staged.ApprovalId,
+                SelectedMutations = [fixture.Staged.MutationSet.Mutations[0].MutationId],
+            },
+        };
+        _ = await fixture.Orchestrator.ContinueAsync(continuation);
+
+        var resumed = await RecreateOrchestrator(fixture).ResumeAsync(
+            request.SessionId,
+            request.RunId);
+        var outcome = await fixture.Checkpoints.GetOutcomeAsync(request.RunId);
+
+        Assert.Equal(ExecutionCheckpointPhase.Failed, resumed.Phase);
+        Assert.NotNull(outcome);
+        Assert.Equal(0, outcome.CorrectionAttempts);
+        Assert.Single(fixture.ProposalHandler.Commands);
+    }
+
     /// <summary>Migrated progress is saved once and can be restored by a fresh host.</summary>
     [Fact]
     public async Task Resume_LegacyStateIsPersistedInCurrentSchemaBeforeFurtherWork()

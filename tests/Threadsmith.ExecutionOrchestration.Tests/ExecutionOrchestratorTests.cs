@@ -140,6 +140,7 @@ public sealed partial class ExecutionOrchestratorTests
             afterPlanOrdinal: 0);
 
         Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, firstProgress.Status);
+        Assert.Null(firstProgress.FinalDiff);
         Assert.Equal(1, firstBoundary.PlanOrdinal);
         Assert.False(terminalWait.IsCompleted);
         fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult with

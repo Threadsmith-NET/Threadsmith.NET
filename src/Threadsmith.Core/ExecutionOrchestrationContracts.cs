@@ -419,6 +419,9 @@ public sealed record ExecutionOutcomeProjection : IProjection
     /// <summary>Number of correction attempts performed.</summary>
     public int CorrectionAttempts { get; init; }
 
+    /// <summary>Cumulative execution-budget usage observed at this boundary.</summary>
+    public BudgetDimensions? BudgetUsed { get; init; }
+
     /// <summary>Whether rollback remains available.</summary>
     public bool RollbackAvailable { get; init; }
 

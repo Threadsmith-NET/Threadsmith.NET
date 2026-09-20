@@ -286,7 +286,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             {
                 Output = call,
                 Text = call is not null ? null : native
-                    ? "{\"succeeded\":true,\"response\":\"Nested skill complete.\"}"
+                    ? "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Nested skill complete.\"}"
                     : "{\"status\":\"complete\",\"summary\":\"Inherited tool work complete.\",\"findings\":[]}",
                 Usage = new ModelUsage(10, 2),
             };

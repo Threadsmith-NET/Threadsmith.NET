@@ -429,7 +429,7 @@ internal static class ApplicationComposition
                 };
             },
             tools.HookCoordinator,
-            budgetFactory: static () => UnboundedBudget.Instance,
+            budgetFactory: host.Budget.CreateScope,
             userUrlIntake: async (sessionId, runId, messageId, rawMessage, cancellationToken) =>
             {
                 if (!tools.ToolStateManager.IsEnabled("web_fetch")

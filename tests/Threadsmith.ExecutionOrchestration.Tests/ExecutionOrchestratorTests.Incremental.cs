@@ -2,6 +2,7 @@ namespace Threadsmith.ExecutionOrchestration.Tests;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
@@ -12,6 +13,28 @@ using Xunit;
 
 public sealed partial class ExecutionOrchestratorTests
 {
+    /// <summary>Repository path identity follows the backing filesystem rather than the host OS default.</summary>
+    [Fact]
+    public static void RepositoryPathComparer_ReflectsBackingFileSystemCaseSensitivity()
+    {
+        var parent = Path.Combine(Path.GetTempPath(), $"threadsmith-path-comparer-{Guid.NewGuid():N}");
+        var repository = Path.Combine(parent, "Repository");
+        Directory.CreateDirectory(repository);
+        try
+        {
+            var alternateCase = Path.Combine(parent, "repository");
+            var expectedCaseSensitive = !Directory.Exists(alternateCase);
+
+            var comparer = RepositoryPathPolicy.GetPathComparer(repository);
+
+            Assert.Equal(expectedCaseSensitive, !comparer.Equals("Case.cs", "case.cs"));
+        }
+        finally
+        {
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
     /// <summary>A later step cannot borrow a completed step's validation.</summary>
     [Fact]
     public async Task CompletionOnly_CannotReuseAnotherStepsValidation()
@@ -75,6 +98,40 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Contains("-old", diff, StringComparison.Ordinal);
         Assert.Contains("+fixed", diff, StringComparison.Ordinal);
         Assert.DoesNotContain("new", diff, StringComparison.Ordinal);
+    }
+
+    /// <summary>A later step cannot inherit lifecycle paths activated by an earlier step.</summary>
+    [Fact]
+    public async Task LaterStepContinuation_UsesOnlyItsOwnActivatedLifecyclePaths()
+    {
+        var fixture = CreateFixture(
+            includeSecondPlanStep: true,
+            includeCorrection: true,
+            includeRejectedLifecycleMutation: true,
+            applyLifecycleMutation: true);
+        await using var events = fixture.Events;
+        fixture.ValidationHandler.PassAll();
+        var secondStep = fixture.CorrectionStaged with
+        {
+            PlanStepIds = [fixture.SecondStepId],
+        };
+        SetProposals(
+            fixture,
+            Proposal(fixture.Staged, true),
+            Proposal(secondStep, false),
+            CompletionOnly());
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+        _ = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
+        var restored = RecreateOrchestrator(fixture);
+
+        var outcome = await restored.ContinueAsync(CreateContinuation(fixture, secondStep));
+
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.Empty(fixture.ProposalHandler.Commands[^1].ExecutionScope!.ActivatedPaths);
+        Assert.Contains(
+            outcome.LifecycleReconciliations,
+            item => item.SourcePath == "src/Rejected.cs"
+                && item.State == FileLifecycleReconciliationState.Applied);
     }
 
     /// <summary>Correction hints cannot overwrite the original implementation intent.</summary>
@@ -270,6 +327,39 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(resumed.StateArtifact, nextResume.StateArtifact);
         Assert.Empty(fixture.CommitHandler.Commands);
         Assert.Single(fixture.ProposalHandler.Commands);
+    }
+
+    /// <summary>Legacy optimistic completion is revoked until resumed validation passes.</summary>
+    [Fact]
+    public async Task Resume_LegacyAppliedStepWithoutPassingValidation_RemainsCurrentCorrectionStep()
+    {
+        var fixture = CreateFixture(includeCorrection: true);
+        await using var events = fixture.Events;
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+        var applied = await fixture.Orchestrator.ApplyAsync(CreateContinuation(fixture, fixture.Staged));
+        var state = JsonNode.Parse((await fixture.Artifacts.ReadAsync(applied.Continuation.StateArtifact!))!)!.AsObject();
+        state["AppliedPlanStepIds"] = JsonSerializer.SerializeToNode(new[] { fixture.StepId });
+        var artifact = await fixture.Artifacts.PublishAsync(
+            fixture.StartRequest.SessionId,
+            "executionContinuationState",
+            state.ToJsonString());
+        await fixture.Checkpoints.SaveCheckpointAsync(applied.Continuation with
+        {
+            SchemaVersion = 1,
+            CompletedStepIds = [fixture.StepId],
+            StateArtifact = artifact,
+        });
+
+        var resumed = await RecreateOrchestrator(fixture).ResumeAsync(
+            fixture.StartRequest.SessionId,
+            fixture.StartRequest.RunId);
+
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
+        Assert.Empty(resumed.CompletedStepIds);
+        Assert.Equal(fixture.StepId, resumed.CurrentPlanStepId);
+        var correction = fixture.ProposalHandler.Commands[^1];
+        Assert.NotNull(correction.Correction);
+        Assert.Equal(fixture.StepId, correction.ExecutionScope!.ActiveStep.StepId);
     }
 
     /// <summary>Legacy runs cannot manufacture original bytes from already-mutated content.</summary>

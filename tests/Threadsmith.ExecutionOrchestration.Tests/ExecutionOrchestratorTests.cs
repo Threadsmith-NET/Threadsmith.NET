@@ -941,6 +941,42 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.DoesNotContain(observed, item => item is RunTransitionFailed failed && failed.RunId == runId);
     }
 
+    /// <summary>Planning usage from a scoped production-style budget is carried into governed execution.</summary>
+    [Fact]
+    public async Task ApprovedPlan_CarriesAccumulatedPlanningUsageIntoExecution()
+    {
+        var fixture = CreateFixture();
+        await using var events = new DomainEventStream();
+        var orchestrator = new CompletingStartOrchestrator();
+        var budget = new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1), 10));
+        var application = new SessionApplication(
+            events,
+            new PlanModelProvider(
+                fixture.StartRequest.ApprovedPlan,
+                new ModelUsage(12, 8, EstimatedCost: 0.25m)),
+            budget,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            executionOrchestrator: orchestrator,
+            executionRequestFactory: CreateStartRequestFactory(fixture),
+            planSanityChecker: new PlanSanityChecker(TestPromptLoader.Instance),
+            planApprovalPolicy: new AlwaysAutoPlanApprovalPolicy(),
+            planSanityRequestFactory: CreateSanityRequestFactory(fixture),
+            budgetFactory: budget.CreateScope,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("budget propagation"));
+
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "change example"));
+        Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        var usage = Assert.IsType<ExecutionStartRequest>(orchestrator.LastStartRequest).InitialBudgetUsage;
+        Assert.Equal(20, usage.Tokens);
+        Assert.Equal(1, usage.Calls);
+        Assert.Equal(0.25m, usage.Cost);
+    }
+
     /// <summary>Verifies auto-approved execution startup failure is terminalized only by the startup path.</summary>
     [Fact]
     public async Task AutoApprovedExecutionStartupFailure_DoesNotDoubleTerminalizeRun()
@@ -1015,7 +1051,8 @@ public sealed partial class ExecutionOrchestratorTests
         bool includeCorrection = false,
         bool includeRejectedLifecycleMutation = false,
         bool includeBuildValidation = false,
-        bool blockFirstProposal = false)
+        bool blockFirstProposal = false,
+        bool applyLifecycleMutation = false)
     {
         var sessionId = SessionId.New();
         var runId = RunId.New();
@@ -1179,10 +1216,23 @@ public sealed partial class ExecutionOrchestratorTests
             blockFirstProposal);
         var firstCommit = new MutationCommitResult(
             mutationSetId,
-            [mutationId],
-            ["src/Example.cs"],
+            applyLifecycleMutation ? [mutationId, lifecycleMutationId] : [mutationId],
+            applyLifecycleMutation ? ["src/Example.cs", "src/Rejected.cs"] : ["src/Example.cs"],
             "revision",
-            false);
+            false)
+        {
+            LifecycleReconciliations = applyLifecycleMutation
+                ?
+                [
+                    new FileLifecycleReconciliation(
+                        lifecycleMutationId,
+                        FileLifecycleReconciliationState.Applied,
+                        "src/Rejected.cs",
+                        null,
+                        "Created file is present."),
+                ]
+                : [],
+        };
         var correctionCommit = new MutationCommitResult(
             correctionSetId,
             [correctionMutationId],
@@ -1488,12 +1538,15 @@ public sealed partial class ExecutionOrchestratorTests
     {
         public int StartCount { get; private set; }
 
+        public ExecutionStartRequest? LastStartRequest { get; private set; }
+
         public Task<ExecutionContinuation> StartAsync(
             ExecutionStartRequest request,
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             StartCount++;
+            LastStartRequest = request;
             StepId? currentStepId = request.ApprovedPlan.Steps.Count == 0
                 ? null
                 : request.ApprovedPlan.Steps[0].StepId;
@@ -1549,10 +1602,12 @@ public sealed partial class ExecutionOrchestratorTests
     private sealed class PlanModelProvider : IModelProvider
     {
         private readonly ImplementationPlan _plan;
+        private readonly ModelUsage? _usage;
 
-        public PlanModelProvider(ImplementationPlan plan)
+        public PlanModelProvider(ImplementationPlan plan, ModelUsage? usage = null)
         {
             _plan = plan;
+            _usage = usage;
         }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
@@ -1566,6 +1621,7 @@ public sealed partial class ExecutionOrchestratorTests
                 Output = new ToolRequestModelOutput(
                     "propose_plan",
                     SerializePlanProposal(_plan)),
+                Usage = _usage,
                 FinishReason = ModelFinishReason.ToolCalls,
             };
         }

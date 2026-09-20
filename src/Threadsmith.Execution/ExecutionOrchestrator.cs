@@ -479,6 +479,17 @@ public sealed class ExecutionOrchestrator :
         CancellationToken cancellationToken = default)
     {
         using var gate = await EnterRunContinuationGateAsync(runId, cancellationToken);
+        var checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
+        if (checkpoint.SessionId != sessionId)
+        {
+            throw new UnauthorizedAccessException("The execution does not belong to the requesting session.");
+        }
+
+        if (string.Equals(checkpoint.StateArtifact?.Kind, "executionStartRequest", StringComparison.Ordinal))
+        {
+            return await RestoreStartRequestAsync(checkpoint, cancellationToken);
+        }
+
         var active = await ResolveActiveAsync(sessionId, runId, cancellationToken);
         return active.Request with { InitialBudgetUsage = active.PlanningBudgetUsed };
     }
@@ -852,13 +863,17 @@ public sealed class ExecutionOrchestrator :
         {
             Commit = committed,
             CurrentBatchFullyApplied = IsEntireStagedSetApplied(active.RequiredStaged, committed),
-            AppliedFiles = MergePaths(active.AppliedFiles, committed.ChangedFiles),
+            AppliedFiles = MergePaths(
+                active.Request.Baseline.RepositoryPath,
+                active.AppliedFiles,
+                committed.ChangedFiles),
             AppliedLifecycleChanges = active.AppliedLifecycleChanges
                 .Concat(CreateAppliedLifecycleChanges(active.RequiredStaged, committed))
                 .ToArray(),
             AppliedLifecycleReconciliations = active.AppliedLifecycleReconciliations
                 .Concat(committed.LifecycleReconciliations)
                 .ToArray(),
+            LifecycleMutationSteps = MergeLifecycleMutationSteps(active, committed),
         };
         _runs[request.RunId] = active;
         var appliedState = await PublishStateAsync(active, cancellationToken);
@@ -1523,6 +1538,7 @@ public sealed class ExecutionOrchestrator :
                 .Select(value => Bound(value, 512))).Distinct(StringComparer.Ordinal).ToArray(),
             AccumulatedResidualRisks = active.AccumulatedResidualRisks.Concat(active.Request.ApprovedPlan.Risks)
                 .Distinct(StringComparer.Ordinal).ToArray(),
+            LifecycleMutationSteps = [],
         };
     }
 
@@ -1610,6 +1626,7 @@ public sealed class ExecutionOrchestrator :
             ValidationRequest = scopedRequest.ValidationRequest with
             {
                 AffectedPaths = MergePaths(
+                    scopedRequest.Baseline.RepositoryPath,
                     scopedRequest.ValidationRequest.AffectedPaths,
                     active.AppliedFiles),
             },
@@ -1625,8 +1642,9 @@ public sealed class ExecutionOrchestrator :
             var inferredStepId = active.CurrentStepId != default
                 ? active.CurrentStepId
                 : checkpoint.CurrentPlanStepId
-                    ?? ResolveCurrentStep(active.Request.ApprovedPlan, active.RequiredStaged.MutationSet)
+                    ?? ResolveCurrentStep(active.Request, active.RequiredStaged.MutationSet)
                     ?? active.Request.ApprovedPlan.Steps[0].StepId;
+            var currentStepHasPassingValidation = active.Validation?.Gate.Status == AcceptanceGateStatus.Passed;
             active = active with
             {
                 CurrentStepId = inferredStepId,
@@ -1635,6 +1653,9 @@ public sealed class ExecutionOrchestrator :
                 BudgetUsed = active.BudgetUsed ?? active.Request.InitialBudgetUsage,
                 CurrentBatchFullyApplied = active.Commit is not null
                     && IsEntireStagedSetApplied(active.RequiredStaged, active.Commit),
+                AppliedPlanStepIds = currentStepHasPassingValidation
+                    ? active.AppliedPlanStepIds
+                    : active.AppliedPlanStepIds.Where(stepId => stepId != inferredStepId).ToArray(),
             };
         }
 
@@ -1695,10 +1716,11 @@ public sealed class ExecutionOrchestrator :
         ActiveExecution active,
         CancellationToken cancellationToken)
     {
-        var originals = new Dictionary<string, ExecutionArtifactReference?>(
-            active.OriginalFiles, StringComparer.OrdinalIgnoreCase);
-        var previouslyApplied = active.AppliedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var workspace = _workspaces.GetWorkspace(active.Request.Baseline.WorkspaceId);
+        var pathComparer = RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath);
+        var originals = new Dictionary<string, ExecutionArtifactReference?>(
+            active.OriginalFiles, pathComparer);
+        var previouslyApplied = active.AppliedFiles.ToHashSet(pathComparer);
         foreach (var mutation in active.RequiredStaged.MutationSet.Mutations)
         {
             foreach (var path in new[] { mutation.RelativePath, mutation.DestinationRelativePath })
@@ -1732,9 +1754,10 @@ public sealed class ExecutionOrchestrator :
             return null;
         }
 
-        var originals = new Dictionary<string, ExecutionArtifactReference?>(
-            active.OriginalFiles, StringComparer.OrdinalIgnoreCase);
         var workspace = _workspaces.GetWorkspace(active.Request.Baseline.WorkspaceId);
+        var originals = new Dictionary<string, ExecutionArtifactReference?>(
+            active.OriginalFiles,
+            RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath));
         var diff = new StringBuilder();
         foreach (var path in active.AppliedFiles)
         {
@@ -1965,6 +1988,7 @@ public sealed class ExecutionOrchestrator :
     private static ExecutionStartRequest EnsurePlanValidationScope(ExecutionStartRequest request)
     {
         var affectedPaths = MergePaths(
+            request.Baseline.RepositoryPath,
             request.ValidationRequest.AffectedPaths,
             request.ApprovedPlan.Steps.SelectMany(step => step.GetAffectedPaths()));
         return request with
@@ -2007,7 +2031,10 @@ public sealed class ExecutionOrchestrator :
         {
             Baseline = baseline,
             Projects = projects,
-            AffectedPaths = MergePaths(previous.AffectedPaths, current.AffectedPaths),
+            AffectedPaths = MergePaths(
+                baseline.RepositoryPath,
+                previous.AffectedPaths,
+                current.AffectedPaths),
             Confidence = (SemanticConfidenceLevel)Math.Min(
                 (int)previous.Confidence,
                 (int)current.Confidence),
@@ -2016,16 +2043,15 @@ public sealed class ExecutionOrchestrator :
         };
     }
 
-    private static IReadOnlyList<string> MergePaths(params IEnumerable<string>[] sources)
+    private static IReadOnlyList<string> MergePaths(
+        string repositoryPath,
+        params IEnumerable<string>[] sources)
     {
-        var comparer = OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
         return sources
             .SelectMany(source => source)
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(path => path.Replace('\\', '/'))
-            .Distinct(comparer)
+            .Distinct(RepositoryPathPolicy.GetPathComparer(repositoryPath))
             .ToArray();
     }
 
@@ -2082,6 +2108,8 @@ public sealed class ExecutionOrchestrator :
             || active.AppliedPlanStepIds is null
             || active.AppliedLifecycleChanges is null
             || active.AppliedLifecycleReconciliations is null
+            || active.LifecycleMutationSteps is null
+            || active.LifecycleMutationSteps.Any(item => item.StepId == default || item.MutationId == default)
             || active.CompletedPlanStepIds is null
             || active.CompletedBehaviorSummary is null
             || active.AccumulatedResidualRisks is null
@@ -2097,13 +2125,14 @@ public sealed class ExecutionOrchestrator :
     }
 
     private static StepId? ResolveCurrentStep(
-        ImplementationPlan plan,
+        ExecutionStartRequest request,
         MutationSet mutationSet)
     {
+        var comparer = RepositoryPathPolicy.GetPathComparer(request.Baseline.RepositoryPath);
         var files = mutationSet.Mutations
             .Select(mutation => mutation.RelativePath.Replace('\\', '/'))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        return plan.Steps.FirstOrDefault(step => step.GetAffectedPaths()
+            .ToHashSet(comparer);
+        return request.ApprovedPlan.Steps.FirstOrDefault(step => step.GetAffectedPaths()
             .Select(path => path.Replace('\\', '/'))
             .Any(files.Contains))?.StepId;
     }
@@ -2149,21 +2178,22 @@ public sealed class ExecutionOrchestrator :
             .StepId;
     }
 
-    private static IReadOnlyList<string> GetActivatedPaths(
+    private IReadOnlyList<string> GetActivatedPaths(
         ActiveExecution active,
         StepId stepId)
     {
-        if (active.CurrentStepId != stepId)
-        {
-            return [];
-        }
-
+        var workspace = _workspaces.GetWorkspace(active.Request.Baseline.WorkspaceId);
+        var mutationIds = active.LifecycleMutationSteps
+            .Where(item => item.StepId == stepId)
+            .Select(item => item.MutationId)
+            .ToHashSet();
         return active.AppliedLifecycleReconciliations
-            .Where(item => item.State == FileLifecycleReconciliationState.Applied)
+            .Where(item => item.State == FileLifecycleReconciliationState.Applied
+                && mutationIds.Contains(item.MutationId))
             .SelectMany(item => new[] { item.SourcePath, item.DestinationPath })
             .Where(path => !string.IsNullOrWhiteSpace(path))
             .Select(path => path!)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath))
             .ToArray();
     }
 
@@ -2324,6 +2354,26 @@ public sealed class ExecutionOrchestrator :
         return staged.Preview.LifecycleChanges
             .Where(change => appliedMutationIds.Contains(change.MutationId))
             .ToArray();
+    }
+
+    private static IReadOnlyList<LifecycleMutationStep> MergeLifecycleMutationSteps(
+        ActiveExecution active,
+        MutationCommitResult committed)
+    {
+        var result = active.LifecycleMutationSteps.ToList();
+        var recordedMutationIds = result.Select(item => item.MutationId).ToHashSet();
+        var appliedMutationIds = committed.AppliedMutations.ToHashSet();
+        foreach (var reconciliation in committed.LifecycleReconciliations.Where(item =>
+            item.State == FileLifecycleReconciliationState.Applied
+            && appliedMutationIds.Contains(item.MutationId)))
+        {
+            if (recordedMutationIds.Add(reconciliation.MutationId))
+            {
+                result.Add(new LifecycleMutationStep(reconciliation.MutationId, active.CurrentStepId));
+            }
+        }
+
+        return result;
     }
 
     private static ExecutionOutcomeProjection CreateOutcomeProjection(
@@ -2494,6 +2544,10 @@ public sealed class ExecutionOrchestrator :
         MutationValidationResult Validation,
         ExecutionArtifactReference Artifact);
 
+    private sealed record LifecycleMutationStep(
+        MutationId MutationId,
+        StepId StepId);
+
     private sealed record ActiveExecution(
         ExecutionStartRequest Request,
         StagedMutationSet? Staged,
@@ -2521,6 +2575,8 @@ public sealed class ExecutionOrchestrator :
         public IReadOnlyList<FileLifecycleChange> AppliedLifecycleChanges { get; init; } = [];
 
         public IReadOnlyList<FileLifecycleReconciliation> AppliedLifecycleReconciliations { get; init; } = [];
+
+        public IReadOnlyList<LifecycleMutationStep> LifecycleMutationSteps { get; init; } = [];
 
         public MutationValidationResult? Validation { get; init; }
 

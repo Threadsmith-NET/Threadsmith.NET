@@ -287,6 +287,37 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(ExecutionCheckpointPhase.Completed, (await fixture.Checkpoints.GetOutcomeAsync(request.RunId))!.Status);
     }
 
+    /// <summary>The public resume command restores cancellation during the first implementation model turn.</summary>
+    [Fact]
+    public async Task ResumeCommand_InitialImplementationCancellation_RestartsFromDurableRequest()
+    {
+        var fixture = CreateFixture(blockFirstProposal: true);
+        using var cancellation = new CancellationTokenSource();
+        var start = fixture.Orchestrator.StartAsync(fixture.StartRequest, cancellation.Token);
+        await fixture.ProposalHandler.FirstHandleEntered.WaitAsync(TimeSpan.FromSeconds(5));
+        await cancellation.CancelAsync();
+        fixture.ProposalHandler.ReleaseFirstHandle();
+#pragma warning disable VSTHRD003 // The task was intentionally started before cancellation reached the blocked model turn.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => start);
+#pragma warning restore VSTHRD003
+        var cancelled = await fixture.Checkpoints.GetCheckpointAsync(fixture.StartRequest.RunId);
+        Assert.Equal(ExecutionCheckpointPhase.Cancelled, cancelled!.Phase);
+        Assert.Equal("executionStartRequest", cancelled.StateArtifact?.Kind);
+        var restored = fixture with { Orchestrator = RecreateOrchestrator(fixture) };
+        await using var scenario = await ConversationScenario.CreateRestoredAsync(restored);
+
+        var resumed = await scenario.Dispatcher.DispatchAsync(
+            new ResumeRunCommand(fixture.StartRequest.SessionId, fixture.StartRequest.RunId));
+        var outcome = await restored.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged));
+
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(fixture.StartRequest.RunId)));
+        Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
+        Assert.Single(fixture.CommitHandler.Commands);
+    }
+
     /// <summary>Continuation uses normal approval for each plan, including beyond the former twelve-plan cap.</summary>
     [Theory]
     [InlineData(2)]

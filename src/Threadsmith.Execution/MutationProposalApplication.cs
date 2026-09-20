@@ -648,7 +648,7 @@ public sealed class MutationProposalApplication :
                 envelope.MutationSet,
                 command,
                 baseline,
-                CreateWorkspacePathComparer(workspace));
+                RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath));
             FailIfMutationPathPolicyViolation(hostOwned);
             FailIfMutationSourceMissingFromBaseline(hostOwned);
             hostOwned = await ResolveSemanticRenameMutationsAsync(
@@ -735,7 +735,7 @@ public sealed class MutationProposalApplication :
                 exception);
         }
 
-        var approvedPlanPathComparer = CreateWorkspacePathComparer(workspace);
+        var approvedPlanPathComparer = RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath);
         var approvedSteps = ResolveApprovedSteps(command);
         ValidateMutationsWithinPlan(
             proposed.Mutations,
@@ -1383,7 +1383,7 @@ public sealed class MutationProposalApplication :
         MutationSet proposed,
         CancellationToken cancellationToken)
     {
-        var pathComparer = CreateWorkspacePathComparer(workspace);
+        var pathComparer = RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath);
         var currentByPath = new Dictionary<string, string?>(pathComparer);
         var mutationByPath = new Dictionary<string, MutationId>(pathComparer);
         foreach (var mutation in proposed.Mutations)
@@ -1452,48 +1452,6 @@ public sealed class MutationProposalApplication :
                 RelatedMutationId = mutationByPath.GetValueOrDefault(item.Key),
             })
             .ToArray();
-    }
-
-    private static StringComparer CreateWorkspacePathComparer(ITransactionalWorkspace workspace)
-    {
-        ArgumentNullException.ThrowIfNull(workspace);
-        return IsCaseSensitiveFileSystem(workspace.Isolation.RepositoryPath)
-            ? StringComparer.Ordinal
-            : StringComparer.OrdinalIgnoreCase;
-    }
-
-    private static bool IsCaseSensitiveFileSystem(string repositoryPath)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-        var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        var parent = Path.GetDirectoryName(fullPath);
-        var name = Path.GetFileName(fullPath);
-        var letterIndex = -1;
-        for (var index = 0; index < name.Length; index++)
-        {
-            if (char.IsLetter(name[index]))
-            {
-                letterIndex = index;
-                break;
-            }
-        }
-
-        if (parent is null || letterIndex < 0 || !Directory.Exists(parent))
-        {
-            return !OperatingSystem.IsWindows();
-        }
-
-        var toggledNameCharacters = name.ToCharArray();
-        var letter = toggledNameCharacters[letterIndex];
-        toggledNameCharacters[letterIndex] = char.IsUpper(letter)
-            ? char.ToLowerInvariant(letter)
-            : char.ToUpperInvariant(letter);
-        string toggledName = new(toggledNameCharacters);
-        var distinctToggledEntryExists = Directory.EnumerateFileSystemEntries(parent)
-            .Select(Path.GetFileName)
-            .Any(entry => string.Equals(entry, toggledName, StringComparison.Ordinal));
-        return distinctToggledEntryExists
-            || !Directory.Exists(Path.Combine(parent, toggledName));
     }
 
     private string ApplyReplacement(

@@ -138,6 +138,81 @@ public sealed partial class ExecutionOrchestratorTests
             CreateContinuation(fixture, fixture.Staged)));
     }
 
+    /// <summary>An admitted later candidate is durable even when cancellation arrives with its model result.</summary>
+    [Fact]
+    public async Task LaterCandidate_CancellationAfterProposalPersistsCandidateAndBudget()
+    {
+        var fixture = CreateFixture(includeSecondPlanStep: true, includeCorrection: true);
+        await using var events = fixture.Events;
+        fixture.ValidationHandler.PassAll();
+        var secondProposal = Proposal(
+            fixture.CorrectionStaged with { PlanStepIds = [fixture.SecondStepId] },
+            true) with
+        {
+            BudgetUsed = new BudgetDimensions(25, 2, TimeSpan.FromSeconds(1)),
+        };
+        SetProposals(
+            fixture,
+            Proposal(fixture.Staged, true),
+            secondProposal);
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+        using var cancellation = new CancellationTokenSource();
+        fixture.ProposalHandler.AfterProposal = cancellation.Cancel;
+
+        var progress = await fixture.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged),
+            cancellation.Token);
+        var resumed = await RecreateOrchestrator(fixture).ResumeAsync(
+            fixture.StartRequest.SessionId,
+            fixture.StartRequest.RunId);
+        var state = JsonNode.Parse((await fixture.Artifacts.ReadAsync(resumed.StateArtifact!))!)!.AsObject();
+
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, progress.Status);
+        Assert.Equal(fixture.CorrectionStaged.MutationSet.MutationSetId, resumed.MutationSetId);
+        Assert.Equal(25, state["BudgetUsed"]!["Tokens"]!.GetValue<long>());
+        Assert.Equal(2, state["BudgetUsed"]!["Calls"]!.GetValue<int>());
+        Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
+    }
+
+    /// <summary>A failed later step retains earlier completed steps from the same plan.</summary>
+    [Fact]
+    public async Task FailedLaterStep_PreservesEarlierCurrentPlanProgress()
+    {
+        var fixture = CreateFixture(includeSecondPlanStep: true);
+        await using var events = fixture.Events;
+        var secondStaged = fixture.CorrectionStaged with
+        {
+            PlanStepIds = [fixture.SecondStepId],
+            StepComplete = true,
+        };
+        SetProposals(fixture, Proposal(fixture.Staged, true), Proposal(secondStaged, true));
+        fixture.CommitHandler.Enqueue(new MutationCommitResult(
+            secondStaged.MutationSet.MutationSetId,
+            secondStaged.MutationSet.Mutations.Select(mutation => mutation.MutationId).ToArray(),
+            ["src/Example.cs"],
+            "revision",
+            false));
+        var request = fixture.StartRequest with { CorrectionBudget = 0 };
+        await fixture.Orchestrator.StartAsync(request);
+        var pending = await fixture.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, fixture.Staged));
+        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult with
+        {
+            Gate = new AcceptanceGateResult(AcceptanceGateStatus.Failed, ["Second step failed."]),
+        });
+
+        var outcome = await fixture.Orchestrator.ContinueAsync(
+            CreateContinuation(fixture, secondStaged));
+
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, pending.Status);
+        Assert.Equal(ExecutionCheckpointPhase.Failed, outcome.Status);
+        Assert.Equal([fixture.StepId], outcome.CompletedStepIds);
+        Assert.Equal([fixture.SecondStepId], outcome.UncompletedStepIds);
+        Assert.Contains("Example behavior changes.", outcome.BehaviorSummary);
+        Assert.DoesNotContain("Untouched behavior changes.", outcome.BehaviorSummary);
+    }
+
     /// <summary>Partial consent stops automatic generation until an explicit resume.</summary>
     [Fact]
     public async Task PartialApproval_PausesUntilExplicitResumeAndRequiresFreshAuthorization()

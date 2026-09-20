@@ -909,6 +909,11 @@ public sealed class ExecutionOrchestrator :
         var validationArtifact = validated.Artifact;
 
         var succeeded = validation.Gate.Status == AcceptanceGateStatus.Passed;
+        if (succeeded)
+        {
+            applied = applied with { CorrectionAttempts = 0 };
+        }
+
         if (!active.CurrentBatchFullyApplied)
         {
             await SaveCheckpointAsync(
@@ -993,7 +998,7 @@ public sealed class ExecutionOrchestrator :
                 request.SessionId,
                 "executionCorrectionDiff",
                 correction.Preview.UnifiedDiff,
-                cancellationToken);
+                CancellationToken.None);
             active = active with
             {
                 Staged = correction,
@@ -1003,7 +1008,7 @@ public sealed class ExecutionOrchestrator :
                 Commit = null,
             };
             _runs[request.RunId] = active;
-            var correctionState = await PublishStateAsync(active, cancellationToken);
+            var correctionState = await PublishStateAsync(active, CancellationToken.None);
             await SaveCheckpointAsync(
                 applied with
                 {
@@ -1025,7 +1030,7 @@ public sealed class ExecutionOrchestrator :
                     NextAction = "review correction exact diff and obtain separate mutation authorization",
                     RecordedAt = DateTimeOffset.UtcNow,
                 },
-                cancellationToken);
+                CancellationToken.None);
             var progress = CreateOutcomeProjection(
                 active, validation, provenance, null, ExecutionCheckpointPhase.CorrectionPending);
             return progress with
@@ -1059,8 +1064,9 @@ public sealed class ExecutionOrchestrator :
                     cancellationToken);
                 if (next is not null)
                 {
+                    var finalDiff = await PublishFinalDiffAsync(next.Value.Active, CancellationToken.None);
                     return CreateOutcomeProjection(
-                        next.Value.Active, validation, provenance, next.Value.Continuation.DiffArtifact, next.Value.Continuation.Phase);
+                        next.Value.Active, validation, provenance, finalDiff, next.Value.Continuation.Phase);
                 }
 
                 active = _runs[request.RunId];
@@ -1115,6 +1121,11 @@ public sealed class ExecutionOrchestrator :
     {
         var request = active.Request;
         applied = await RequireCheckpointAsync(request.RunId, cancellationToken);
+        if (validation.Gate.Status == AcceptanceGateStatus.Passed)
+        {
+            applied = applied with { CorrectionAttempts = 0 };
+        }
+
         var succeeded = validation.Gate.Status == AcceptanceGateStatus.Passed
             && active.AppliedPlanStepIds.Count == active.Request.ApprovedPlan.Steps.Count;
         active = active with { ApprovalProvenance = provenance };
@@ -1282,35 +1293,14 @@ public sealed class ExecutionOrchestrator :
         var staged = proposal.StagedMutationSet
             ?? throw new InvalidOperationException(
                 "The first approved step cannot complete without current validation evidence.");
-
-        // Once admitted, persist the exact candidate and its budget before honoring cancellation.
-        var diff = await _artifacts.PublishAsync(
-            request.SessionId,
-            "executionDiff",
-            staged.Preview.UnifiedDiff,
-            CancellationToken.None);
-        active = active with
-        {
-            Staged = staged,
-            CurrentStepId = scope.ActiveStep.StepId,
-            PendingStepComplete = proposal.StepComplete,
-            BatchOrdinal = scope.BatchOrdinal,
-            BudgetUsed = proposal.BudgetUsed ?? active.BudgetUsed,
-            PendingPlanInitialization = false,
-        };
-        _runs[active.Request.RunId] = active;
-        var pending = modelTurn with
-        {
-            Phase = ExecutionCheckpointPhase.MutationApprovalPending,
-            PendingStepComplete = proposal.StepComplete,
-            MutationSetId = staged.MutationSet.MutationSetId,
-            StateArtifact = await PublishStateAsync(active, CancellationToken.None),
-            DiffArtifact = diff,
-            NextAction = "review approved plan batch exact diff and obtain separate mutation authorization",
-            RecordedAt = DateTimeOffset.UtcNow,
-        };
-        await SaveCheckpointAsync(pending, CancellationToken.None);
-        return pending;
+        var persisted = await PersistImplementationProposalAsync(
+            active,
+            modelTurn,
+            scope,
+            proposal,
+            staged,
+            preserveValidation: true);
+        return persisted.Continuation;
     }
 
     private async Task<(ActiveExecution Active, ExecutionContinuation Continuation)?> PrepareNextProposalAsync(
@@ -1397,51 +1387,70 @@ public sealed class ExecutionOrchestrator :
                 checkpoint = modelTurn with
                 {
                     CompletedStepIds = active.AppliedPlanStepIds,
-                    StateArtifact = await PublishStateAsync(active, cancellationToken),
+                    StateArtifact = await PublishStateAsync(active, CancellationToken.None),
                     NextAction = active.AppliedPlanStepIds.Count == active.Request.ApprovedPlan.Steps.Count
                         ? "assemble terminal execution outcome"
                         : "select the next incomplete approved step",
                     RecordedAt = DateTimeOffset.UtcNow,
                 };
-                await SaveCheckpointAsync(checkpoint, cancellationToken);
+                await SaveCheckpointAsync(checkpoint, CancellationToken.None);
                 continue;
             }
 
             var staged = proposal.StagedMutationSet
                 ?? throw new InvalidDataException("The proposal result contains neither changes nor completion.");
-            var diff = await _artifacts.PublishAsync(
-                active.Request.SessionId,
-                "executionDiff",
-                staged.Preview.UnifiedDiff,
-                cancellationToken);
-            active = active with
-            {
-                Staged = staged,
-                CurrentStepId = scope.ActiveStep.StepId,
-                PendingStepComplete = proposal.StepComplete,
-                BatchOrdinal = scope.BatchOrdinal,
-                BudgetUsed = proposal.BudgetUsed ?? active.BudgetUsed,
-                CurrentBatchFullyApplied = false,
-                Commit = null,
-                Validation = null,
-            };
-            _runs[active.Request.RunId] = active;
-            var state = await PublishStateAsync(active, cancellationToken);
-            var pending = modelTurn with
-            {
-                Phase = ExecutionCheckpointPhase.MutationApprovalPending,
-                PendingStepComplete = proposal.StepComplete,
-                MutationSetId = staged.MutationSet.MutationSetId,
-                StateArtifact = state,
-                DiffArtifact = diff,
-                NextAction = "review next batch exact diff and obtain separate mutation authorization",
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
-            await SaveCheckpointAsync(pending, cancellationToken);
-            return (active, pending);
+            return await PersistImplementationProposalAsync(
+                active,
+                modelTurn,
+                scope,
+                proposal,
+                staged,
+                preserveValidation: false);
         }
 
         return null;
+    }
+
+    private async Task<(ActiveExecution Active, ExecutionContinuation Continuation)> PersistImplementationProposalAsync(
+        ActiveExecution active,
+        ExecutionContinuation modelTurn,
+        MutationExecutionScope scope,
+        MutationProposalResult proposal,
+        StagedMutationSet staged,
+        bool preserveValidation)
+    {
+        // Once admitted, persist the exact candidate and consumed budget before honoring cancellation.
+        var diff = await _artifacts.PublishAsync(
+            active.Request.SessionId,
+            "executionDiff",
+            staged.Preview.UnifiedDiff,
+            CancellationToken.None);
+        active = active with
+        {
+            Staged = staged,
+            CurrentStepId = scope.ActiveStep.StepId,
+            PendingStepComplete = proposal.StepComplete,
+            BatchOrdinal = scope.BatchOrdinal,
+            BudgetUsed = proposal.BudgetUsed ?? active.BudgetUsed,
+            PendingPlanInitialization = false,
+            CurrentBatchFullyApplied = false,
+            Commit = null,
+            Validation = preserveValidation ? active.Validation : null,
+        };
+        _runs[active.Request.RunId] = active;
+        var pending = modelTurn with
+        {
+            Phase = ExecutionCheckpointPhase.MutationApprovalPending,
+            PendingStepComplete = proposal.StepComplete,
+            MutationSetId = staged.MutationSet.MutationSetId,
+            StateArtifact = await PublishStateAsync(active, CancellationToken.None),
+            DiffArtifact = diff,
+            Operation = null,
+            NextAction = "review active-step batch exact diff and obtain separate mutation authorization",
+            RecordedAt = DateTimeOffset.UtcNow,
+        };
+        await SaveCheckpointAsync(pending, CancellationToken.None);
+        return (active, pending);
     }
 
     private async Task<ExecutionContinuation> PauseForReplanningAsync(
@@ -2325,9 +2334,7 @@ public sealed class ExecutionOrchestrator :
         ExecutionCheckpointPhase status)
     {
         var failed = status is ExecutionCheckpointPhase.Failed or ExecutionCheckpointPhase.CorrectionPending;
-        var currentCompleted = !failed
-            ? active.AppliedPlanStepIds.ToHashSet()
-            : [];
+        var currentCompleted = active.AppliedPlanStepIds.ToHashSet();
         var completed = active.CompletedPlanStepIds.Concat(currentCompleted).Distinct().ToArray();
         return new ExecutionOutcomeProjection
         {

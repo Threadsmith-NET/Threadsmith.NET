@@ -502,6 +502,10 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal([fixture.SecondStepId], outcome.UncompletedStepIds);
         Assert.DoesNotContain("Untouched behavior changes.", outcome.BehaviorSummary);
         Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, outcome.Status);
+        var appliedDiff = await fixture.Artifacts.ReadAsync(outcome.FinalDiff!);
+        Assert.Contains("+new", appliedDiff, StringComparison.Ordinal);
+        Assert.DoesNotContain("+fixed", appliedDiff, StringComparison.Ordinal);
+        Assert.NotEqual(fixture.CorrectionStaged.Preview.UnifiedDiff, appliedDiff);
         Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(fixture.StartRequest.RunId));
     }
 
@@ -813,6 +817,9 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.DoesNotContain("+new", finalDiff, StringComparison.Ordinal);
         Assert.DoesNotContain("-new", finalDiff, StringComparison.Ordinal);
         Assert.Equal(2, fixture.CommitHandler.Commands.Count);
+        var checkpoint = await fixture.Checkpoints.GetCheckpointAsync(fixture.StartRequest.RunId);
+        Assert.Equal(0, checkpoint!.CorrectionAttempts);
+        Assert.Equal(1, outcome.CorrectionAttempts);
         var correctionCommand = Assert.Single(
             fixture.ProposalHandler.Commands,
             command => command.Correction is not null);

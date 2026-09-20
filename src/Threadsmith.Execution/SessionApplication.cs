@@ -954,14 +954,12 @@ public sealed partial class SessionApplication :
         CancellationToken cancellationToken)
     {
         var previous = await GetResumeRegistrationAsync(command, cancellationToken);
-
-        var checkpoint = await orchestrator.ResumeAsync(
-            command.SessionId,
-            command.RunId,
-            cancellationToken);
         if (previous is not null && !previous.Completion.Task.IsCompleted)
         {
-            return checkpoint;
+            return await orchestrator.ResumeAsync(
+                command.SessionId,
+                command.RunId,
+                cancellationToken);
         }
 
         if (previous?.ExecutionObservation is { } finishedObservation)
@@ -985,25 +983,61 @@ public sealed partial class SessionApplication :
 
         registration.ExecutionStarted = true;
         registration.IncrementalPlanExecution = request.AllowPlanContinuation;
-        registration.LastPlanBoundaryOrdinal = checkpoint.PlanOrdinal - 1;
         registration.LastPublishedPlan = request.ApprovedPlan;
-        if (_conversationStore is not null)
+        var installed = previous is not null
+            && _runs.TryUpdate(command.RunId, registration, previous);
+        installed = installed || _runs.TryAdd(command.RunId, registration);
+        if (!installed)
         {
-            var snapshot = await _conversationStore.GetSnapshotAsync(
-                command.SessionId,
-                cancellationToken: cancellationToken);
-            registration.SourceMessage = snapshot.Messages.FirstOrDefault(message =>
-                message.RunId == command.RunId && message.Role == ConversationRole.User);
-            registration.CurrentMessageId = registration.SourceMessage?.Id;
-            registration.ConversationMode = snapshot.Mode;
+            registration.Cancellation.Dispose();
+            throw new InvalidOperationException("The execution became active while resume admission was in progress.");
         }
 
         previous?.Cancellation.Dispose();
-        _runs[command.RunId] = registration;
-        _steering.RegisterRun(command.SessionId, command.RunId);
-        registration.SteeringRegistered = true;
-        registration.ExecutionObservation = CompleteExecutionAsync(command.RunId, registration);
-        return checkpoint;
+        try
+        {
+            _steering.RegisterRun(command.SessionId, command.RunId);
+            registration.SteeringRegistered = true;
+            var checkpoint = await orchestrator.ResumeAsync(
+                command.SessionId,
+                command.RunId,
+                registration.Cancellation.Token);
+            registration.LastPlanBoundaryOrdinal = checkpoint.PlanOrdinal - 1;
+            if (_conversationStore is not null)
+            {
+                var snapshot = await _conversationStore.GetSnapshotAsync(
+                    command.SessionId,
+                    cancellationToken: registration.Cancellation.Token);
+                registration.SourceMessage = snapshot.Messages.FirstOrDefault(message =>
+                    message.RunId == command.RunId && message.Role == ConversationRole.User);
+                registration.CurrentMessageId = registration.SourceMessage?.Id;
+                registration.ConversationMode = snapshot.Mode;
+            }
+
+            registration.ExecutionObservation = CompleteExecutionAsync(command.RunId, registration);
+            return checkpoint;
+        }
+        catch (Exception exception)
+        {
+            if (exception is OperationCanceledException && registration.Cancellation.IsCancellationRequested)
+            {
+                registration.Completion.TrySetCanceled(registration.Cancellation.Token);
+            }
+            else
+            {
+                registration.Completion.TrySetException(exception);
+            }
+
+            if (registration.SteeringRegistered)
+            {
+                _steering.CompleteRun(command.SessionId, command.RunId);
+                registration.SteeringRegistered = false;
+            }
+
+            _runs.TryRemove(new KeyValuePair<RunId, RunRegistration>(command.RunId, registration));
+            registration.Cancellation.Dispose();
+            throw;
+        }
     }
 
     private RunRegistration CreateRunRegistration(

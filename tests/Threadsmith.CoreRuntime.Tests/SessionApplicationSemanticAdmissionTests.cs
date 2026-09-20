@@ -215,6 +215,29 @@ public static class SessionApplicationSemanticAdmissionTests
         Assert.True(published);
     }
 
+    /// <summary>A restored run is visible to lifecycle guards and cancellation while resume advances it.</summary>
+    [Fact]
+    public static async Task ResumeRun_BlockedOrchestratorIsActiveAndCancellable()
+    {
+        await using var events = new DomainEventStream();
+        var refresh = new WorkspaceSemanticRefreshCoordinator();
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        var workspaceId = WorkspaceId.New();
+        var (application, orchestrator) = CreateResumeApplication(
+            events, refresh, sessionId, runId, workspaceId);
+
+        var resume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
+        await orchestrator.ResumeEntered.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(application.HasActiveWork);
+        Assert.True(await application.HandleAsync(new CancelRunCommand(sessionId, runId)));
+#pragma warning disable VSTHRD003 // The resume task was deliberately started above to exercise cancellation during admission.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resume);
+#pragma warning restore VSTHRD003
+        Assert.False(application.HasActiveWork);
+    }
+
     /// <summary>Concurrent resume requests attach only one completion observer.</summary>
     [Fact]
     public static async Task ResumeRun_ConcurrentRequestsAttachOneObserver()

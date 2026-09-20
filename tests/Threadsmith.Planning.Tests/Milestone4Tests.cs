@@ -4249,11 +4249,11 @@ public static class Milestone4Tests
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
-            "For a known type, interface, method, property, field, or event, use find_symbol",
+            "For a known type, interface, method, property, field, or event declaration or direct relationship, use find_symbol",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
-            "do not repeat equivalent searches",
+            "do not reopen, re-search, or otherwise retrieve equivalent evidence",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(

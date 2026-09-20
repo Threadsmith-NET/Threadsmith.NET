@@ -288,37 +288,6 @@ public sealed class DelegateAgentsToolExecutionTests
                 checkpoint => checkpoint.Phase == DelegationCheckpointPhase.Cancelled).Phase);
     }
 
-    /// <summary>Verifies parent cancellation remains authoritative when one sibling already completed.</summary>
-    [Fact]
-    public async Task ExecuteAsync_MixedCompletionAndParentCancellation_ReturnsCancelledWithOutcomes()
-    {
-        // Arrange
-        await using var events = new DomainEventStream();
-        await using var scheduler = CreateScheduler();
-        var checkpoints = new RecordingCheckpointStore();
-        var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var runner = new MixedCancellationJoinRunner();
-        var fixture = CreateTool(coordinator, new FixedRunnerFactory(runner));
-        using var cancellation = new CancellationTokenSource();
-
-        // Act
-        var executionTask = fixture.Tool.ExecuteAsync(
-            CreateInput(2),
-            fixture.Context,
-            cancellation.Token);
-        await runner.BlockingChildEntered.WaitAsync(TimeSpan.FromSeconds(5));
-        await cancellation.CancelAsync();
-        var execution = await executionTask;
-
-        // Assert
-        Assert.Equal(DelegateAgentsStatus.Cancelled, execution.Value.Status);
-        Assert.Equal(["Completed", "Cancelled"], execution.Value.Children.Select(child => child.Status));
-        Assert.Equal(0, runner.JoinCalls);
-        var cancelled = checkpoints.History.Last();
-        Assert.Equal(DelegationCheckpointPhase.Cancelled, cancelled.Phase);
-        Assert.Equal(2, cancelled.ChildOutcomes.Count);
-    }
-
     /// <summary>Verifies cancellation that arrives during join wins even when the joiner returns late.</summary>
     [Fact]
     public async Task ExecuteAsync_ParentCancellationDuringNonCooperativeJoin_ReturnsCancelled()

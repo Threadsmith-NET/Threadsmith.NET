@@ -36,6 +36,8 @@ The joined `Tool-delegate_agents-ChildSummary.md` block uses `Summary` for the f
 
 The `code_explore` omissions block includes unresolved requested filenames, their resolution outcomes, and any permitted path alternatives. These values come from the tool result; they are not guesses made by the model or permission to read additional paths.
 
+The repository-inspection guidance, `code_explore` description, partial-source action, source-line retry reason, and continuation cursor label make follow-up conditional on an outstanding question requiring the omitted evidence. An incomplete result alone does not require another call. Exact source cursors retain their source identity checks and use configured source allowances without discovery-tier reductions; their presentation omits selected-evidence repetition.
+
 The token column lists required, case-sensitive named tokens unless a token is marked optional. `None` means the file is loaded as exact text and must not contain a template marker. Every source owner path is `src/<owner>/Prompts/<filename>`; every deployed path is the flat `prompts/<filename>` path shown here.
 
 For a category-organized explanation of every file and a glossary defining what every placeholder means, see the [Prompt file reference](../prompt-file-reference.md).

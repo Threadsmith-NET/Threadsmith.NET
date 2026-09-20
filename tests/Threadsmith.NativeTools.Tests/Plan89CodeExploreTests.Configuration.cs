@@ -3,12 +3,101 @@ namespace Threadsmith.NativeTools.Tests;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Context;
 using Threadsmith.Core;
+using Threadsmith.Models;
 using Threadsmith.Tools;
 using Xunit;
 
 public sealed partial class Plan89CodeExploreTests
 {
+    /// <summary>Exact continuation pages use configured caps, retain identity, and reuse prior partial source.</summary>
+    [Theory]
+    [InlineData(5000, false)]
+    [InlineData(900, false)]
+    [InlineData(5000, true)]
+    public async Task CodeExplore_SourceCursorUsesConfiguredPageAndPreservesDigest(int perFileCap, bool changed)
+    {
+        var options = new CodeExploreOptions
+        {
+            Limits = new CodeExploreLimits { MaximumSourceCharacters = 5000, MaximumPerFileSourceCharacters = perFileCap },
+            Tiny = new CodeExploreAdaptiveOptions { MaximumFiles = 2, MaximumSourceCharacters = 700, MaximumPerFileSourceCharacters = 700 },
+        };
+        await using var fixture = await AllocationFixture.CreateAsync(options);
+        var tool = new CodeExploreOutputFormattingTool(fixture.Tool, new CodeExploreOutputOptions(), TestPromptLoader.Instance, options);
+        var first = await tool.ExecuteAsync(new CodeExploreInput { Query = "Large.cs" }, fixture.Context, TestContext.Current.CancellationToken);
+        var firstResult = Assert.IsType<CodeExploreResult>(first.Value);
+        var firstSource = Assert.Single(firstResult.FileSections).Source;
+        Assert.Equal(CodeExploreSourceCompleteness.Partial, firstSource.Completeness);
+        var target = Assert.Single(firstResult.ContinuationTargets);
+        Assert.Equal(firstSource.FileSha256, target.ExpectedFileSha256);
+        var cursor = (first.ModelResultContent ?? string.Empty).Split('`')
+            .First(text => text.StartsWith("code_explore:continue:", StringComparison.Ordinal));
+        var frontier = ModelVisibleSourceFrontierBuilder.Build(
+            [
+                new ModelMessage
+                {
+                    Role = ModelMessageRole.Tool,
+                    ToolName = "code_explore",
+                    ToolCallId = "first",
+                    SectionId = "source",
+                    Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = JsonSerializer.Serialize(firstResult) }],
+                },
+            ],
+            fixture.Root,
+            fixture.Context.Invocation.WorkspaceId,
+            1);
+        var repeated = await fixture.Tool.ExecuteAsync(
+            new CodeExploreRequest
+            {
+                Query = "Large.cs",
+                PathAnchors =
+                [
+                    new CodeExplorePathAnchor
+                    {
+                        Path = "Large.cs",
+                        Line = firstSource.Range.StartLine,
+                        EndLine = firstSource.Range.EndLine,
+                        SelectionMode = CodeExplorePathSelectionMode.ExactLineRange,
+                    },
+                ],
+            },
+            fixture.Context with { Invocation = fixture.Context.Invocation with { VisibleSourceFrontier = frontier } },
+            TestContext.Current.CancellationToken);
+        Assert.Empty(repeated.Value.FileSections);
+        Assert.Single(repeated.Value.BackReferences ?? []);
+
+        if (changed)
+        {
+            await File.AppendAllTextAsync(Path.Combine(fixture.Root, "Large.cs"), "\n// changed", TestContext.Current.CancellationToken);
+        }
+
+        var next = await tool.ExecuteAsync(new CodeExploreInput { Query = cursor }, fixture.Context, TestContext.Current.CancellationToken);
+        var result = Assert.IsType<CodeExploreResult>(next.Value);
+        var source = Assert.Single(result.FileSections).Source;
+
+        Assert.True(result.IsSourceContinuation);
+        Assert.False(result.AdaptiveBudget?.AdaptiveDefaultsApplied);
+        Assert.Equal(perFileCap, result.AdaptiveBudget?.EffectiveMaximumPerFileSourceCharacters);
+        Assert.Null(result.Flow);
+        Assert.Null(result.BlastRadius);
+        Assert.Null(result.AssociatedArtifacts);
+        Assert.DoesNotContain("**Selected evidence**", next.ModelResultContent ?? string.Empty);
+        Assert.True(result.Allocation?.SpentSourceCharacters <= perFileCap);
+        if (changed)
+        {
+            Assert.Equal(CodeExploreSourceCompleteness.Drifted, source.Completeness);
+            Assert.Empty(source.NumberedLines);
+        }
+        else
+        {
+            Assert.Equal(firstSource.Range.EndLine + 1, source.Range.StartLine);
+            Assert.Equal(firstSource.FileSha256, source.FileSha256);
+            Assert.Equal(perFileCap == 5000 ? CodeExploreSourceCompleteness.Complete : CodeExploreSourceCompleteness.Partial, source.Completeness);
+            Assert.Contains(source.NumberedLines[^1], next.ModelResultContent ?? string.Empty);
+        }
+    }
+
     /// <summary>The outer deadline leaves enough time for the default semantic timeout to return a partial result.</summary>
     [Fact]
     public void CodeExplore_DefaultTimeouts_PreserveGracefulSemanticTimeout()

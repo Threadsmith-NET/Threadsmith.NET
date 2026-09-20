@@ -5,7 +5,7 @@
 - For a local variable or parameter, use scoped search for exact text or csharp_pattern_search when syntax matters.
 - Use targeted search for known text when compiler-backed identity or relationships are unnecessary.
 - Use focused code_explore for unfamiliar or cross-cutting C# behavior, unknown discovery, or multi-hop relationships that one targeted semantic operation cannot establish; keep its query no broader than the user's request.
-- Text matches alone do not establish references, dispatch, or impact. When code_explore reports incomplete coverage, follow its granular fallback for the missing information.
+- Text matches alone do not establish references, dispatch, or impact. When code_explore reports incomplete coverage, follow its granular continuation or fallback only if the missing information is needed to resolve an outstanding question.
 - If code_explore returns no evidence, narrow the query or use one targeted lookup guided by the reported gap. Do not compensate with broad file enumeration or unrelated reads.
 - Treat source ranges returned by code_explore as already read; do not reopen, re-search, or otherwise retrieve equivalent evidence without a reason.
 - Tool descriptions are capability hints, not implementation evidence; do not describe repository implementation, tool availability, or source state from tool descriptions or prior assumptions.

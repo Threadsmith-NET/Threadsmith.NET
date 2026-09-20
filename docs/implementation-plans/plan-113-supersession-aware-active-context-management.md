@@ -92,7 +92,7 @@ The group boundary is correct for native-tool protocol and model-summary cuts. I
 
 ### 5.3 Existing source proof
 
-`ModelVisibleSourceFrontierBuilder` already proves exact current-request `code_explore` source visibility using bounded ranges and digests. It intentionally fails closed when content is partial, malformed, changed, from a different workspace, or no longer present after compaction. This proof should become the source-coverage component of the generalized active-context ledger.
+`ModelVisibleSourceFrontierBuilder` already proves exact current-request `code_explore` source visibility using bounded ranges and digests. It admits the exact emitted range of a partial result when its range digest and delivered lines are present; omitted lines never count as visible. It fails closed for unverifiable, malformed, changed, cross-workspace, or compacted-away source. This proof should become the source-coverage component of the generalized active-context ledger.
 
 ### 5.4 Existing budget admission
 

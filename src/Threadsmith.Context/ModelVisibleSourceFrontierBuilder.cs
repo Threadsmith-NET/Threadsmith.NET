@@ -40,6 +40,7 @@ public static class ModelVisibleSourceFrontierBuilder
             {
                 AddJsonCodeExploreEntries(
                     content.Content,
+                    content.IsModelVisible,
                     message,
                     normalizedRepositoryPath,
                     workspaceId,
@@ -60,6 +61,7 @@ public static class ModelVisibleSourceFrontierBuilder
 
     private static void AddJsonCodeExploreEntries(
         string content,
+        bool isModelVisible,
         ModelMessage message,
         string normalizedRepositoryPath,
         WorkspaceId? workspaceId,
@@ -95,8 +97,79 @@ public static class ModelVisibleSourceFrontierBuilder
                 continue;
             }
 
+            // Markdown may have dropped a section that remains in the structured sidecar.
+            if (!isModelVisible
+                && section.Source.Completeness == CodeExploreSourceCompleteness.Partial
+                && !message.Content.Any(part => part.IsModelVisible
+                    && ContainsVisibleSection(part.Content, section, fileSections)))
+            {
+                continue;
+            }
+
             entries.Add(entry);
         }
+    }
+
+    private static bool ContainsVisibleSection(
+        string content,
+        CodeExploreFileSection section,
+        IReadOnlyList<CodeExploreFileSection> fileSections)
+    {
+        var normalizedContent = content.ReplaceLineEndings("\n");
+        var header = CreateMarkdownSectionHeader(section.FilePath);
+        var source = string.Join('\n', section.Source.NumberedLines);
+        var sectionHeaders = fileSections
+            .Select(item => CreateMarkdownSectionHeader(item.FilePath))
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var searchIndex = 0;
+        while ((searchIndex = normalizedContent.IndexOf(header, searchIndex, StringComparison.Ordinal)) >= 0)
+        {
+            var sectionStart = searchIndex + header.Length;
+            var sectionEnd = normalizedContent.Length;
+            foreach (var otherHeader in sectionHeaders)
+            {
+                var nextHeader = normalizedContent.IndexOf(otherHeader, sectionStart, StringComparison.Ordinal);
+                if (nextHeader >= 0)
+                {
+                    sectionEnd = Math.Min(sectionEnd, nextHeader);
+                }
+            }
+
+            if (normalizedContent.AsSpan(sectionStart, sectionEnd - sectionStart).Contains(source, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            searchIndex = sectionStart;
+        }
+
+        return false;
+    }
+
+    private static string CreateMarkdownSectionHeader(string filePath)
+    {
+        var cleanPath = string.Join(' ', filePath.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var maximumRun = 0;
+        var currentRun = 0;
+        foreach (var character in cleanPath)
+        {
+            if (character == '`')
+            {
+                currentRun++;
+                maximumRun = Math.Max(maximumRun, currentRun);
+            }
+            else
+            {
+                currentRun = 0;
+            }
+        }
+
+        var delimiter = new string('`', Math.Max(1, maximumRun + 1));
+        var codeSpan = cleanPath.StartsWith('`') || cleanPath.EndsWith('`')
+            ? $"{delimiter} {cleanPath} {delimiter}"
+            : $"{delimiter}{cleanPath}{delimiter}";
+        return $"**{codeSpan}**";
     }
 
     private static bool TryDeserializeCodeExploreResult(
@@ -144,9 +217,17 @@ public static class ModelVisibleSourceFrontierBuilder
             || section.Source is null
             || section.Source.NumberedLines is null
             || section.Source.OmittedRanges is null
-            || section.Source.Completeness != CodeExploreSourceCompleteness.Complete
+            || section.Source.Completeness is not (CodeExploreSourceCompleteness.Complete or CodeExploreSourceCompleteness.Partial)
             || string.IsNullOrWhiteSpace(section.Source.FileSha256)
             || section.Source.NumberedLines.Count == 0)
+        {
+            return false;
+        }
+
+        // Partial describes the requested envelope, not the exact lines actually returned.
+        if (section.Source.Completeness == CodeExploreSourceCompleteness.Partial
+            && (string.IsNullOrWhiteSpace(section.Source.RangeSha256)
+                || section.Source.Range.EndLine - section.Source.Range.StartLine + 1 != section.Source.NumberedLines.Count))
         {
             return false;
         }

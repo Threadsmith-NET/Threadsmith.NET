@@ -629,7 +629,11 @@ internal sealed class CodeExploreMarkdownRenderer
         var builder = new StringBuilder();
         AppendHeader(builder, result, query);
         AppendAvailability(builder, result);
-        AppendSelectedEvidence(builder, result);
+        if (!result.IsSourceContinuation)
+        {
+            AppendSelectedEvidence(builder, result);
+        }
+
         AppendSourceCode(builder, result.FileSections);
         AppendBlastRadius(builder, result.BlastRadius);
         AppendFlow(builder, result.Flow);
@@ -722,6 +726,13 @@ internal sealed class CodeExploreMarkdownRenderer
 
     private void AppendHeader(StringBuilder builder, CodeExploreResult result, string? query)
     {
+        if (result.IsSourceContinuation)
+        {
+            query = result.FileSections.Count > 0
+                ? result.FileSections[0].FilePath
+                : result.ResolvedAnchors.Count > 0 ? result.ResolvedAnchors[0].Input : null;
+        }
+
         var symbols = new HashSet<string>(StringComparer.Ordinal);
         foreach (var resolution in result.ResolvedAnchors)
         {

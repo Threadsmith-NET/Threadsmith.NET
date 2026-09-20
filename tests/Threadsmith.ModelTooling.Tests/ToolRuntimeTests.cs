@@ -1116,6 +1116,46 @@ public static partial class ToolRuntimeTests
         }
     }
 
+    /// <summary>Source continuation cursors stay compact and reject transcription damage.</summary>
+    [Fact]
+    public static void CodeExploreContinuationCursor_CompactSourceCursor_RejectsCorruption()
+    {
+        var path = "container/source/AI.Inference.Fusion/Pipelines/Common/Retrievers/ResearchReports/ResearchReportSemanticHybridRetriever.cs";
+        var target = new CodeExploreContinuationTarget(
+            CodeExploreAnchorKind.Path,
+            path,
+            path,
+            117,
+            204,
+            false,
+            CodeExplorePathSelectionMode.ExactLineRange,
+            new string('a', 64),
+            42,
+            "Continue this exact source range.");
+
+        var cursor = CodeExploreContinuationCursor.CreateSource(target)
+            ?? throw new InvalidOperationException("Expected a continuation cursor.");
+
+        Assert.InRange(cursor.Length, CodeExploreContinuationCursor.Prefix.Length + 1, 320);
+        Assert.True(CodeExploreContinuationCursor.TryCreateRequest(
+            cursor,
+            new CodeExploreLimits(),
+            maximumFiles: 8,
+            out var request));
+        Assert.Equal(path, Assert.Single(request?.PathAnchors ?? []).Path);
+
+        var changedIndex = CodeExploreContinuationCursor.Prefix.Length
+            + ((cursor.Length - CodeExploreContinuationCursor.Prefix.Length) / 2);
+        var replacement = cursor[changedIndex] == 'A' ? 'B' : 'A';
+        var corrupted = cursor[..changedIndex] + replacement + cursor[(changedIndex + 1)..];
+
+        Assert.False(CodeExploreContinuationCursor.TryCreateRequest(
+            corrupted,
+            new CodeExploreLimits(),
+            maximumFiles: 8,
+            out _));
+    }
+
     /// <summary>Continuation display never advertises a cursor that exceeds configured replay constraints.</summary>
     [Theory]
     [InlineData(32, 960, 1024)]

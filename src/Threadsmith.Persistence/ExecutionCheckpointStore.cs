@@ -52,12 +52,6 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
             return null;
         }
 
-        if (stored.SchemaVersion is < MinimumCheckpointSchemaVersion or > CurrentCheckpointSchemaVersion)
-        {
-            throw new NotSupportedException(
-                $"Execution checkpoint schema {stored.SchemaVersion} is inspectable but cannot resume.");
-        }
-
         var checkpoint = JsonSerializer.Deserialize<ExecutionContinuation>(
             stored.CheckpointJson,
             JsonOptions) ?? throw new InvalidDataException("Stored execution checkpoint is invalid.");
@@ -96,14 +90,15 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
             return null;
         }
 
-        if (stored.SchemaVersion != SupportedOutcomeSchemaVersion)
+        var outcome = JsonSerializer.Deserialize<ExecutionOutcomeProjection>(stored.OutcomeJson, JsonOptions)
+            ?? throw new InvalidDataException("Stored execution outcome is invalid.");
+        if (outcome.SchemaVersion != SupportedOutcomeSchemaVersion)
         {
             throw new NotSupportedException(
-                $"Execution outcome schema {stored.SchemaVersion} is inspectable but unsupported.");
+                $"Execution outcome schema {outcome.SchemaVersion} is inspectable but unsupported.");
         }
 
-        return JsonSerializer.Deserialize<ExecutionOutcomeProjection>(stored.OutcomeJson, JsonOptions)
-            ?? throw new InvalidDataException("Stored execution outcome is invalid.");
+        return outcome;
     }
 
     private async Task UpsertAsync(
@@ -149,7 +144,7 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
         await connection.OpenAsync(cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT schema_version, checkpoint_json, outcome_json
+            SELECT checkpoint_json, outcome_json
             FROM execution_runs WHERE run_id = $run;
             """;
         command.Parameters.AddWithValue("$run", runId.Value.ToString("D"));
@@ -159,12 +154,11 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
             return null;
         }
 
-        var checkpointIsNull = await reader.IsDBNullAsync(1, cancellationToken);
-        var outcomeIsNull = await reader.IsDBNullAsync(2, cancellationToken);
+        var checkpointIsNull = await reader.IsDBNullAsync(0, cancellationToken);
+        var outcomeIsNull = await reader.IsDBNullAsync(1, cancellationToken);
         return new StoredExecution(
-            reader.GetInt32(0),
-            checkpointIsNull ? string.Empty : reader.GetString(1),
-            outcomeIsNull ? null : reader.GetString(2));
+            checkpointIsNull ? string.Empty : reader.GetString(0),
+            outcomeIsNull ? null : reader.GetString(1));
     }
 
     private static void ValidateCheckpoint(ExecutionContinuation checkpoint)
@@ -192,10 +186,7 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
         ArgumentException.ThrowIfNullOrWhiteSpace(checkpoint.NextAction);
     }
 
-    private sealed record StoredExecution(
-        int SchemaVersion,
-        string CheckpointJson,
-        string? OutcomeJson);
+    private sealed record StoredExecution(string CheckpointJson, string? OutcomeJson);
 }
 
 /// <summary>Adapts the content-addressed artifact store to execution-owned references.</summary>

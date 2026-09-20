@@ -502,10 +502,7 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal([fixture.SecondStepId], outcome.UncompletedStepIds);
         Assert.DoesNotContain("Untouched behavior changes.", outcome.BehaviorSummary);
         Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, outcome.Status);
-        var appliedDiff = await fixture.Artifacts.ReadAsync(outcome.FinalDiff!);
-        Assert.Contains("+new", appliedDiff, StringComparison.Ordinal);
-        Assert.DoesNotContain("+fixed", appliedDiff, StringComparison.Ordinal);
-        Assert.NotEqual(fixture.CorrectionStaged.Preview.UnifiedDiff, appliedDiff);
+        Assert.Null(outcome.FinalDiff);
         Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(fixture.StartRequest.RunId));
     }
 
@@ -1042,6 +1039,59 @@ public sealed partial class ExecutionOrchestratorTests
         }
         finally
         {
+            File.Delete(databasePath);
+        }
+    }
+
+    /// <summary>Checkpoint writes cannot change the independently versioned terminal outcome payload.</summary>
+    [Fact]
+    public async Task ExecutionCheckpointStore_CheckpointWritePreservesReadableOutcomeSchema()
+    {
+        var databasePath = Path.Combine(Path.GetTempPath(), $"threadsmith-execution-store-{Guid.NewGuid():N}.db");
+        var connectionString = $"Data Source={databasePath};Pooling=False";
+        var sessionId = SessionId.New();
+        var runId = RunId.New();
+        try
+        {
+            await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync();
+            var store = new ExecutionCheckpointStore(connectionString);
+            var outcome = new ExecutionOutcomeProjection
+            {
+                Key = new ProjectionKey("execution-outcome", runId.Value.ToString("D")),
+                SessionId = sessionId,
+                RunId = runId,
+                Status = ExecutionCheckpointPhase.Completed,
+                ApprovalProvenance = "test",
+            };
+            var checkpoint = new ExecutionContinuation
+            {
+                SchemaVersion = 2,
+                SessionId = sessionId,
+                RunId = runId,
+                WorkspaceId = WorkspaceId.New(),
+                PlanRevision = 1,
+                PlanHash = "plan",
+                Phase = ExecutionCheckpointPhase.Completed,
+                DiagnosticBaselineIdentity = "diagnostic",
+                MutationBaselineIdentity = "mutation",
+                NextAction = "inspect outcome",
+                RecordedAt = DateTimeOffset.UtcNow,
+            };
+
+            await store.SaveOutcomeAsync(outcome);
+            await store.SaveCheckpointAsync(checkpoint);
+
+            var reopened = new ExecutionCheckpointStore(connectionString);
+            var restored = await reopened.GetOutcomeAsync(runId);
+            Assert.NotNull(restored);
+            Assert.Equal(outcome.SchemaVersion, restored.SchemaVersion);
+            Assert.Equal(outcome.SessionId, restored.SessionId);
+            Assert.Equal(outcome.RunId, restored.RunId);
+            Assert.Equal(outcome.Status, restored.Status);
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
             File.Delete(databasePath);
         }
     }

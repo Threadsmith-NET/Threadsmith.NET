@@ -58,6 +58,9 @@ public sealed partial class SessionApplication :
     private readonly Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
         _executionRequestFactory;
 
+    private readonly Func<SessionId, CancellationToken, Task<SessionProjection?>>?
+        _sessionProjectionReader;
+
     private readonly Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
         _planSanityRequestFactory;
 
@@ -251,7 +254,8 @@ public sealed partial class SessionApplication :
         IPromptLoader? prompts = null,
         ISemanticRefreshCoordinator? semanticRefreshCoordinator = null,
         IManagedRepositoryMemoryService? repositoryMemories = null,
-        IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null)
+        IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null,
+        Func<SessionId, CancellationToken, Task<SessionProjection?>>? sessionProjectionReader = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -285,6 +289,7 @@ public sealed partial class SessionApplication :
         _evidenceStore = evidenceStore;
         _executionOrchestrator = executionOrchestrator;
         _executionRequestFactory = executionRequestFactory;
+        _sessionProjectionReader = sessionProjectionReader;
         _hooks = hooks;
         _planSanityChecker = planSanityChecker;
         _planApprovalPolicy = planApprovalPolicy;
@@ -699,6 +704,11 @@ public sealed partial class SessionApplication :
                         "The revision response did not contain a structured plan.");
                 stopwatch.Stop();
                 AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
+                await PersistPlanningUsageAsync(
+                    command.RunId,
+                    registration,
+                    _executionOrchestrator,
+                    cancellationToken);
                 await PublishPlanAsync(
                     command.RunId,
                     registration,
@@ -967,12 +977,19 @@ public sealed partial class SessionApplication :
             await finishedObservation.WaitAsync(cancellationToken);
         }
 
+        var pendingPlan = request.AllowPlanContinuation
+            ? await GetPendingPlanAsync(
+                command.SessionId,
+                command.RunId,
+                request.ApprovedPlan.Revision,
+                cancellationToken)
+            : null;
         var registration = CreateRunRegistration(
             command.SessionId,
             command.RunId,
             request.Baseline.WorkspaceId,
             request.Task,
-            RunPhase.ImplementationPreparing,
+            pendingPlan is null ? RunPhase.ImplementationPreparing : RunPhase.AwaitingPlanApproval,
             cancellationToken);
         var usage = registration.Budget.Accrue(request.InitialBudgetUsage);
         if (usage.IsExhausted)
@@ -983,7 +1000,9 @@ public sealed partial class SessionApplication :
 
         registration.ExecutionStarted = true;
         registration.IncrementalPlanExecution = request.AllowPlanContinuation;
-        registration.LastPublishedPlan = request.ApprovedPlan;
+        registration.PendingPlan = pendingPlan?.Plan;
+        registration.PendingApprovalId = pendingPlan?.ApprovalId;
+        registration.LastPublishedPlan = pendingPlan?.Plan ?? request.ApprovedPlan;
         var installed = previous is not null
             && _runs.TryUpdate(command.RunId, registration, previous);
         installed = installed || _runs.TryAdd(command.RunId, registration);
@@ -1002,7 +1021,20 @@ public sealed partial class SessionApplication :
                 command.SessionId,
                 command.RunId,
                 registration.Cancellation.Token);
-            registration.LastPlanBoundaryOrdinal = checkpoint.PlanOrdinal - 1;
+            if (pendingPlan is not null
+                && checkpoint.Phase is not (ExecutionCheckpointPhase.PlanContinuationPending
+                    or ExecutionCheckpointPhase.PlanReplanningPending))
+            {
+                throw new InvalidDataException(
+                    "The pending replacement plan does not correspond to an incremental execution boundary.");
+            }
+
+            registration.LastPlanBoundaryOrdinal = pendingPlan is null
+                ? checkpoint.PlanOrdinal - 1
+                : checkpoint.PlanOrdinal;
+            registration.ReplanningPlan = checkpoint.Phase == ExecutionCheckpointPhase.PlanReplanningPending
+                ? request.ApprovedPlan
+                : null;
             if (_conversationStore is not null)
             {
                 var snapshot = await _conversationStore.GetSnapshotAsync(
@@ -1344,6 +1376,11 @@ public sealed partial class SessionApplication :
             }
 
             AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
+            await PersistPlanningUsageAsync(
+                runId,
+                registration,
+                orchestrator,
+                registration.Cancellation.Token);
             if (publication is null)
             {
                 if (!registration.ObjectiveCompletionRequested || registration.ReplanningPlan is not null)
@@ -2116,6 +2153,52 @@ public sealed partial class SessionApplication :
         }
 
         retainedCharacters = checked(retainedCharacters + additionalCharacters);
+    }
+
+    private async Task<PlanProjection?> GetPendingPlanAsync(
+        SessionId sessionId,
+        RunId runId,
+        int approvedRevision,
+        CancellationToken cancellationToken)
+    {
+        if (_sessionProjectionReader is null)
+        {
+            return null;
+        }
+
+        var projection = await _sessionProjectionReader(sessionId, cancellationToken);
+        var plan = projection?.Plan;
+        if (plan is null
+            || plan.RunId != runId
+            || plan.Status != PlanReviewStatus.Pending
+            || plan.Plan.Revision <= approvedRevision
+            || !projection!.PendingApprovals.Any(item => item.ApprovalId == plan.ApprovalId))
+        {
+            return null;
+        }
+
+        return plan;
+    }
+
+    private static async Task PersistPlanningUsageAsync(
+        RunId runId,
+        RunRegistration registration,
+        IExecutionOrchestrator? orchestrator,
+        CancellationToken cancellationToken)
+    {
+        if (!registration.ExecutionStarted
+            || !registration.IncrementalPlanExecution
+            || orchestrator is null)
+        {
+            return;
+        }
+
+        var usage = registration.Budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
+        await orchestrator.RecordPlanningUsageAsync(
+            registration.SessionId,
+            runId,
+            usage,
+            cancellationToken);
     }
 
     private bool TryGetPendingPlan(

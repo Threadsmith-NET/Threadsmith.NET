@@ -60,6 +60,16 @@ public sealed class ExecutionOrchestratorRouter : IExecutionOrchestrator
     }
 
     /// <inheritdoc />
+    public Task RecordPlanningUsageAsync(
+        SessionId sessionId,
+        RunId runId,
+        BudgetDimensions usage,
+        CancellationToken cancellationToken = default)
+    {
+        return GetInner().RecordPlanningUsageAsync(sessionId, runId, usage, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
         RunId runId,
         int afterPlanOrdinal,

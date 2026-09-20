@@ -483,7 +483,12 @@ internal static class ApplicationComposition
             prompts: host.PromptLoader,
             semanticRefreshCoordinator: semantic.SemanticRefreshCoordinator,
             repositoryMemories: memoryService,
-            repositoryMemoryOptions: memoryOptions);
+            repositoryMemoryOptions: memoryOptions,
+            sessionProjectionReader: async (sessionId, cancellationToken) =>
+            {
+                var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
+                return await host.Projections.GetAsync<SessionProjection>(key, cancellationToken);
+            });
 
         // The foundation-owned coordinator may prepare work before session composition, but publication
         // delegates to this sole run-lifetime authority once it exists.

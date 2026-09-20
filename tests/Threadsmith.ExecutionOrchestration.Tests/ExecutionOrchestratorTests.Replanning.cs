@@ -60,11 +60,7 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.True(await scenario.Dispatcher.DispatchAsync(new ApprovePlanCommand(request.SessionId, request.RunId)));
         Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
         Assert.Empty(fixture.CommitHandler.Commands);
-        fixture.ValidationHandler.Enqueue(new MutationValidationResult(
-            new BuildValidationResult(true, [], [], TimeSpan.Zero),
-            [],
-            new TestValidationResult { Completed = true, Selection = new TestSelection() },
-            new AcceptanceGateResult(AcceptanceGateStatus.Passed, [])));
+        fixture.ValidationHandler.Enqueue(PassingValidation());
         await restored.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
 
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
@@ -115,6 +111,71 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
         Assert.Equal([replacement.ApprovedPlan.Steps[0].StepId], outcome.CompletedStepIds);
         Assert.Single(fixture.CommitHandler.Commands);
+    }
+
+    /// <summary>Boundary assessment usage remains durable across orchestrator reconstruction.</summary>
+    [Fact]
+    public async Task PlanBoundary_PlanningUsageSurvivesResume()
+    {
+        var fixture = CreateFixture();
+        await using var events = fixture.Events;
+        var initialUsage = new BudgetDimensions(10, 1, TimeSpan.FromSeconds(1), 0.1m);
+        var assessedUsage = new BudgetDimensions(30, 2, TimeSpan.FromSeconds(3), 0.3m);
+        var request = fixture.StartRequest with
+        {
+            AllowPlanContinuation = true,
+            InitialBudgetUsage = initialUsage,
+        };
+        SetProposals(fixture, Replan());
+        await fixture.Orchestrator.StartAsync(request);
+
+        await fixture.Orchestrator.RecordPlanningUsageAsync(request.SessionId, request.RunId, assessedUsage);
+        var restored = RecreateOrchestrator(fixture);
+        var resumedRequest = await restored.GetResumeRequestAsync(request.SessionId, request.RunId);
+
+        Assert.Equal(assessedUsage, resumedRequest.InitialBudgetUsage);
+    }
+
+    /// <summary>A pending replacement plan is restored without repeating its planning turn.</summary>
+    [Fact]
+    public async Task Replan_PublishedReplacementRestoresForExistingApproval()
+    {
+        var fixture = CreateFixture();
+        var request = fixture.StartRequest with { AllowPlanContinuation = true };
+        SetProposals(fixture, Replan(), Proposal(fixture.Staged, true));
+        await fixture.Orchestrator.StartAsync(request);
+        var replacement = ReplacementRequest(fixture, request).ApprovedPlan;
+        var approvalId = ApprovalId.New();
+        var projection = new SessionProjection
+        {
+            Key = new ProjectionKey("session", request.SessionId.Value.ToString("D")),
+            SessionId = request.SessionId,
+            Name = "restored replacement",
+            Phase = RunPhase.AwaitingPlanApproval,
+            Plan = new PlanProjection(
+                request.RunId,
+                approvalId,
+                replacement,
+                PlanReviewStatus.Pending),
+            PendingApprovals = [new ApprovalProjection(approvalId, "Approve replacement plan")],
+        };
+        var restored = fixture with { StartRequest = request, Orchestrator = RecreateOrchestrator(fixture) };
+        await using var scenario = await ConversationScenario.CreateRestoredAsync(
+            restored,
+            sessionProjection: projection);
+
+        var checkpoint = await scenario.Dispatcher.DispatchAsync(
+            new ResumeRunCommand(request.SessionId, request.RunId));
+
+        Assert.Equal(ExecutionCheckpointPhase.PlanReplanningPending, checkpoint.Phase);
+        Assert.Equal(0, scenario.Model.RequestCount);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new ApprovePlanCommand(request.SessionId, request.RunId)));
+        Assert.Equal(replacement, fixture.ProposalHandler.Commands[^1].ApprovedPlan);
+        fixture.ValidationHandler.PassAll();
+        fixture.ValidationHandler.Enqueue(PassingValidation());
+        await restored.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(request.RunId)));
+        Assert.Equal(1, scenario.Model.RequestCount);
     }
 
     /// <summary>Applied work and introduced failures cannot be forgotten by replacing a plan.</summary>
@@ -224,6 +285,12 @@ public sealed partial class ExecutionOrchestratorTests
         ReplanRequested = true,
         Rationale = "Inspect the missing dependency and replace unfinished work.",
     };
+
+    private static MutationValidationResult PassingValidation() => new(
+        new BuildValidationResult(true, [], [], TimeSpan.Zero),
+        [],
+        new TestValidationResult { Completed = true, Selection = new TestSelection() },
+        new AcceptanceGateResult(AcceptanceGateStatus.Passed, []));
 
     private static ExecutionStartRequest ReplacementRequest(ExecutionFixture fixture, ExecutionStartRequest previous)
     {

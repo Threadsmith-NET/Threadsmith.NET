@@ -495,6 +495,50 @@ public sealed class ExecutionOrchestrator :
     }
 
     /// <inheritdoc />
+    public async Task RecordPlanningUsageAsync(
+        SessionId sessionId,
+        RunId runId,
+        BudgetDimensions usage,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        ExecutionBudget.ValidateDimensions(usage, nameof(usage));
+        using var gate = await EnterRunContinuationGateAsync(runId, cancellationToken);
+        var checkpoint = await RequireCheckpointAsync(runId, cancellationToken);
+        if (checkpoint.SessionId != sessionId)
+        {
+            throw new UnauthorizedAccessException("The execution does not belong to the requesting session.");
+        }
+
+        if (checkpoint.Phase is not (ExecutionCheckpointPhase.PlanContinuationPending
+            or ExecutionCheckpointPhase.PlanReplanningPending))
+        {
+            throw new InvalidOperationException("Planning usage can be recorded only at an incremental plan boundary.");
+        }
+
+        var active = await ResolveActiveAsync(sessionId, runId, cancellationToken);
+        if (!ContainsAtLeast(usage, active.PlanningBudgetUsed))
+        {
+            throw new InvalidOperationException("Planning usage cannot move backwards.");
+        }
+
+        if (usage == active.PlanningBudgetUsed)
+        {
+            return;
+        }
+
+        active = active with { PlanningBudgetUsed = usage };
+        _runs[runId] = active;
+        await SaveCheckpointAsync(
+            checkpoint with
+            {
+                StateArtifact = await PublishStateAsync(active, cancellationToken),
+                RecordedAt = DateTimeOffset.UtcNow,
+            },
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<ExecutionOutcomeProjection> HandleAsync(
         ContinueExecutionCommand command,
         CancellationToken cancellationToken = default)
@@ -1079,9 +1123,8 @@ public sealed class ExecutionOrchestrator :
                     cancellationToken);
                 if (next is not null)
                 {
-                    var finalDiff = await PublishFinalDiffAsync(next.Value.Active, CancellationToken.None);
                     return CreateOutcomeProjection(
-                        next.Value.Active, validation, provenance, finalDiff, next.Value.Continuation.Phase);
+                        next.Value.Active, validation, provenance, null, next.Value.Continuation.Phase);
                 }
 
                 active = _runs[request.RunId];
@@ -1965,14 +2008,12 @@ public sealed class ExecutionOrchestrator :
             || request.RunId == default
             || request.Baseline.WorkspaceId == default
             || request.ApprovedPlan.Revision < 1
-            || request.CorrectionBudget < 0
-            || request.InitialBudgetUsage.Tokens < 0
-            || request.InitialBudgetUsage.Calls < 0
-            || request.InitialBudgetUsage.WallClock < TimeSpan.Zero
-            || request.InitialBudgetUsage.Cost < 0)
+            || request.CorrectionBudget < 0)
         {
             throw new ArgumentException("Execution start state contains invalid identity, plan, or budget data.", nameof(request));
         }
+
+        ExecutionBudget.ValidateDimensions(request.InitialBudgetUsage, nameof(request));
 
         if (request.ValidationRequest.SessionId != request.SessionId
             || request.ValidationRequest.RunId != request.RunId
@@ -1983,6 +2024,14 @@ public sealed class ExecutionOrchestrator :
                 "Execution validation and mutation baselines must share exact host-owned identity.",
                 nameof(request));
         }
+    }
+
+    private static bool ContainsAtLeast(BudgetDimensions candidate, BudgetDimensions current)
+    {
+        return candidate.Tokens >= current.Tokens
+            && candidate.Calls >= current.Calls
+            && candidate.WallClock >= current.WallClock
+            && candidate.Cost >= current.Cost;
     }
 
     private static ExecutionStartRequest EnsurePlanValidationScope(ExecutionStartRequest request)

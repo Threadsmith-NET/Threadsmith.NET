@@ -592,6 +592,17 @@ public interface IExecutionOrchestrator
             new NotSupportedException("Session resume is not supported by this orchestrator."));
     }
 
+    /// <summary>Durably records planning usage consumed while assessing an incremental plan boundary.</summary>
+    Task RecordPlanningUsageAsync(
+        SessionId sessionId,
+        RunId runId,
+        BudgetDimensions usage,
+        CancellationToken cancellationToken = default)
+    {
+        return Task.FromException(
+            new NotSupportedException("Incremental planning usage persistence is not supported by this orchestrator."));
+    }
+
     /// <summary>Waits for the next completed-plan or replanning boundary.</summary>
     Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
         RunId runId,

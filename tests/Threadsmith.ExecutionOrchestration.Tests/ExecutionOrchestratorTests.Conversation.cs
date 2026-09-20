@@ -427,7 +427,10 @@ public sealed partial class ExecutionOrchestratorTests
                 failAssistantArchive: false);
         }
 
-        public static Task<ConversationScenario> CreateRestoredAsync(ExecutionFixture fixture, int planProposalCount = 0)
+        public static Task<ConversationScenario> CreateRestoredAsync(
+            ExecutionFixture fixture,
+            int planProposalCount = 0,
+            SessionProjection? sessionProjection = null)
         {
             return CreateCoreAsync(
                 fixture.Events,
@@ -438,7 +441,8 @@ public sealed partial class ExecutionOrchestratorTests
                 failAssistantArchive: false,
                 planProposalCount: planProposalCount,
                 limits: ExecutionLimits.Default,
-                restoredSession: fixture.StartRequest.SessionId);
+                restoredSession: fixture.StartRequest.SessionId,
+                sessionProjection: sessionProjection);
         }
 
         public static Task<ConversationScenario> CreateIncrementalAsync(int planProposalCount = 1)
@@ -606,7 +610,8 @@ public sealed partial class ExecutionOrchestratorTests
             bool failAssistantArchive,
             int? planProposalCount = null,
             ExecutionLimits? limits = null,
-            SessionId? restoredSession = null)
+            SessionId? restoredSession = null,
+            SessionProjection? sessionProjection = null)
         {
             var directory = Path.Combine(Path.GetTempPath(), $"threadsmith-conversation-{Guid.NewGuid():N}");
             Directory.CreateDirectory(directory);
@@ -655,7 +660,14 @@ public sealed partial class ExecutionOrchestratorTests
                     executionOrchestrator: orchestrator,
                     executionRequestFactory: executionRequestFactory,
                     correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                    prompts: TestPromptLoader.Instance);
+                    prompts: TestPromptLoader.Instance,
+                    sessionProjectionReader: sessionProjection is null
+                        ? null
+                        : (_, cancellationToken) =>
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            return Task.FromResult<SessionProjection?>(sessionProjection);
+                        });
                 var dispatcher = new CommandDispatcher([application]);
                 var sessionId = restoredSession ?? await dispatcher.DispatchAsync(new CreateSessionCommand("conversation outcome"));
                 if (restoredSession is not null)
@@ -960,6 +972,16 @@ public sealed partial class ExecutionOrchestratorTests
                 static _ => new TaskCompletionSource<ExecutionPlanBoundary>(
                     TaskCreationOptions.RunContinuationsAsynchronously));
             return boundary.Task.WaitAsync(cancellationToken);
+        }
+
+        public Task RecordPlanningUsageAsync(
+            SessionId sessionId,
+            RunId runId,
+            BudgetDimensions usage,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
         }
 
         public async Task<ExecutionOutcomeProjection> WaitForOutcomeAsync(

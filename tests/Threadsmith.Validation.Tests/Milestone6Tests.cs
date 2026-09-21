@@ -2,6 +2,7 @@ namespace Threadsmith.Validation.Tests;
 
 using System.Diagnostics;
 using System.Globalization;
+using System.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -1788,16 +1789,18 @@ public sealed class Milestone6Tests
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-build-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
+        var windowsDelayCommand = OperatingSystem.IsWindows() ? CreateWindowsDelayCommand() : string.Empty;
         var delayProperties = includeDelay
             ? """
                   <PropertyGroup>
-                    <DelayCommand Condition="'$(OS)' == 'Windows_NT'">powershell -NoProfile -Command "[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\child.pid.tmp', '$(MSBuildProjectDirectory)\child.pid'); Start-Sleep -Seconds 30"</DelayCommand>
+                    <DelayCommand Condition="'$(OS)' == 'Windows_NT'">{{WindowsDelayCommand}}</DelayCommand>
                     <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; sleep 30'</DelayCommand>
                   </PropertyGroup>
                   <Target Name="DelayBuild" BeforeTargets="BeforeBuild">
                     <Exec Command="$(DelayCommand)" />
                   </Target>
               """
+                .Replace("{{WindowsDelayCommand}}", SecurityElement.Escape(windowsDelayCommand), StringComparison.Ordinal)
             : string.Empty;
         var projectPath = Path.Combine(root, "ValidationTarget.csproj");
         await File.WriteAllTextAsync(
@@ -1836,6 +1839,32 @@ public sealed class Milestone6Tests
             [],
             SelectedSolutionPath: projectPath,
             TrustLevel: RepositoryTrustLevel.TrustedBuild);
+    }
+
+    private static string CreateWindowsDelayCommand()
+    {
+        var shell = FindExecutablePath("pwsh.exe")
+            ?? FindExecutablePath("powershell.exe")
+            ?? throw new InvalidOperationException("PowerShell is required for the delayed build fixture.");
+        return $"\"{shell}\" -NoProfile -NonInteractive -Command \"[System.IO.File]::WriteAllText('$(MSBuildProjectDirectory)\\child.pid.tmp', [string]$PID); [System.IO.File]::Move('$(MSBuildProjectDirectory)\\child.pid.tmp', '$(MSBuildProjectDirectory)\\child.pid'); Start-Sleep -Seconds 30\"";
+    }
+
+    private static string? FindExecutablePath(string fileName)
+    {
+        var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        var pathExtensions = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".EXE;.CMD;.BAT;.COM")
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            : [string.Empty];
+        string[] candidateNames = OperatingSystem.IsWindows() && !Path.HasExtension(fileName)
+            ? [.. pathExtensions.Select(extension => fileName + extension)]
+            : [fileName];
+        return pathValue
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(directory => directory.Trim('"'))
+            .Where(Path.IsPathFullyQualified)
+            .SelectMany(directory => candidateNames.Select(candidate => Path.Combine(directory, candidate)))
+            .FirstOrDefault(File.Exists);
     }
 
     private sealed class TemporaryDirectoryLink : IAsyncDisposable

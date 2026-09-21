@@ -181,6 +181,7 @@ Threadsmith registers a built-in runtime tool catalog. Repository configuration,
 | `datetime` | Return current UTC and local date/time with timezone information. |
 | `csharp_script` | Run bounded C# in a fresh isolated worker; disabled by default and reserved for fully trusted automation. |
 | `web_search` | Search the web through Brave after explicit repository-scoped outbound consent; disabled by default, with bounded results treated as untrusted evidence. |
+| `web_fetch` | Retrieve web content from authorized sources that you control through several mechanisms. |
 | `pr_fetch` | Read configured GitHub.com or Bitbucket Cloud pull-request metadata, complete changed-file inventories, and optional bounded diff pages without checking out or modifying the PR. |
 | `jira` | Read a configured Jira Cloud issue's identity, summary, and bounded plain-text description from an issue key or browse URL; disabled until an account is configured and enabled. |
 

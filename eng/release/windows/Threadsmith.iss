@@ -1,7 +1,7 @@
 #ifndef SourceDir
   #error SourceDir is required
 #endif
-#define AppId "{84149F30-D0D9-4A0A-B796-A59CC37727AE}"
+#define AppId "{{84149F30-D0D9-4A0A-B796-A59CC37727AE}}"
 [Setup]
 AppId={#AppId}
 AppName=Threadsmith.NET

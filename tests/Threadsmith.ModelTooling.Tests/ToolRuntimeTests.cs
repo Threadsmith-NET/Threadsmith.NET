@@ -3921,7 +3921,12 @@ public static partial class ToolRuntimeTests
         if (OperatingSystem.IsWindows())
         {
             var escapedPath = processIdPath.Replace("'", "''", StringComparison.Ordinal);
-            var script = "$start = [Diagnostics.ProcessStartInfo]::new('ping.exe', '-n 60 127.0.0.1'); "
+            var childScript = Convert.ToBase64String(
+                Encoding.Unicode.GetBytes("Start-Sleep -Seconds 60"));
+            var script = "$childExecutable = Join-Path $PSHOME 'powershell.exe'; "
+                + "$start = [Diagnostics.ProcessStartInfo]::new($childExecutable, '-NoProfile -NonInteractive -EncodedCommand "
+                + childScript
+                + "'); "
                 + "$start.UseShellExecute = $false; $start.CreateNoWindow = $true; "
                 + "$child = [Diagnostics.Process]::Start($start); "
                 + $"[IO.File]::WriteAllText('{escapedPath}', $child.Id.ToString()); "

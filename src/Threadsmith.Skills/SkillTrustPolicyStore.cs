@@ -139,7 +139,7 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
                 temporary,
                 content,
                 cancellationToken);
-            File.Move(temporary, _path, overwrite: true);
+            await MovePolicyFileAsync(temporary, _path, cancellationToken);
             lock (_gate)
             {
                 _userPolicy = next;
@@ -150,6 +150,27 @@ public sealed class FileSkillTrustPolicyProvider : ISkillTrustPolicyProvider
             if (File.Exists(temporary))
             {
                 File.Delete(temporary);
+            }
+        }
+    }
+
+    private static async Task MovePolicyFileAsync(
+        string sourcePath,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Move(sourcePath, destinationPath, overwrite: true);
+                return;
+            }
+            catch (Exception exception) when (
+                attempt < 9
+                && exception is IOException or UnauthorizedAccessException)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * (attempt + 1)), cancellationToken);
             }
         }
     }

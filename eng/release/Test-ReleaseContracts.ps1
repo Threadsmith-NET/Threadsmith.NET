@@ -70,11 +70,38 @@ Test-Contract 'prompt payload is complete, collision-free, byte-exact, and valid
 }
 Test-Contract 'workflow scripts are tracked' {
     $root = Get-RepositoryRoot
-    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-PackagedDocumentation.ps1', 'Test-StagedPayload.ps1', 'Test-RerankerPayload.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'release-license-evidence.json')) {
+    foreach ($name in @('Publish-Release.ps1', 'Stage-Ripgrep.ps1', 'Stage-DotNetRuntimeLegal.ps1', 'New-ReleaseLegalArtifacts.ps1', 'Test-ReleaseLicenseEvidence.ps1', 'Test-ReleaseCompliance.ps1', 'New-ArtifactCompliance.ps1', 'Test-ArtifactPayload.ps1', 'Test-PackagedDocumentation.ps1', 'Test-StagedPayload.ps1', 'Test-RerankerPayload.ps1', 'Install-WindowsPackagingTools.ps1', 'Build-WindowsInstaller.ps1', 'Build-LinuxArchive.ps1', 'Build-MacPackage.ps1', 'New-ReleaseManifest.ps1', 'ripgrep-assets.json', 'windows-packaging-tools.json', 'release-license-evidence.json')) {
         $path = "eng/release/$name"
         if (-not (Test-Path (Join-Path $root $path))) { throw "Missing $path." }
         git -C $root ls-files --error-unmatch $path 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "$path is not tracked by Git." }
+    }
+}
+Test-Contract 'Windows packaging tools are exact, hashed, and represented in release evidence' {
+    $tools = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'windows-packaging-tools.json') -Raw | ConvertFrom-Json
+    $invalidTools = @(
+        $tools.schemaVersion -ne 1
+        $tools.innoSetup.version -notmatch '^\d+\.\d+\.\d+$'
+        $tools.innoExtract.version -notmatch '^\d+$'
+        $tools.innoExtract.sha256 -notmatch '^[0-9a-f]{64}$'
+        $tools.innoExtract.uri -notlike "$($tools.innoExtract.sourceRepository)/releases/download/$($tools.innoExtract.version)/*"
+        $tools.innoExtract.licenseExpression -ne 'Zlib'
+    ) -contains $true
+    if ($invalidTools) {
+        throw 'Windows packaging tools are not pinned to the approved manifest contract.'
+    }
+    $evidence = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'release-license-evidence.json') -Raw | ConvertFrom-Json
+    $innoSetup = @($evidence.components | Where-Object { $_.id -eq 'Inno Setup' })
+    $innoExtract = @($evidence.components | Where-Object { $_.id -eq 'innoextract-win' })
+    $evidenceMismatch = @(
+        $innoSetup.Count -ne 1
+        $innoSetup[0].version -ne $tools.innoSetup.version
+        $innoExtract.Count -ne 1
+        $innoExtract[0].version -ne $tools.innoExtract.version
+        $innoExtract[0].licenseExpression -ne $tools.innoExtract.licenseExpression
+    ) -contains $true
+    if ($evidenceMismatch) {
+        throw 'Windows packaging tool evidence does not match the pinned tool manifest.'
     }
 }
 Test-Contract 'release-license evidence is closed, current, and fail-closed' {

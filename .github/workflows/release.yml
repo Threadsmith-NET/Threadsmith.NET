@@ -57,10 +57,10 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - name: Install Inno Setup
+      - name: Install pinned Windows packaging tools
         if: startsWith(matrix.rid, 'win-')
-        shell: powershell
-        run: choco install innosetup --yes --no-progress
+        shell: pwsh
+        run: ./eng/release/Install-WindowsPackagingTools.ps1 -InstallDirectory '${{ runner.temp }}/threadsmith-windows-packaging-tools'
       - name: Resolve version
         id: version
         shell: pwsh

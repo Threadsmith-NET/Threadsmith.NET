@@ -58,7 +58,7 @@ Deployed prompt files are installer-owned application assets, not user state. An
 & .\eng\release\Build-WindowsInstaller.ps1 -Version 0.1.0 -RuntimeIdentifier win-x64
 ```
 
-Use `Build-LinuxArchive.ps1` only on Linux and `Build-MacPackage.ps1` only on macOS. Platform-native tools (`iscc`, `tar`, `pkgbuild`) and release-time HTTPS access to the exact pinned GitHub asset are required. Ripgrep is never downloaded at application runtime; a missing or checksum-mismatched release asset fails staging. `Sign-WindowsArtifact.ps1` and `Notarize-MacPackage.ps1` are explicit optional production hooks; successful verification is required before an artifact may be recorded as signed/notarized.
+Use `Build-LinuxArchive.ps1` only on Linux and `Build-MacPackage.ps1` only on macOS. Platform-native tools (`iscc`, `tar`, `pkgbuild`) and release-time HTTPS access to the exact pinned assets are required. Windows CI installs the exact Inno Setup and checksum-pinned `innoextract` versions declared by `eng/release/windows-packaging-tools.json`; installer compliance inspection does not rely on the hosted runner's changing preinstalled versions. Ripgrep is never downloaded at application runtime; a missing or checksum-mismatched release asset fails staging. `Sign-WindowsArtifact.ps1` and `Notarize-MacPackage.ps1` are explicit optional production hooks; successful verification is required before an artifact may be recorded as signed/notarized.
 
 ## Release-license closure and artifact gate
 

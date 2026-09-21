@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "policyVersion": "1.0",
-  "reviewedAtUtc": "2026-08-16T00:00:00Z",
+  "reviewedAtUtc": "2026-09-21T00:00:00Z",
   "reviewOwner": "Threadsmith.NET designated release owner",
   "approvedLicenseExpressions": [
     "MIT",
@@ -13,7 +13,8 @@
     "platform-terms-approved",
     "not-bundled",
     "WTFPL",
-    "BSD-3-Clause"
+    "BSD-3-Clause",
+    "Zlib"
   ],
   "windowsSelfContainedDecision": {
     "status": "approved",
@@ -726,11 +727,20 @@
     },
     {
       "id": "Inno Setup",
-      "version": "6",
+      "version": "6.4.0",
       "scope": "release-tool",
       "provenance": "https://jrsoftware.org/isinfo.php",
       "licenseExpression": "custom-approved",
       "noticeTreatment": "Installer compiler only; generated installer terms reviewed separately",
+      "reviewState": "approved"
+    },
+    {
+      "id": "innoextract-win",
+      "version": "640",
+      "scope": "release-tool",
+      "provenance": "https://github.com/UserUnknownFactor/innoextract_win/releases/tag/640",
+      "licenseExpression": "Zlib",
+      "noticeTreatment": "Build-host installer inspection only; checksum-pinned and not bundled",
       "reviewState": "approved"
     },
     {

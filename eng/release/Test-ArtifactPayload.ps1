@@ -19,10 +19,14 @@ try {
         if ($hosts.Count -ne 1) { throw 'The macOS package does not contain one unambiguous Threadsmith payload.' }
         $payload = $hosts[0].Directory.FullName
     } elseif ($artifact.EndsWith('.exe', [StringComparison]::OrdinalIgnoreCase)) {
-        $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
-        if (-not $sevenZip) { $sevenZip = (Get-Command 7z -ErrorAction Stop).Source }
-        & $sevenZip x -y "-o$temporary" $artifact | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'The Windows installer could not be expanded for compliance inspection.' }
+        $innoExtract = $env:THREADSMITH_INNOEXTRACT_PATH
+        if (-not $innoExtract) { $innoExtract = (Get-Command innoextract.exe -ErrorAction Stop).Source }
+        $extractOutput = @(& $innoExtract --extract --test --silent --no-extract-unknown --output-dir $temporary -- $artifact 2>&1)
+        $extractExitCode = $LASTEXITCODE
+        if ($extractExitCode -ne 0) {
+            $detail = [string]::Join([Environment]::NewLine, @($extractOutput | Select-Object -Last 10))
+            throw "innoextract could not inspect the Windows installer (exit $extractExitCode). $detail"
+        }
         $hosts = @(Get-ChildItem -LiteralPath $temporary -Filter 'Threadsmith.App.exe' -File -Recurse)
         if ($hosts.Count -ne 1) { throw 'The Windows installer does not contain one unambiguous Threadsmith payload.' }
         $payload = $hosts[0].Directory.FullName

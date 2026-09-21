@@ -7,7 +7,8 @@ $output = Initialize-CleanDirectory $OutputRoot
 $publish = Join-Path $output 'payload-build'
 & (Join-Path $PSScriptRoot 'Publish-Release.ps1') -Version $Version -RuntimeIdentifier $RuntimeIdentifier -OutputRoot $publish | Out-Null
 $artifacts = New-Item -ItemType Directory (Join-Path $output 'artifacts')
-$iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source
+$iscc = $env:THREADSMITH_ISCC_PATH
+if (-not $iscc) { $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source }
 if (-not $iscc) { $iscc = (Get-Command ISCC.exe -ErrorAction Stop).Source }
 & $iscc (Join-Path $PSScriptRoot 'windows/Threadsmith.iss') "/DSourceDir=$(Join-Path $publish 'stage')" "/DOutputDir=$($artifacts.FullName)" "/DAppVersion=$Version" "/DTargetRid=$RuntimeIdentifier"
 if ($LASTEXITCODE -ne 0) { throw 'Inno Setup packaging failed.' }

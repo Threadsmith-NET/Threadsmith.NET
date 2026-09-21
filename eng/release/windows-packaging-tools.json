@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "innoSetup": {
+    "version": "6.4.0",
+    "chocolateyPackage": "innosetup"
+  },
+  "innoExtract": {
+    "version": "640",
+    "sourceRepository": "https://github.com/UserUnknownFactor/innoextract_win",
+    "archive": "innoextract640.zip",
+    "uri": "https://github.com/UserUnknownFactor/innoextract_win/releases/download/640/innoextract640.zip",
+    "sha256": "90b8eea0d4e5d5413c6a15ff8c57436eb4c8b9367f15f27fa93730e58d0d3597",
+    "executable": "innoextract.exe",
+    "licenseExpression": "Zlib"
+  }
+}

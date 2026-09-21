@@ -6,9 +6,14 @@ Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives mode
 
 ## Current state
 
-Threadsmith.NET is currently under active testing and feature refinement. I'd say it's transitioned from pre-Alpha to pre-Beta! 
+Threadsmith.NET is currently under active testing and feature refinement. As of 09-20-2026 I'll call it in Beta. Enough of the toys are in place and working for it to genuinely be useful. I used it last week as my daily driver for my day job. 
 
 Some recent enhancements (most recent first): 
+- Fixed bug with Codex provider where I wasn't setting the proper properties in the request to ensure optimal prefix caching. 
+- I've been performing considerable analysis of conversation histories, doing a variety of tasks, and I've been using that information to adjust things such as tool definitions, system and exploration prompts, the code_explore tool, context management, and the plan/propose/mutate cycle.
+- Visual context viewer in the TUI. You can see every item in your context and what's taking up space. 
+- "Code Review" native skill. This is a Threadsmith native skill, not Claude-style skill. It can accept its input from several places, and I'm adding more. Spawns five specialist subagents, each reviewed different areas. And remember, Threadsmith sub-agent roles can each be configured with their own provider and model! Writes a detailed output to .inbox in your repo or to the output and you can write it anywhere else from there.
+- New native tools for reading PRs and Jira tickets. The PR tool interacts with repositories using an adapter pattern and I currently have GitHub and Bitbucket adapters in place. Currently, PRs can only be read, but additional functionality will be coming in the next week or two.
 - Governed Jira Cloud issue reads from ticket keys or browse URLs, with scoped and unscoped API-token support
 - Provider-backed GitHub.com and Bitbucket Cloud pull-request retrieval for inventories and bounded diff evidence
 - Significant TUI enhancements

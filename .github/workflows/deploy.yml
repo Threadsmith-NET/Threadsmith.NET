@@ -30,8 +30,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/threadsmith-pages"
           cp -a docs/. "$RUNNER_TEMP/threadsmith-pages/"
-          cp index.html google*.html .nojekyll "$RUNNER_TEMP/threadsmith-pages/"
-          cp -a website-assets "$RUNNER_TEMP/threadsmith-pages/"
+          cp index.html "$RUNNER_TEMP/threadsmith-pages/"
+          if compgen -G "google*.html" > /dev/null; then cp google*.html "$RUNNER_TEMP/threadsmith-pages/"; fi
+          if [ -d website-assets ]; then cp -a website-assets "$RUNNER_TEMP/threadsmith-pages/"; fi
+          touch "$RUNNER_TEMP/threadsmith-pages/.nojekyll"
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:

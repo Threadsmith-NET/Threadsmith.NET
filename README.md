@@ -26,7 +26,7 @@ Some recent enhancements (most recent first):
 
 If you are interested in helping, contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details or contact me at [mwright556@gmail.com](mailto:mwright556@gmail.com). Areas that need substantial testing include the Codex provider and its authentication flow, as well as MCP support—particularly SSO authentication flows. This work will take time, and I maintain the project alongside a demanding full-time job.
 
-I aim to provide complete cross-platform installers, and the groundwork is already in place. I do not own or have access to a Mac, so macOS testing and packaging are major areas where help would be especially valuable. GitHub-hosted releases and the remaining release automation are also planned, but are not yet complete. I will not use paid GitHub features because I cannot pay out of pocket to give software away.
+I aim to provide complete cross-platform installers, and the groundwork is already in place. I do not own or have access to a Mac, so macOS testing and packaging are major areas where help would be especially valuable. GitHub-hosted CI and tag-gated release packaging are configured in this repository, though the first public release still needs real runner rehearsal and platform installation verification. I will not use paid GitHub features because I cannot pay out of pocket to give software away.
 
 Detailed implementation and milestone status remains in [the source-repository milestone plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/milestones.md).
 
@@ -253,7 +253,7 @@ Local publish (Windows Example):
 ```
 Note that Windows protects the Program Files folder, and your shell will need to be an administrator if you want to publish to that location. Otherwise, you can change the publish target to suit your preference. `PublishSingleFile` is intentionally not used because Threadsmith loads extensions via `AssemblyLoadContext` and spawns the scripting worker as a separate process, both of which require separate assembly files.
 
-**Note:** Eventually, I hope to have release builds set up and run in Github. For now, anyone who wants to use it must build and run locally. I have not set up Github for an actual public repo before, so if anyone has experience and wants to help out, my answer is "yes".
+**Note:** Release packaging is driven by `.github/workflows/release.yml`. A manual workflow run builds and verifies the installer set without uploading a GitHub Release; pushing a reviewed `v<semver>` tag runs the same matrix and attaches the verified artifacts to that immutable release.
 
 ## Project layout
 

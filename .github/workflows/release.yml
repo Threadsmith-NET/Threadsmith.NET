@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
       - name: Verify release contracts
         shell: pwsh
         run: ./eng/release/Test-ReleaseContracts.ps1
@@ -53,7 +56,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.204'
+          global-json-file: global.json
       - name: Install Inno Setup
         if: startsWith(matrix.rid, 'win-')
         shell: powershell
@@ -89,16 +92,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  publish:
-    if: github.event_name == 'push'
+  verify:
     needs: package
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
       - uses: actions/download-artifact@v4
         with:
           pattern: package-*
@@ -107,8 +110,34 @@ jobs:
       - name: Verify aggregate release
         shell: pwsh
         run: |
-          $version = '${{ github.ref_name }}'.Substring(1)
-          ./eng/release/New-ReleaseManifest.ps1 -Version $version -ReleaseTag '${{ github.ref_name }}' -SourceCommit '${{ github.sha }}' -ArtifactDirectory artifacts
+          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.Substring(1) }
+          ./eng/release/New-ReleaseManifest.ps1 -Version $version -ReleaseTag "v$version" -SourceCommit '${{ github.sha }}' -ArtifactDirectory artifacts
+      - name: Upload verified aggregate
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-aggregate
+          path: |
+            artifacts/release-manifest.json
+            artifacts/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: artifacts
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-aggregate
+          path: artifacts
       - name: Publish immutable GitHub release assets
         env:
           GH_TOKEN: ${{ github.token }}

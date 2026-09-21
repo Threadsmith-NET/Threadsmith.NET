@@ -184,38 +184,41 @@ public sealed class Plan85CodeExploreAssociatedArtifactTests
     }
 
     /// <summary>Explicit artifact filenames opt Auto mode into the matching project-wide evidence.</summary>
-    [Theory]
-    [InlineData(".editorconfig", "src/App/.editorconfig", CodeExploreArtifactRelationshipKind.AnalyzerConfiguration)]
-    [InlineData("App.csproj", "src/App/App.csproj", CodeExploreArtifactRelationshipKind.ProjectItem)]
-    [InlineData("APP.CSPROJ", "src/App/App.csproj", CodeExploreArtifactRelationshipKind.ProjectItem)]
-    [InlineData("Guide.md", "src/App/Additional/Guide.md", CodeExploreArtifactRelationshipKind.AdditionalDocument)]
-    [InlineData("GUIDE.MD", "src/App/Additional/Guide.md", CodeExploreArtifactRelationshipKind.AdditionalDocument)]
-    [InlineData("Welcome.resx", "src/App/Resources/Welcome.resx", CodeExploreArtifactRelationshipKind.ProjectResource)]
-    [InlineData("feature-flags.yaml", "src/App/Config/feature-flags.yaml", CodeExploreArtifactRelationshipKind.ProjectItem)]
-    [InlineData("feature_flags.yaml", "src/App/Config/feature_flags.yaml", CodeExploreArtifactRelationshipKind.ProjectItem)]
-    [InlineData("settings.jsonc", "src/App/Config/settings.jsonc", CodeExploreArtifactRelationshipKind.ProjectItem)]
-    [InlineData("appsettings.Development.json", "src/App/appsettings.Development.json", CodeExploreArtifactRelationshipKind.ProjectItem)]
-    public async Task CodeExplore_AssociatedArtifactsAuto_RecognizesExplicitArtifactFilenameIntent(
-        string queryArtifact,
-        string expectedPath,
-        CodeExploreArtifactRelationshipKind expectedRelationship)
+    [Fact]
+    public async Task CodeExplore_AssociatedArtifactsAuto_RecognizesExplicitArtifactFilenameIntent()
     {
         await using var fixture = await CodeExploreArtifactFixture.CreateAsync();
+        (string QueryArtifact, string ExpectedPath, CodeExploreArtifactRelationshipKind ExpectedRelationship)[] cases =
+        [
+            (".editorconfig", "src/App/.editorconfig", CodeExploreArtifactRelationshipKind.AnalyzerConfiguration),
+            ("App.csproj", "src/App/App.csproj", CodeExploreArtifactRelationshipKind.ProjectItem),
+            ("APP.CSPROJ", "src/App/App.csproj", CodeExploreArtifactRelationshipKind.ProjectItem),
+            ("Guide.md", "src/App/Additional/Guide.md", CodeExploreArtifactRelationshipKind.AdditionalDocument),
+            ("GUIDE.MD", "src/App/Additional/Guide.md", CodeExploreArtifactRelationshipKind.AdditionalDocument),
+            ("Welcome.resx", "src/App/Resources/Welcome.resx", CodeExploreArtifactRelationshipKind.ProjectResource),
+            ("feature-flags.yaml", "src/App/Config/feature-flags.yaml", CodeExploreArtifactRelationshipKind.ProjectItem),
+            ("feature_flags.yaml", "src/App/Config/feature_flags.yaml", CodeExploreArtifactRelationshipKind.ProjectItem),
+            ("settings.jsonc", "src/App/Config/settings.jsonc", CodeExploreArtifactRelationshipKind.ProjectItem),
+            ("appsettings.Development.json", "src/App/appsettings.Development.json", CodeExploreArtifactRelationshipKind.ProjectItem),
+        ];
 
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = $"show BuildWelcomeResponse and {queryArtifact}",
-                ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
-                AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Auto,
-                Limits = CreateWideArtifactLimits(),
-            },
-            fixture.CreateArtifactReader(),
-            TestContext.Current.CancellationToken);
+        foreach (var testCase in cases)
+        {
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = $"show BuildWelcomeResponse and {testCase.QueryArtifact}",
+                    ExactSymbolAnchors = ["ArtifactSample.ResponseBuilder.BuildWelcomeResponse"],
+                    AssociatedArtifacts = CodeExploreAssociatedArtifactsMode.Auto,
+                    Limits = CreateWideArtifactLimits(),
+                },
+                fixture.CreateArtifactReader(),
+                TestContext.Current.CancellationToken);
 
-        Assert.Contains(RequireArtifacts(result), artifact => artifact.FilePath == expectedPath
-            && artifact.Relationship == expectedRelationship);
+            Assert.Contains(RequireArtifacts(result), artifact => artifact.FilePath == testCase.ExpectedPath
+                && artifact.Relationship == testCase.ExpectedRelationship);
+        }
     }
 
     /// <summary>Project artifact discovery emits one physical artifact even when several selected projects load it.</summary>

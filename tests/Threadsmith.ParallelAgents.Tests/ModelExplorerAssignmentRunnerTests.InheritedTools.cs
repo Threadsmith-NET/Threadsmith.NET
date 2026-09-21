@@ -220,7 +220,28 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         finally
         {
             Assert.StartsWith(PhysicalTemporaryPath(), Path.GetFullPath(repository), StringComparison.OrdinalIgnoreCase);
-            Directory.Delete(repository, recursive: true);
+            await DeleteDirectoryEventuallyAsync(repository);
+        }
+    }
+
+    private static async Task DeleteDirectoryEventuallyAsync(string path)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+            }
+            catch (UnauthorizedAccessException) when (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), TestContext.Current.CancellationToken);
+            }
         }
     }
 

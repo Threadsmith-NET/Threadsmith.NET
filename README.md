@@ -1,8 +1,8 @@
 # Threadsmith.NET
 
-A .NET-native, terminal-first coding harness where the host owns control flow and the model is a pluggable reasoning engine—not an autonomous actor.
+A .NET-native, terminal-first coding harness that treats your C# code as code and not just text. 
 
-Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives models governed read-only tools, requires host-validated plans before repository changes, stages mutations transactionally, and runs confidence-aware build and test validation. Interactive use defaults to a retained full-screen TUIKit interface, with the original native-scrollback frontend available explicitly; equivalent headless operation supports scripts and CI.
+Threadsmith.NET opens real .NET repositories with Roslyn (Compiler as a Service) and MSBuild, gives models governed read-only tools that leverage compiler-backed semantics, requires host-validated plans before repository changes, stages mutations transactionally, and performs Roslyn-based semantic checks on proposed changes _before_ the project is built, providing fail-fast feedback and corrective opportunities. Interactive use defaults to a full-screen TUIKit interface; equivalent headless operation supports scripts and CI.
 
 ## Current state
 

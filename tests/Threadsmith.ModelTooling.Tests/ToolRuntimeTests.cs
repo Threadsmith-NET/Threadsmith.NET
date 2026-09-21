@@ -3920,22 +3920,25 @@ public static partial class ToolRuntimeTests
     {
         if (OperatingSystem.IsWindows())
         {
+            var shellExecutable = FindExecutablePath("pwsh.exe")
+                ?? FindExecutablePath("powershell.exe")
+                ?? throw new InvalidOperationException("PowerShell is required for this process tree test.");
             var escapedPath = processIdPath.Replace("'", "''", StringComparison.Ordinal);
+            var escapedShell = shellExecutable.Replace("'", "''", StringComparison.Ordinal);
             var childScript = Convert.ToBase64String(
-                Encoding.Unicode.GetBytes("Start-Sleep -Seconds 60"));
-            var script = "$childExecutable = Join-Path $PSHOME 'powershell.exe'; "
+                Encoding.Unicode.GetBytes($"[IO.File]::WriteAllText('{escapedPath}', $PID.ToString()); Start-Sleep -Seconds 60"));
+            var script = $"$childExecutable = '{escapedShell}'; "
                 + "$start = [Diagnostics.ProcessStartInfo]::new($childExecutable, '-NoProfile -NonInteractive -EncodedCommand "
                 + childScript
                 + "'); "
                 + "$start.UseShellExecute = $false; $start.CreateNoWindow = $true; "
                 + "$child = [Diagnostics.Process]::Start($start); "
-                + $"[IO.File]::WriteAllText('{escapedPath}', $child.Id.ToString()); "
                 + "$child.WaitForExit()";
             return new ProcessExecutionRequest
             {
                 ToolInvocationId = ToolInvocationId.New(),
                 RunId = RunId.New(),
-                FileName = "powershell.exe",
+                FileName = shellExecutable,
                 Arguments = ["-NoProfile", "-NonInteractive", "-Command", script],
                 WorkingDirectory = repository,
                 Timeout = TimeSpan.FromMinutes(1),
@@ -3957,6 +3960,9 @@ public static partial class ToolRuntimeTests
     }
 
     private static bool IsExecutableAvailable(string fileName)
+        => FindExecutablePath(fileName) is not null;
+
+    private static string? FindExecutablePath(string fileName)
     {
         var pathValue = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         var pathExtensions = OperatingSystem.IsWindows()
@@ -3970,7 +3976,8 @@ public static partial class ToolRuntimeTests
             .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(directory => directory.Trim('"'))
             .Where(Path.IsPathFullyQualified)
-            .Any(directory => candidateNames.Any(candidate => File.Exists(Path.Combine(directory, candidate))));
+            .SelectMany(directory => candidateNames.Select(candidate => Path.Combine(directory, candidate)))
+            .FirstOrDefault(File.Exists);
     }
 
     private static async Task WaitForFileAsync(string path, TimeSpan timeout)

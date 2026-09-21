@@ -173,8 +173,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             }
 
             Assert.True(result.Succeeded, result.Error ?? result.ModelResultContent);
-            Assert.Equal("child artifact", await File.ReadAllTextAsync(Path.Combine(repository, ".inbox/child.md")));
-            Assert.Equal("native artifact", await File.ReadAllTextAsync(Path.Combine(repository, ".inbox/native.md")));
+            Assert.Equal("child artifact", await ReadEventuallyAsync(Path.Combine(repository, ".inbox/child.md")));
+            Assert.Equal("native artifact", await ReadEventuallyAsync(Path.Combine(repository, ".inbox/native.md")));
             var process = Assert.Single(processes.Requests);
             Assert.NotEqual(rootRunId, process.RunId);
             Assert.Equal(repository, Path.TrimEndingDirectorySeparator(process.WorkingDirectory));
@@ -222,6 +222,28 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             Assert.StartsWith(Path.GetFullPath(Path.GetTempPath()), Path.GetFullPath(repository), StringComparison.OrdinalIgnoreCase);
             Directory.Delete(repository, recursive: true);
         }
+    }
+
+    private static async Task<string> ReadEventuallyAsync(string path)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (stopwatch.Elapsed < TimeSpan.FromSeconds(5))
+        {
+            try
+            {
+                return await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+            }
+            catch (DirectoryNotFoundException)
+            {
+            }
+            catch (FileNotFoundException)
+            {
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+
+        return await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
     }
 
     private sealed class InheritedToolsProvider : IModelProvider

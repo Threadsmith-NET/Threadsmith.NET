@@ -148,7 +148,7 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         foreach (var root in _roots)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var canonicalRoot = Path.GetFullPath(root.RootPath);
+            var canonicalRoot = ResolvePhysicalPath(root.RootPath);
             if (!Directory.Exists(canonicalRoot))
             {
                 continue;
@@ -215,13 +215,13 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         var root = _roots.Single(item =>
             item.Scope == candidate.Identity.Scope
             && string.Equals(item.Source, candidate.Identity.Source, StringComparison.Ordinal));
-        var rootPath = Path.GetFullPath(root.RootPath);
+        var rootPath = ResolvePhysicalPath(root.RootPath);
         if (!Directory.Exists(rootPath) || IsLink(rootPath))
         {
             throw new InvalidDataException("The configured Claude skill root is missing or linked.");
         }
 
-        var skillRoot = Path.GetFullPath(Path.Combine(rootPath, candidate.Identity.Name));
+        var skillRoot = ResolvePhysicalPath(Path.Combine(rootPath, candidate.Identity.Name));
         EnsureContained(rootPath, skillRoot);
         if (!Directory.Exists(skillRoot) || IsLink(skillRoot))
         {
@@ -672,6 +672,28 @@ public sealed partial class ClaudeSkillCompatibilityCatalog : IClaudeSkillCompat
         {
             throw new InvalidDataException("Claude skill path escapes its approved root.");
         }
+    }
+
+    private static string ResolvePhysicalPath(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (OperatingSystem.IsWindows())
+        {
+            return fullPath;
+        }
+
+        var resolved = Path.GetPathRoot(fullPath)!;
+        foreach (var segment in fullPath[resolved.Length..]
+            .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var current = Path.Combine(resolved, segment);
+            var directory = new DirectoryInfo(current);
+            resolved = directory.Exists
+                ? directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName
+                : current;
+        }
+
+        return Path.GetFullPath(resolved);
     }
 
     private static bool IsLink(string path)

@@ -134,7 +134,25 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
         }
 
         var source = ResolveClaudeSource(parsed);
-        var activated = await _claude.ActivateAsync(source, cancellationToken);
+        ClaudeSkillSnapshot activated;
+        try
+        {
+            activated = await _claude.ActivateAsync(source, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException
+            or UnauthorizedAccessException
+            or InvalidDataException
+            or DecoderFallbackException
+            or CryptographicException)
+        {
+            return ProjectMetadata(source) with
+            {
+                Verification = SkillVerificationState.Invalid,
+                VerificationReason = $"{exception.GetType().Name}: Claude source activation failed",
+                Enabled = false,
+            };
+        }
+
         var digest = activated.Candidate.Identity.Digest
             ?? throw new InvalidDataException("Claude skill activation did not produce an exact digest.");
         if (parsed.Digest is not null
@@ -213,6 +231,11 @@ public sealed class CompatibleSkillCatalog : ISkillCatalog, IAsyncSkillCatalog, 
             ? $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}"
             : SkillPolicyIdentity.FormatSelector(candidate);
         var exact = await ResolveAsync(selector, cancellationToken);
+        if (exact.Verification == SkillVerificationState.Invalid)
+        {
+            throw new InvalidDataException(exact.VerificationReason);
+        }
+
         var digest = exact.Identity.Digest.Value;
         var snapshot = _snapshots[digest];
         return (exact, snapshot);

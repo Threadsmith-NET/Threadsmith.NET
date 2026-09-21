@@ -40,7 +40,10 @@ jobs:
         run: dotnet build src/Threadsmith.sln --configuration Debug --no-restore
 
       - name: Test
-        run: dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules 4
+        shell: pwsh
+        run: |
+          $parallelModules = if ($env:RUNNER_OS -eq 'macOS') { 1 } else { 4 }
+          dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules $parallelModules
 
       - name: Report macOS native test crashes
         if: ${{ failure() && runner.os == 'macOS' }}

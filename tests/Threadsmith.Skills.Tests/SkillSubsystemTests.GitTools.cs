@@ -143,7 +143,7 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class GitToolRepositoryFixture : IDisposable, IAsyncDisposable
     {
-        private readonly string _container = Path.Combine(Path.GetTempPath(), "threadsmith-git-tool-" + Guid.NewGuid().ToString("N"));
+        private readonly string _container = Path.Combine(PhysicalTemporaryPath(), "threadsmith-git-tool-" + Guid.NewGuid().ToString("N"));
 
         public GitToolRepositoryFixture()
         {
@@ -224,6 +224,19 @@ public sealed partial class SkillSubsystemTests
             }
 
             Directory.Delete(_container, true);
+        }
+
+        private static string PhysicalTemporaryPath()
+        {
+            var path = Path.GetFullPath(Path.GetTempPath());
+            var resolved = Path.GetPathRoot(path)!;
+            foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var directory = new DirectoryInfo(Path.Combine(resolved, segment));
+                resolved = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+            }
+
+            return Path.TrimEndingDirectorySeparator(resolved);
         }
     }
 }

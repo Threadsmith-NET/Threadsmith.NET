@@ -21,7 +21,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [Fact]
     public async Task InheritedTools_ProcessesWritesAndSkillsUseSharedPipelineWithoutParentOnlyTools()
     {
-        var repository = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), $"threadsmith-inherited-tools-{Guid.NewGuid():N}")).FullName;
+        var repository = Directory.CreateDirectory(Path.Combine(PhysicalTemporaryPath(), $"threadsmith-inherited-tools-{Guid.NewGuid():N}")).FullName;
         try
         {
             await using var events = new DomainEventStream();
@@ -219,7 +219,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
         finally
         {
-            Assert.StartsWith(Path.GetFullPath(Path.GetTempPath()), Path.GetFullPath(repository), StringComparison.OrdinalIgnoreCase);
+            Assert.StartsWith(PhysicalTemporaryPath(), Path.GetFullPath(repository), StringComparison.OrdinalIgnoreCase);
             Directory.Delete(repository, recursive: true);
         }
     }
@@ -244,6 +244,19 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
 
         return await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+    }
+
+    private static string PhysicalTemporaryPath()
+    {
+        var path = Path.GetFullPath(Path.GetTempPath());
+        var resolved = Path.GetPathRoot(path)!;
+        foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var directory = new DirectoryInfo(Path.Combine(resolved, segment));
+            resolved = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+        }
+
+        return Path.TrimEndingDirectorySeparator(resolved);
     }
 
     private sealed class InheritedToolsProvider : IModelProvider

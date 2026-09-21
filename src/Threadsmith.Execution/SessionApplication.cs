@@ -1423,6 +1423,7 @@ public sealed partial class SessionApplication :
                     await _events.PublishAsync(
                         new RunCompleted(registration.SessionId, DateTimeOffset.UtcNow, runId, false),
                         CancellationToken.None);
+                    CompleteSteeringIfRegistered(runId, registration);
                     registration.Completion.TrySetResult(false);
                     return;
                 }
@@ -1470,6 +1471,17 @@ public sealed partial class SessionApplication :
                 succeeded),
             CancellationToken.None);
         registration.Completion.TrySetResult(succeeded);
+    }
+
+    private void CompleteSteeringIfRegistered(RunId runId, RunRegistration registration)
+    {
+        if (!registration.SteeringRegistered)
+        {
+            return;
+        }
+
+        _steering.CompleteRun(registration.SessionId, runId);
+        registration.SteeringRegistered = false;
     }
 
     private void SetIncrementalPlanningContext(

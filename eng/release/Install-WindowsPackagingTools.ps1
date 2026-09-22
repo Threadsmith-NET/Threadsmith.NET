@@ -21,8 +21,21 @@ if ($LASTEXITCODE -notin @(0, 1641, 3010)) { throw "Chocolatey could not install
 $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
 if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) { $iscc = (Get-Command iscc.exe -ErrorAction SilentlyContinue).Source }
 if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) { throw 'The pinned Inno Setup compiler was not found after installation.' }
-$installedVersion = (Get-Item -LiteralPath $iscc).VersionInfo.ProductVersion
-if (-not $installedVersion.StartsWith($manifest.innoSetup.version, [StringComparison]::Ordinal)) {
+# Inno Setup 6.4.0 binaries have 0.0.0.0 version resources. Probe the compiler engine instead.
+$probe = @'
+[Setup]
+AppName=Threadsmith packaging probe
+AppVersion=1.0.0
+DefaultDirName={tmp}\ThreadsmithPackagingProbe
+Uninstallable=no
+Output=no
+'@
+$probeOutput = ($probe | & $iscc - 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0) { throw "Inno Setup compiler probe failed: $probeOutput" }
+$versionMatch = [regex]::Match($probeOutput, '(?m)^Compiler engine version: Inno Setup (\d+\.\d+\.\d+)\s*$')
+if (-not $versionMatch.Success) { throw "Inno Setup did not report its compiler engine version: $probeOutput" }
+$installedVersion = $versionMatch.Groups[1].Value
+if ($installedVersion -ne $manifest.innoSetup.version) {
     throw "Expected Inno Setup $($manifest.innoSetup.version), but found $installedVersion."
 }
 

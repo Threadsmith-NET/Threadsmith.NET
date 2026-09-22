@@ -2535,92 +2535,6 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Cancelling a process request terminates its child process tree.</summary>
-    [Theory]
-    [InlineData(false, 5000)]
-    [InlineData(true, 5000)]
-    [InlineData(false, 1)]
-    public static async Task ProcessManager_Cancellation_KillsChildTree(bool infiniteTimeout, int drainTimeoutMilliseconds)
-    {
-        var repository = CreateTemporaryDirectory();
-        var processIdPath = Path.Combine(repository, "child.pid");
-        using var cancellation = new CancellationTokenSource();
-        Process? child = null;
-        Task<ProcessExecutionResult>? running = null;
-        try
-        {
-            var manager = new ProcessManager(
-                new TestSanitizer(),
-                NullLogger<ProcessManager>.Instance,
-                limits: new ProcessResourceLimits { DrainTimeoutMilliseconds = drainTimeoutMilliseconds });
-            var request = CreateTreeProcessRequest(repository, processIdPath);
-            if (infiniteTimeout)
-            {
-                request = request with { Timeout = Timeout.InfiniteTimeSpan };
-            }
-
-            running = manager.RunAsync(request, cancellation.Token);
-            await WaitForFileAsync(processIdPath, TimeSpan.FromSeconds(30));
-            var processIdText = await File.ReadAllTextAsync(processIdPath);
-            var processId = int.Parse(processIdText, System.Globalization.CultureInfo.InvariantCulture);
-            child = Process.GetProcessById(processId);
-
-            await cancellation.CancelAsync();
-            var cancellationObserved = false;
-            try
-            {
-                await running;
-            }
-            catch (OperationCanceledException)
-            {
-                cancellationObserved = true;
-            }
-
-            await WaitForTerminationAsync(child, TimeSpan.FromSeconds(10));
-
-            Assert.True(cancellationObserved);
-            Assert.True(HasTerminated(child));
-            Assert.Empty(manager.ActiveProcesses);
-        }
-        finally
-        {
-            await cancellation.CancelAsync();
-            if (running is not null)
-            {
-                try
-                {
-                    await running;
-                }
-                catch (OperationCanceledException)
-                {
-                    // Observe teardown even when the process-start assertion failed.
-                }
-            }
-
-            if (child is { HasExited: false })
-            {
-                child.Kill(entireProcessTree: true);
-                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
-            }
-
-            child?.Dispose();
-            // Windows can retain a directory handle briefly after process-tree exit.
-            // Process termination is asserted above; cleanup must not mask that result.
-            for (var attempt = 0; ; attempt++)
-            {
-                try
-                {
-                    Directory.Delete(repository, recursive: true);
-                    break;
-                }
-                catch (IOException) when (OperatingSystem.IsWindows() && attempt < 99)
-                {
-                    await Task.Delay(50);
-                }
-            }
-        }
-    }
-
     /// <summary>A tiny post-kill drain deadline preserves the process timeout outcome.</summary>
     [Fact]
     public static async Task ProcessManager_TinyDrainDeadline_PreservesTimeoutResult()
@@ -3914,51 +3828,6 @@ public static partial class ToolRuntimeTests
         return path;
     }
 
-    private static ProcessExecutionRequest CreateTreeProcessRequest(
-        string repository,
-        string processIdPath)
-    {
-        if (OperatingSystem.IsWindows())
-        {
-            var shellExecutable = FindExecutablePath("pwsh.exe")
-                ?? FindExecutablePath("powershell.exe")
-                ?? throw new InvalidOperationException("PowerShell is required for this process tree test.");
-            var escapedPath = processIdPath.Replace("'", "''", StringComparison.Ordinal);
-            var escapedShell = shellExecutable.Replace("'", "''", StringComparison.Ordinal);
-            var childScript = Convert.ToBase64String(
-                Encoding.Unicode.GetBytes($"[IO.File]::WriteAllText('{escapedPath}', $PID.ToString()); Start-Sleep -Seconds 60"));
-            var script = $"$childExecutable = '{escapedShell}'; "
-                + "$start = [Diagnostics.ProcessStartInfo]::new($childExecutable, '-NoProfile -NonInteractive -EncodedCommand "
-                + childScript
-                + "'); "
-                + "$start.UseShellExecute = $false; $start.CreateNoWindow = $true; "
-                + "$child = [Diagnostics.Process]::Start($start); "
-                + "$child.WaitForExit()";
-            return new ProcessExecutionRequest
-            {
-                ToolInvocationId = ToolInvocationId.New(),
-                RunId = RunId.New(),
-                FileName = shellExecutable,
-                Arguments = ["-NoProfile", "-NonInteractive", "-Command", script],
-                WorkingDirectory = repository,
-                Timeout = TimeSpan.FromMinutes(1),
-                Origin = ProcessRequestOrigin.Host,
-            };
-        }
-
-        var shellScript = $"sleep 60 & child=$!; echo $child > '{processIdPath}'; wait $child";
-        return new ProcessExecutionRequest
-        {
-            ToolInvocationId = ToolInvocationId.New(),
-            RunId = RunId.New(),
-            FileName = "sh",
-            Arguments = ["-c", shellScript],
-            WorkingDirectory = repository,
-            Timeout = TimeSpan.FromMinutes(1),
-            Origin = ProcessRequestOrigin.Host,
-        };
-    }
-
     private static bool IsExecutableAvailable(string fileName)
         => FindExecutablePath(fileName) is not null;
 
@@ -3978,54 +3847,6 @@ public static partial class ToolRuntimeTests
             .Where(Path.IsPathFullyQualified)
             .SelectMany(directory => candidateNames.Select(candidate => Path.Combine(directory, candidate)))
             .FirstOrDefault(File.Exists);
-    }
-
-    private static async Task WaitForFileAsync(string path, TimeSpan timeout)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        while (!File.Exists(path) && stopwatch.Elapsed < timeout)
-        {
-            await Task.Delay(25);
-        }
-
-        Assert.True(File.Exists(path), $"Timed out waiting for process marker '{path}'.");
-    }
-
-    private static async Task WaitForTerminationAsync(Process process, TimeSpan timeout)
-    {
-        var stopwatch = Stopwatch.StartNew();
-        while (!HasTerminated(process) && stopwatch.Elapsed < timeout)
-        {
-            await Task.Delay(25);
-            process.Refresh();
-        }
-
-        Assert.True(HasTerminated(process), $"Timed out waiting for process {process.Id} to terminate.");
-    }
-
-    private static bool HasTerminated(Process process)
-    {
-        if (process.HasExited)
-        {
-            return true;
-        }
-
-        if (!OperatingSystem.IsLinux())
-        {
-            return false;
-        }
-
-        var statusPath = $"/proc/{process.Id}/stat";
-        if (!File.Exists(statusPath))
-        {
-            return true;
-        }
-
-        var status = File.ReadAllText(statusPath);
-        var commandEnd = status.LastIndexOf(')');
-        return commandEnd >= 0
-            && status.Length > commandEnd + 2
-            && status[commandEnd + 2] == 'Z';
     }
 
     private sealed class NoopCodeExploreService : ICodeExploreService

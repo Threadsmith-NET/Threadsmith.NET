@@ -1,4 +1,4 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Tui.TuiKit;
 
 using System.Collections.Concurrent;
 using System.Text;

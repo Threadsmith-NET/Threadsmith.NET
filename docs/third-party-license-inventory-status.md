@@ -2,6 +2,8 @@
 
 ## Status
 
+**Current frontend inventory (2026-09-23): TUIKit is the sole interactive frontend.** PrettyPrompt, Spectre.Console, Spectre.Console.Ansi, and TextCopy are absent from the application dependency closure. The retired packages have been removed from the current release evidence; the package graph below was refreshed from the solution. The older baseline and action list below record the pre-automation assessment and are historical, not current release instructions.
+
 **Current addition (2026-09-10): the native Anthropic provider adds the MIT-licensed Anthropic SDK 12.46.0.** Its exact NuGet SHA-512, pinned source revision, and full license are recorded in `eng/release/release-license-evidence.json` and `eng/release/legal/licenses/Anthropic-12.46.0.txt`. `Microsoft.Extensions.AI.Abstractions` is centrally pinned to the existing application version 10.8.3. The refreshed `dotnet-package-graph.json` records 52 restored projects; the application closure has no package missing from the reviewed evidence. Existing SDK/runtime distribution review scope is unchanged.
 
 **Current addition (2026-09-09): local repository-memory embeddings add ONNX Runtime 1.22.1, Microsoft.ML.Tokenizers 2.0.0 and the pinned Apache-2.0 MiniLM model assets.** Exact NuGet package hashes, licenses and supplemental native notices are recorded in eng/release/release-license-evidence.json; the immutable model revision, artifact hashes and six native RID hashes are in src/Threadsmith.Embeddings.Local/minilm-assets.json. Release staging verifies this closed asset set and includes the source model card and full license; generated notices and SPDX identify the model alongside the runtime package closure. The refreshed dotnet-package-graph.json records 48 restored projects. The historical assessment below predates the implemented ADR-49 release automation; canonical current authority is the reviewed evidence and exact per-RID generated artifact validation. Existing SDK/runtime review scope is unchanged.
@@ -89,7 +91,7 @@ release process starts redistributing them.
 
 ### TUIKit product frontend (2026-09-04)
 
-`Threadsmith.Tui.TuiKit` pins **TUIKit 0.10.1** in the root central catalog. It is included in the product solution, dependency graph, and all six local publish payloads. Canonical release evidence records its exact SHA-512, MIT declaration, and supplemental font notices. TUIKit is the default interactive frontend; the original PrettyPrompt frontend remains selectable and its MPL obligations still apply.
+`Threadsmith.Tui.TuiKit` pins **TUIKit 0.10.1** in the root central catalog. It is included in the product solution, dependency graph, and all six local publish payloads. Canonical release evidence records its exact SHA-512, MIT declaration, and supplemental font notices. TUIKit is the sole interactive frontend.
 
 The [candidate licensing bundle](../eng/release/legal/TUIKit-0.10.1-candidate/README.md)
 records exact archive/assembly/resource digests, the pinned upstream MIT license,

@@ -545,7 +545,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-dotnet_inventory-Description.md` | Advertised description for `dotnet_inventory`. | `None` |
+| `Tool-dotnet_inventory-Description.md` | Complete loaded project and declared package inventory; directs upgrade queries to NuGet tooling. | `None` |
 
 #### `find_implementations` family
 
@@ -636,7 +636,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-memories-Description.md` | Advertised description for `memories`. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
-| `Tool-nuget_health-Description.md` | Advertised description for `nuget_health`. | `None` |
+| `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
 
 #### `propose_mutations` family
 

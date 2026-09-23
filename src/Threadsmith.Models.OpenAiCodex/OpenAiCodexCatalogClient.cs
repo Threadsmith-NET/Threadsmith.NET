@@ -4,6 +4,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Threadsmith.Core;
 using Threadsmith.Models;
 
@@ -12,11 +13,14 @@ public sealed class OpenAiCodexCatalogClient
 {
     private const int DefaultContextWindow = 128_000;
     private const int DefaultOutputReserve = 32_768;
+    private const int MaximumReleaseMetadataBytes = 1024 * 1024;
 
     // The Codex backend filters `/models` rows by Codex client compatibility, not by
-    // Threadsmith's product version. Upstream Codex model metadata reviewed for this
-    // implementation currently requires up to 0.144.0.
-    private const string CodexModelsClientCompatibilityVersion = "0.144.0";
+    // Threadsmith's product version. Use this only when release lookup is unavailable.
+    private const string CodexModelsClientCompatibilityVersion = "0.155.1";
+    private static readonly Uri LatestCodexRelease = new("https://api.github.com/repos/openai/codex/releases/latest");
+    private static readonly TimeSpan ReleaseLookupTimeout = TimeSpan.FromSeconds(5);
+    private static readonly Regex ReleaseTagPattern = new(@"^rust-v(?<version>\d{1,4}\.\d{1,4}\.\d{1,4})$", RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
 
     private readonly HttpClient _httpClient;
 
@@ -34,7 +38,8 @@ public sealed class OpenAiCodexCatalogClient
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accessToken);
-        using HttpRequestMessage request = new(HttpMethod.Get, BuildModelsUri());
+        var clientVersion = await ResolveClientVersionAsync(cancellationToken).ConfigureAwait(false);
+        using HttpRequestMessage request = new(HttpMethod.Get, BuildModelsUri(clientVersion));
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         request.Headers.TryAddWithoutValidation("originator", "threadsmith");
@@ -94,10 +99,55 @@ public sealed class OpenAiCodexCatalogClient
         };
     }
 
-    private static Uri BuildModelsUri()
+    private async Task<string> ResolveClientVersionAsync(CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(ReleaseLookupTimeout);
+        try
+        {
+            using HttpRequestMessage request = new(HttpMethod.Get, LatestCodexRelease);
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
+            request.Headers.UserAgent.ParseAdd("Threadsmith.NET");
+            using var response = await _httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return CodexModelsClientCompatibilityVersion;
+            }
+
+            await response.Content.LoadIntoBufferAsync(MaximumReleaseMetadataBytes, timeout.Token).ConfigureAwait(false);
+            await using var body = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            using var document = await JsonDocument.ParseAsync(body, cancellationToken: timeout.Token).ConfigureAwait(false);
+            if (document.RootElement.ValueKind != JsonValueKind.Object
+                || !document.RootElement.TryGetProperty("tag_name", out var tag)
+                || tag.ValueKind != JsonValueKind.String)
+            {
+                return CodexModelsClientCompatibilityVersion;
+            }
+
+            var match = ReleaseTagPattern.Match(tag.GetString() ?? string.Empty);
+            if (!match.Success || !Version.TryParse(match.Groups["version"].Value, out var version)
+                || version <= Version.Parse(CodexModelsClientCompatibilityVersion))
+            {
+                return CodexModelsClientCompatibilityVersion;
+            }
+
+            return version.ToString();
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or IOException or JsonException
+            || (exception is OperationCanceledException && !cancellationToken.IsCancellationRequested))
+        {
+            return CodexModelsClientCompatibilityVersion;
+        }
+    }
+
+    private static Uri BuildModelsUri(string clientVersion)
     {
         return new Uri(
-            $"{OpenAiCodexProviderRegistration.ModelsEndpoint}?client_version={Uri.EscapeDataString(CodexModelsClientCompatibilityVersion)}");
+            $"{OpenAiCodexProviderRegistration.ModelsEndpoint}?client_version={Uri.EscapeDataString(clientVersion)}");
     }
 
     private static OpenAiCodexModelConfiguration? ProjectModel(JsonElement element)

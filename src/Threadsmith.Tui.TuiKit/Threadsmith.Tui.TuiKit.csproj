@@ -4,8 +4,10 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Threadsmith.Interaction/Threadsmith.Interaction.csproj" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" />
     <PackageReference Include="TUIKit" />
     <InternalsVisibleTo Include="Threadsmith.App" />
     <InternalsVisibleTo Include="Threadsmith.CoreRuntime.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.SessionStatus.Tests" />
   </ItemGroup>
 </Project>

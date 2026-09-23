@@ -6,7 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
-using Threadsmith.Tui;
+using Threadsmith.Tui.TuiKit;
 using Xunit;
 
 /// <summary>Verifies deterministic Plan-49 operation-duration formatting boundaries.</summary>
@@ -70,48 +70,6 @@ public static class OperationDurationFormatterTests
         timeProvider.Advance(TimeSpan.FromSeconds(8.65));
 
         Assert.Equal("8.6s", OperationDurationFormatter.FormatElapsed(timeProvider, started));
-    }
-
-    /// <summary>Plan and mutation review boundaries end transient activity before prompting.</summary>
-    [Fact]
-    public static void EndsTransientActivity_ReviewBoundaries_ReturnsTrue()
-    {
-        var sessionId = SessionId.New();
-        var occurredAt = DateTimeOffset.UtcNow;
-
-        Assert.True(PrettyPromptConsoleSurface.EndsTransientActivity(
-            new PlanProposed(sessionId, occurredAt, "plan"),
-            emittedModelOutput: false));
-        Assert.True(PrettyPromptConsoleSurface.EndsTransientActivity(
-            new MutationSetProposed(sessionId, occurredAt, MutationSetId.New()),
-            emittedModelOutput: false));
-        Assert.False(PrettyPromptConsoleSurface.EndsTransientActivity(
-            new ModelReasoningObserved(sessionId, occurredAt, "reasoning"),
-            emittedModelOutput: false));
-    }
-
-    /// <summary>Cancellation stops a pending activity refresh even when its operation has not completed.</summary>
-    [Fact]
-    public static async Task RefreshActivityUntilCompletedAsync_CancelledDisplay_StopsPromptly()
-    {
-        var operation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var cancellation = new CancellationTokenSource();
-        var activity = new InteractionActivity(
-            "TOOLS: pending",
-            TimeProvider.System.GetTimestamp(),
-            ShowDuration: true,
-            TimeProvider.System);
-        var display = PrettyPromptConsoleSurface.RefreshActivityUntilCompletedAsync(
-            activity,
-            operation.Task,
-            _ => { },
-            cancellation.Token);
-
-        await cancellation.CancelAsync();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => display.WaitAsync(TimeSpan.FromSeconds(2)));
-        Assert.False(operation.Task.IsCompleted);
     }
 
     /// <summary>Display configuration defaults on, accepts layered false, and diagnoses malformed values.</summary>

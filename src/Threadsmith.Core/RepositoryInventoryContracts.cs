@@ -292,7 +292,8 @@ public sealed record DotNetInventoryResult(
     SemanticConfidenceLevel Confidence,
     IReadOnlyList<string> Omissions,
     bool UsedEvaluation,
-    bool UsedRestoreAssets);
+    bool UsedRestoreAssets,
+    IReadOnlyList<PackageReferenceInventory> CentralPackageVersions);
 
 /// <summary>Host boundary for normalized .NET inventory.</summary>
 public interface IDotNetInventoryService

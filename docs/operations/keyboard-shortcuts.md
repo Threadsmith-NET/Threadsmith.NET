@@ -1,6 +1,6 @@
 # Interactive Terminal Commands and Keys
 
-Bare `--tui` and `--tui=tuikit` launch the default retained TUIKit frontend. `--tui=original` launches the previous PrettyPrompt/Spectre frontend.
+Bare `--tui` and `--tui=tuikit` launch the retained TUIKit frontend.
 
 ## Default TUIKit frontend
 
@@ -24,21 +24,9 @@ Bare `--tui` and `--tui=tuikit` launch the default retained TUIKit frontend. `--
 
 A leading partial slash token shows up to six autocomplete rows in catalog order. While visible, unmodified arrows/PageUp/PageDown/Home/End select a suggestion, `Tab` or `Enter` inserts it, and `Esc` dismisses only the suggestions. Completion never executes or submits a command, adds a space, or changes submission history; undo restores the previous draft in one step. Add any arguments and press Enter separately to submit. Ctrl+Enter still inserts a newline; hidden suggestions leave normal Tab indentation and editor navigation unchanged.
 
-Discovery is absent for exact command names, arguments, prose, multiline input, selected text, secondary/steering prompts, other modals, transcript focus, and terminals below 40 x 12. Argument completion is not supported. Palette queries are limited to 256 characters and single-line paste; command discovery performs no host queries. F3 and this retained autocomplete are TUIKit-only; the original frontend is unchanged.
+Discovery is absent for exact command names, arguments, prose, multiline input, selected text, secondary/steering prompts, other modals, transcript focus, and terminals below 40 x 12. Argument completion is not supported. Palette queries are limited to 256 characters and single-line paste; command discovery performs no host queries.
 
 Selectors are centered, padded below their headings, and block background mouse input. `/tools`, `/hooks`/`/hooks list`, `/mcp`/`/mcp list`, `/extensions`, and MCP tool availability use keyboard-only checkbox trees: arrows navigate, Space applies now, typing/paste filters, F2 shows details, F6 copies selected detail text, and Esc/Enter closes while keeping acknowledged changes. Group changes affect only currently visible eligible members; essential and consent restrictions remain enforced by the host.
-
-## Original PrettyPrompt/Spectre frontend
-
-- `Enter`: submit the current composer text. While a conversation run is active and no composer is visible, request one steering prompt at the next safe model/tool boundary; repeated Enter presses reuse the same pending request.
-- `Shift+Enter`: insert a soft newline in the multiline composer.
-- `Ctrl+V` or `Shift+Insert`: paste clipboard text into the composer as one operation.
-- `Ctrl+C`: cancel the current composer input or an active run. When the terminal emulator has a native selection, it copies that selection instead.
-- `Esc Esc`: while a conversation run is active, cooperatively cancel it when both unmodified Escape presses occur within 850 ms.
-- `Ctrl+Shift+C`: copy a PrettyPrompt editor selection where supported.
-- `Ctrl+T`: on an empty composer, toggle live streaming of future sanitized reasoning. Reasoning streaming is off by default.
-- Mouse drag: create a native terminal selection across composer text or any transcript output.
-- Terminal keyboard mark mode: select transcript or composer output without the mouse; the activation key is terminal-specific.
 
 ## Shared interactive commands
 
@@ -53,14 +41,14 @@ Selectors are centered, padded below their headings, and block background mouse 
 - `/quit`: exit cleanly.
 - `/reasoning [none|minimal|low|medium|high]`: set reasoning effort when the active model supports the requested level.
 - `/semantic_refresh`: force and await one complete semantic refresh without creating a model run. Requires a bound repository and solution.
-- `/theme`: choose one built-in or configured theme with the filtered Up/Down/Enter modal; Esc cancels. The original frontend uses a numbered selector.
+- `/theme`: choose one built-in or configured theme with the filtered Up/Down/Enter modal; Esc cancels.
 - `/theme <id>`: switch directly and save the user-level default; `/theme current` reports the effective theme.
-- `/thinking [on|off]`: enable, disable, or toggle live streaming of future sanitized reasoning using the `Reasoning` semantic style, equivalent to `Ctrl+T` on an empty composer when no argument is supplied. Previously displayed reasoning remains in the retained transcript or the original frontend’s native scrollback.
+- `/thinking [on|off]`: enable, disable, or toggle live streaming of future sanitized reasoning using the `Reasoning` semantic style, equivalent to `Ctrl+T` on an empty composer when no argument is supplied. Previously displayed reasoning remains in the retained transcript.
 - `/trust [inspect|read|build|mutation|automation]`: show the trust selector or set/upgrade the active repository trust directly. Persisted higher trust is not downgraded.
 
-Repository trust and multi-solution choices use selection dialogs; TUIKit themes use a filtered single-selection modal. The original frontend provides numbered choices with Up/Down plus Enter. Plan and mutation approvals appear as numbered, fail-closed review prompts. Invalid choices do not authorize an action. State-changing choices submit application commands; PrettyPrompt and Spectre.Console remain terminal adapters and do not call execution services directly.
+Repository trust and multi-solution choices use selection dialogs; themes use a filtered single-selection modal. Plan and mutation approvals remain fail-closed. Invalid choices do not authorize an action. State-changing choices submit application commands; the terminal adapter does not call execution services directly.
 
-The default TUIKit prompt is `Threadsmith >`; its fixed footer identifies the repository. Agent tabs have a one-cell gap using `AgentTabHeaderRole`. The original frontend uses the repository directory name, such as `main >`, and updates it after `/open`. Names are bounded for terminal stability. TUIKit keeps activity and session status in fixed rows. During a turn, MAIN shows `ENTER to steer; ESC-ESC to cancel` after its activity timer; this transient hint disappears at completion or pause. In the original frontend, a responsive composer-adjacent status row appears immediately before the prompt; it remains ordinary native scrollback and is refreshed at the next prompt boundary rather than pinned with cursor controls.
+The prompt is `Threadsmith >`; its fixed footer identifies the repository. Agent tabs have a one-cell gap using `AgentTabHeaderRole`. Names are bounded for terminal stability. TUIKit keeps activity and session status in fixed rows. During a turn, MAIN shows `ENTER to steer; ESC-ESC to cancel` after its activity timer; this transient hint disappears at completion or pause.
 
 In the MCP connection checkbox modal, F3 opens actions for the selected OAuth-enabled profile. **Sign in / Authenticate** starts the existing browser flow; Esc cancels an active sign-in attempt and returns to the list. Space still controls connection checkboxes and group toggles. F2 shows details.
 

@@ -538,11 +538,10 @@ public sealed record DotNetInventoryInput;
 public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInventoryResult>
 {
     private static readonly JsonSerializerOptions ModelJsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly SemanticResourceLimits _limits;
     private readonly IDotNetInventoryService _service;
 
     /// <summary>Initializes a new instance of the <see cref="DotNetInventoryTool"/> class.</summary>
-    public DotNetInventoryTool(IDotNetInventoryService service, IPromptLoader promptLoader, SemanticResourceLimits? limits = null)
+    public DotNetInventoryTool(IDotNetInventoryService service, IPromptLoader promptLoader)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(promptLoader);
@@ -558,8 +557,6 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
         {
             RequiresWorkspace = true,
         };
-        _limits = limits ?? new();
-        _limits.Validate();
         _service = service;
     }
 
@@ -617,80 +614,34 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
         };
     }
 
-    private string CreateModelResultContent(DotNetInventoryResult result)
+    private static string CreateModelResultContent(DotNetInventoryResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         var projects = result.Solution.Projects
-            .Take(_limits.MaximumModelProjects)
             .Select(project => new DotNetInventoryModelProject(
-                Bound(project.Name, 128),
-                Bound(project.Path, 512),
+                project.Name,
+                project.Path,
                 project.IsTestProject,
-                project.TargetFrameworks.Take(_limits.MaximumModelTargetFrameworks)
-                    .Select(framework => Bound(framework.Name, 64)).ToArray(),
-                project.ProjectReferences.Take(_limits.MaximumModelItemsPerProject)
-                    .Select(reference => Bound(reference.Path, 512)).ToArray(),
-                project.PackageReferences.Take(_limits.MaximumModelItemsPerProject)
+                project.TargetFrameworks.Select(framework => framework.Name).ToArray(),
+                project.ProjectReferences.Select(reference => reference.Path).ToArray(),
+                project.PackageReferences
                     .Select(package => new DotNetInventoryModelPackage(
-                        Bound(package.Id, 128),
-                        BoundNullable(package.Version, 128),
+                        package.Id,
+                        package.Version,
                         package.VersionSource.ToString()))
-                    .ToArray(),
-                Math.Max(0, project.TargetFrameworks.Count - _limits.MaximumModelTargetFrameworks),
-                Math.Max(0, project.ProjectReferences.Count - _limits.MaximumModelItemsPerProject),
-                Math.Max(0, project.PackageReferences.Count - _limits.MaximumModelItemsPerProject)))
+                    .ToArray()))
             .ToArray();
         var projection = new DotNetInventoryModelProjection(
-            Bound(result.Solution.Path, 512),
+            result.Solution.Path,
             result.Confidence.ToString(),
             result.Solution.Projects.Count,
             projects,
-            Math.Max(0, result.Solution.Projects.Count - _limits.MaximumModelProjects),
-            result.Omissions.Take(_limits.MaximumModelOmissions)
-                .Select(omission => Bound(omission, 512)).ToArray(),
-            Math.Max(0, result.Omissions.Count - _limits.MaximumModelOmissions));
-        var content = JsonSerializer.Serialize(projection, ModelJsonOptions);
-        if (content.Length <= _limits.MaximumModelResultCharacters)
-        {
-            return content;
-        }
-
-        var summarizedProjects = projects.Select(project => project with
-        {
-            ProjectReferences = [],
-            Packages = [],
-            OmittedProjectReferences = project.OmittedProjectReferences + project.ProjectReferences.Count,
-            OmittedPackages = project.OmittedPackages + project.Packages.Count,
-        }).ToArray();
-        content = JsonSerializer.Serialize(
-            projection with { Projects = summarizedProjects },
-            ModelJsonOptions);
-        return content.Length <= _limits.MaximumModelResultCharacters
-            ? content
-            : Bound("Inventory omitted: the summarized result exceeds the configured model-result character limit.", _limits.MaximumModelResultCharacters);
-    }
-
-    private static string Bound(string value, int maximumCharacters)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCharacters);
-        var builder = new StringBuilder(Math.Min(value.Length, maximumCharacters));
-        foreach (var rune in value.EnumerateRunes())
-        {
-            if (builder.Length + rune.Utf16SequenceLength > maximumCharacters)
-            {
-                break;
-            }
-
-            builder.Append(rune.ToString());
-        }
-
-        return builder.ToString();
-    }
-
-    private static string? BoundNullable(string? value, int maximumCharacters)
-    {
-        return value is null ? null : Bound(value, maximumCharacters);
+            result.CentralPackageVersions.Select(package => new DotNetInventoryModelPackage(
+                package.Id,
+                package.Version,
+                package.VersionSource.ToString())).ToArray(),
+            result.Omissions);
+        return JsonSerializer.Serialize(projection, ModelJsonOptions);
     }
 
     private sealed record DotNetInventoryModelPackage(
@@ -704,19 +655,15 @@ public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInven
         bool IsTestProject,
         IReadOnlyList<string> TargetFrameworks,
         IReadOnlyList<string> ProjectReferences,
-        IReadOnlyList<DotNetInventoryModelPackage> Packages,
-        int OmittedTargetFrameworks,
-        int OmittedProjectReferences,
-        int OmittedPackages);
+        IReadOnlyList<DotNetInventoryModelPackage> Packages);
 
     private sealed record DotNetInventoryModelProjection(
         string Solution,
         string Confidence,
         int ProjectCount,
         IReadOnlyList<DotNetInventoryModelProject> Projects,
-        int OmittedProjects,
-        IReadOnlyList<string> Omissions,
-        int OmittedOmissions);
+        IReadOnlyList<DotNetInventoryModelPackage> CentralPackageVersions,
+        IReadOnlyList<string> Omissions);
 }
 
 /// <summary>Creates compact model-facing Git projections while retaining complete host results.</summary>

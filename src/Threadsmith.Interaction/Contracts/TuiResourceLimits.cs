@@ -3,9 +3,6 @@ namespace Threadsmith.Interaction.Contracts;
 /// <summary>Resource limits for interactive presentation.</summary>
 public sealed record TuiResourceLimits
 {
-    /// <summary>Maximum buffered keystrokes in the PrettyPrompt frontend.</summary>
-    public int MaximumBufferedKeys { get; init; } = 100000;
-
     /// <summary>Maximum editable draft and pasted UTF-8 bytes.</summary>
     public int MaximumDraftBytes { get; init; } = 1048576;
 
@@ -99,7 +96,6 @@ public sealed record TuiResourceLimits
     /// <summary>Rejects nonpositive limits.</summary>
     public void Validate()
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumBufferedKeys);
         ArgumentNullException.ThrowIfNull(Markdown);
         Markdown.Validate();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFilterCharacters);

@@ -6,21 +6,19 @@ using Xunit;
 /// <summary>Checks default and explicit frontend selection without starting a terminal.</summary>
 public static class FrontendSelectionTests
 {
-    /// <summary>Bare TUI selection uses TUIKit while the original frontend remains explicit.</summary>
+    /// <summary>Bare and explicit TUI selection use TUIKit.</summary>
     [Theory]
-    [InlineData("--tui", true)]
-    [InlineData("--tui=tuikit", true)]
-    [InlineData("--TUI=TUIKit", true)]
-    [InlineData("--tui=original", false)]
-    [InlineData("--TUI=Original", false)]
-    public static void SelectsFrontend(string argument, bool expectedTuiKit)
+    [InlineData("--tui")]
+    [InlineData("--tui=tuikit")]
+    [InlineData("--TUI=TUIKit")]
+    public static void SelectsFrontend(string argument)
     {
         var parsed = CommandLineParser.Parse([argument, "request"]);
         Assert.Null(parsed.Error);
         var options = Assert.IsType<CommandLineOptions>(parsed.Options);
         Assert.True(options.UseInteractiveTerminal);
         Assert.Equal(
-            expectedTuiKit ? InteractiveFrontendKind.TuiKit : InteractiveFrontendKind.Original,
+            InteractiveFrontendKind.TuiKit,
             options.InteractiveFrontend);
         Assert.Equal(["request"], options.RequestArguments);
     }
@@ -29,6 +27,7 @@ public static class FrontendSelectionTests
     [Theory]
     [InlineData("--tui=")]
     [InlineData("--tui=pretty")]
+    [InlineData("--tui=original")]
     [InlineData("--tui=unknown")]
     public static void RejectsUnknownFrontend(string argument)
     {

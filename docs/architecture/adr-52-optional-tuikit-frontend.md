@@ -1,6 +1,6 @@
 # ADR-52: Selectable TUIKit Frontend
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-62
 - **Date:** 2026-09-04; amended 2026-09-05 and 2026-09-10
 - **Deciders:** Threadsmith.NET maintainers
 

@@ -13,8 +13,8 @@ using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.DotNet;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Models;
-using Threadsmith.Tui;
 using Threadsmith.Workspaces;
 using Xunit;
 
@@ -310,7 +310,7 @@ public static partial class Milestone5Tests
             "preview"));
         await using var workspace = await TransactionalWorkspace.CreateAsync(repository.Baseline, events);
         _ = await workspace.StageAsync(set);
-        var presenter = new TuiPresenter(
+        var presenter = new InteractionPresenter(
             new CommandDispatcher(Array.Empty<object>()),
             projections);
 

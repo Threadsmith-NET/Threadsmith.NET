@@ -10,10 +10,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Models;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
-using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Verifies Milestone 4 governed context and structured planning behavior.</summary>
@@ -4268,13 +4268,13 @@ public static class Milestone4Tests
 
     /// <summary>The presenter renders the plan, token pressure, evidence rationale, and prompt assets.</summary>
     [Fact]
-    public static async Task TuiPresenter_RendersPlanAndContextInspector()
+    public static async Task InteractionPresenter_RendersPlanAndContextInspector()
     {
         await using var harness = await PlanningHarness.CreateAsync([CreatePlan("visible plan", 1)]);
         var runId = await harness.Dispatcher.DispatchAsync(
             new SubmitRequestCommand(harness.SessionId, "Render planning"));
         _ = await harness.WaitForPhaseAsync(RunPhase.AwaitingPlanApproval);
-        var presenter = new TuiPresenter(harness.Dispatcher, harness.Projections);
+        var presenter = new InteractionPresenter(harness.Dispatcher, harness.Projections);
         var snapshot = await presenter.RenderAsync(harness.SessionId);
 
         Assert.Contains("visible plan", snapshot.Workspace, StringComparison.Ordinal);
@@ -5025,8 +5025,8 @@ public static class Milestone4Tests
                     Output = new ToolRequestModelOutput(
                         "search",
                         _filePath is not null
-                            ? JsonSerializer.Serialize(new { query = "SectorEntityStandardizer", path = _filePath })
-                            : "{\"query\":\"SectorEntityStandardizer\"}"),
+                            ? JsonSerializer.Serialize(new { query = "SectorEntityStandardizer", path = _filePath, glob = _fileScoped ? "*" : "*.cs" })
+                            : "{\"query\":\"SectorEntityStandardizer\",\"glob\":\"*.cs\"}"),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };
                 yield break;

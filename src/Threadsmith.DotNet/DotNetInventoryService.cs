@@ -54,15 +54,8 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
         var semanticProjects = _registry.GetProjects(request.WorkspaceId);
         var confidence = _registry.GetConfidence(request.WorkspaceId);
         var omissions = new List<string>();
-        if (semanticProjects.Count > _resourceLimits.MaximumInventoryProjects)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact(
-                $"Project inventory was limited to {_resourceLimits.MaximumInventoryProjects} entries."));
-        }
-
         var centralVersions = ReadCentralVersions(repositoryRoot, omissions);
         ProjectInventory[] projects = [.. semanticProjects
-            .Take(_resourceLimits.MaximumInventoryProjects)
             .Select(project => CreateProject(repositoryRoot, project, centralVersions, omissions, cancellationToken))
             .OrderBy(project => project.Path, StringComparer.OrdinalIgnoreCase)];
         if (projects.Length == 0)
@@ -80,7 +73,10 @@ public sealed class DotNetInventoryService : IDotNetInventoryService
             confidence,
             omissions.Distinct(StringComparer.Ordinal).ToArray(),
             confidence >= SemanticConfidenceLevel.ProjectGraphOnly,
-            false);
+            false,
+            centralVersions.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => new PackageReferenceInventory(pair.Key, pair.Value, PackageVersionSource.Central))
+                .ToArray());
         return result;
     }
 

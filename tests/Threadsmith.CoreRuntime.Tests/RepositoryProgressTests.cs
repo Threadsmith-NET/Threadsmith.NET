@@ -10,14 +10,18 @@ public static class RepositoryProgressTests
 {
     /// <summary>Blocked opening and restore show progress; every terminal outcome releases the indicator.</summary>
     [Theory]
-    [InlineData("complete")]
-    [InlineData("fail")]
-    [InlineData("cancel")]
-    public static async Task RepositoryWorkflow_ReportsProgressWhileOperationsArePending(string outcome)
+    [InlineData("complete", "sample.sln", "Loading solution ...")]
+    [InlineData("fail", "sample.sln", "Loading solution ...")]
+    [InlineData("cancel", "sample.sln", "Loading solution ...")]
+    [InlineData("complete", "sample.csproj", "Loading project ...")]
+    public static async Task RepositoryWorkflow_ReportsProgressWhileOperationsArePending(
+        string outcome,
+        string candidate,
+        string expectedLoadingLabel)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeout.Token);
-        var handler = new GatedRepositoryHandler();
+        var handler = new GatedRepositoryHandler(candidate);
         var openVisible = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var solutionVisible = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var labels = new List<string>();
@@ -54,7 +58,7 @@ public static class RepositoryProgressTests
             await solutionVisible.Task.WaitAsync(timeout.Token);
             Assert.False(workflow.IsCompleted);
             Assert.Equal(1, activeIndicators);
-            Assert.Equal(["Opening repository...", "Loading solution and restoring packages..."], labels);
+            Assert.Equal(["Opening repository...", expectedLoadingLabel], labels);
             if (outcome == "cancel")
             {
                 await operationCancellation.CancelAsync();
@@ -94,6 +98,12 @@ public static class RepositoryProgressTests
         ICommandHandler<RecordBaselineCommand, WorkspaceBaseline>
     {
         private readonly WorkspaceId _workspace = WorkspaceId.New();
+        private readonly string _candidate;
+
+        internal GatedRepositoryHandler(string candidate)
+        {
+            _candidate = candidate;
+        }
 
         internal TaskCompletionSource OpenGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -114,7 +124,7 @@ public static class RepositoryProgressTests
                 new RepositoryTrustState(command.RepositoryPath, command.RequestedTrust, DateTimeOffset.UtcNow),
                 new RepositoryConfigurationSnapshot(null, [], []),
                 null,
-                ["sample.sln"]);
+                [_candidate]);
         }
 
         public async Task<SolutionSelectionResult> HandleAsync(SelectSolutionCommand command, CancellationToken cancellationToken = default)

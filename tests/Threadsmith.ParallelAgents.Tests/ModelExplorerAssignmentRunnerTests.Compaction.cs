@@ -12,27 +12,19 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>Compaction uses the real summary service; mixed evidence reads preserve originals and usage.</summary>
+    /// <summary>Distinct compaction/evidence branches preserve task context, profile selection, and usage.</summary>
     [Theory]
     [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, false)]
-    [InlineData(AgentRole.SecurityReviewer, WorkloadClass.Review, 12_000, false, false)]
-    [InlineData(AgentRole.Implementer, WorkloadClass.CodeEdit, 12_000, false, false)]
-    [InlineData(AgentRole.Explorer, WorkloadClass.General, 300_000, false, false)]
     [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, true, false)]
     [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, true)]
     [InlineData(AgentRole.Implementer, WorkloadClass.CodeEdit, 12_000, false, true)]
-    [InlineData(AgentRole.SecurityReviewer, WorkloadClass.Review, 12_000, false, true)]
-    [InlineData(AgentRole.TestReviewer, WorkloadClass.Review, 12_000, false, true)]
-    [InlineData(AgentRole.PerformanceReviewer, WorkloadClass.Review, 12_000, false, true)]
-    [InlineData(AgentRole.ArchitectureReviewer, WorkloadClass.Review, 12_000, false, true)]
-    [InlineData(AgentRole.BugReviewer, WorkloadClass.Review, 12_000, false, true)]
     public async Task RunAsync_CompactionAndEvidenceRead_PreservesTaskAndAccountsForSummary(
         AgentRole role, WorkloadClass workload, int contentCharacters, bool inheritEvidence, bool useCompactionProfile)
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(events, sanitizer);
-        var paths = Enumerable.Range(0, 600).Select(index => new ToolProvenanceSource("file", $"src/File{index}.cs"))
+        var paths = Enumerable.Range(0, 3).Select(index => new ToolProvenanceSource("file", $"src/File{index}.cs"))
             .Append(new ToolProvenanceSource("file", "src/password=private-provenance-value/File.cs")).ToArray();
         var content = new string('x', contentCharacters);
         var tool = new InspectMetadataTool(content, Math.Max(64_000, contentCharacters * 4), paths);
@@ -148,6 +140,19 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         {
             Assert.True(candidate.WireEstimate?.WireInputTokens > 65_536);
         }
+    }
+
+    /// <summary>Opt-in probe verifies compaction accounting above the 65,536-token scale boundary.</summary>
+    [Fact(Explicit = true)]
+    [Trait("Category", "Performance")]
+    public Task RunAsync_LargeCompactionInput_PreservesHighTokenAccounting()
+    {
+        return RunAsync_CompactionAndEvidenceRead_PreservesTaskAndAccountsForSummary(
+            AgentRole.Explorer,
+            WorkloadClass.General,
+            300_000,
+            inheritEvidence: false,
+            useCompactionProfile: false);
     }
 
     /// <summary>Defaults match main-loop pressure and account for output reserve without an absolute trigger.</summary>

@@ -23,7 +23,8 @@ internal static class SemanticFirstSearchPolicy
         if (invocationContext?.WorkspaceId is null
             || semanticToolAttempted
             || !string.Equals(tool.ToolName, "search", StringComparison.OrdinalIgnoreCase)
-            || !TryGetDiscoverySearchQuery(tool.ArgumentsJson, invocationContext.RepositoryPath, out var query)
+            || !TryGetDiscoverySearchQuery(tool.ArgumentsJson, invocationContext.RepositoryPath, out var query, out var glob)
+            || !TargetsCSharpFiles(query, glob)
             || !LooksLikeCSharpSymbolOrFileQuery(query))
         {
             return false;
@@ -84,9 +85,14 @@ internal static class SemanticFirstSearchPolicy
             || string.Equals(toolName, "generated_code_query", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool TryGetDiscoverySearchQuery(string argumentsJson, string repositoryPath, [NotNullWhen(true)] out string? query)
+    private static bool TryGetDiscoverySearchQuery(
+        string argumentsJson,
+        string repositoryPath,
+        [NotNullWhen(true)] out string? query,
+        out string? glob)
     {
         query = null;
+        glob = null;
         try
         {
             using var document = JsonDocument.Parse(argumentsJson);
@@ -112,12 +118,39 @@ internal static class SemanticFirstSearchPolicy
             }
 
             query = queryElement.GetString();
+            if (document.RootElement.TryGetProperty("glob", out var globElement)
+                && globElement.ValueKind == JsonValueKind.String)
+            {
+                glob = globElement.GetString();
+            }
+
             return !string.IsNullOrWhiteSpace(query);
         }
         catch (Exception exception) when (exception is JsonException or ArgumentException or NotSupportedException)
         {
             return false;
         }
+    }
+
+    private static bool TargetsCSharpFiles(string query, string? glob)
+    {
+        if (string.IsNullOrWhiteSpace(glob) || glob == "*")
+        {
+            return query.Trim().EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+        }
+
+        var filePattern = glob.Replace('\\', '/').Split('/').Last();
+        if (filePattern.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var extensionListStart = filePattern.LastIndexOf(".{", StringComparison.Ordinal);
+        return extensionListStart >= 0
+            && filePattern.EndsWith('}')
+            && filePattern[(extensionListStart + 2)..^1]
+                .Split(',', StringSplitOptions.TrimEntries)
+                .Any(extension => extension.Equals("cs", StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool LooksLikeCSharpSymbolOrFileQuery(string query)

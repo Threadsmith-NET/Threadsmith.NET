@@ -101,7 +101,6 @@ public sealed partial class InteractionCoordinator
             return;
         }
 
-        // The original frontend uses the same host operations through sequential selections.
         while (!cancellationToken.IsCancellationRequested)
         {
             var entries = candidates.ToArray();

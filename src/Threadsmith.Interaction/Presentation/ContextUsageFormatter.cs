@@ -35,7 +35,7 @@ public static class ContextUsageFormatter
     /// <summary>Bounds and neutralizes external display labels.</summary>
     public static string Label(string value) => TerminalControlEncoder.Encode(value.Length > 512 ? value[..512] + "…" : value).ReplaceLineEndings(" ").Replace('\t', ' ');
 
-    /// <summary>Formats the identical frozen snapshot for the original frontend.</summary>
+    /// <summary>Formats the identical frozen snapshot for interactive presentation.</summary>
     public static string Format(ContextUsageSnapshot? snapshot)
     {
         if (snapshot is null)

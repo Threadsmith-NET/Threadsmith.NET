@@ -354,6 +354,7 @@ public static class Program
 
                 var accessToken = await oauth.GetAccessTokenAsync(cancellationToken)
                     ?? throw new InvalidOperationException("Codex authentication completed without an access token.");
+                await Console.Out.WriteLineAsync("Getting latest Codex model list...");
                 var catalog = await new OpenAiCodexCatalogClient(httpClient)
                     .DiscoverAsync(accessToken, cancellationToken: cancellationToken);
                 await cache.SaveAsync(catalog, cancellationToken);

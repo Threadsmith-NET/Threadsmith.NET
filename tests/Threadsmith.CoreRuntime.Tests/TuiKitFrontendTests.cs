@@ -73,7 +73,7 @@ public static class TuiKitFrontendTests
     {
         const string source = "# Title\n\n**bold** *italic* ~~strike~~ `code` [link](https://example.com)\n\n> quote\n\n- [x] checked\n- plain\n\n1. ordered\n\n---\n\n```cs\nvar value = 1;\n```\n\n| Name | Value |\n|---|---|\n| first | detail |\n";
         var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
-        Assert.Equal(Threadsmith.Tui.TuiMarkdownLayout.Format(document, width), TuiMarkdownLayout.Format(document, width));
+        Assert.Equal(Threadsmith.Tui.TuiKit.TuiMarkdownLayout.Format(document, width), TuiMarkdownLayout.Format(document, width));
     }
 
     /// <summary>Grapheme edits and undo preserve exact Unicode and multiline paste.</summary>

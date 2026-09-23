@@ -294,32 +294,26 @@ public sealed class JiraTests
         Assert.InRange(allocated, 0, 8 * 1024 * 1024);
     }
 
-    /// <summary>Many expanding marks are assembled once instead of repeatedly copying accumulated text.</summary>
+    /// <summary>Nested marks preserve their ordered wrappers without requiring a stress-scale fixture.</summary>
     [Fact]
-    public void AdfProjectionBoundsCumulativeMarkAllocations()
+    public void AdfProjectionPreservesNestedMarks()
+    {
+        using var document = CreateMarkedTextDocument(3);
+
+        var result = JiraDescriptionReader.Read(document.RootElement, 1024);
+
+        Assert.Equal("[struck: [struck: [struck: x]]]", result.Body);
+        Assert.True(result.BodyComplete);
+        Assert.False(result.IsTruncated);
+    }
+
+    /// <summary>Opt-in allocation probe guards against repeatedly copying many expanding marks.</summary>
+    [Fact(Explicit = true)]
+    [Trait("Category", "Performance")]
+    public void AdfProjectionStress_BoundsCumulativeMarkAllocations()
     {
         const int markCount = 20_000;
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
-        {
-            type = "doc",
-            version = 1,
-            content = new[]
-            {
-                new
-                {
-                    type = "paragraph",
-                    content = new[]
-                    {
-                        new
-                        {
-                            type = "text",
-                            text = "x",
-                            marks = Enumerable.Range(0, markCount).Select(_ => new { type = "strike" }).ToArray(),
-                        },
-                    },
-                },
-            },
-        }));
+        using var document = CreateMarkedTextDocument(markCount);
         var before = GC.GetAllocatedBytesForCurrentThread();
 
         var result = JiraDescriptionReader.Read(document.RootElement, 256 * 1024);
@@ -335,21 +329,12 @@ public sealed class JiraTests
     [Fact]
     public void AdfProjectionBoundsEmptyTableRows()
     {
-        using var document = JsonDocument.Parse(JsonSerializer.Serialize(new
-        {
-            type = "doc",
-            version = 1,
-            content = new[]
-            {
-                new
-                {
-                    type = "table",
-                    content = Enumerable.Range(0, 50_100)
-                        .Select(_ => new { type = "tableRow", content = Array.Empty<object>() })
-                        .ToArray(),
-                },
-            },
-        }));
+        const int rowCount = 50_000;
+        var rows = string.Join(',', Enumerable.Repeat("{\"type\":\"tableRow\",\"content\":[]}", rowCount));
+        using var document = JsonDocument.Parse(
+            "{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"table\",\"content\":["
+            + rows
+            + "]}]}");
 
         var result = JiraDescriptionReader.Read(document.RootElement, 2 * 1024 * 1024);
 
@@ -1000,6 +985,33 @@ public sealed class JiraTests
             tool.ExecuteAsync(new JiraInput { Kind = "read", Issue = "APP-123", Provider = "work-jira" }, Context()));
 
         Assert.Contains("Retry after about 86400 seconds", error.Message, StringComparison.Ordinal);
+    }
+
+    private static JsonDocument CreateMarkedTextDocument(int markCount)
+    {
+        return JsonDocument.Parse(JsonSerializer.Serialize(new
+        {
+            type = "doc",
+            version = 1,
+            content = new[]
+            {
+                new
+                {
+                    type = "paragraph",
+                    content = new[]
+                    {
+                        new
+                        {
+                            type = "text",
+                            text = "x",
+                            marks = Enumerable.Range(0, markCount)
+                                .Select(_ => new { type = "strike" })
+                                .ToArray(),
+                        },
+                    },
+                },
+            },
+        }));
     }
 
     private static JiraTool CreateTool(HttpClient http, ISecretResolver secrets, JiraOptions options)

@@ -74,7 +74,6 @@ public static class DependencyDirectionTests
         "Threadsmith.Extensions.Abstractions",
         "Threadsmith.Extensions.Runtime",
         "Threadsmith.Interaction",
-        "Threadsmith.Tui",
         "Threadsmith.Tui.TuiKit",
         "Threadsmith.Cli",
         "Threadsmith.Mcp",
@@ -197,13 +196,13 @@ public static class DependencyDirectionTests
     public static void InteractionAndTuiPackagesAreIsolated()
     {
         var interactionPackages = GetPackageReferences("Threadsmith.Interaction").ToHashSet(StringComparer.Ordinal);
-        var tuiPackages = GetPackageReferences("Threadsmith.Tui").ToHashSet(StringComparer.Ordinal);
+        var tuiPackages = GetPackageReferences("Threadsmith.Tui.TuiKit").ToHashSet(StringComparer.Ordinal);
 
         Assert.DoesNotContain("PrettyPrompt", interactionPackages);
         Assert.DoesNotContain("Spectre.Console", interactionPackages);
         Assert.DoesNotContain("Markdig", tuiPackages);
-        Assert.Contains("PrettyPrompt", tuiPackages);
-        Assert.Contains("Spectre.Console", tuiPackages);
+        Assert.DoesNotContain("PrettyPrompt", tuiPackages);
+        Assert.DoesNotContain("Spectre.Console", tuiPackages);
     }
 
     /// <summary>Public interaction signatures expose only Threadsmith and framework-owned types.</summary>
@@ -225,23 +224,13 @@ public static class DependencyDirectionTests
 
     /// <summary>The current shell contains frontend adaptation and delegation, not shared workflows.</summary>
     [Fact]
-    public static void ConversationalShellRemainsAThinFrontendFacade()
+    public static void InteractiveRunnerUsesOnlyTuiKit()
     {
-        var path = Path.Combine(RepoRoot, "src", "Threadsmith.Tui", "ConversationalShell.cs");
+        var path = Path.Combine(RepoRoot, "src", "Threadsmith.App", "InteractiveFrontendRunner.cs");
         var source = File.ReadAllText(path);
-        string[] forbiddenImplementations =
-        [
-            "InteractiveDecisionClassifier",
-            "InteractionEventDispatcher",
-            "InteractionInputReader.ReadSecondaryAsync",
-            "MarkdownParser",
-            "new ModelAnswerCollector(",
-            "ConversationTranscript",
-        ];
-
-        Assert.All(
-            forbiddenImplementations,
-            forbidden => Assert.DoesNotContain(forbidden, source, StringComparison.Ordinal));
+        Assert.DoesNotContain("PrettyPrompt", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("InteractiveFrontendKind.Original", source, StringComparison.Ordinal);
+        Assert.Contains("new TuiKitSurface(", source, StringComparison.Ordinal);
         Assert.Contains("new InteractionCoordinator(", source, StringComparison.Ordinal);
     }
 
@@ -370,7 +359,6 @@ public static class DependencyDirectionTests
             ["Threadsmith.Extensions.Runtime"] = ["Threadsmith.Core", "Threadsmith.Extensions.Abstractions", "Threadsmith.Telemetry", "Threadsmith.Tools"],
             ["Threadsmith.Interaction"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution"],
             ["Threadsmith.Tui.TuiKit"] = ["Threadsmith.Interaction"],
-            ["Threadsmith.Tui"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Execution", "Threadsmith.Interaction"],
             ["Threadsmith.Cli"] = ["Threadsmith.Core", "Threadsmith.Execution"],
             ["Threadsmith.Mcp"] = ["Threadsmith.Core", "Threadsmith.Tools", "Threadsmith.Extensions.Abstractions"],
         };
@@ -384,7 +372,7 @@ public static class DependencyDirectionTests
             "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Embeddings.Local", "Threadsmith.Reranking.Local",
             "Threadsmith.DotNet", "Threadsmith.Workspaces", "Threadsmith.Validation",
             "Threadsmith.Execution", "Threadsmith.Skills", "Threadsmith.Hooks", "Threadsmith.Extensions.Runtime", "Threadsmith.Interaction",
-            "Threadsmith.Tui", "Threadsmith.Tui.TuiKit", "Threadsmith.Cli", "Threadsmith.Mcp",
+            "Threadsmith.Tui.TuiKit", "Threadsmith.Cli", "Threadsmith.Mcp",
             "Threadsmith.Scripting.Worker",
         ];
         return graph;
@@ -404,8 +392,6 @@ public static class DependencyDirectionTests
             ["Threadsmith.Extensions.Abstractions"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
             // Interaction owns semantic coordination and Markdown generation, not terminal adaptation.
             ["Threadsmith.Interaction"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
-            // Tui references no persistence implementations (§8.1).
-            ["Threadsmith.Tui"] = ["TUIKit", "Microsoft.Data.Sqlite"],
             ["Threadsmith.Tui.TuiKit"] = ["PrettyPrompt", "Spectre.Console", "Markdig", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],
         };
         return graph;

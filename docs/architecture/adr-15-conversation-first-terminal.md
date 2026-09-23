@@ -1,6 +1,6 @@
 # ADR-15: Conversation-first inline terminal
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-62
 - **Date:** 2026-08-02
 - **Supersedes:** ADR-9 for the active interactive host; ADR-2 and ADR-9 remain historical evidence
 - **Evidence:** Interactive Terminal.Gui v1/v2 testing, Terminal.Gui issue #5323, and `Threadsmith.Milestone1.Tests`

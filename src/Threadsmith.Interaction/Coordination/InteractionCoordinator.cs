@@ -220,10 +220,17 @@ public sealed partial class InteractionCoordinator
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(modelStatus);
         var starting = true;
-        var controller = new InteractionController(_presenter, (label, operation, token) =>
-            starting && label.StartsWith("Loading solution", StringComparison.Ordinal) && _surface.Surface is IStartupProgressSurface startup
-                ? startup.ShowStartupAsync(StartupBanner, label, operation, token)
-                : _surface.ShowStatusUntilAsync(label, operation, token));
+        var controller = new InteractionController(
+            _presenter,
+            (label, operation, token) =>
+                starting && (label.StartsWith("Loading solution", StringComparison.Ordinal)
+                    || label.StartsWith("Loading project", StringComparison.Ordinal)) && _surface.Surface is IStartupProgressSurface startup
+                    ? startup.ShowStartupAsync(StartupBanner, label, operation, token)
+                    : _surface.ShowStatusUntilAsync(label, operation, token),
+            (solutionPath, token) =>
+                starting && _surface.Surface is IStartupProgressSurface startup
+                    ? startup.SetStartupDetailsAsync([$"Remembered: {Path.GetFileName(solutionPath)}"], token)
+                    : Task.CompletedTask);
         var sessionId = _sessionLifecycleAvailable
             ? (await controller.CreateNewSessionAsync(cancellationToken)).ActiveSession.SessionId
             : await controller.OpenAsync("Interactive", cancellationToken);
@@ -331,7 +338,7 @@ public sealed partial class InteractionCoordinator
             {
                 if (_surface.Surface is IStartupProgressSurface startup)
                 {
-                    await startup.ShowStartupAsync(StartupBanner, "Semantic loading", semanticCompletion.Task, lifetime.Token);
+                    await startup.ShowStartupAsync(StartupBanner, "Semantic Loading ...", semanticCompletion.Task, lifetime.Token);
                 }
                 else
                 {
@@ -1160,6 +1167,14 @@ public sealed partial class InteractionCoordinator
                     var action = arguments.Length == 3
                         ? Enum.Parse<ModelProviderAuthenticationAction>(arguments[2], ignoreCase: true)
                         : ModelProviderAuthenticationAction.Login;
+                    if (action == ModelProviderAuthenticationAction.Login)
+                    {
+                        await _surface.WriteAsync(
+                            "Signing in and getting latest Codex model list...\n",
+                            PresentationTextRole.Status,
+                            lifetime.Token);
+                    }
+
                     var result = await _presenter
                         .ManageModelProviderAuthenticationAsync("openai-codex", action, lifetime.Token);
                     var resultRole = result.IsAuthenticated
@@ -4598,19 +4613,11 @@ public sealed partial class InteractionCoordinator
                 && result.Repository is not null
                 && result.Solution is not null)
             {
-                var relativeSolution = Path.GetRelativePath(
-                        result.Repository.RepositoryPath,
-                        result.Solution.SolutionPath)
-                    .Replace('\\', '/');
-                string[] details = [$"Loading remembered solution: {relativeSolution}"];
-                if (isStartup && _surface.Surface is IStartupProgressSurface startup)
-                {
-                    await startup.SetStartupDetailsAsync(details, cancellationToken);
-                }
-                else
+                var detail = $"Remembered: {Path.GetFileName(result.Solution.SolutionPath)}";
+                if (!isStartup || _surface.Surface is not IStartupProgressSurface)
                 {
                     await _surface.WriteAsync(
-                        string.Join(Environment.NewLine, details) + Environment.NewLine,
+                        detail + Environment.NewLine,
                         PresentationTextRole.Status,
                         cancellationToken);
                 }

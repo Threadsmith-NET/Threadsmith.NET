@@ -17,7 +17,7 @@ This file consolidates the durable architecture contract from the strategy docum
 7. **Extensions contribute capabilities.** Via stable contracts; never mutate arbitrary host internals or retain undocumented host references. (§5.7)
 8. **Cancellation is end-to-end.** Every async boundary accepts/propagates `CancellationToken` — model streaming, tools, indexing, process, build/test, extension invocation, session, UI interruption. (§5.8) *Note: Roslyn/MSBuild APIs may be non-cooperatively cancellable — use the abandon-and-discard pattern with a bounded-wait backstop (see §13).*
 9. **Observability is not optional.** Every meaningful operation is a structured event and, where appropriate, an OTel span or metric. (§5.9)
-10. **External frameworks remain behind adapters.** PrettyPrompt, Spectre.Console, model SDKs, MCP SDK, Git libs, and DB libs are isolated behind host-owned interfaces. The architecture survives a library swap. (§5.10)
+10. **External frameworks remain behind adapters.** TUIKit, model SDKs, MCP SDK, Git libs, and DB libs are isolated behind host-owned interfaces. The architecture survives a library swap. (§5.10)
 
 ---
 
@@ -27,7 +27,7 @@ This file consolidates the durable architecture contract from the strategy docum
 |---|---|---|
 | Runtime | .NET 10 LTS | Current LTS baseline |
 | Language | C# | Native fit for Roslyn/MSBuild/DI/async/generators |
-| Interactive terminal | PrettyPrompt 6.0.4 + Spectre.Console 0.57 | Inline multiline composer, native terminal transcript/selection, bounded formatted output; ADR-15 |
+| Interactive terminal | TUIKit 0.10.1 | Full-screen composer, bounded retained transcript, and fixed status footer; ADR-62 |
 | Compiler services | Roslyn | Syntax, semantic models, symbols, diagnostics, refactoring, workspace |
 | Project evaluation | MSBuild APIs | Evaluated project graph + build configuration |
 | Extension isolation | Collectible `AssemblyLoadContext` | Modern unload mechanism; **not** a security boundary; **not** `AppDomain` |
@@ -90,7 +90,7 @@ src/
   Threadsmith.Persistence/               SQLite schema, event store, artifact storage, migrations, retention, session restore
   Threadsmith.Telemetry/                 Logging, metrics, tracing, redaction, diagnostic exports
   Threadsmith.Interaction/               Frontend-neutral commands, coordination, status, semantic presentation, Markdown generation
-  Threadsmith.Tui/                       PrettyPrompt/Spectre input, terminal layout/rendering, themes, compatibility facades
+  Threadsmith.Tui.TuiKit/                Interactive terminal input, layout/rendering, themes
   Threadsmith.Cli/                       Headless commands, scripting output, CI behavior
   Threadsmith.Mcp/                       MCP client adapters, connection lifecycle, tool/resource import, policy
 tests/  (per-subsystem .Tests + IntegrationTests + EndToEndTests)
@@ -102,7 +102,7 @@ docs/   (architecture | extension-authoring | operations | testing)
 - `Threadsmith.Core` references no UI, no Roslyn, no terminal library, no model-provider SDK, and no extension implementations.
 - `Threadsmith.Interaction` references Core, Context, Tools, and Execution; it owns frontend-neutral coordination and Markdig parsing but no terminal packages or authority.
 - Interactive frontends depend on `Threadsmith.Interaction`; the interaction layer never depends on a frontend.
-- `Threadsmith.Tui` may reference application contracts + projections, **not** internal persistence implementations.
+- `Threadsmith.Tui.TuiKit` may reference application contracts + projections, **not** internal persistence implementations.
 - `Threadsmith.Extensions.Abstractions` stays small + stable.
 - Extension implementations reference `Threadsmith.Extensions.Abstractions`, **not** `Threadsmith.Extensions.Runtime`.
 - Built-in capabilities use the same capability contracts as extensions where practical.

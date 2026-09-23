@@ -498,6 +498,7 @@ public sealed class Plan41InventoryToolTests
         Assert.Equal(load.Confidence, result.Confidence);
         Assert.NotNull(result.RepositoryRevision);
         Assert.Equal("Inventory.Tests.csproj", result.Solution.Path);
+        Assert.Contains(result.CentralPackageVersions, item => item.Id == "Unused.Pin" && item.Version == "2.0.0");
         var resources = service.GetResourcePaths(new DotNetInventoryRequest
         {
             WorkspaceId = workspaceId,
@@ -516,16 +517,8 @@ public sealed class Plan41InventoryToolTests
         Assert.NotNull(execution.ModelResultContent);
         Assert.Contains("Inventory.Tests.csproj", execution.ModelResultContent, StringComparison.Ordinal);
         Assert.Contains("Example.Package", execution.ModelResultContent, StringComparison.Ordinal);
-        foreach (var maximumCharacters in new[] { 1, 64, 256 })
-        {
-            var boundedTool = new DotNetInventoryTool(service, TestPromptLoader.Instance, new SemanticResourceLimits
-            {
-                MaximumModelResultCharacters = maximumCharacters,
-            });
-            var bounded = await boundedTool.ExecuteAsync(new DotNetInventoryInput(), CreateExecutionContext(repository.Path, workspaceId: workspaceId));
-            Assert.NotNull(bounded.ModelResultContent);
-            Assert.InRange(bounded.ModelResultContent.Length, 1, maximumCharacters);
-        }
+        Assert.Contains(result.CentralPackageVersions, item => item.Id == "Example.Package" && item.Version == "1.2.3");
+        Assert.Contains("Unused.Pin", execution.ModelResultContent, StringComparison.Ordinal);
 
         Assert.DoesNotContain("repositoryRevision", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("usedEvaluation", execution.ModelResultContent, StringComparison.OrdinalIgnoreCase);
@@ -548,6 +541,51 @@ public sealed class Plan41InventoryToolTests
                 allowedExecutables: ["git"],
                 workspaceId: workspaceId));
         Assert.False(decision.IsAllowed);
+    }
+
+    /// <summary>Verifies inventory projection includes all projects, references, and central pins.</summary>
+    [Fact]
+    public async Task DotNetInventory_ModelProjection_DoesNotDropPackageDeclarations()
+    {
+        // Arrange
+        await using var repository = await TestRepository.CreateAsync();
+        var packages = Enumerable.Range(1, 30)
+            .Select(index => new PackageReferenceInventory($"Example.Package.{index}", "1.0.0", PackageVersionSource.Central))
+            .ToArray();
+        var projects = Enumerable.Range(1, 30)
+            .Select(index => new ProjectInventory(
+                $"Project{index}",
+                $"Project{index}.csproj",
+                [new TargetFrameworkInventory("net10.0")],
+                [],
+                packages,
+                false,
+                SemanticConfidenceLevel.ProjectGraphOnly))
+            .ToArray();
+        var result = new DotNetInventoryResult(
+            new SolutionInventory("Threadsmith.sln", projects),
+            null,
+            SemanticConfidenceLevel.ProjectGraphOnly,
+            [],
+            true,
+            false,
+            [.. packages, new PackageReferenceInventory("Unused.Pin", "2.0.0", PackageVersionSource.Central)]);
+        var tool = new DotNetInventoryTool(new StubDotNetInventoryService(result), TestPromptLoader.Instance);
+
+        // Act
+        var execution = await tool.ExecuteAsync(
+            new DotNetInventoryInput(),
+            CreateExecutionContext(repository.Path, workspaceId: WorkspaceId.New()));
+
+        // Assert
+        Assert.NotNull(execution.ModelResultContent);
+        using var document = JsonDocument.Parse(execution.ModelResultContent);
+        var root = document.RootElement;
+        Assert.Equal(30, root.GetProperty("projects").GetArrayLength());
+        Assert.All(root.GetProperty("projects").EnumerateArray(), project =>
+            Assert.Equal(30, project.GetProperty("packages").GetArrayLength()));
+        Assert.Equal(31, root.GetProperty("centralPackageVersions").GetArrayLength());
+        Assert.Contains("Unused.Pin", execution.ModelResultContent, StringComparison.Ordinal);
     }
 
     /// <summary>Verifies every Plan 41 operation has a distinct typed schema.</summary>
@@ -662,6 +700,28 @@ public sealed class Plan41InventoryToolTests
         };
     }
 
+    private sealed class StubDotNetInventoryService : IDotNetInventoryService
+    {
+        private readonly DotNetInventoryResult _result;
+
+        public StubDotNetInventoryService(DotNetInventoryResult result)
+        {
+            _result = result;
+        }
+
+        public IReadOnlyList<string> GetResourcePaths(DotNetInventoryRequest request)
+        {
+            return [];
+        }
+
+        public Task<DotNetInventoryResult> GetInventoryAsync(
+            DotNetInventoryRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_result);
+        }
+    }
+
     private sealed class UnusedGitQueryService : IGitQueryService
     {
         public Task<string?> GetCurrentBranchAsync(
@@ -749,7 +809,7 @@ public sealed class Plan41InventoryToolTests
             var repository = await CreateAsync();
             await File.WriteAllTextAsync(
                 System.IO.Path.Combine(repository.Path, "Directory.Packages.props"),
-                "<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include=\"Example.Package\" Version=\"1.2.3\" /></ItemGroup></Project>");
+                "<Project><PropertyGroup><ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally></PropertyGroup><ItemGroup><PackageVersion Include=\"Example.Package\" Version=\"1.2.3\" /><PackageVersion Include=\"Unused.Pin\" Version=\"2.0.0\" /></ItemGroup></Project>");
             await File.WriteAllTextAsync(
                 System.IO.Path.Combine(repository.Path, "Inventory.Tests.csproj"),
                 "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include=\"Example.Package\" /></ItemGroup></Project>");

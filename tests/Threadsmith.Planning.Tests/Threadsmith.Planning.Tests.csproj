@@ -11,12 +11,12 @@
     <PackageReference Include="xunit.analyzers" />
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
     <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.Interaction\Threadsmith.Interaction.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Context\Threadsmith.Context.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Execution\Threadsmith.Execution.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models.Anthropic\Threadsmith.Models.Anthropic.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />
-    <ProjectReference Include="..\..\src\Threadsmith.Tui\Threadsmith.Tui.csproj" />
   </ItemGroup>
 </Project>

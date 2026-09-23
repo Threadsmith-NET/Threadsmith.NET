@@ -4,7 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Contracts;
-using Threadsmith.Tui;
+using Threadsmith.Tui.TuiKit;
 
 /// <summary>Resolves whole name lists independently across ordinary configuration providers.</summary>
 internal static class AgentNameConfiguration

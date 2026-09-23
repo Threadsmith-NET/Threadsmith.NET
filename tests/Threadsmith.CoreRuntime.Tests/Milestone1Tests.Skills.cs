@@ -5,7 +5,6 @@ using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Models;
-using Threadsmith.Tui;
 using Xunit;
 
 public static partial class Milestone1Tests
@@ -105,7 +104,7 @@ public static partial class Milestone1Tests
         var manager = new DialogSkillHandler();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), additionalHandlers: [manager]);
         var surface = new FakeConsoleSurface(["/skills", "/quit"], [1, 0, 1, 1, 3]);
-        var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
 
         await shell.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
 

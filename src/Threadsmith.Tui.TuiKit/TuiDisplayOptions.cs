@@ -1,4 +1,4 @@
-namespace Threadsmith.Tui;
+namespace Threadsmith.Tui.TuiKit;
 
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Interaction.Contracts;

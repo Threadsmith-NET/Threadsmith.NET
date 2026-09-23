@@ -242,10 +242,10 @@ public static class AgentWorkspaceTests
         await surface.RunAsync(
             async token =>
         {
-            await surface.ShowStartupAsync("Splash logo", "Loading solution", Task.CompletedTask, token);
-            await surface.SetStartupDetailsAsync(["Loading remembered solution: Sample.sln"], token);
+            await surface.ShowStartupAsync("Splash logo", "Loading solution ...", Task.CompletedTask, token);
+            await surface.SetStartupDetailsAsync(["Remembered: Sample.sln"], token);
             var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var startup = surface.ShowStartupAsync("Splash logo", "Semantic loading", loaded.Task, token);
+            var startup = surface.ShowStartupAsync("Splash logo", "Semantic Loading ...", loaded.Task, token);
             await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new("Startup warning\n", PresentationTextRole.Warning)])]), token);
             if (outcome == "Failed")
             {
@@ -274,15 +274,15 @@ public static class AgentWorkspaceTests
             Assert.DoesNotContain("Splash logo", transcript, StringComparison.Ordinal);
             Assert.DoesNotContain("Loading solution", transcript, StringComparison.Ordinal);
             Assert.DoesNotContain("Completed", transcript, StringComparison.Ordinal);
-            Assert.DoesNotContain("Loading remembered solution", transcript, StringComparison.Ordinal);
+            Assert.DoesNotContain("Remembered: Sample.sln", transcript, StringComparison.Ordinal);
             Assert.DoesNotContain("Use --solution to change", transcript, StringComparison.Ordinal);
             if (outcome == "Completed")
             {
-                Assert.DoesNotContain("Semantic loading", transcript, StringComparison.Ordinal);
+                Assert.DoesNotContain("Semantic Loading", transcript, StringComparison.Ordinal);
             }
             else
             {
-                Assert.Contains($"Semantic loading: {outcome}", transcript, StringComparison.Ordinal);
+                Assert.Contains($"Semantic Loading ... {outcome}", transcript, StringComparison.Ordinal);
             }
         },
             timeout.Token);
@@ -293,13 +293,18 @@ public static class AgentWorkspaceTests
     public static void StartupModalRendersRememberedSolutionDetails()
     {
         var cells = new CellBuffer(120, 35);
+        var roles = new List<PresentationTextRole>();
         var modal = new StartupModal(
             "Threadsmith.NET\nForge better code, not slop.",
-            "Semantic loading",
-            ["Loading solution: Completed"],
+            "Semantic Loading ...",
+            ["Loading solution ... Completed", "Reticulating Splines ... Completed"],
             () => { },
-            _ => CellStyle.Default,
-            ["Loading remembered solution: Sample.sln"]);
+            role =>
+            {
+                roles.Add(role);
+                return CellStyle.Default;
+            },
+            ["Remembered: Sample.sln"]);
 
         modal.Render(new BufferSurface(cells));
 
@@ -308,11 +313,19 @@ public static class AgentWorkspaceTests
         var taglineRow = Array.FindIndex(lines, line => line.Contains("Forge better code, not slop.", StringComparison.Ordinal));
         Assert.True(taglineRow >= 0);
         Assert.Matches(@"^\s*│\s+│\s*$", lines[taglineRow + 1]);
-        Assert.Contains("Loading remembered solution: Sample.sln", lines[taglineRow + 2], StringComparison.Ordinal);
-        Assert.Contains("Loading remembered solution: Sample.sln", text, StringComparison.Ordinal);
+        Assert.Contains("Remembered: Sample.sln", lines[taglineRow + 2], StringComparison.Ordinal);
+        Assert.Contains("Remembered: Sample.sln", text, StringComparison.Ordinal);
         Assert.DoesNotContain("Use --solution to change", text, StringComparison.Ordinal);
-        Assert.Contains("Loading solution: Completed", text, StringComparison.Ordinal);
-        Assert.Contains("Semantic loading", text, StringComparison.Ordinal);
+        Assert.Contains("Loading solution ... Completed", text, StringComparison.Ordinal);
+        Assert.Contains("Reticulating Splines ... Completed", text, StringComparison.Ordinal);
+        Assert.Contains("Semantic Loading ...", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("input discarded", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(PresentationTextRole.Status, roles[^1]);
+        modal.Complete();
+        var completedCells = new CellBuffer(120, 35);
+        modal.Render(new BufferSurface(completedCells));
+        Assert.Contains("Semantic Loading ... Completed", TUIKit.Testing.Snapshot.ToText(completedCells), StringComparison.Ordinal);
+        Assert.Equal(PresentationTextRole.Success, roles[^1]);
     }
 
     /// <summary>Verifies startup discards typeahead and closes before one composer read.</summary>
@@ -326,7 +339,7 @@ public static class AgentWorkspaceTests
             async token =>
         {
             var loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var startup = surface.ShowStartupAsync("Threadsmith.NET", "Semantic loading", loaded.Task, token);
+            var startup = surface.ShowStartupAsync("Threadsmith.NET", "Semantic Loading ...", loaded.Task, token);
             await surface.PresentAsync(Text(string.Empty), token);
             backend.FeedInput("discard\r\u001b[200~discard paste\u001b[201~");
             await surface.PresentAsync(Text(string.Empty), token);

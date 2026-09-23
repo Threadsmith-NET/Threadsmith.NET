@@ -800,7 +800,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private static string? ResolveKnownReasoningDelta(OpenAiDelta delta)
     {
-        return delta.ReasoningContent ?? delta.Reasoning ?? delta.ReasoningText;
+        return !string.IsNullOrEmpty(delta.ReasoningContent)
+            ? delta.ReasoningContent
+            : !string.IsNullOrEmpty(delta.Reasoning)
+                ? delta.Reasoning
+                : delta.ReasoningText;
     }
 
     private static IReadOnlyList<ModelChunk> DrainToolCalls(

@@ -1063,7 +1063,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             new GitShowTool(gitQueries, promptLoader),
             new GitBlameTool(gitQueries, promptLoader),
             new GitBranchComparisonTool(gitQueries, promptLoader),
-            new DotNetInventoryTool(dotNetInventory, promptLoader, operationalLimits.Semantic),
+            new DotNetInventoryTool(dotNetInventory, promptLoader),
             new NuGetHealthTool(nativeValidation, promptLoader, operationalLimits.Validation),
             new DotNetBuildTool(nativeValidation, promptLoader, operationalLimits.Validation),
             new DotNetAnalyzerTool(nativeValidation, promptLoader, operationalLimits.Validation),

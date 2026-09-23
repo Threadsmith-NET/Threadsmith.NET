@@ -1,11 +1,10 @@
 namespace Threadsmith.SessionStatus.Tests;
 
-using PrettyPrompt.Rendering;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
-using Threadsmith.Tui;
+using Threadsmith.Tui.TuiKit;
 using Xunit;
 
 /// <summary>Verifies Plan-26 usage accounting and responsive session-status contracts.</summary>
@@ -246,7 +245,7 @@ public static class SessionStatusTests
         var rendered = TuiSessionStatusFormatter.Format(CreateStatus(12_000, 32_000), width, " | ");
 
         Assert.DoesNotContain('\n', rendered);
-        Assert.True(string.IsNullOrEmpty(rendered) || UnicodeWidth.GetWidth(rendered.AsSpan()) == width);
+        Assert.True(string.IsNullOrEmpty(rendered) || UnicodeWidth.GetWidth(rendered) == width);
         if (!string.IsNullOrEmpty(rendered))
         {
             Assert.Contains("ctx ", rendered, StringComparison.Ordinal);
@@ -280,7 +279,7 @@ public static class SessionStatusTests
 
         var rendered = TuiSessionStatusFormatter.Format(status, 200, "｜");
 
-        Assert.Equal(200, UnicodeWidth.GetWidth(rendered.AsSpan()));
+        Assert.Equal(200, UnicodeWidth.GetWidth(rendered));
         Assert.Contains("folder C:/…/工具箱/src", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("very-long-root-name", rendered, StringComparison.Ordinal);
     }

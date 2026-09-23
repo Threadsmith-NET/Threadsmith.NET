@@ -70,7 +70,7 @@ public abstract record ModelConfiguration
     /// <summary>Validated default reasoning level.</summary>
     public ReasoningLevel DefaultReasoningLevel { get; init; }
 
-    /// <summary>Supported reasoning levels, always including <see cref="ReasoningLevel.None"/>.</summary>
+    /// <summary>Model-defined reasoning levels; omit <see cref="ReasoningLevel.None"/> when reasoning cannot be disabled.</summary>
     public IReadOnlyList<ReasoningLevel> SupportedReasoningLevels { get; init; } = [ReasoningLevel.None];
 
     /// <summary>Optional sampling temperature.</summary>

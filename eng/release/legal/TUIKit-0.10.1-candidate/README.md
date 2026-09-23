@@ -48,6 +48,6 @@ The product integration now performs the following:
    An SPDX package entry or a generic MIT template alone is insufficient.
 3. Regenerate the product package graph and licensing inventory; generate and
    inspect all six RID notice bundles/SBOMs and packaged payloads. Verify that
-   both PrettyPrompt and TUIKit remain represented in the shipped closure.
+   TUIKit remains represented in the shipped closure.
 
 All six isolated candidate and product self-contained publishes succeeded on 2026-09-04. Canonical product evidence, supplemental notice generation, the dependency inventory, and all six local RID notice/SPDX outputs now include TUIKit 0.10.1. No artifact was published externally.

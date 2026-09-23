@@ -1,8 +1,8 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
 using Threadsmith.Core;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
-using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Plan 80 bounded interactive inspection projection tests.</summary>
@@ -17,7 +17,7 @@ public static class Plan80ActiveTurnInspectionTests
         var profileId = ModelProfileId.New();
         var occurredAt = DateTimeOffset.UtcNow;
 
-        var activity = ConversationalShell.FormatActiveTurnCompactionActivity(
+        var activity = InteractionCoordinator.FormatActiveTurnCompactionActivity(
             new ActiveTurnCompactionStarted(
                 sessionId,
                 occurredAt,
@@ -34,8 +34,8 @@ public static class Plan80ActiveTurnInspectionTests
                 BeforeInputTokens: 87_434,
                 AfterInputTokens: 31_699,
                 DurationMilliseconds: 15_300);
-        var completion = ConversationalShell.FormatActiveTurnCompactionCompletion(completedEvent);
-        var completionWithoutDuration = ConversationalShell.FormatActiveTurnCompactionCompletion(
+        var completion = InteractionCoordinator.FormatActiveTurnCompactionCompletion(completedEvent);
+        var completionWithoutDuration = InteractionCoordinator.FormatActiveTurnCompactionCompletion(
             completedEvent,
             showOperationDuration: false);
 
@@ -77,7 +77,7 @@ public static class Plan80ActiveTurnInspectionTests
     public static void Active_turn_inspection_formats_pressure_cut_and_outcome_metadata()
     {
         var candidateProfileId = Guid.NewGuid();
-        var rendered = ConversationalShell.FormatActiveTurnInspection(
+        var rendered = InteractionCoordinator.FormatActiveTurnInspection(
             new ActiveTurnCompactionInspectionProjection
             {
                 AssessmentSequence = 3,
@@ -119,6 +119,6 @@ public static class Plan80ActiveTurnInspectionTests
     [Fact]
     public static void Missing_active_turn_inspection_formats_empty()
     {
-        Assert.Equal(string.Empty, ConversationalShell.FormatActiveTurnInspection(null));
+        Assert.Equal(string.Empty, InteractionCoordinator.FormatActiveTurnInspection(null));
     }
 }

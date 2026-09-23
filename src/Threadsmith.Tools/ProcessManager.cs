@@ -234,7 +234,8 @@ public sealed class ProcessManager : IProcessManager
         }
 
         var allowedEnvironment = new HashSet<string>(
-            ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "DOTNET_ROOT"],
+            ["PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "HOME", "DOTNET_ROOT",
+                "USERPROFILE", "LOCALAPPDATA", "APPDATA", "ProgramFiles"],
             StringComparer.OrdinalIgnoreCase);
         foreach (var key in startInfo.Environment.Keys.ToArray())
         {

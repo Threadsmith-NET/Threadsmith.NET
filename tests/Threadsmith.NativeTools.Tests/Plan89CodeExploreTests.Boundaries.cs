@@ -43,8 +43,46 @@ public sealed partial class Plan89CodeExploreTests
         Assert.Contains(result.ContinuationTargets, target => target.FilePath == "Large.cs" && target.StartLine == large.Source.Range.EndLine + 1);
     }
 
-    /// <summary>Raised source-read limits and disabled output caps reach both structured and Markdown consumers.</summary>
+    /// <summary>Disabled output caps return configured current source to structured and Markdown consumers.</summary>
     [Fact]
+    public async Task CodeExplore_DisabledOutputCaps_ReturnConfiguredCurrentSource()
+    {
+        var source = string.Join("\n", Enumerable.Repeat("// configured source", 200))
+            + "\npublic class Expanded { public int BoundaryValue => 17; }\n";
+        var options = new CodeExploreOptions
+        {
+            AdaptiveSizingEnabled = false,
+            MaximumCurrentSourceFileBytes = 20_000,
+            MaximumResultBytes = 0,
+            MaximumMarkdownBytes = 0,
+            Limits = new CodeExploreLimits
+            {
+                MaximumSourceCharacters = 20_000,
+                MaximumPerFileSourceCharacters = 20_000,
+            },
+        };
+        var files = new Dictionary<string, string> { ["Expanded.cs"] = source };
+        await using var fixture = await AllocationFixture.CreateAsync(options, files);
+        var formatter = new CodeExploreOutputFormattingTool(
+            fixture.Tool,
+            new CodeExploreOutputOptions(),
+            TestPromptLoader.Instance,
+            options);
+
+        var execution = await formatter.ExecuteAsync(
+            new CodeExploreInput { Query = "Expanded.cs" },
+            fixture.Context,
+            TestContext.Current.CancellationToken);
+
+        var result = Assert.IsType<CodeExploreResult>(execution.Value);
+        var section = Assert.Single(result.FileSections);
+        Assert.Equal(CodeExploreSourceCompleteness.Complete, section.Source.Completeness);
+        Assert.Contains("BoundaryValue => 17", execution.ModelResultContent, StringComparison.Ordinal);
+    }
+
+    /// <summary>Opt-in probe verifies the operational raised-read contract with source above one MiB.</summary>
+    [Fact(Explicit = true)]
+    [Trait("Category", "Performance")]
     public async Task CodeExplore_RaisedReadSizeAndDisabledOutput_ReturnLargeCurrentSource()
     {
         var source = string.Join("\n", Enumerable.Repeat("// read boundary evidence", 44_000)) + "\npublic class Huge { public int Value => 1; }\n";

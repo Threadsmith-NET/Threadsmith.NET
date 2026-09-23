@@ -29,8 +29,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Extensions.Runt
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Extensions.Abstractions", "Threadsmith.Extensions.Abstractions\Threadsmith.Extensions.Abstractions.csproj", "{51DF2E29-7A8A-40C3-8C61-4302064BAB9E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Tui", "Threadsmith.Tui\Threadsmith.Tui.csproj", "{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Cli", "Threadsmith.Cli\Threadsmith.Cli.csproj", "{08CDA689-1F70-47DC-AD75-A9177AABFA85}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Mcp", "Threadsmith.Mcp\Threadsmith.Mcp.csproj", "{43ADC044-B428-4775-97DC-4D553C1CDFA9}"
@@ -275,18 +273,6 @@ Global
 		{51DF2E29-7A8A-40C3-8C61-4302064BAB9E}.Release|x64.Build.0 = Release|Any CPU
 		{51DF2E29-7A8A-40C3-8C61-4302064BAB9E}.Release|x86.ActiveCfg = Release|Any CPU
 		{51DF2E29-7A8A-40C3-8C61-4302064BAB9E}.Release|x86.Build.0 = Release|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Debug|x64.Build.0 = Debug|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Debug|x86.Build.0 = Debug|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Release|Any CPU.Build.0 = Release|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Release|x64.ActiveCfg = Release|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Release|x64.Build.0 = Release|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Release|x86.ActiveCfg = Release|Any CPU
-		{48AB5CCB-FBF5-4F6E-BA2E-064B57E9F3A8}.Release|x86.Build.0 = Release|Any CPU
 		{08CDA689-1F70-47DC-AD75-A9177AABFA85}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{08CDA689-1F70-47DC-AD75-A9177AABFA85}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{08CDA689-1F70-47DC-AD75-A9177AABFA85}.Debug|x64.ActiveCfg = Debug|Any CPU

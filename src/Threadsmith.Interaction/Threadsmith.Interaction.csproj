@@ -15,7 +15,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <InternalsVisibleTo Include="Threadsmith.Tui" />
     <InternalsVisibleTo Include="Threadsmith.Tui.TuiKit" />
     <InternalsVisibleTo Include="Threadsmith.App" />
     <InternalsVisibleTo Include="Threadsmith.CoreRuntime.Tests" />

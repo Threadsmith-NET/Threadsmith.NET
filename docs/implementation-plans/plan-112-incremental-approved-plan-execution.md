@@ -1,6 +1,6 @@
 # Plan 112 - Incremental approved-plan execution
 
-**Status:** Active. Incremental mutation execution and objective-level plan continuation are implemented in the working tree; targeted review remediation is recorded below. Manual and full-plan acceptance remain separate from these focused fixes.
+**Status:** Complete. Incremental mutation execution and objective-level plan continuation are implemented, targeted review remediation is recorded below, and full-plan acceptance has passed.
 **Delivery track:** Maintenance - extend the existing approved-plan execution capability with incremental progress; preserve milestone ownership and completed milestone contracts.
 **Prerequisites:** The implemented serial approved-plan orchestrator, transactional baseline promotion, separate plan/mutation approval policies, conversation-native corrective turns, deployed prompt assets, frontend-neutral interaction coordination, and current mutation-preview reliability work. Reconfirm their production call sites before implementation. No pending parallel-worker or new scheduling framework is required.
 

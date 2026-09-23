@@ -444,10 +444,10 @@ public sealed record AgentAssignmentLimits
     public int MaximumAssignments { get; init; } = 16;
 
     /// <summary>Maximum characters in assignment and provenance text.</summary>
-    public int MaximumTextCharacters { get; init; } = 4_096;
+    public int MaximumTextCharacters { get; init; }
 
     /// <summary>Maximum characters in initial child context.</summary>
-    public int MaximumContextCharacters { get; init; } = 8_192;
+    public int MaximumContextCharacters { get; init; }
 
     /// <summary>Maximum tasks in one assignment.</summary>
     public int MaximumTasksPerAssignment { get; init; } = 32;

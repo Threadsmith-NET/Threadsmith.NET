@@ -2,6 +2,7 @@ namespace Threadsmith.Execution;
 
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -19,6 +20,9 @@ public sealed class MutationProposalApplication :
 {
     private const string ProposeMutationsToolName = "propose_mutations";
     private const string RequestReplanToolName = "request_replan";
+    private const int MaximumRecoveryAnchorCharacters = 256;
+    private const int MaximumRecoveryCandidateCharacters = 512;
+    private const int MaximumRecoveryScanCharacters = 256 * 1024;
     private const string ProposeMutationsArgumentsSchema = """
         {
           "type": "object",
@@ -292,6 +296,7 @@ public sealed class MutationProposalApplication :
         var restoredUsage = command.BudgetUsed;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var correctiveMessages = new List<ModelMessage>();
+        var failedReplaceTextFingerprints = new HashSet<string>(StringComparer.Ordinal);
         try
         {
             for (var proposalAttempt = 1; ; proposalAttempt++)
@@ -333,6 +338,16 @@ public sealed class MutationProposalApplication :
                 }
                 catch (RepairableMutationProposalException exception)
                 {
+                    var replaceTextMismatch = exception.ReplaceTextMismatch;
+                    if (replaceTextMismatch is not null)
+                    {
+                        replaceTextMismatch = replaceTextMismatch with
+                        {
+                            IsRepeatedProposal = !failedReplaceTextFingerprints.Add(
+                                replaceTextMismatch.ProposalFingerprint),
+                        };
+                    }
+
                     await AppendCorrectionMessageOrThrowAsync(
                         command,
                         correctiveTurns,
@@ -340,6 +355,7 @@ public sealed class MutationProposalApplication :
                         exception.Category,
                         exception.Diagnostic,
                         exception,
+                        replaceTextMismatch,
                         cancellationToken);
                 }
                 catch (MalformedInvocationException exception)
@@ -351,6 +367,7 @@ public sealed class MutationProposalApplication :
                         ModelCorrectionCategory.ProviderInvocation,
                         exception.Diagnostic,
                         exception,
+                        replaceTextMismatch: null,
                         cancellationToken);
                 }
             }
@@ -387,6 +404,7 @@ public sealed class MutationProposalApplication :
         ModelCorrectionCategory category,
         MalformedInvocationDiagnostic diagnostic,
         Exception exception,
+        ReplaceTextMismatchCorrectionEvidence? replaceTextMismatch,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -418,7 +436,8 @@ public sealed class MutationProposalApplication :
         correctiveMessages.Add(RequireCorrectiveMessages().CreateMutationProposalDeveloperMessage(
             diagnostic with { SafeMessage = safeReason },
             correctionAttempt,
-            correctiveTurns.MaximumTurns));
+            correctiveTurns.MaximumTurns,
+            replaceTextMismatch));
     }
 
     private IReadOnlyList<ModelMessage> CreateRequestLocalCorrectionMessages(
@@ -1073,6 +1092,7 @@ public sealed class MutationProposalApplication :
     {
         try
         {
+            json = ModelJsonCleanup.Clean(json);
             using var document = JsonDocument.Parse(json);
             RejectDuplicateProperties(document.RootElement, "$", StringComparer.OrdinalIgnoreCase);
             var request = JsonSerializer.Deserialize<ReplanRequest>(json, JsonOptions);
@@ -1109,6 +1129,7 @@ public sealed class MutationProposalApplication :
 
     private static string NormalizeProposalJson(string json)
     {
+        json = ModelJsonCleanup.Clean(json);
         using var document = JsonDocument.Parse(json);
         RejectDuplicateProperties(document.RootElement, "$", StringComparer.OrdinalIgnoreCase);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
@@ -1350,13 +1371,14 @@ public sealed class MutationProposalApplication :
         MalformedInvocationFailureKind kind,
         string safeMessage,
         Exception? innerException = null,
-        string toolName = ProposeMutationsToolName)
+        string toolName = ProposeMutationsToolName,
+        ReplaceTextMismatchCorrectionEvidence? replaceTextMismatch = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(safeMessage);
         var diagnostic = CreateRepairableMutationDiagnostic(kind, safeMessage) with { ToolName = toolName };
         return innerException is null
-            ? new RepairableMutationProposalException(category, diagnostic)
-            : new RepairableMutationProposalException(category, diagnostic, innerException);
+            ? new RepairableMutationProposalException(category, diagnostic, replaceTextMismatch)
+            : new RepairableMutationProposalException(category, diagnostic, innerException, replaceTextMismatch);
     }
 
     private static MalformedInvocationDiagnostic CreateRepairableMutationDiagnostic(
@@ -1602,7 +1624,12 @@ public sealed class MutationProposalApplication :
             throw CreateRepairableMutationFailure(
                 ModelCorrectionCategory.MutationProposal,
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
-                $"ReplaceText expectedText was not found in '{path}'.");
+                $"ReplaceText expectedText was not found in '{path}'.",
+                replaceTextMismatch: CreateReplaceTextMismatchEvidence(
+                    path,
+                    current,
+                    expected,
+                    mutation.ReplacementText));
         }
 
         if (searchText.IndexOf(searchExpected, firstMatch + 1, StringComparison.Ordinal) >= 0)
@@ -1637,6 +1664,166 @@ public sealed class MutationProposalApplication :
             ExpectedText = expected,
             ReplacementText = replacement,
         };
+    }
+
+    private static ReplaceTextMismatchCorrectionEvidence CreateReplaceTextMismatchEvidence(
+        string path,
+        string current,
+        string expected,
+        string replacement)
+    {
+        var evidence = new ReplaceTextMismatchCorrectionEvidence
+        {
+            Path = BoundRecoveryText(path, MaximumRecoveryCandidateCharacters),
+            RejectedExpectedText = BoundRecoveryText(expected, MaximumRecoveryAnchorCharacters),
+            ProposalFingerprint = CreateReplaceTextFingerprint(path, expected, replacement),
+        };
+        if (current.Length > MaximumRecoveryScanCharacters
+            || expected.Length > MaximumRecoveryAnchorCharacters
+            || expected.IndexOfAny(['\r', '\n']) >= 0)
+        {
+            return evidence;
+        }
+
+        var candidate = FindClosestUniqueBaselineLine(current, expected);
+        if (candidate is null)
+        {
+            return evidence;
+        }
+
+        return evidence with
+        {
+            ClosestUniqueBaselineText = candidate.Text,
+            BaselineLine = candidate.LineNumber,
+            EditDistance = candidate.EditDistance,
+            FirstDifference = CreateFirstDifference(expected, candidate.Text),
+        };
+    }
+
+    private static BaselineRecoveryCandidate? FindClosestUniqueBaselineLine(
+        string current,
+        string expected)
+    {
+        var maximumDistance = Math.Clamp(expected.Length / 10, 1, 8);
+        BaselineRecoveryCandidate? best = null;
+        var bestMatchCount = 0;
+        using var reader = new StringReader(current);
+        for (var lineNumber = 1; reader.ReadLine() is { } line; lineNumber++)
+        {
+            var withoutIndentation = line.TrimStart();
+            string[] candidates = string.Equals(line, withoutIndentation, StringComparison.Ordinal)
+                ? [line]
+                : [line, withoutIndentation];
+            foreach (var candidateText in candidates)
+            {
+                if (candidateText.Length == 0
+                    || candidateText.Length > MaximumRecoveryCandidateCharacters
+                    || Math.Abs(candidateText.Length - expected.Length) > maximumDistance)
+                {
+                    continue;
+                }
+
+                var distance = CalculateBoundedEditDistance(expected, candidateText, maximumDistance);
+                if (distance > maximumDistance)
+                {
+                    continue;
+                }
+
+                if (best is null || distance < best.EditDistance)
+                {
+                    best = new BaselineRecoveryCandidate(candidateText, lineNumber, distance);
+                    bestMatchCount = 1;
+                }
+                else if (distance == best.EditDistance)
+                {
+                    bestMatchCount++;
+                }
+            }
+        }
+
+        if (best is null || bestMatchCount != 1)
+        {
+            return null;
+        }
+
+        var firstOccurrence = current.IndexOf(best.Text, StringComparison.Ordinal);
+        return firstOccurrence >= 0
+            && current.IndexOf(best.Text, firstOccurrence + best.Text.Length, StringComparison.Ordinal) < 0
+                ? best
+                : null;
+    }
+
+    private static int CalculateBoundedEditDistance(string left, string right, int maximumDistance)
+    {
+        if (Math.Abs(left.Length - right.Length) > maximumDistance)
+        {
+            return maximumDistance + 1;
+        }
+
+        var previous = new int[right.Length + 1];
+        var current = new int[right.Length + 1];
+        for (var column = 0; column <= right.Length; column++)
+        {
+            previous[column] = column;
+        }
+
+        for (var row = 1; row <= left.Length; row++)
+        {
+            current[0] = row;
+            var rowMinimum = current[0];
+            for (var column = 1; column <= right.Length; column++)
+            {
+                var substitutionCost = left[row - 1] == right[column - 1] ? 0 : 1;
+                current[column] = Math.Min(
+                    Math.Min(current[column - 1] + 1, previous[column] + 1),
+                    previous[column - 1] + substitutionCost);
+                rowMinimum = Math.Min(rowMinimum, current[column]);
+            }
+
+            if (rowMinimum > maximumDistance)
+            {
+                return maximumDistance + 1;
+            }
+
+            (previous, current) = (current, previous);
+        }
+
+        return previous[right.Length];
+    }
+
+    private static ReplaceTextFirstDifference? CreateFirstDifference(string expected, string baseline)
+    {
+        var commonLength = Math.Min(expected.Length, baseline.Length);
+        var index = 0;
+        while (index < commonLength && expected[index] == baseline[index])
+        {
+            index++;
+        }
+
+        if (index == expected.Length && index == baseline.Length)
+        {
+            return null;
+        }
+
+        return new ReplaceTextFirstDifference(
+            index,
+            index < expected.Length ? expected[index].ToString() : null,
+            index < baseline.Length ? baseline[index].ToString() : null,
+            index < expected.Length ? $"U+{(int)expected[index]:X4}" : null,
+            index < baseline.Length ? $"U+{(int)baseline[index]:X4}" : null);
+    }
+
+    private static string CreateReplaceTextFingerprint(string path, string expected, string replacement)
+    {
+        var value = string.Concat(path, "\0", expected, "\0", replacement);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    }
+
+    private static string BoundRecoveryText(string value, int maximumCharacters)
+    {
+        return value.Length <= maximumCharacters
+            ? value
+            : string.Concat(value.AsSpan(0, maximumCharacters - 1), "…");
     }
 
     private static int MapNormalizedOffset(string text, int normalizedOffset)
@@ -2203,27 +2390,38 @@ public sealed class MutationProposalApplication :
 
         public RepairableMutationProposalException(
             ModelCorrectionCategory category,
-            MalformedInvocationDiagnostic diagnostic)
+            MalformedInvocationDiagnostic diagnostic,
+            ReplaceTextMismatchCorrectionEvidence? replaceTextMismatch = null)
             : base((diagnostic ?? throw new ArgumentNullException(nameof(diagnostic))).SafeMessage)
         {
             Category = category;
             Diagnostic = diagnostic;
+            ReplaceTextMismatch = replaceTextMismatch;
         }
 
         public RepairableMutationProposalException(
             ModelCorrectionCategory category,
             MalformedInvocationDiagnostic diagnostic,
-            Exception innerException)
+            Exception innerException,
+            ReplaceTextMismatchCorrectionEvidence? replaceTextMismatch = null)
             : base((diagnostic ?? throw new ArgumentNullException(nameof(diagnostic))).SafeMessage, innerException)
         {
             Category = category;
             Diagnostic = diagnostic;
+            ReplaceTextMismatch = replaceTextMismatch;
         }
 
         public ModelCorrectionCategory Category { get; }
 
         public MalformedInvocationDiagnostic Diagnostic { get; }
+
+        public ReplaceTextMismatchCorrectionEvidence? ReplaceTextMismatch { get; }
     }
+
+    private sealed record BaselineRecoveryCandidate(
+        string Text,
+        int LineNumber,
+        int EditDistance);
 }
 
 /// <summary>Wraps a mutation-proposal failure that consumed cumulative execution budget.</summary>

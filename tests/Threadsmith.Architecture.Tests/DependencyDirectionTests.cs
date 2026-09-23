@@ -364,7 +364,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.DotNet"] = ["Threadsmith.Core", "Threadsmith.Models", "Threadsmith.Context"],
             ["Threadsmith.Workspaces"] = ["Threadsmith.Core", "Threadsmith.Context"],
             ["Threadsmith.Validation"] = ["Threadsmith.Core", "Threadsmith.Tools"],
-            ["Threadsmith.Execution"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Models", "Threadsmith.Persistence", "Threadsmith.Tools"],
+            ["Threadsmith.Execution"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Models", "Threadsmith.Persistence", "Threadsmith.Telemetry", "Threadsmith.Tools"],
             ["Threadsmith.Skills"] = ["Threadsmith.Core", "Threadsmith.Context", "Threadsmith.Models", "Threadsmith.Telemetry", "Threadsmith.Tools"],
             ["Threadsmith.Hooks"] = ["Threadsmith.Core", "Threadsmith.Tools"],
             ["Threadsmith.Extensions.Runtime"] = ["Threadsmith.Core", "Threadsmith.Extensions.Abstractions", "Threadsmith.Telemetry", "Threadsmith.Tools"],

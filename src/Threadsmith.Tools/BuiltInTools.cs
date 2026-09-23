@@ -1890,6 +1890,30 @@ internal static class ToolDefinitionFactory
         };
     }
 
+    /// <summary>Adds documentation to named properties in one generated model-facing schema.</summary>
+    internal static ToolDefinition WithPropertyDescriptions(
+        ToolDefinition definition,
+        params (string PropertyName, string Description)[] descriptions)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(descriptions);
+        var schema = JsonNode.Parse(definition.InputSchema.JsonSchema)?.AsObject()
+            ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no object input schema.");
+        foreach ((var propertyName, var description) in descriptions)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(propertyName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(description);
+            var property = schema["properties"]?[propertyName]?.AsObject()
+                ?? throw new InvalidOperationException($"Tool '{definition.Id}' has no '{propertyName}' input property.");
+            property["description"] = description;
+        }
+
+        return definition with
+        {
+            InputSchema = definition.InputSchema with { JsonSchema = schema.ToJsonString() },
+        };
+    }
+
     /// <summary>Constrains one generated string property to closed model-facing values.</summary>
     internal static ToolDefinition WithStringEnum(
         ToolDefinition definition,

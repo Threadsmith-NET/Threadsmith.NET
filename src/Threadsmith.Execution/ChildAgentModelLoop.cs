@@ -8,6 +8,7 @@ using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Tools;
+using Threadsmith.Tools.PullRequests;
 
 /// <summary>One child response plus independently collected usage, evidence, and model metadata.</summary>
 internal sealed record ChildAgentModelResult(
@@ -95,13 +96,21 @@ internal sealed class ChildAgentModelLoop
         CancellationToken cancellationToken)
     {
         _sessionUsage?.RegisterChild(plan.Provenance.SessionId, assignment.ChildRunId);
-        var deliveredEvidenceIds = context.Evidence.Select(item => item.EvidenceId).ToHashSet();
+        var capturedPullRequests = childToolContext.OperationScope?
+            .GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry())
+            .Snapshot(plan.Provenance.SessionId, plan.Provenance.ParentRunId)
+            ?? [];
+        var capturedById = capturedPullRequests.ToDictionary(
+            snapshot => new EvidenceId(snapshot.SnapshotId),
+            snapshot => snapshot);
+        var deliveredEvidenceIds = context.Evidence.Select(item => item.EvidenceId)
+            .Concat(capturedById.Keys).ToHashSet();
         var registrations = ResolveRegistrations(assignment).ToList();
         if (!childToolContext.DenyAllTools
             && !childToolContext.DeniedToolIds.Contains(ChildAgentEvidenceTool.ToolId, StringComparer.OrdinalIgnoreCase))
         {
             registrations.Add(new ToolRegistration(
-                new ChildAgentEvidenceTool(_evidence, plan.Provenance.SessionId, assignment.ChildRunId, deliveredEvidenceIds, _prompts),
+                new ChildAgentEvidenceTool(_evidence, plan.Provenance.SessionId, assignment.ChildRunId, deliveredEvidenceIds, _prompts, capturedById),
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "child-evidence")));
             childToolContext = childToolContext with
             {
@@ -118,7 +127,16 @@ internal sealed class ChildAgentModelLoop
             registration => registration.Tool.Definition.Id,
             StringComparer.OrdinalIgnoreCase);
         var prompt = new ChildAgentPrompt(_prompts, assignment.Role);
-        var messages = prompt.CreateMessages(context, instructions);
+        var handoff = capturedPullRequests.Count == 0
+            ? context
+            : context with
+            {
+                InitialContext = context.InitialContext + Environment.NewLine + string.Join(
+                    Environment.NewLine,
+                    capturedPullRequests.Select(snapshot =>
+                        $"Captured PR evidence: {snapshot.Metadata.Url}; snapshot {snapshot.SnapshotId:D}; {snapshot.Page.Files.Count} changed files. Read the complete captured metadata, inventory, and diff with read_agent_evidence(evidenceId: \"{snapshot.SnapshotId:D}\"). Use startLine/endLine for a portion if the full result exceeds your model context. This reads the parent's captured snapshot without a provider request.")),
+            };
+        var messages = prompt.CreateMessages(handoff, instructions);
         var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
         history.RecordInitialEvidence(deliveredEvidenceIds.ToArray());
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
@@ -672,7 +690,7 @@ internal sealed class ChildAgentModelLoop
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
                 preflight.FailedOrdinal,
                 preflight.FailedToolId,
-                preflight.SafeReason ?? new CorrectiveMessageFactory(_prompts).GetToolBatchPreflightFailedReason(),
+                preflight.SafeReason ?? new CorrectiveMessageFactory(_prompts, _sanitizer).GetToolBatchPreflightFailedReason(),
                 requests.Count));
         }
 
@@ -687,7 +705,7 @@ internal sealed class ChildAgentModelLoop
                 childContext,
                 semanticToolAttempted,
                 toolDefinitions,
-                new CorrectiveMessageFactory(_prompts),
+                new CorrectiveMessageFactory(_prompts, _sanitizer),
                 out var reason))
             {
                 throw new MalformedInvocationException(CorrectiveMessageFactory.CreateToolBatchDiagnostic(
@@ -704,7 +722,7 @@ internal sealed class ChildAgentModelLoop
                     MalformedInvocationFailureKind.PhaseInvalidTool,
                     ordinal,
                     request.ToolName,
-                    new CorrectiveMessageFactory(_prompts).CreateDuplicateToolInvocationReason(request.ToolName),
+                    new CorrectiveMessageFactory(_prompts, _sanitizer).CreateDuplicateToolInvocationReason(request.ToolName),
                     requests.Count));
             }
 
@@ -900,7 +918,7 @@ internal sealed class ChildAgentModelLoop
         };
         var attemptNumber = correctiveTurns.BeginAttemptOrThrow(diagnostic);
         ledger.Charge(new AgentResourceUsage { Corrections = 1 });
-        var corrections = new CorrectiveMessageFactory(_prompts);
+        var corrections = new CorrectiveMessageFactory(_prompts, _sanitizer);
         var summary = corrections.CreateToolBatchFailureSummary(diagnostic.ToolOrdinal, diagnostic.ToolName, diagnostic.SafeMessage);
         var resultsAdded = false;
         for (var ordinal = 0; ordinal < requests.Count; ordinal++)

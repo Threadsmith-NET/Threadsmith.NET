@@ -1878,6 +1878,107 @@ public static partial class Milestone5Tests
         }
     }
 
+    /// <summary>A missing quote receives exact baseline evidence and an unchanged retry is identified.</summary>
+    [Fact]
+    public static async Task ModelMutationProposal_CloseExpectedText_ProvidesBoundedRecoveryEvidence()
+    {
+        const string path = "prompts/news.md";
+        const string source = "<procedure>\n\t\t<step number=\"45 name=\"Apply inferred filters\">\n</procedure>";
+        const string rejectedExpected = "<step number=\"45\" name=\"Apply inferred filters\">";
+        const string baselineExpected = "<step number=\"45 name=\"Apply inferred filters\">";
+        const string replacement = "<step number=\"5\" name=\"Apply inferred filters\">";
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
+        {
+            [path] = source,
+        });
+        var runId = RunId.New();
+        var stepId = StepId.New();
+        var rejectedArguments = CreateArguments(rejectedExpected);
+        var model = new QueueModelProvider(
+            new ModelChunk
+            {
+                Output = new ToolRequestModelOutput("propose_mutations", rejectedArguments),
+                Usage = new ModelUsage(100, 50),
+            },
+            new ModelChunk
+            {
+                Output = new ToolRequestModelOutput("propose_mutations", rejectedArguments),
+                Usage = new ModelUsage(100, 50),
+            },
+            new ModelChunk
+            {
+                Output = new ToolRequestModelOutput("propose_mutations", CreateArguments(baselineExpected)),
+                Usage = new ModelUsage(100, 50),
+            });
+        await using var scenario = await MutationScenario.CreateAsync(repository, model);
+        var plan = new ImplementationPlan
+        {
+            Summary = "Fix prompt step ordering.",
+            Steps =
+            [
+                new ImplementationPlanStep
+                {
+                    StepId = stepId,
+                    Title = "Fix prompt step",
+                    Description = "Renumber the malformed prompt step.",
+                    FileIntents = ModifyIntents(path),
+                    ExpectedOutcome = "The prompt step is valid and numbered 5.",
+                },
+            ],
+        };
+
+        var staged = await scenario.ProposeAsync(
+            runId,
+            new TaskSpecification("Fix prompt ordering", []),
+            plan,
+            RunPhase.ImplementationModelTurn);
+
+        Assert.Equal(3, model.Requests.Count);
+        var firstCorrection = GetCorrectionMessageText(
+            model.Requests[1],
+            "active-turn-mutation-correction:");
+        Assert.Contains("replaceTextExpectedTextNotFound", firstCorrection, StringComparison.Ordinal);
+        Assert.Contains("closestUniqueBaselineText", firstCorrection, StringComparison.Ordinal);
+        Assert.Contains("45 name", firstCorrection, StringComparison.Ordinal);
+        Assert.Contains("\"repeatedProposal\":false", firstCorrection, StringComparison.Ordinal);
+        Assert.DoesNotContain("<step", firstCorrection, StringComparison.Ordinal);
+
+        var repeatedCorrection = GetCorrectionMessageText(
+            model.Requests[2],
+            "active-turn-mutation-correction:2");
+        Assert.Contains("\"repeatedProposal\":true", repeatedCorrection, StringComparison.Ordinal);
+        Assert.Contains("+\t\t<step number=\"5\" name=\"Apply inferred filters\">", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
+
+        static string CreateArguments(string expectedText)
+        {
+            var envelope = new MutationProposalEnvelope
+            {
+                MutationSet = new MutationProposalSet
+                {
+                    Mutations =
+                    [
+                        new ReplaceTextMutationProposal
+                        {
+                            RelativePath = path,
+                            ExpectedText = expectedText,
+                            ReplacementText = replacement,
+                        },
+                    ],
+                    Rationale = "Fix the prompt step ordering.",
+                    Risk = MutationRisk.Low,
+                },
+            };
+            return JsonSerializer.Serialize(
+                envelope,
+                new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+                    Converters = { new JsonStringEnumConverter() },
+                });
+        }
+    }
+
     /// <summary>Request-local correction messages participate in assembly-time budget reduction.</summary>
     [Fact]
     public static async Task MutationContextAssembly_CorrectionMessagesReserveBudgetBeforeEvidenceSelection()

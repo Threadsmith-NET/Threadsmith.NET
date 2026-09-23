@@ -40,8 +40,8 @@ Common editing rules:
 | System and phase prompts | 28 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 19 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 53 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
-| Skill prompts | 14 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
+| Tool prompts | 200 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
 | **Total** | **318** | Complete deployed catalog. |
@@ -218,7 +218,7 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 | `Correction-Mutation-ExclusiveDecision.md` | Rejects mixed or repeated implementation decisions before staging. | `None` |
 | `Correction-Mutation-ReplanArguments.md` | Requests a single nonempty reason object through existing corrective feedback. | `None` |
 | `Correction-Mutation-PostApplyValidation.md` | Corrective or retry guidance for `Mutation-PostApplyValidation`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
-| `Correction-Mutation-Proposal.md` | Corrective or retry guidance for `Mutation-Proposal`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
+| `Correction-Mutation-Proposal.md` | Corrective or retry guidance for `Mutation-Proposal`, including bounded untrusted `ReplaceText` mismatch evidence when available. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason), [`RecoveryEvidence`](#placeholder-recoveryevidence) |
 | `Correction-Mutation-RenameSymbolOverlap.md` | Corrective guidance for overlapping semantic and text mutations. | [`RelativePath`](#placeholder-relativepath) |
 | `Correction-Mutation-RenameSymbolSemanticUnavailable.md` | Corrective guidance when semantic rename support is unavailable. | `None` |
 | `Correction-Mutation-ReplaceTextAmbiguousExpectedText.md` | Corrective guidance for ambiguous `ReplaceText` expected text. | [`RelativePath`](#placeholder-relativepath) |
@@ -353,7 +353,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | `None` |
-| `Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of original results by previously delivered evidence ID. | `None` |
+| `Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of delivered results and captured parent PR snapshots by evidence ID, with optional line ranges. | `None` |
 
 #### `code_explore` family
 
@@ -516,7 +516,6 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-delegate_agents-FindingUncertainty.md` | Conditional uncertainty block in a joined delegation finding. | [`Uncertainty`](#placeholder-uncertainty) |
 | `Tool-delegate_agents-ResultHeader.md` | Joined delegation result block for `ResultHeader`. | [`DelegationId`](#placeholder-delegationid), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-Steering.md` | Joined delegation result block for `Steering`. | [`Submitted`](#placeholder-submitted), [`Delivered`](#placeholder-delivered), [`Undelivered`](#placeholder-undelivered) |
-| `Tool-delegate_agents-Truncation.md` | Joined delegation result block for `Truncation`. | [`OmittedBlockCount`](#placeholder-omittedblockcount) |
 
 #### `diagnostic_query` family
 
@@ -719,7 +718,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-pr_fetch-Description.md` | PR acquisition, cursor/refresh and untrusted evidence guidance. | [`Providers`](#placeholder-providers) |
+| `Tool-pr_fetch-Description.md` | Complete single-call PR acquisition, refresh and untrusted evidence guidance. | [`Providers`](#placeholder-providers) |
 
 `Providers` is the ordinally sorted list of enabled configured account IDs, compiled adapter types and recognized web hosts, rendered at startup without resolving credentials. Routing patterns are read from account configuration by host code and are not rendered into this token. The description defines the required `kind` values `inventory` and `diff`, explains cursor continuity and the result's kind/continuation fields, and permits explicit account selection when supplied by the user or needed to resolve ambiguity. Wording cannot change retrieval scope, provider selection, trust, permission or cache authority. `Skill-Review.md` requests `kind:"inventory"` for the lead `pullRequest` handoff and reserves `kind:"diff"` for specialist patch evidence while retaining the five-role/report contract.
 
@@ -748,6 +747,7 @@ Both maintained review packages load this file from the normal prompt cache. The
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Skill-Procedure-Continuation.md` | Tool result and continuation guidance for the legacy input projection; structured model messages carry the result once as a tool response. | [`ToolName`](#placeholder-toolname), [`ToolResult`](#placeholder-toolresult) |
+| `Skill-Procedure-OutputCorrection.md` | Formatting-only recovery of invalid final skill output without repeating completed tools. | [`FailureSummary`](#placeholder-failuresummary) |
 | `Skill-Procedure-Request.md` | Skill procedure guidance for `Procedure-Request`. | [`PackageId`](#placeholder-packageid), [`PackageVersion`](#placeholder-packageversion), [`PackageDigest`](#placeholder-packagedigest), [`StepId`](#placeholder-stepid), [`StepKind`](#placeholder-stepkind), [`Iteration`](#placeholder-iteration), [`MaximumIterations`](#placeholder-maximumiterations), [`SkillAssets`](#placeholder-skillassets), [`InputJson`](#placeholder-inputjson) |
 | `Skill-Procedure-System.md` | Skill procedure guidance for `Procedure-System`. | `None` |
 
@@ -889,7 +889,6 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-outcomejson"></a>`OutcomeJson` | Compact, host-serialized sanitized JSON receipt for a terminal execution outcome. Text fields are historical data rather than instructions; reported status remains authoritative when a failed execution lists changed files. |
 | <a id="placeholder-omission"></a>`Omission` | One bounded explanation of evidence or detail not returned. |
 | <a id="placeholder-omissionitems"></a>`OmissionItems` | Fully rendered collection of bounded omission rows. |
-| <a id="placeholder-omittedblockcount"></a>`OmittedBlockCount` | Number of complete result blocks omitted to stay within the projection bound. |
 | <a id="placeholder-ordinal"></a>`Ordinal` | One-based position of either a host-authorized URL candidate in current-turn context or a sibling tool request in a batch-preflight correction. |
 | <a id="placeholder-origin"></a>`Origin` | Canonical public HTTPS origin (scheme plus server) of the exact URL awaiting direct-fetch authorization. |
 | <a id="placeholder-originfile"></a>`OriginFile` | Repository-relative source file from which an associated artifact was inferred. |
@@ -907,6 +906,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-reason"></a>`Reason` | Bounded explanation for the surrounding outcome, omission, or correction. |
 | <a id="placeholder-reasons"></a>`Reasons` | Fully rendered or joined explanations for the surrounding outcome. |
 | <a id="placeholder-recentturns"></a>`RecentTurns` | Bounded recent conversation turns retained verbatim in the request. |
+| <a id="placeholder-recoveryevidence"></a>`RecoveryEvidence` | JSON-encoded, bounded, untrusted baseline evidence for a recoverable mutation mismatch, or `null` when none is available. |
 | <a id="placeholder-rejectedquery"></a>`RejectedQuery` | Bounded query text that the host rejected. |
 | <a id="placeholder-relationship"></a>`Relationship` | Relationship between an artifact/symbol and its origin. |
 | <a id="placeholder-relationshipcount"></a>`RelationshipCount` | Number of relationships represented by the result. |

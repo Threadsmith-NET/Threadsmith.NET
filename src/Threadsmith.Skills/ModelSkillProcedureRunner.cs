@@ -98,6 +98,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
         var maximumToolCalls = plan.EffectiveBudget.ToolCalls;
         var toolCalls = 0;
         var corrections = 0;
+        var formattingOnly = false;
+        var schemas = new BoundedJsonSchemaValidator();
+        var outputSchemaContent = content.SingleOrDefault(segment =>
+            string.Equals(segment.AssetPath, step.OutputSchemaAsset, StringComparison.OrdinalIgnoreCase));
+        var outputSchema = outputSchemaContent is null ? null : schemas.Compile(outputSchemaContent.Content);
         var prompt = BuildPrompt(plan, step, iteration, content, inputJson);
         var messages = new List<ModelMessage>
         {
@@ -134,7 +139,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                     plan.Request.SessionId,
                     plan.Request.RunId,
                     modelContext,
-                    toolsWithheld: false,
+                    toolsWithheld: formattingOnly,
                     callerRegistrations);
                 var registrations = available.Registrations.ToDictionary(
                     item => item.Tool.Definition.Id,
@@ -212,6 +217,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         profile?.ContextWindow) ?? modelRequest;
                     transientState.ValidateHistory(modelRequest);
                     ModelUsage? reportedUsage = null;
+                    var receivedEnvelope = false;
                     try
                     {
                         await foreach (var chunk in models.StreamAsync(
@@ -227,6 +233,7 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                             if (chunk.ResponseEnvelope is { } envelope)
                             {
                                 transientState.Accept(modelRequest, envelope);
+                                receivedEnvelope = true;
                             }
 
                             if (chunk.Text is { } delta)
@@ -240,6 +247,11 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
                             if (chunk.Output is ToolRequestModelOutput requested)
                             {
+                                if (formattingOnly)
+                                {
+                                    throw new InvalidDataException("Skill output formatting correction requested tools; no tools were executed.");
+                                }
+
                                 if (toolRequests.Count >= maximumToolCalls - toolCalls)
                                 {
                                     throw new InvalidOperationException("Skill procedure tool-call budget is exhausted.");
@@ -264,11 +276,61 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
                     if (toolRequests.Count == 0)
                     {
-                        var output = NormalizeDeclaredJsonOutput(text.ToString());
+                        var output = ModelJsonCleanup.Clean(text.ToString());
                         output = JsonOutputSanitizer.SanitizeJsonOrText(output, _sanitizer).Trim();
-                        if (string.IsNullOrWhiteSpace(output))
+                        try
                         {
-                            throw new InvalidDataException("Skill procedure returned empty output.");
+                            if (string.IsNullOrWhiteSpace(output))
+                            {
+                                throw new InvalidDataException("Skill procedure returned empty output.");
+                            }
+
+                            if (outputSchema is not null)
+                            {
+                                _ = schemas.Validate(outputSchema, output);
+                            }
+                            else
+                            {
+                                using var document = JsonDocument.Parse(output);
+                            }
+                        }
+                        catch (Exception exception) when (exception is JsonException or InvalidDataException)
+                        {
+                            if (round + 1 >= maximumRounds)
+                            {
+                                throw new InvalidDataException(
+                                    "Skill final output remains invalid after the model-turn budget was exhausted; completed side effects are preserved.",
+                                    exception);
+                            }
+
+                            formattingOnly = true;
+                            corrections++;
+                            var correction = _prompts.Render(
+                                PromptFileNames.SkillProcedureOutputCorrection,
+                                new Dictionary<string, string>(StringComparer.Ordinal)
+                                {
+                                    ["FailureSummary"] = _sanitizer.Sanitize(exception.Message),
+                                });
+                            messages.Add(new ModelMessage
+                            {
+                                Role = ModelMessageRole.Assistant,
+                                SectionId = "skill-invalid-output",
+                                ModelRound = round,
+                                Content = [new ModelContentPart { Content = output }],
+                            });
+                            messages.Add(new ModelMessage
+                            {
+                                Role = ModelMessageRole.Developer,
+                                SectionId = "skill-output-correction",
+                                Content = [new ModelContentPart { Content = correction }],
+                            });
+                            prompt += Environment.NewLine + output + Environment.NewLine + correction;
+                            if (receivedEnvelope)
+                            {
+                                transientState.SealRound(round, messages.ToArray());
+                            }
+
+                            continue;
                         }
 
                         if (PackagedDocumentationPolicy.IsDocumentationSkill(
@@ -347,7 +409,8 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         var batchCalls = new ToolCallHistory(seenCalls);
                         foreach (var toolRequest in toolRequests)
                         {
-                            var arguments = SkillCanonicalJson.CanonicalizeValue(toolRequest.ArgumentsJson);
+                            var arguments = SkillCanonicalJson.CanonicalizeValue(
+                                ModelJsonCleanup.Clean(toolRequest.ArgumentsJson));
                             var accepted = registrations.TryGetValue(toolRequest.ToolName, out var advertised)
                                 ? batchCalls.TryAdd(advertised.Tool.Definition, arguments)
                                 : batchCalls.TryAdd(toolRequest.ToolName, arguments);
@@ -536,37 +599,6 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
 
         value = default;
         return false;
-    }
-
-    private static string NormalizeDeclaredJsonOutput(string output)
-    {
-        var trimmed = output.Trim();
-        var openingEnd = trimmed.IndexOf('\n');
-        var closingStart = trimmed.LastIndexOf('\n');
-        if (openingEnd < 0 || closingStart <= openingEnd)
-        {
-            return trimmed;
-        }
-
-        var opening = trimmed[..openingEnd].Trim();
-        var closing = trimmed[(closingStart + 1)..].Trim();
-        if ((!opening.Equals("```json", StringComparison.OrdinalIgnoreCase)
-                && !opening.Equals("```", StringComparison.Ordinal))
-            || !closing.Equals("```", StringComparison.Ordinal))
-        {
-            return trimmed;
-        }
-
-        var candidate = trimmed[(openingEnd + 1)..closingStart].Trim();
-        try
-        {
-            using var jsonDocument = JsonDocument.Parse(candidate);
-            return candidate;
-        }
-        catch (JsonException)
-        {
-            return trimmed;
-        }
     }
 
     private static IReadOnlyList<ModelToolDefinition> BuildToolDefinitions(IEnumerable<ToolRegistration> registrations)

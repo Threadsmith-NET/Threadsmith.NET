@@ -22,18 +22,17 @@ public sealed partial class SkillSubsystemTests
         Assert.DoesNotContain("Compare the two trees directly", prompt, StringComparison.Ordinal);
     }
 
-    /// <summary>PR reviews gather inventory before delegation instead of making the lead ingest every diff page.</summary>
+    /// <summary>PR reviews gather complete inventory and diff evidence before delegation.</summary>
     [Fact]
     public void NativeReview_PullRequestUsesInventoryBeforeDelegation()
     {
         var prompt = TestPromptLoader.Instance.Get(PromptFileNames.SkillReview);
 
-        Assert.Contains("Start with kind:\"inventory\"", prompt, StringComparison.Ordinal);
-        Assert.Contains("Do not call kind:\"diff\" before delegation", prompt, StringComparison.Ordinal);
-        Assert.Contains("specialists to call pr_fetch", prompt, StringComparison.Ordinal);
-        Assert.Contains("kind:\"diff\" only when their assignment needs patch evidence", prompt, StringComparison.Ordinal);
+        Assert.Contains("Call kind:\"diff\" once", prompt, StringComparison.Ordinal);
+        Assert.Contains("host supplies its captured evidence ID", prompt, StringComparison.Ordinal);
+        Assert.Contains("read_agent_evidence", prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain("specialists to call pr_fetch", prompt, StringComparison.Ordinal);
         Assert.DoesNotContain("Always set kind:\"diff\"", prompt, StringComparison.Ordinal);
-        Assert.DoesNotContain("follow its cursors with kind:\"diff\" through the complete page before delegating", prompt, StringComparison.Ordinal);
     }
 
     /// <summary>Review is one ordinary procedure; retry preserves its model and prepared context usage.</summary>
@@ -203,6 +202,69 @@ public sealed partial class SkillSubsystemTests
 
         Assert.Equal(SkillInvocationStatus.Completed, result.Status);
         Assert.Equal("custom_artifact_writer", Assert.Single(Assert.Single(result.Checkpoint.Steps).SideEffects).ToolId);
+    }
+
+    /// <summary>Repository-relative artifact claims match the absolute path returned by a write tool.</summary>
+    [Theory]
+    [InlineData(".inbox/review.md", 12, true)]
+    [InlineData("elsewhere/review.md", 12, false)]
+    [InlineData(".inbox/review.md", 13, false)]
+    public async Task SkillWorkflow_ArtifactOutputResolvesRepositoryRelativePath(
+        string claimedPath,
+        long observedBytes,
+        bool matches)
+    {
+        const string input = """{"mode":"specialInstructions","instructions":"Review the current changes"}""";
+        var repositoryPath = Path.Combine(Path.GetTempPath(), "threadsmith-artifact-validation");
+        var observedPath = Path.Combine(repositoryPath, ".inbox", "review.md");
+        var catalog = new SkillCatalog([new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true)]);
+        await catalog.RefreshAsync();
+        var selected = ModelProfileId.New();
+        var state = new InMemorySkillStateStore();
+        await using var events = new DomainEventStream();
+        await using var workflow = new SkillWorkflowOrchestrator(
+            catalog,
+            new SkillPackageVerifier(new SkillTrustPolicySnapshot()),
+            new CompatibleEvaluator { Profiles = [selected] },
+            new SkillContentLoader(new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            new BoundedJsonSchemaValidator(),
+            new FixedProcedureRunner(
+                System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    succeeded = true,
+                    delivery = "artifact",
+                    response = "Artifact created",
+                    artifact = new { path = claimedPath, bytesWritten = 12 },
+                }),
+                [ArtifactSideEffect("write_file", observedPath, observedBytes)]),
+            TestPromptLoader.Instance,
+            state,
+            (_, _) => Task.FromResult(new SkillInvocationHostContext
+            {
+                RepositoryPath = repositoryPath,
+                Trust = RepositoryTrustLevel.TrustedRead,
+                Phase = RunPhase.EvidenceCollection,
+                ModelProfileId = selected,
+                ReasoningLevel = "medium",
+            }),
+            events);
+        var request = PermissionPlan().Request with
+        {
+            Selector = "review",
+            InputJson = input,
+            HostBudget = new SkillBudget(),
+        };
+
+        if (matches)
+        {
+            var result = await workflow.InvokeAsync(request);
+            Assert.Equal(SkillInvocationStatus.Completed, result.Status);
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => workflow.InvokeAsync(request));
+            Assert.Contains("not observed in artifact side effects", error.Message, StringComparison.Ordinal);
+        }
     }
 
     /// <summary>An artifact claim must be backed by an observed side effect.</summary>

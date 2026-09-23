@@ -52,7 +52,7 @@ public sealed partial class AgentOperationalLimitTests
         Assert.Throws<InvalidOperationException>(() => (options with { MaximumAgents = -1 }).Validate());
     }
 
-    /// <summary>Model input uses trusted configurable count and text limits rather than compiled ceilings.</summary>
+    /// <summary>Delegation accepts long task and context text without a character ceiling.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -61,8 +61,6 @@ public sealed partial class AgentOperationalLimitTests
         var options = new DelegateAgentsOptions
         {
             MaximumAgents = disabled ? 0 : 17,
-            MaximumTaskCharacters = disabled ? 0 : 4_097,
-            MaximumContextCharacters = disabled ? 0 : 8_193,
         };
         var input = new DelegateAgentsInput
         {
@@ -76,6 +74,7 @@ public sealed partial class AgentOperationalLimitTests
 
         options.Validate();
         DelegateAgentsInputValidator.Validate(input, options);
+        DelegateAgentsInputValidator.Validate(input with { Agents = [input.Agents[0]] }, new DelegateAgentsOptions());
         Assert.Throws<ToolArgumentValidationException>(() => DelegateAgentsInputValidator.Validate(input, new DelegateAgentsOptions()));
         Assert.Throws<ToolArgumentValidationException>(() => DelegateAgentsInputValidator.Validate(input with { Agents = [] }, options));
         Assert.Throws<ToolArgumentValidationException>(() => DelegateAgentsInputValidator.Validate(
@@ -115,7 +114,7 @@ public sealed partial class AgentOperationalLimitTests
         Assert.NotNull(restored);
         Assert.Equal(limits, restored.AssignmentLimits);
         DelegationPlanValidator.Validate(restored);
-        Assert.Throws<InvalidDataException>(() => DelegationPlanValidator.Validate(plan with { AssignmentLimits = new() }));
+        DelegationPlanValidator.Validate(plan with { AssignmentLimits = new() { MaximumAssignments = 17, MaximumTasksPerAssignment = 33, MaximumScopeCharacters = 1_025 } });
     }
 
     /// <summary>Disabling operational limits cannot disable graph, role, path, or tool authority checks.</summary>

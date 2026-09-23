@@ -40,21 +40,28 @@ public sealed class PrFetchTests
         var input = (PrFetchInput)tool.DeserializeInput(JsonSerializer.Serialize(new { url = Input(bitbucket).Url, kind = "inventory" }));
         Assert.Equal(PrFetchKind.Inventory, input.Kind);
         await using var scope = new ToolOperationScope(CancellationToken.None);
-        var result = await tool.ExecuteAsync(input, Context(scope));
+        var context = Context(scope);
+        var result = await tool.ExecuteAsync(input, context);
         Assert.Equal("account", result.Value.Provider);
-        Assert.Equal(1, handler.Requests);
+        Assert.Equal(result.Value, Assert.Single(
+            scope.GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry())
+                .Snapshot(context.SessionId, context.RunId)));
+        Assert.Equal(3, handler.Requests);
         using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
         Assert.True(schema.RootElement.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToHashSet(StringComparer.Ordinal).SetEquals(["kind", "url"]));
         var kindSchema = schema.RootElement.GetProperty("properties").GetProperty("kind");
         Assert.Equal(["inventory", "diff"], kindSchema.GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("Use kind:\"inventory\"", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.Contains("Use kind:\"diff\" only when", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.Contains("instead of fetching all diff pages before delegation", tool.Definition.Description, StringComparison.Ordinal);
+        Assert.Contains("Use kind:\"diff\" for review", tool.Definition.Description, StringComparison.Ordinal);
+        Assert.Contains("calls kind:\"diff\" once before delegation", tool.Definition.Description, StringComparison.Ordinal);
         Assert.False(tool.Definition.AllowDuplicateInvocations);
+        Assert.False(tool.Definition.SubagentAvailable);
         using var outputSchema = JsonDocument.Parse(tool.Definition.OutputSchema.JsonSchema);
         var outputProperties = outputSchema.RootElement.GetProperty("properties");
         Assert.Equal(["inventory", "diff"], outputProperties.GetProperty("kind").GetProperty("enum").EnumerateArray().Select(item => item.GetString()));
-        Assert.Equal("boolean", outputProperties.GetProperty("isContinuation").GetProperty("type").GetString());
+        Assert.False(outputProperties.TryGetProperty("isContinuation", out _));
+        Assert.False(outputProperties.TryGetProperty("cursor", out _));
+        Assert.False(schema.RootElement.GetProperty("properties").TryGetProperty("cursor", out _));
     }
 
     /// <summary>Ambiguity is actionable without probing credentials or selecting an arbitrary account.</summary>
@@ -181,8 +188,6 @@ public sealed class PrFetchTests
         Assert.DoesNotContain(pages, page => page.Page.Kind == "diff");
         Assert.All(pages, page => Assert.Empty(page.Page.Diff));
         Assert.True(pages[^1].AcquisitionComplete);
-        Assert.True(pages[^1].DeliveryComplete);
-        Assert.Null(pages[^1].Cursor);
         Assert.Contains("Diff content was not requested", Assert.Single(pages[^1].Page.Limitations), StringComparison.Ordinal);
         Assert.Equal(0, handler.DiffRequests);
         Assert.Equal(2, handler.MetadataRequests);
@@ -190,14 +195,14 @@ public sealed class PrFetchTests
         var full = await tool.ExecuteAsync(input with { Kind = PrFetchKind.Diff }, context);
         Assert.False(full.Value.CacheHit);
         Assert.NotEqual(pages[0].SnapshotId, full.Value.SnapshotId);
-        Assert.Equal(3, handler.MetadataRequests);
+        Assert.Equal(4, handler.MetadataRequests);
     }
 
-    /// <summary>Large single-file diffs are delivered losslessly in bounded chunks.</summary>
+    /// <summary>Large single-file diffs and all inventory pages are delivered losslessly in one call.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task LargeDiffAndInventoryPaginationRemainBounded(bool bitbucket)
+    public async Task LargeDiffAndInventoryReturnInOneCall(bool bitbucket)
     {
         var diff = "diff --git a/src/changed.cs b/src/changed.cs\n" + string.Concat(Enumerable.Repeat("+Unicode 😀 changed line\n", 1000));
         using var handler = new PrHandler(bitbucket) { DiffText = diff, MultipleFilePages = true };
@@ -206,22 +211,20 @@ public sealed class PrFetchTests
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var context = Context(scope);
         var first = (await tool.ExecuteAsync(Input(bitbucket), context)).Value;
-        Assert.Equal(1, handler.Requests);
-        Assert.False(first.AcquisitionComplete);
-        Assert.False(first.DeliveryComplete);
+        Assert.Equal(2, handler.MetadataRequests);
+        Assert.True(first.AcquisitionComplete);
+        Assert.Equal(diff, first.Page.Diff);
         var pages = await ReadAllAsync(tool, Input(bitbucket), context);
         Assert.Equal(diff, string.Concat(pages.Select(page => page.Page.Diff)));
-        Assert.All(pages, page => Assert.True(page.Page.Diff.Length <= 257));
+        Assert.Single(pages);
         Assert.Equal(bitbucket ? 2 : 21, pages.Sum(page => page.Page.Files.Count));
         var cached = (await tool.ExecuteAsync(Input(bitbucket), context)).Value;
         Assert.True(cached.AcquisitionComplete);
-        Assert.False(cached.DeliveryComplete);
-        Assert.True(pages[^1].DeliveryComplete);
     }
 
-    /// <summary>Visible activity detail distinguishes PR fetch pagination without exposing cursor values.</summary>
+    /// <summary>Visible activity reports complete acquisition.</summary>
     [Fact]
-    public async Task ActivityDetailShowsKindAndPaginationState()
+    public async Task ActivityDetailShowsCompletedAcquisition()
     {
         using var handler = new PrHandler(false) { MultipleFilePages = true };
         using var http = new HttpClient(handler);
@@ -231,19 +234,10 @@ public sealed class PrFetchTests
         var input = Input(false) with { Kind = PrFetchKind.Inventory };
 
         var startedDetail = tool.GetActivityDetail(input);
-        Assert.Contains("account · inventory · first page", startedDetail, StringComparison.Ordinal);
-
-        var first = await tool.ExecuteAsync(input, context);
-        Assert.Contains("account · inventory · metadata · first page", first.TransientActivityDetail, StringComparison.Ordinal);
-        Assert.Contains("cursor returned", first.TransientActivityDetail, StringComparison.Ordinal);
-        Assert.Contains("acquisition pending", first.TransientActivityDetail, StringComparison.Ordinal);
-
-        var nextInput = input with { Cursor = first.Value.Cursor };
-        Assert.Contains("account · inventory · continuation", tool.GetActivityDetail(nextInput), StringComparison.Ordinal);
-
-        var next = await tool.ExecuteAsync(nextInput, context);
-        Assert.Contains("continuation", next.TransientActivityDetail, StringComparison.Ordinal);
-        Assert.DoesNotContain(first.Value.Cursor ?? string.Empty, next.TransientActivityDetail, StringComparison.Ordinal);
+        Assert.Contains("account · inventory · acquiring", startedDetail, StringComparison.Ordinal);
+        var result = await tool.ExecuteAsync(input, context);
+        Assert.Contains("acquisition complete", result.TransientActivityDetail, StringComparison.Ordinal);
+        Assert.DoesNotContain("pending", result.TransientActivityDetail, StringComparison.Ordinal);
     }
 
     /// <summary>Redirects must be validated before credentials can reach a different authority.</summary>
@@ -281,7 +275,6 @@ public sealed class PrFetchTests
         var tool = CreateTool(http, new TestSecrets(), options, true);
         await using var scope = new ToolOperationScope(CancellationToken.None);
         var pages = await ReadAllAsync(tool, Input(true), Context(scope));
-        Assert.True(pages[^1].DeliveryComplete);
         Assert.Contains("+new", string.Concat(pages.Select(page => page.Page.Diff)), StringComparison.Ordinal);
     }
 
@@ -353,7 +346,6 @@ public sealed class PrFetchTests
         var first = pages[0];
         Assert.Equal("account", first.Provider);
         Assert.True(pages[^1].AcquisitionComplete);
-        Assert.Null(pages[^1].Cursor);
         Assert.All(pages, page => Assert.Equal(first.SnapshotId, page.SnapshotId));
         var file = Assert.Single(pages.SelectMany(page => page.Page.Files));
         Assert.Equal("src/changed.cs", file.Path);
@@ -402,7 +394,6 @@ public sealed class PrFetchTests
 
         var refreshed = await tool.ExecuteAsync(input with { Refresh = true }, parent);
         Assert.NotEqual(first.SnapshotId, refreshed.Value.SnapshotId);
-        await Assert.ThrowsAsync<ArgumentException>(() => tool.ExecuteAsync(input with { Cursor = first.Cursor }, restrictedChild));
         await ReadAllAsync(tool, input, parent);
         Assert.True(handler.Requests > requests);
     }
@@ -427,15 +418,8 @@ public sealed class PrFetchTests
             Invocation = baseContext.Invocation with { ProhibitedPaths = [".env"] },
         };
 
-        var first = await tool.ExecuteAsync(Input(bitbucket), context);
-        var inventory = await tool.ExecuteAsync(Input(bitbucket) with { Cursor = first.Value.Cursor }, context);
-        Assert.Empty(inventory.Value.Page.Files);
-        Assert.Contains(
-            inventory.Value.Page.Limitations,
-            limitation => limitation.Contains("outside the caller's approved repository path scope", StringComparison.Ordinal));
-
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            tool.ExecuteAsync(Input(bitbucket) with { Cursor = inventory.Value.Cursor }, context));
+            tool.ExecuteAsync(Input(bitbucket), context));
         Assert.Contains("outside the caller's approved repository path scope", error.Message, StringComparison.Ordinal);
     }
 
@@ -458,12 +442,10 @@ public sealed class PrFetchTests
             Invocation = baseContext.Invocation with { ApprovedRoots = ["src"] },
         };
 
-        var first = await tool.ExecuteAsync(Input(false), context);
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            tool.ExecuteAsync(Input(false) with { Cursor = first.Value.Cursor }, context));
+            tool.ExecuteAsync(Input(false), context));
 
         Assert.Contains("file inventory is incomplete", error.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain(".env", JsonSerializer.Serialize(first.Value), StringComparison.Ordinal);
         Assert.Equal(0, handler.DiffRequests);
     }
 
@@ -485,14 +467,10 @@ public sealed class PrFetchTests
             Invocation = baseContext.Invocation with { ApprovedRoots = ["src"] },
         };
 
-        var first = await tool.ExecuteAsync(Input(false), context);
-        var inventory = await tool.ExecuteAsync(Input(false) with { Cursor = first.Value.Cursor }, context);
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            tool.ExecuteAsync(Input(false) with { Cursor = inventory.Value.Cursor }, context));
+            tool.ExecuteAsync(Input(false), context));
 
         Assert.Contains("changed during acquisition", error.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret", JsonSerializer.Serialize(first.Value), StringComparison.Ordinal);
-        Assert.DoesNotContain("secret", JsonSerializer.Serialize(inventory.Value), StringComparison.Ordinal);
         Assert.Equal(1, handler.DiffRequests);
     }
 
@@ -518,10 +496,8 @@ public sealed class PrFetchTests
             Invocation = baseContext.Invocation with { ApprovedRoots = ["src"] },
         };
 
-        var first = await tool.ExecuteAsync(Input(false), context);
-        var inventory = await tool.ExecuteAsync(Input(false) with { Cursor = first.Value.Cursor }, context);
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            tool.ExecuteAsync(Input(false) with { Cursor = inventory.Value.Cursor }, context));
+            tool.ExecuteAsync(Input(false), context));
 
         Assert.Contains("maximumCacheBytes", error.Message, StringComparison.Ordinal);
         Assert.Equal(1, handler.DiffRequests);
@@ -714,6 +690,41 @@ public sealed class PrFetchTests
         Assert.False(wrapped.Get("pr_fetch").Definition.AllowDuplicateInvocations);
     }
 
+    /// <summary>Complete evidence larger than the former output cap survives ordinary tool serialization.</summary>
+    [Fact]
+    public async Task CompleteLargeDiffPassesThroughToolPipelineWithoutTruncation()
+    {
+        var diff = "diff --git a/src/changed.cs b/src/changed.cs\n" + new string('x', 300_000);
+        using var handler = new PrHandler(false) { DiffText = diff, MultipleFilePages = true };
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new TestSecrets(), Options(false), false);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var context = Context(scope);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+
+        var result = await pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = context.SessionId,
+            RunId = context.RunId,
+            ToolId = "pr_fetch",
+            ArgumentsJson = "{\"url\":\"https://github.com/org/repo/pull/1\",\"kind\":\"diff\"}",
+            Context = context.Invocation,
+        });
+
+        Assert.True(result.Succeeded, result.Error);
+        Assert.False(result.IsTruncated);
+        using var payload = JsonDocument.Parse(result.ResultJson!);
+        Assert.Equal(diff, payload.RootElement.GetProperty("Page").GetProperty("Diff").GetString());
+        Assert.Equal(21, payload.RootElement.GetProperty("Page").GetProperty("Files").GetArrayLength());
+        Assert.Equal(2, handler.MetadataRequests);
+        Assert.Equal(1, handler.DiffRequests);
+        var cached = (await tool.ExecuteAsync(Input(false), context)).Value;
+        Assert.Equal(diff, cached.Page.Diff);
+        Assert.Equal(21, cached.Page.Files.Count);
+        Assert.True(cached.CacheHit);
+    }
+
     private static PrFetchTool CreateTool(HttpClient http, ISecretResolver secrets, PrFetchOptions options, bool bitbucket)
         => new([bitbucket ? new BitbucketCloudPullRequestProvider(http, secrets, options) : new GitHubPullRequestProvider(http, secrets, options)], options, TestPromptLoader.Instance);
 
@@ -749,17 +760,10 @@ public sealed class PrFetchTests
 
     private static async Task<List<PrFetchOutput>> ReadAllAsync(PrFetchTool tool, PrFetchInput input, ToolExecutionContext context)
     {
-        var pages = new List<PrFetchOutput>();
-        do
-        {
-            var page = (await tool.ExecuteAsync(input, context)).Value;
-            Assert.Equal(input.Kind, page.Kind);
-            Assert.Equal(input.Cursor is not null, page.IsContinuation);
-            pages.Add(page);
-            input = input with { Cursor = page.Cursor, Refresh = false };
-        }
-        while (input.Cursor is not null);
-        return pages;
+        var result = (await tool.ExecuteAsync(input, context)).Value;
+        Assert.Equal(input.Kind, result.Kind);
+        Assert.True(result.AcquisitionComplete);
+        return [result];
     }
 
     private sealed class TestSecrets : ISecretResolver

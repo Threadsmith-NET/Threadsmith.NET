@@ -1290,7 +1290,7 @@ public static class Milestone3Tests
                 {
                     Name = "propose_plan",
                     Description = "Propose governed work.",
-                    ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"object\"}}}",
+                    ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"object\",\"description\":\"The complete proposed plan.\"}}}",
                     PreferStrictArguments = true,
                 },
             ],
@@ -1309,11 +1309,69 @@ public static class Milestone3Tests
         Assert.False(parameters.GetProperty("additionalProperties").GetBoolean());
         Assert.Equal(["plan"], parameters.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
         var planSchema = parameters.GetProperty("properties").GetProperty("plan");
+        Assert.Equal("The complete proposed plan.", planSchema.GetProperty("description").GetString());
         Assert.Contains(
             planSchema.GetProperty("type").EnumerateArray(),
             item => item.GetString() == "null");
         Assert.False(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
         Assert.False(document.RootElement.TryGetProperty("response_format", out _));
+    }
+
+    /// <summary>The production code-explore decorator and OpenAI projection preserve argument help.</summary>
+    [Fact]
+    public static async Task OpenAiAdapter_CodeExploreArgumentDescriptions_ReachProviderRequest()
+    {
+        string? requestBody = null;
+        var handler = new RecordingHandler(async (request, cancellationToken) =>
+        {
+            requestBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return Response(HttpStatusCode.OK, "data: [DONE]\n");
+        });
+        var profile = CreateProfile(
+            _capableProfileId,
+            "code-explore-schema-help",
+            toolCalls: true,
+            combinedCost: 1);
+        var provider = new OpenAiCompatibleModelProvider(new HttpClient(handler), profile);
+        var tool = new CodeExploreOutputFormattingTool(
+            new CodeExploreTool(new UnusedCodeExploreService(), TestPromptLoader.Instance),
+            new CodeExploreOutputOptions(),
+            TestPromptLoader.Instance);
+        using var nativeSchema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        var nativeProperties = nativeSchema.RootElement.GetProperty("properties");
+        var queryDescription = nativeProperties.GetProperty("query").GetProperty("description").GetString();
+        var maxFilesDescription = nativeProperties.GetProperty("maxFiles").GetProperty("description").GetString();
+        Assert.Contains("both endpoints", queryDescription, StringComparison.Ordinal);
+        Assert.Contains("source-bearing file count", maxFilesDescription, StringComparison.Ordinal);
+
+        await CollectAsync(provider, new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "hello",
+            RequiredCapabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                ToolCalls = true,
+            },
+            Tools =
+            [
+                new ModelToolDefinition
+                {
+                    Name = tool.Definition.Id,
+                    Description = tool.Definition.Description,
+                    ArgumentsJsonSchema = tool.Definition.InputSchema.JsonSchema,
+                    PreferStrictArguments = tool.Definition.PreferStrictArguments,
+                },
+            ],
+        });
+
+        Assert.NotNull(requestBody);
+        using var request = JsonDocument.Parse(requestBody);
+        var function = Assert.Single(request.RootElement.GetProperty("tools").EnumerateArray())
+            .GetProperty("function");
+        var providerProperties = function.GetProperty("parameters").GetProperty("properties");
+        Assert.Equal(queryDescription, providerProperties.GetProperty("query").GetProperty("description").GetString());
+        Assert.Equal(maxFilesDescription, providerProperties.GetProperty("maxFiles").GetProperty("description").GetString());
     }
 
     /// <summary>Adjacent host-owned system messages are coalesced before OpenAI-compatible projection for endpoints that require one leading system message.</summary>
@@ -3356,6 +3414,20 @@ public static class Milestone3Tests
             CancellationToken cancellationToken)
         {
             return _handler(request, cancellationToken);
+        }
+    }
+
+    private sealed class UnusedCodeExploreService : ICodeExploreService
+    {
+        public Task<CodeExploreResult> QueryCodeExploreAsync(
+            WorkspaceId workspaceId,
+            CodeExploreRequest request,
+            ICodeExploreSourceReader sourceReader,
+            CancellationToken cancellationToken = default,
+            ModelVisibleSourceFrontier? visibleSourceFrontier = null)
+        {
+            return Task.FromException<CodeExploreResult>(
+                new InvalidOperationException("The schema projection test must not execute code exploration."));
         }
     }
 

@@ -44,6 +44,8 @@ Tool activity, success/failure, truncation, a 4,096-character sanitized result p
 
 Model-authored sibling tool calls are preflighted as one batch before any tool starts. If one sibling is malformed, unavailable, repeated, phase-invalid, or fails argument/schema validation before execution, Threadsmith rejects the entire batch, returns bounded corrective feedback for every correlated call, and asks the model to retry within `execution:maxCorrectiveTurns`. No valid sibling in that rejected batch is executed or retained as evidence.
 
+Before validating model-authored JSON against an input or output contract, Threadsmith uses the common JSON cleanup path to extract a complete object or array from surrounding prose or Markdown fences. The extracted value still undergoes the original schema, type, policy, and authority checks; cleanup does not accept invalid fields or execute anything by itself.
+
 Process executable values must be bare names; path-qualified values are rejected even when their basename is allow-listed. The process manager resolves the name only from absolute host `PATH` entries, never from the repository working directory. Cancellation terminates the entire tracked process tree, and a manager timeout is recorded as a failed tool invocation. Standard output and error are captured separately, sanitized, and bounded. If a semantic tool is unavailable, inspect the displayed semantic confidence and reopen the solution with `TrustedBuild` or explicitly request the supported text fallback.
 
 ## Availability and live activity

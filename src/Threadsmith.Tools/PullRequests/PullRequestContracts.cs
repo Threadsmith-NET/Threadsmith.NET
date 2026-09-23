@@ -27,17 +27,14 @@ public sealed record PrFetchInput
     /// <summary>Evidence scope: inventory for file identities/statuses, or diff for patch content and review.</summary>
     public required PrFetchKind Kind { get; init; }
 
-    /// <summary>Explicitly replaces the captured PR; cannot accompany a cursor.</summary>
+    /// <summary>Explicitly replaces the captured PR.</summary>
     public bool Refresh { get; init; }
-
-    /// <summary>Continuation returned by this tool for the current snapshot.</summary>
-    public string? Cursor { get; init; }
 }
 
 /// <summary>Provider-validated web and API identity; no model-supplied API endpoint.</summary>
 public sealed record PullRequestTarget(string Url, string ApiPath, string Repository, string Number);
 
-/// <summary>Captured PR identity and commit provenance. DestinationCommit is not a merge base. Description is sent on the first page only.</summary>
+/// <summary>Captured PR identity and commit provenance. DestinationCommit is not a merge base.</summary>
 public sealed record PullRequestMetadata(
     string Url,
     string Repository,
@@ -58,19 +55,16 @@ public sealed record PullRequestFile(string Path, string? PreviousPath, string S
 /// <summary>A bounded portion of untrusted PR evidence. Completion is an explicit terminal page.</summary>
 public sealed record PullRequestPage(string Kind, IReadOnlyList<PullRequestFile> Files, string Diff, IReadOnlyList<string> Limitations);
 
-/// <summary>Captured PR page and cursor. Only the terminal page confirms acquisition consistency.</summary>
+/// <summary>Complete PR evidence after acquisition consistency checks.</summary>
 public sealed record PrFetchOutput(
     string Provider,
     PrFetchKind Kind,
-    bool IsContinuation,
     Guid SnapshotId,
     DateTimeOffset CapturedAt,
     PullRequestMetadata Metadata,
     PullRequestPage Page,
     bool CacheHit,
-    bool AcquisitionComplete,
-    bool DeliveryComplete,
-    string? Cursor);
+    bool AcquisitionComplete);
 
 /// <summary>Compiled provider contract; all returned values are host-owned evidence DTOs.</summary>
 public interface IPullRequestProvider

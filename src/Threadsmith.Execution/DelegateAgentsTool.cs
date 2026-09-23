@@ -144,7 +144,7 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
         _options = options;
         _steering = steering;
         _projector = new DelegateAgentsResultProjector(options, projectionLimits, prompts);
-        _renderer = new DelegateAgentsResultRenderer(prompts, options.EffectiveModelProjectionCharacters());
+        _renderer = new DelegateAgentsResultRenderer(prompts);
         _definition = CreateDefinition(options, prompts);
     }
 
@@ -186,11 +186,11 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
                         context.RunId,
                         plan.DelegationId),
                 };
-            var modelContent = _renderer.Render(result, out var modelTruncated);
+            var modelContent = _renderer.Render(result);
             return new ToolExecution<DelegateAgentsResult>(
                 result,
                 [new ToolProvenanceSource("delegation", result.DelegationId)],
-                projection.IsTruncated || modelTruncated,
+                projection.IsTruncated,
                 modelContent);
         }
         finally
@@ -273,14 +273,12 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             ["minLength"] = 1,
             ["description"] = "The task or question for this child.",
         };
-        AddPositiveInteger(task, "maxLength", options.EffectiveLimit(options.MaximumTaskCharacters));
         var context = new JsonObject
         {
             ["type"] = "string",
             ["minLength"] = 1,
             ["description"] = "All known files, symbols, evidence, constraints, and stopping guidance relevant to this child.",
         };
-        AddPositiveInteger(context, "maxLength", options.EffectiveLimit(options.MaximumContextCharacters));
         var agents = new JsonObject
         {
             ["type"] = "array",

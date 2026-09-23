@@ -633,7 +633,8 @@ public sealed partial class InteractionCoordinator
                                 eventSegments,
                                 domainEvent,
                                 transcriptDelta,
-                                _displayOptions.ShowOperationDurations);
+                                _displayOptions.ShowOperationDurations,
+                                toolProgress);
                         }
 
                         if (eventSegments.Count > 0)

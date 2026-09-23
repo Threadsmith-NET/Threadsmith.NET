@@ -207,8 +207,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.Equal(new[] { "Explorer", "SecurityReviewer", "TestReviewer" }, result.Children.Select(item => item.Role));
         var projectedReview = Assert.Single(result.Children, child => child.Role == nameof(AgentRole.SecurityReviewer));
         Assert.Equal(longResponse, projectedReview.Summary);
-        var rendered = new DelegateAgentsResultRenderer(TestPromptLoader.Instance).Render(result, out var truncated);
-        Assert.False(truncated);
+        var rendered = new DelegateAgentsResultRenderer(TestPromptLoader.Instance).Render(result);
         Assert.Contains(longResponse, rendered, StringComparison.Ordinal);
         Assert.All(checkpoint.ChildOutcomes, outcome => Assert.NotNull(outcome.ModelSelection));
         var restored = JsonSerializer.Deserialize<DelegationCheckpoint>(JsonSerializer.Serialize(checkpoint));

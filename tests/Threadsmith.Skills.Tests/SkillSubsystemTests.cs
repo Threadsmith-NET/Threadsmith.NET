@@ -298,6 +298,7 @@ public sealed partial class SkillSubsystemTests
         var compiled = validator.Compile(safe);
 
         // Act / Assert
+        Assert.Equal("{\"count\":2}", validator.Validate(compiled, "The value is: {\"count\":2}."));
         Assert.Throws<NotSupportedException>(() =>
             validator.Compile("{\"type\":\"object\",\"$ref\":\"https://evil.invalid/schema\"}"));
         Assert.Throws<NotSupportedException>(() =>

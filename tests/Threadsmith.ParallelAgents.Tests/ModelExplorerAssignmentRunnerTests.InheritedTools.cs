@@ -17,9 +17,9 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>Inherited children execute processes, writes and native skills while parent-only tools stay unavailable throughout.</summary>
+    /// <summary>Inherited children execute processes and writes while parent-only and workflow tools stay unavailable.</summary>
     [Fact]
-    public async Task InheritedTools_ProcessesWritesAndSkillsUseSharedPipelineWithoutParentOnlyTools()
+    public async Task InheritedTools_ProcessesAndWritesUseSharedPipelineWithoutParentOnlyOrWorkflowTools()
     {
         var repository = Directory.CreateDirectory(Path.Combine(PhysicalTemporaryPath(), $"threadsmith-inherited-tools-{Guid.NewGuid():N}")).FullName;
         try
@@ -147,6 +147,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             var parentTools = registry.GetRegistrations(sessionId, rootRunId)
                 .Where(item => authority.AllowedToolIds.Contains(item.Tool.Definition.Id, StringComparer.Ordinal)).ToArray();
             Assert.Contains(parentTools, item => item.Tool.Definition.Id == DelegateAgentsContract.ToolId);
+            Assert.Contains(parentTools, item => item.Tool.Definition.Id == "invoke_skill");
             Assert.Contains(parentTools, item => item.Tool.Definition.Id == "parent_only_metadata");
             var snapshotId = snapshots.Capture(
                 sessionId,
@@ -174,18 +175,17 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
             Assert.True(result.Succeeded, result.Error ?? result.ModelResultContent);
             Assert.Equal("child artifact", await ReadEventuallyAsync(Path.Combine(repository, ".inbox/child.md")));
-            Assert.Equal("native artifact", await ReadEventuallyAsync(Path.Combine(repository, ".inbox/native.md")));
             var process = Assert.Single(processes.Requests);
             Assert.NotEqual(rootRunId, process.RunId);
             Assert.Equal(repository, Path.TrimEndingDirectorySeparator(process.WorkingDirectory));
             Assert.Equal("bash", process.FileName);
             Assert.Contains("dotnet test", process.Arguments);
             var requests = provider.Requests.ToArray();
-            Assert.Equal(6, requests.Length);
+            Assert.Equal(3, requests.Length);
             Assert.Equal(0, usage.GetOwnerSnapshot(sessionId).InputTokens);
-            Assert.Equal(60, usage.GetOwnerSnapshot(sessionId, process.RunId).InputTokens);
-            Assert.Equal(60, usage.GetSnapshot(sessionId).InputTokens);
-            Assert.Equal(12, usage.GetSnapshot(sessionId).OutputTokens);
+            Assert.Equal(30, usage.GetOwnerSnapshot(sessionId, process.RunId).InputTokens);
+            Assert.Equal(30, usage.GetSnapshot(sessionId).InputTokens);
+            Assert.Equal(6, usage.GetSnapshot(sessionId).OutputTokens);
             Assert.All(requests, request =>
             {
                 Assert.Equal(frozen.Id, request.ResolvedProfileId);
@@ -193,16 +193,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 Assert.DoesNotContain(request.Tools, tool => tool.Name == "inspect_metadata");
                 Assert.DoesNotContain(request.Tools, tool => tool.Name == "parent_only_metadata");
                 Assert.DoesNotContain(request.Tools, tool => tool.Name == DelegateAgentsContract.ToolId);
+                Assert.DoesNotContain(request.Tools, tool => tool.Name == "invoke_skill");
             });
             var nativeRequests = requests.Where(request => request.Messages.Any(message => message.SectionId == "skill-procedure")).ToArray();
-            Assert.Equal(2, nativeRequests.Length);
-            Assert.All(nativeRequests, request => Assert.Contains(request.Tools, tool => tool.Name == ChildAgentEvidenceTool.ToolId));
-            Assert.All(nativeRequests, request => Assert.Equal(process.RunId, request.RunId));
+            Assert.Empty(nativeRequests);
             var invocations = observed.OfType<ToolInvocationStarted>().ToArray();
             Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == "run_process");
-            Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == "invoke_skill");
-            Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == "write_file"
-                && item.ActivityOrigin?.StartsWith("skill:Maintained:review@1.0.0:", StringComparison.Ordinal) == true);
+            Assert.DoesNotContain(invocations, item => item.RunId == process.RunId && item.ToolName == "invoke_skill");
+            Assert.Contains(invocations, item => item.RunId == process.RunId && item.ToolName == "write_file");
             Assert.Equal(rootRunId, Assert.Single(invocations, item => item.ToolName == DelegateAgentsContract.ToolId).RunId);
             var delegations = observed.OfType<DelegationCheckpointWritten>().Select(item => item.DelegationId).Distinct().ToArray();
             Assert.Single(delegations);
@@ -324,26 +322,16 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
                 Assert.False(toolResult.IsError, toolResult.GetModelVisibleContent());
             }
 
-            var native = request.Messages.Any(message => message.SectionId == "skill-procedure");
-            var call = native
-                ? request.ToolContinuationRound switch
-                {
-                    0 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/native.md\",\"content\":\"native artifact\"}"),
-                    _ => null,
-                }
-                : request.ToolContinuationRound switch
+            var call = request.ToolContinuationRound switch
                 {
                     0 => new ToolRequestModelOutput("run_process", "{\"command\":\"dotnet test\"}"),
                     1 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/child.md\",\"content\":\"child artifact\"}"),
-                    2 => new ToolRequestModelOutput("invoke_skill", "{\"selector\":\"Maintained:review@1.0.0\",\"input\":{}}"),
                     _ => null,
                 };
             yield return new ModelChunk
             {
                 Output = call,
-                Text = call is not null ? null : native
-                    ? "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Nested skill complete.\"}"
-                    : "{\"status\":\"complete\",\"summary\":\"Inherited tool work complete.\",\"findings\":[]}",
+                Text = call is not null ? null : "{\"status\":\"complete\",\"summary\":\"Inherited tool work complete.\",\"findings\":[]}",
                 Usage = new ModelUsage(10, 2),
             };
         }

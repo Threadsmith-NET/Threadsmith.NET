@@ -1,167 +1,196 @@
 # Implementation Plan 102: Code Explore Schema Help and Tool Selection
 
-**Status:** Planned.
-**Delivery track:** Maintenance - model-facing argument help and task-appropriate tool selection.
-**Prerequisites:** The configuration/allocation implementation in [Plan 89](plan-89-code-explore-agent-sufficiency-ranking-adaptive-output.md), the deployed prompt-asset contract in [Plan 90](plan-90-deployable-prompt-assets.md), and the existing minimal semantic schemas in [Plan 92](plan-92-advanced-semantic-tool-schema-maintenance.md). Preserve the implemented source, flow, deduplication, partial-coverage, and continuation contracts in the [code explore architecture](../architecture/code-explore-tool.md).
+**Status:** Complete. Provider-visible `query` and `maxFiles` descriptions are implemented and verified through the production decorated definition and maintained provider projections; independent adversarial re-review is clean.
+**Delivery track:** Maintenance - complete model-facing `code_explore` argument documentation while preserving the current task-appropriate tool-selection policy.
+**Prerequisites:** The implemented configuration/allocation behavior from [Plan 89](plan-89-code-explore-agent-sufficiency-ranking-adaptive-output.md), the deployed prompt-asset mechanism from [Plan 90](plan-90-deployable-prompt-assets.md), and the strict model-facing schema patterns established by completed [Plan 92](plan-92-advanced-semantic-tool-schema-maintenance.md). Preserve the current source, flow, deduplication, partial-coverage, continuation, and active-context contracts in the [code explore architecture](../architecture/code-explore-tool.md).
 **Related contracts:** [Planning governance](planning-governance.md), [shared implementation context](00-shared-context.md), [tool operations](../operations/tools.md), and [prompt operations](../operations/prompts.md).
 
 ## 1. Objective
 
-Make `code_explore` easier to query and choose appropriately without discouraging efficient direct reads of known files. Add useful help to the argument schema actually advertised to the model, clarify discovery and relationship use cases, and retain reuse of sufficient current source. Evaluate the wording separately from allocation changes.
+Make the meaning of `code_explore.query` and `code_explore.maxFiles` explicit in the JSON schema actually advertised to models. Preserve the current top-level selection guidance, which already directs models toward `code_explore` for unfamiliar or cross-cutting C# behavior and toward narrower tools for known files, declarations, relationships, and exact text.
 
-Success means useful, accurate answers at an acceptable total token and elapsed-time cost. More `code_explore` calls, fewer direct reads, or more emitted source are not success criteria by themselves.
+Success means provider-visible requests contain accurate property-level help without changing argument shape, execution, source selection, budgets, validation, authority, or unrelated tool schemas. Increased `code_explore` usage is not a success criterion.
 
 ## 2. Architectural Context
 
-The host owns tool availability, schemas, execution, source scope, budgets, and authority. Deployed prompt assets control wording. `ToolDefinitionFactory` generates native JSON schemas, and provider projection must preserve their supported documentation metadata. The output-formatting wrapper must retain the underlying tool description and argument help.
+The host owns tool availability, schemas, execution, source scope, budgets, and authority. `ToolDefinitionFactory` generates native JSON schemas from Tools-layer input DTOs, seals object schemas, and supplies provider-neutral `ToolDefinition` contracts. Provider adapters and output-formatting wrappers must preserve supported schema documentation metadata.
 
-All tools operate alongside the host's other tools. A comparison between CodeGraph's own MCP inventory and Threadsmith's complete native inventory cannot establish an efficiency disadvantage. CodeGraph's stronger explore-first wording is a design reference, not evidence that its selection policy is better for Threadsmith.
+Threadsmith-owned top-level tool wording remains a deployed prompt asset. Property names, types, requiredness, validation, and property documentation are code-owned schema contracts. Do not move schema structure or validation into prompt assets merely to add help text.
+
+The current `code_explore` description already establishes the intended selection policy: use exploration when relevant code is unknown or compiler-backed cross-cutting evidence is required; use direct reads, exact search, or focused semantic tools when their narrower evidence is sufficient; reuse returned ranges rather than rereading them. This plan preserves that policy rather than replacing it with an explore-first rule.
 
 ## 3. Scope
 
-- Add concise `query` examples and flow-endpoint guidance to the model-visible `code_explore` argument schema.
-- Explain `maxFiles` using the implemented host-default and narrowing semantics.
-- Clarify that explore is useful for discovering relevant source and understanding compiler-backed calls, dependencies, and impact.
-- Preserve direct reads of known files/ranges, batching independent reads, and scoped exact-text search.
-- Retain sufficient-source reuse, precise partial coverage, missing-file/ambiguity results, and targeted follow-up.
-- Check related `read_file`, `search`, and `find_symbol` descriptions for contradictions; change only wording needed to keep the selection rules consistent.
-- Run a controlled description/schema-help comparison with unchanged execution behavior.
+- Add concise provider-visible help for the required `query` property.
+- Add concise provider-visible help for the optional `maxFiles` property using its implemented default and narrowing semantics.
+- Verify the help survives the native definition, provider projection, and any output-formatting wrapper used in real requests.
+- Preserve the current top-level `code_explore`, `read_file`, `search`, `find_symbol`, and relationship-tool selection guidance unless inspection finds a concrete contradiction.
+- Add focused regression coverage for metadata propagation and unchanged schema/execution behavior.
+- Use a small optional live smoke comparison only when needed to confirm that a configured provider receives and can use the metadata; deterministic wire-request inspection is the acceptance authority.
 
 ## 4. Non-Scope
 
-- No blanket explore-first rule, including for questions that merely mention multiple files or symbols.
-- No claims that one explore call is usually enough, guaranteed accuracy/token savings, or arbitrary call-count limits.
-- No changes to allocation, ranking, query interpretation, retrieval, operational options, model routing, tool availability, or request validation semantics.
-- No generic documentation-generation framework or automatic schema changes across unrelated tools.
-- No forced tool sequence, mandatory answer format, runtime answer grading, or citation-count gate.
-- No permission, path, source-identity, mutation, or continuation-authority changes.
+- No blanket explore-first rule, including for questions that merely name multiple files or symbols.
+- No rewrite of the current `code_explore` description solely to match the earlier candidate prose in this plan.
+- No 192-run model benchmark or claim that wording alone improves accuracy, latency, token cost, or tool-call count.
+- No changes to allocation, ranking, query interpretation, retrieval, result formatting, operational options, model routing, tool availability, or request validation semantics.
+- No generic documentation-generation framework or automatic schema mutation across unrelated tools.
+- No new argument, forced tool sequence, mandatory answer format, runtime answer grading, or citation-count gate.
+- No permission, path, source-identity, mutation, continuation-authority, or prompt-customization change.
 
 ## 5. Current State
 
-The inspected Threadsmith `code_explore` description already recommends discovery/compiler-backed relationships, permits direct reads/search for known files, and encourages source reuse. Those are existing strengths to preserve.
+The current top-level `code_explore` description is materially newer and more precise than the description inspected when this plan was created. It now:
 
-The actual first-request argument advertisement was identical across all 48 matched Plan 89 live runs: `query` is a required string, `maxFiles` is an optional integer, and neither property has a description. XML comments on `CodeExploreInput` do not reach that schema. CodeGraph's inspected local 1.5.0 and installed 1.4.1 descriptions include grouped-target examples and flow-endpoint help; importing its broader explore-first policy is outside this plan.
+- reserves exploration for unfamiliar or cross-cutting C# behavior and multi-hop flow, dependency, or impact questions;
+- directs known declarations and direct relationships to focused semantic tools;
+- directs known files to `read_file` and exact text to `search`;
+- tells the model to reuse returned source ranges and follow continuations only for evidence still needed;
+- describes missing/ambiguous named-file handling and bounded host-managed traversal.
 
-The existing live evaluation changed execution behavior, while descriptions and schemas stayed constant. It did not isolate direct reads versus explore or establish a benefit from stronger selection wording.
+That later work satisfies the plan's general tool-selection objective. No broad description rewrite is currently justified.
+
+The remaining gap is in the actual input schema. `CodeExploreInput` contains XML documentation comments, but `ToolDefinitionFactory.Create` uses `JsonSerializerOptions.GetJsonSchemaAsNode` without an explicit property-documentation modifier. The generated schema therefore advertises required string `query` and optional integer `maxFiles` without property descriptions. XML comments are not provider-visible schema help.
+
+`maxFiles` is a source-bearing file-section hint, not a cap on every file referenced by relationship/coverage metadata, a source-character budget, or an authority boundary. Omission or a nonpositive value uses the resolved host default; a positive value requests a narrower source-bearing file-count bound subject to enabled host limits. The top-level description says the argument is optional but cannot fully explain these per-property semantics as reliably as the schema itself.
+
+The earlier Plan 89 live evaluation changed execution behavior while descriptions and schemas remained constant. It does not measure this remaining metadata-only change and need not be repeated as a release gate.
 
 ## 6. Proposed Design
 
-### 6.1 Argument help in the actual advertisement
+### 6.1 Tool-scoped schema metadata
 
-Use the smallest explicit, tool-scoped metadata path compatible with the existing schema exporter. Keep property names, types, requiredness, strict-argument preference, object sealing, and execution validation unchanged. Do not assume C# XML comments or attributes are exported: verify the actual native definition and provider-facing request.
+Add the smallest explicit, tool-scoped metadata mechanism that places descriptions on `code_explore`'s generated `query` and `maxFiles` property schemas. Prefer a local post-generation helper or an equally narrow supported exporter customization. Do not add reflection over XML documentation, a repository-wide schema annotation framework, or incidental changes to every built-in tool.
 
-Proposed `query` help:
+Keep property names, JSON casing, types, requiredness, strict-object sealing, integer constraints, and execution validation unchanged. Fail fast in construction/tests if the expected property is absent rather than silently advertising incomplete help.
 
-> A C# question, symbol, file, or code term. Name related targets together, for example "CodeExploreTool CodeExploreOutputFormattingTool". For a flow, include both endpoints. A natural-language question also works; no preliminary symbol search is required.
+Intended `query` help:
 
-Proposed `maxFiles` help:
+> A C# question, symbol, file, or code term. Name related targets together; for a flow, include both endpoints. Natural-language questions are supported without a preliminary symbol search.
 
-> Optional source-file count hint. Omit or use a nonpositive value to use the configured host default. A positive value requests that file-count bound, subject to enabled host limits. This does not set the source-length budget.
+Intended `maxFiles` help:
 
-Do not advertise a hard-coded default or imply that argument zero disables a cap. The configuration convention where zero disables an operational cap is a separate contract.
+> Optional source-bearing file count hint. Omit or use a nonpositive value for the configured host default. A positive value requests a narrower source-bearing file count subject to host limits; it does not set the source-length budget.
 
-Model-facing help must follow the repository's deployed prompt-asset ownership rules; schemas and validation stay code-owned. If new prompt assets are needed, add them to the code catalog, loader/deployment inventories, and both prompt reference documents in the same implementation change. Prefer short descriptions with inline examples over unsupported provider-specific schema keywords.
+Final wording may be shortened to meet provider limits, but must preserve those meanings and must not advertise a hard-coded default.
 
-### 6.2 Selection guidance
+### 6.2 Existing selection guidance
 
-| Task | Guidance |
+Retain the current selection policy:
+
+| Information need | Preferred path |
 |---|---|
-| Relevant file or range is known and can answer the question | Read it directly; batch independent reads, including multiple known files |
-| A known large file needs an exact-text location | Scoped search followed by a targeted read can avoid unnecessary source volume |
-| Relevant source is unknown | Explore using the question or available code terms |
-| Calls, dependencies, or impact need compiler-backed evidence | Explore with related targets; name both endpoints for a flow |
-| Current returned ranges already answer the question | Reuse them and answer; follow up only for unresolved evidence |
+| Known repository-relative file or sufficient known range | `read_file`, batching independent known reads where supported |
+| Exact text in a known scope | `search`, followed by a targeted read when needed |
+| Known declaration or one direct semantic relationship | `find_symbol` or the matching focused relationship tool |
+| Relevant source is unknown or behavior is cross-cutting | `code_explore` with a focused question or anchors |
+| Multi-hop calls, dependencies, impact, or endpoint-to-endpoint flow | `code_explore`, naming related targets or both flow endpoints |
+| Current returned ranges already answer the question | Reuse them; do not reread or re-search them |
 
-The number of named files alone must not override the information need. Preserve repository-wide C# symbol-discovery restrictions in `search` and declaration-only use cases in `find_symbol`.
+Change a deployed description only if an inspected contradiction would cause incorrect selection or argument use. Any such change remains subject to the prompt catalog, deployment synchronization, and documentation rules; the schema descriptions themselves remain code-owned metadata.
 
-### 6.3 Candidate main description
+### 6.3 Verification strategy
 
-> Explore current C# code to discover relevant source or understand compiler-backed calls, dependencies, and impact. Accepts a natural-language question, symbols, files, or code terms and returns grouped line-numbered source with available relationships. Name related targets together; for a flow, include both endpoints. Read known files or ranges directly when they can answer the question, batching independent reads. Use scoped search to locate exact text. Reuse returned source ranges when sufficient; a partial range does not establish whole-file coverage. Follow reported paths or continuations for missing evidence. Named C# files produce explicit missing or ambiguous results; use list_files to locate a missing bare filename or reported paths to disambiguate. Provide query and optionally maxFiles; the host manages traversal and result budgets.
+Treat deterministic inspection of the actual provider-facing request as the primary evidence. Verify both property descriptions after every active projection/wrapper, not merely on `CodeExploreInput` or the initial native definition.
 
-This is a candidate for review and measurement, not permission to change execution behavior. Keep final wording concise and consistent with existing path, staleness, and continuation guidance.
+A live provider smoke check is optional and narrowly scoped: capture one or more authorized requests to establish that the configured adapter transmits the same descriptions. Model behavior is stochastic and is not required to prove deterministic schema propagation. If broader wording effectiveness is later questioned, create a separately justified evaluation rather than retaining the superseded 192-run matrix here.
 
 ## 7. Public Contracts
 
-The tool remains `code_explore` with required string `query` and optional integer `maxFiles`. No new argument, configuration key, output field, permission, or required call is introduced. Description metadata is the only intended wire-schema change. Current output ranges, hashes, coverage indicators, back-references, and continuations keep their meaning.
+The tool remains `code_explore` with required string `query` and optional integer `maxFiles`. Description metadata on those properties is the only intended wire-schema change. No new argument, configuration key, output field, permission, tool version, or required call is introduced.
+
+Current result ranges, hashes, completeness indicators, back-references, relationships, omissions, and continuations retain their meanings. Existing valid calls and host-authored requests behave identically.
 
 ## 8. Project/File Changes
 
-- `src/Threadsmith.Tools/CodeExploreTool.cs`: bind the argument help without changing input behavior.
-- `src/Threadsmith.Tools/BuiltInTools.cs`: only if a small explicit opt-in schema-metadata hook is necessary; preserve unrelated advertisements.
-- `src/Threadsmith.Tools/Prompts/Tool-code_explore-Description.md`: narrowed task-selection wording.
-- Related `Tool-read_file-Description.md`, `Tool-search-Description.md`, and `Tool-find_symbol-Description.md`: only confirmed consistency fixes.
-- Prompt catalog, loading/deployment inventories, `docs/operations/prompts.md`, and `docs/prompt-file-reference.md`: required if prompt filename, purpose, token contract, or ownership changes.
-- Focused native-tool/model-tooling/architecture tests: actual metadata propagation, unchanged schema constraints, and deployed assets.
-- Existing evaluation harness and a source-only result record: controlled comparison; no new benchmark subsystem.
+- `src/Threadsmith.Tools/CodeExploreTool.cs`: attach tool-scoped input-property help without changing input behavior.
+- `src/Threadsmith.Tools/BuiltInTools.cs`: only if a small reusable primitive is needed to update named properties on one generated schema; unrelated definitions must remain structurally unchanged.
+- Provider projection/output-formatting owners: change only if inspection proves they discard supported property descriptions.
+- `src/Threadsmith.Tools/Prompts/Tool-code_explore-Description.md` and related descriptions: no expected change; edit only for a demonstrated contradiction.
+- Focused native-tool/model-tooling/provider tests: generated shape, projected metadata, unchanged validation, and unrelated-schema isolation.
+- Prompt catalogs and prompt reference documents: update only if a deployed prompt asset actually changes.
 
 ## 9. Ordered Tasks
 
-1. Re-read applicable DOX, prompt ownership, and C# guardrails; capture current effective descriptions and schemas from a real request.
-2. Implement explicit help for `query` and `maxFiles`; prove it reaches the model and does not change validation or unrelated tool schemas.
-3. Apply the narrowed description and inspect related tool guidance for contradictions.
-4. Run focused contract tests and prompt/deployment validation. Verify calls, source limits, formatting, and continuation behavior are unchanged for identical inputs.
-5. Obtain an adversarial subagent review; resolve valid findings until clean.
-6. Freeze the experiment design and variants before running the live comparison in section 10.
-7. Audit answers and usage, report uncertainty and regressions, and retain or revise wording based on the evidence. Re-review substantive revisions and rerun only affected comparisons.
-8. Record completion and results in this document; update owned user/operator documentation only for shipped behavior.
+1. Capture the current native and provider-facing `code_explore` definitions from a real request path; confirm that both properties lack descriptions and identify every projection/wrapper involved.
+2. Trace `maxFiles` from deserialization through request construction and resolved options; confirm the intended omission, nonpositive, positive, and hard-limit semantics before fixing wording.
+3. Implement the smallest tool-scoped property-description mechanism and apply it only to `query` and `maxFiles`.
+4. Add focused tests proving descriptions reach the provider-facing schema while names, types, requiredness, strict-object sealing, constraints, and malformed-call behavior remain unchanged.
+5. Compare current descriptions for `code_explore`, `read_file`, `search`, `find_symbol`, and focused relationship tools. Make no prose edit unless a concrete contradiction remains.
+6. Run affected native-tool, model-tooling/provider, prompt/deployment when applicable, and architecture checks. Inspect the diff for unrelated schema churn.
+7. Perform adversarial integration review through the actual request path, including wrappers and more than one provider projection when available. Resolve demonstrated findings.
+8. Optionally perform a small authorized live request inspection if deterministic adapter fixtures cannot establish transmitted metadata. Record unavailable providers rather than expanding the task into a benchmark.
+9. Record completion, verification commands/results, deviations, and any unassessed provider path in this document.
 
 ## 10. Testing
 
 ### 10.1 Deterministic contracts
 
-- Inspect the actual provider-facing advertisement for readable parameter descriptions and query examples; test beyond the input type's XML comments.
-- Preserve `query` requiredness, `maxFiles` type/optionality, strict object handling, and rejection behavior for malformed calls. Cover omitted, nonpositive, and positive `maxFiles` semantics using existing execution fixtures.
-- Verify any shared metadata hook leaves unrelated schemas unchanged and survives the formatter/provider path.
-- Run relevant existing prompt catalog, loading, and packaging tests. Do not build a prose-ranking or exact-wording test framework.
-- Use representative identical tool calls to confirm descriptions did not alter source selection, budgets, results, or continuation replay.
+- Assert that the generated `code_explore` input schema contains readable descriptions on `query` and `maxFiles`.
+- Assert that the provider-facing request retains the same descriptions through each supported projection path exercised by existing fixtures.
+- Preserve `query` requiredness, `maxFiles` integer type/optionality, closed-object behavior, strict-argument preference, and rejection of unknown or malformed arguments.
+- Cover omitted, zero, negative, positive, and above-host-limit `maxFiles` behavior using existing execution fixtures; schema prose must describe rather than change these semantics.
+- Compare representative unrelated tool schemas before and after the metadata hook and prove that they do not acquire or lose fields, constraints, or descriptions.
+- Execute identical `code_explore` calls with fixed fixtures and confirm source selection, budgets, result projection, and continuations are unchanged.
+- Run prompt catalog/loading/packaging tests only if a prompt asset changes.
 
-### 10.2 Controlled live comparison
+### 10.2 Provider and live evidence
 
-Use the same completed Plan 89 execution implementation for both variants. The intended difference is only the descriptions and schema help; record exact advertisements and all differing fields. Preserve tool inventory/order, options, sources, repository scope, model profile, reasoning setting, questions, and paired admitted context. Freeze or isolate memory so one run cannot change its counterpart's instructions. Account for the extra description tokens rather than masking their cost.
+Use existing provider-adapter request fixtures to inspect serialized schemas for every maintained projection that supports property descriptions. If a provider format cannot carry them, record that limitation and avoid inventing misleading fallback prose unless the common top-level description has a demonstrated gap.
 
-Before the first run, select at least two questions in each of four categories: known files (including multiple known files), known ranges/scoped exact text, discovery, and compiler-backed relationships. Use Terra, Sol, and Luna when available, with four repetitions per model/question/variant. With eight questions and three models, this is 192 planned runs / 96 pairs. Record availability-based exclusions before execution; do not depend on vLLM.
-
-Counterbalance baseline-first and candidate-first within every model/question combination; interleave categories and models. Record runtime/source/configuration hashes before and after, resolved profile/reasoning, exact questions, request context, tool advertisements, and restoration. Use serial execution or a fixed declared concurrency policy that is identical for both variants.
-
-Primary outcomes are answer accuracy, total reported input tokens (including cache reads), and elapsed time. Report cached/uncached breakdowns, output tokens, tool calls, and model requests separately. Manually audit substantive inaccuracies and material omissions against frozen source, hiding variant labels where practical. State the review method and its limits.
-
-First-tool selection, repeated reads of already-shown ranges, and explore frequency are diagnostics. Keep all completed runs in the primary analysis regardless of tool choice or answer quality. Record failures, timeouts, and any predeclared retry policy; do not silently replace poor answers. Show per-category and per-model results as well as paired aggregates and uncertainty. Avoid causal claims beyond the measured wording change and controlled conditions.
-
-No throughput or general efficiency claim follows from a small favorable aggregate. If results are inconclusive, record that explicitly; accurate schema help may still be retained as a usability correction. Narrow or revert wording that causes supported accuracy or known-file efficiency regressions. No automatic statistical release gate is introduced.
+An authorized live smoke check may capture the advertised schema for one configured profile without assessing answer quality. Do not infer accuracy, efficiency, or cross-provider behavior from a model's choice in a handful of calls. No live credentials are required for completion when deterministic production-path fixtures cover projection faithfully.
 
 ## 11. Security/Permissions
 
-Tool selection prose cannot widen permissions, trusted scope, source access, mutation authority, or model capacity. Source and tool results remain untrusted content, and continuation validation remains host-owned. Live evaluation uses already authorized provider access and repository scope; preserve ordinary authorization boundaries for any new environment. Do not publish credentials, user configuration, or raw private exchanges with result summaries.
+Property descriptions cannot widen permissions, trusted scope, source access, mutation authority, model capacity, or traversal limits. Source and tool results remain untrusted content, and continuation validation remains host-owned. Do not place configuration values, paths, source text, credentials, or user data in static schema descriptions or verification logs.
 
 ## 12. Observability
 
-Reuse existing request/tool logs and usage reports. Record versioned descriptions, schema hashes, paired run IDs, question categories, measurement provenance, and any deviations. Keep measurement records separate from model-visible instructions. Add no product telemetry service or runtime response grader.
+Use existing request/tool diagnostics and raw-model logging only under their current safeguards. Tests may record schema hashes or structural comparisons; no runtime telemetry service, response grader, or new durable event is required. Provider-visible descriptions remain inspectable through the existing explicitly enabled raw request diagnostics.
 
 ## 13. Migration/Compatibility
 
-Existing calls and configuration continue to work unchanged. Custom deployed prompt files may retain old wording; document the normal prompt upgrade/restart behavior if relevant. Do not silently overwrite operator customizations or change tool versions/authority solely to force the experiment. Prompt text changes can alter cache behavior, which must be reflected in measured cost.
+Existing calls and configuration continue to work unchanged. The schema gains documentation annotations only; its accepted JSON shape and execution semantics remain compatible. Custom deployed prompt files are unaffected unless a separate demonstrated description correction is made. Provider caches may observe a changed tool schema payload after upgrade/restart, which is expected and requires no persisted-state migration.
 
 ## 14. Acceptance Criteria
 
-- Actual model-facing requests include accurate `query` and `maxFiles` help.
-- Known-file/range reads and batched known-file reads remain explicitly valid; no multi-file explore-first rule is present.
-- Discovery and relationship guidance is clear without contradicting scoped search or declaration lookup.
-- Sufficient current source is reused while missing/stale/partial evidence permits targeted follow-up.
-- Input validation, enabled tools, source budgets, output contracts, and authority remain unchanged.
-- Relevant deterministic checks pass and adversarial review has no unresolved valid findings.
-- The controlled live comparison and manual answer audit are complete, with uncertainty, availability, failures, and regressions disclosed; retention decisions are evidence-based and do not equate explore uptake with effectiveness.
+- Actual provider-facing requests on covered production paths include accurate descriptions for `query` and `maxFiles`.
+- The descriptions explain multi-anchor/flow use and the host-default/narrowing semantics without advertising a hard-coded default or source-length control.
+- Current task-appropriate selection guidance remains intact; no blanket explore-first rule is introduced.
+- Tool id, argument names/types/requiredness, strict schema behavior, validation, execution, source budgets, results, and authority are unchanged.
+- Unrelated native tool schemas do not change as a side effect.
+- Focused deterministic tests and applicable architecture/prompt packaging checks pass, and adversarial review has no unresolved valid finding.
+- Any unsupported or untested provider projection is recorded explicitly; a large behavioral benchmark is not required for this metadata correction.
 
 ## 15. Risks
 
-Stronger wording can waste calls when evidence is already known, suppress needed follow-up, or inflate prompt cost. A shared schema change can unexpectedly alter unrelated tool advertisements. Model variability, cache warmth, source scope, and memory can obscure effects. Mitigate these through explicit task selection, narrow metadata changes, actual-request inspection, paired controls, counterbalancing within each category, and honest reporting.
+A shared schema helper could alter unrelated advertisements, provider projection could silently drop descriptions, or inaccurate `maxFiles` prose could imply an authority or byte-budget guarantee that does not exist. Over-editing the already improved top-level description could regress efficient direct reads or focused semantic-tool use. Mitigate these risks with tool-scoped mutation, structural before/after tests, production-path request inspection, and a no-change default for deployed descriptions.
 
 ## 16. Documentation
 
-Add this plan and one status-free navigation row now. Leave completed milestone contracts, milestone lifecycle, acceptance scenarios, manual procedures, user guidance, and DOX unchanged for this planning-only addition. During implementation, update only documentation whose owned behavior or prompt-asset contract changes; cite existing Scenario AO and applicable manual cases rather than copying history or counts into them.
+Keep the existing README navigation row. Update [tool operations](../operations/tools.md) only if it documents the model-facing argument schema at this level or currently contradicts the implemented semantics. Update prompt operations and the prompt-file reference only if a deployed description asset changes. Do not change acceptance scenarios, manual procedures, completed milestone details, or user guidance for documentation-only schema metadata that leaves observable user/operator behavior unchanged.
 
 ## 17. Open Decisions
 
-- Choose the smallest tool-scoped argument-help mechanism after inspecting the current exporter and prompt catalog.
-- Finalize concise wording and the fixed question set before the live comparison, with any environment limitation recorded before runs begin.
+None.
 
-These choices do not reopen the direct-read, unchanged-execution, or no-blanket-explore-first boundaries above.
+### Resolved implementation decisions
+
+- A narrow `ToolDefinitionFactory.WithPropertyDescriptions` helper updates named properties after schema generation and fails if an expected property is absent. Only `code_explore` uses it; no reflection, general annotation framework, or unrelated schema mutation was introduced.
+- The production `CodeExploreOutputFormattingTool` definition is exercised through the OpenAI-compatible strict request path. Focused Codex and Anthropic projection tests also prove that property descriptions survive their maintained schema mappings. No provider fallback prose was needed.
+- `maxFiles` is documented as a source-bearing file-count hint, not a cap on every file referenced by relationship/coverage metadata and not a source-length budget.
+- The current deployed tool descriptions were retained because inspection found no contradictory selection guidance.
+
+### Completion evidence
+
+- `dotnet build src/Threadsmith.sln --configuration Debug --no-restore` passed with zero warnings and errors.
+- `Threadsmith.NativeTools.Tests` passed: 176 tests.
+- Final `Threadsmith.ModelTooling.Tests` passed: 827 total, 819 succeeded, 8 environment-gated skips.
+- `Threadsmith.AnthropicProvider.Tests` passed: 168 tests.
+- `Threadsmith.CodexProvider.Tests` passed: 39 tests.
+- `Threadsmith.Architecture.Tests` passed: 276 total, 272 succeeded, 4 live-test skips.
+- The full solution run executed 3,541 tests: 3,518 succeeded, 22 skipped, and one unrelated CoreRuntime Escape-chord timing case failed. Its isolated three-case rerun passed. The relevant focused suites and final build remained clean.
+- Analyzer verification of changed files reported only existing informational diagnostics outside the changed lines; `git diff --check` passed.
+- No live-provider smoke test was run because deterministic production-path fixtures cover the native decorated definition, strict projection, and maintained provider mappings without credentials or stochastic tool choice.
+
+The first independent adversarial review found two implementation issues: overly broad `maxFiles` wording and missing production decorated-definition/request-path coverage. Both were corrected. A second independent adversarial review verified the fixes and reported no valid actionable findings.

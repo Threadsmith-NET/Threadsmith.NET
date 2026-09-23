@@ -2,20 +2,31 @@ namespace Threadsmith.Execution;
 
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Models;
+using Threadsmith.Telemetry;
 
 /// <summary>Creates bounded model-visible messages for active-turn corrective retries.</summary>
 public sealed class CorrectiveMessageFactory
 {
     private const int MaximumReasonCharacters = 512;
     private readonly IPromptLoader _prompts;
+    private readonly IOutputSanitizer _sanitizer;
+
+    /// <summary>Initializes a new instance of the <see cref="CorrectiveMessageFactory"/> class with the standard output sanitizer.</summary>
+    public CorrectiveMessageFactory(IPromptLoader prompts)
+        : this(prompts, new SecretOutputSanitizer())
+    {
+    }
 
     /// <summary>Initializes a new instance of the <see cref="CorrectiveMessageFactory"/> class.</summary>
-    public CorrectiveMessageFactory(IPromptLoader prompts)
+    public CorrectiveMessageFactory(IPromptLoader prompts, IOutputSanitizer sanitizer)
     {
         ArgumentNullException.ThrowIfNull(prompts);
+        ArgumentNullException.ThrowIfNull(sanitizer);
         _prompts = prompts;
+        _sanitizer = sanitizer;
     }
 
     /// <summary>Creates a standalone developer correction for malformed provider-boundary invocations.</summary>
@@ -116,12 +127,11 @@ public sealed class CorrectiveMessageFactory
         int attemptNumber,
         int maximumAttempts)
     {
-        ArgumentNullException.ThrowIfNull(diagnostic);
-        var reason = BoundSingleLine(diagnostic.SafeMessage, MaximumReasonCharacters);
-        var content = _prompts.Render(
-            PromptFileNames.CorrectionMutationProposal,
-            CreateAttemptTokens(attemptNumber, maximumAttempts, "Reason", reason));
-        return CreateDeveloperCorrectionMessage("active-turn-mutation-correction", attemptNumber, content);
+        return CreateMutationProposalDeveloperMessage(
+            diagnostic,
+            attemptNumber,
+            maximumAttempts,
+            replaceTextMismatch: null);
     }
 
     /// <summary>Creates a standalone developer correction from a host-owned mutation correction context.</summary>
@@ -298,6 +308,58 @@ public sealed class CorrectiveMessageFactory
         };
     }
 
+    /// <summary>Creates a standalone developer correction with bounded, ephemeral ReplaceText recovery evidence.</summary>
+    internal ModelMessage CreateMutationProposalDeveloperMessage(
+        MalformedInvocationDiagnostic diagnostic,
+        int attemptNumber,
+        int maximumAttempts,
+        ReplaceTextMismatchCorrectionEvidence? replaceTextMismatch)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostic);
+        var reason = BoundSingleLine(diagnostic.SafeMessage, MaximumReasonCharacters);
+        var rejectedExpectedText = replaceTextMismatch is null
+            ? null
+            : _sanitizer.Sanitize(replaceTextMismatch.RejectedExpectedText);
+        var closestUniqueBaselineText = replaceTextMismatch?.ClosestUniqueBaselineText is { } baselineText
+            ? _sanitizer.Sanitize(baselineText)
+            : null;
+        var redactedSource = replaceTextMismatch is not null
+            && (!string.Equals(rejectedExpectedText, replaceTextMismatch.RejectedExpectedText, StringComparison.Ordinal)
+                || !string.Equals(closestUniqueBaselineText, replaceTextMismatch.ClosestUniqueBaselineText, StringComparison.Ordinal));
+        var recoveryEvidence = replaceTextMismatch is null
+            ? JsonSerializer.Serialize<object?>(null)
+            : JsonSerializer.Serialize(new
+            {
+                kind = "replaceTextExpectedTextNotFound",
+                path = _sanitizer.Sanitize(replaceTextMismatch.Path),
+                rejectedExpectedText,
+                closestUniqueBaselineText,
+                baselineLine = replaceTextMismatch.BaselineLine,
+                editDistance = replaceTextMismatch.EditDistance,
+                firstDifference = redactedSource || replaceTextMismatch.FirstDifference is null
+                    ? null
+                    : new
+                    {
+                        utf16Index = replaceTextMismatch.FirstDifference.Utf16Index,
+                        expectedCharacter = replaceTextMismatch.FirstDifference.ExpectedCharacter,
+                        baselineCharacter = replaceTextMismatch.FirstDifference.BaselineCharacter,
+                        expectedCodePoint = replaceTextMismatch.FirstDifference.ExpectedCodePoint,
+                        baselineCodePoint = replaceTextMismatch.FirstDifference.BaselineCodePoint,
+                    },
+                repeatedProposal = replaceTextMismatch.IsRepeatedProposal,
+            });
+        var content = _prompts.Render(
+            PromptFileNames.CorrectionMutationProposal,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["AttemptNumber"] = attemptNumber.ToString(CultureInfo.InvariantCulture),
+                ["MaximumAttempts"] = maximumAttempts.ToString(CultureInfo.InvariantCulture),
+                ["Reason"] = reason,
+                ["RecoveryEvidence"] = recoveryEvidence,
+            });
+        return CreateDeveloperCorrectionMessage("active-turn-mutation-correction", attemptNumber, content);
+    }
+
     private string RenderToolName(string promptFileName, string toolName)
     {
         return _prompts.Render(
@@ -373,3 +435,44 @@ public sealed class CorrectiveMessageFactory
         return builder.ToString().Trim();
     }
 }
+
+/// <summary>Bounded ephemeral baseline evidence for a rejected ReplaceText proposal.</summary>
+internal sealed record ReplaceTextMismatchCorrectionEvidence
+{
+    /// <summary>Gets the bounded repository-relative target path.</summary>
+    public required string Path { get; init; }
+
+    /// <summary>Gets the bounded anchor rejected by exact baseline matching.</summary>
+    public required string RejectedExpectedText { get; init; }
+
+    /// <summary>Gets the closest unique baseline line when a confident candidate exists.</summary>
+    public string? ClosestUniqueBaselineText { get; init; }
+
+    /// <summary>Gets the one-based line number of the closest baseline candidate.</summary>
+    public int? BaselineLine { get; init; }
+
+    /// <summary>Gets the edit distance between the rejected anchor and baseline candidate.</summary>
+    public int? EditDistance { get; init; }
+
+    /// <summary>Gets the first differing UTF-16 position and characters.</summary>
+    public ReplaceTextFirstDifference? FirstDifference { get; init; }
+
+    /// <summary>Gets the host-only fingerprint used to recognize an unchanged retry.</summary>
+    public required string ProposalFingerprint { get; init; }
+
+    /// <summary>Gets a value indicating whether the same failed proposal was previously observed.</summary>
+    public bool IsRepeatedProposal { get; init; }
+}
+
+/// <summary>Describes the first UTF-16 difference between a rejected anchor and baseline candidate.</summary>
+/// <param name="Utf16Index">Zero-based UTF-16 index of the difference.</param>
+/// <param name="ExpectedCharacter">Character in the rejected anchor, or null at its end.</param>
+/// <param name="BaselineCharacter">Character in the baseline candidate, or null at its end.</param>
+/// <param name="ExpectedCodePoint">Formatted UTF-16 code unit in the rejected anchor.</param>
+/// <param name="BaselineCodePoint">Formatted UTF-16 code unit in the baseline candidate.</param>
+internal sealed record ReplaceTextFirstDifference(
+    int Utf16Index,
+    string? ExpectedCharacter,
+    string? BaselineCharacter,
+    string? ExpectedCodePoint,
+    string? BaselineCodePoint);

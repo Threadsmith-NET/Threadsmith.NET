@@ -2088,6 +2088,46 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Empty(observed.OfType<SemanticRefreshFailed>());
     }
 
+    /// <summary>A change already inside inventory lookup is ignored when shutdown disposes its backend.</summary>
+    [Fact]
+    public static async Task DisposeAsync_InFlightInventoryDisposal_DoesNotEscapeWatcherBoundary()
+    {
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var coordinator = CreateCoordinator(backend, events);
+        await coordinator.BindAsync(repository.CreateRequest());
+        var barrier = backend.BlockNextInventoryWithDisposal();
+
+        var observation = Task.Run(async () =>
+            await coordinator.ObserveChangeAsync(repository.CreateChange()));
+        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await coordinator.DisposeAsync();
+        barrier.Release.Set();
+        await observation.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    /// <summary>An active backend disposal remains visible when no shutdown boundary explains it.</summary>
+    [Fact]
+    public static async Task ObserveChangeAsync_ActiveInventoryDisposal_IsNotSuppressed()
+    {
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        await using var coordinator = CreateCoordinator(backend, events);
+        await coordinator.BindAsync(repository.CreateRequest());
+        var barrier = backend.BlockNextInventoryWithDisposal();
+
+        var observation = Task.Run(async () =>
+            await coordinator.ObserveChangeAsync(repository.CreateChange()));
+        await barrier.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        barrier.Release.Set();
+
+        await Assert.ThrowsAsync<ObjectDisposedException>(async () =>
+            await observation.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
     private static SemanticRefreshCoordinator CreateCoordinator(
         ISemanticRefreshBackend backend,
         IDomainEventStream events,
@@ -2180,6 +2220,7 @@ public static class SemanticRefreshCoordinatorTests
         private readonly Queue<RefreshBarrier> _barriers = [];
         private readonly Dictionary<WorkspaceId, Dictionary<string, string>> _loadedTexts = [];
         private readonly Dictionary<WorkspaceId, HashSet<string>> _fullReloadInputPaths = [];
+        private InventoryBarrier? _inventoryBarrier;
         private int _refreshCount;
 
         public TestSemanticRefreshBackend(WorkspaceId workspaceId, string sourcePath)
@@ -2255,6 +2296,17 @@ public static class SemanticRefreshCoordinatorTests
             return barrier;
         }
 
+        public InventoryBarrier BlockNextInventoryWithDisposal()
+        {
+            var barrier = new InventoryBarrier();
+            lock (_gate)
+            {
+                _inventoryBarrier = barrier;
+            }
+
+            return barrier;
+        }
+
         public void SetLoadedDocumentText(WorkspaceId workspaceId, string path, string text)
         {
             _loadedTexts[workspaceId][path] = text;
@@ -2267,6 +2319,24 @@ public static class SemanticRefreshCoordinatorTests
 
         public SemanticRefreshInventory GetRefreshInventory(WorkspaceId workspaceId)
         {
+            InventoryBarrier? barrier;
+            lock (_gate)
+            {
+                barrier = _inventoryBarrier;
+                _inventoryBarrier = null;
+            }
+
+            if (barrier is not null)
+            {
+                barrier.Started.TrySetResult();
+                if (!barrier.Release.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    throw new TimeoutException("Synthetic inventory disposal was not released.");
+                }
+
+                throw new ObjectDisposedException(nameof(SemanticEngineRegistry));
+            }
+
             if (!InventoryAvailable)
             {
                 return new SemanticRefreshInventory(
@@ -2536,6 +2606,14 @@ public static class SemanticRefreshCoordinatorTests
     {
         public TaskCompletionSource Release { get; } = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+
+    private sealed class InventoryBarrier
+    {
+        public ManualResetEventSlim Release { get; } = new(initialState: false);
 
         public TaskCompletionSource Started { get; } = new(
             TaskCreationOptions.RunContinuationsAsynchronously);

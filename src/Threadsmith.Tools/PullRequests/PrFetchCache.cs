@@ -1,6 +1,6 @@
 namespace Threadsmith.Tools.PullRequests;
 
-using System.Globalization;
+using System.Text;
 using System.Text.Json;
 
 /// <summary>One operation's bounded, revision-bound acquisitions and concurrent readers.</summary>
@@ -21,7 +21,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
         _ownerCancellation = ownerCancellation;
     }
 
-    /// <summary>Returns an acquired page or joins its scoped acquisition without transferring cancellation ownership.</summary>
+    /// <summary>Returns complete evidence or joins its scoped acquisition without transferring cancellation ownership.</summary>
     public async Task<PrFetchOutput> ReadAsync(
         string key,
         string providerId,
@@ -37,24 +37,13 @@ internal sealed class PrFetchCache : IAsyncDisposable
         Entry entry;
         bool hit;
         Entry? cancelPrevious = null;
-        var index = 0;
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             _entries.TryGetValue(key, out var existing);
-            if (input.Cursor is not null)
-            {
-                var cursor = input.Cursor.Split(':');
-                if (existing is null || cursor.Length != 2 || cursor[0] != existing.Id.ToString("N")
-                    || !int.TryParse(cursor[1], NumberStyles.None, CultureInfo.InvariantCulture, out index) || index < 0 || index > existing.Pages.Count
-                    || (existing.Finished && existing.Failure is null && index >= existing.Pages.Count))
-                {
-                    throw new ArgumentException("The PR cursor is expired or does not belong to this operation, provider, or PR.");
-                }
-            }
 
             // Refresh joins another refresh in progress but supersedes an ordinary acquisition.
-            var replace = existing is null || (input.Cursor is null && existing.Failure is not null)
+            var replace = existing is null || existing.Failure is not null
                 || (input.Refresh && !(existing.IsRefresh && !existing.Finished));
             hit = !replace;
             if (replace)
@@ -80,11 +69,6 @@ internal sealed class PrFetchCache : IAsyncDisposable
             {
                 entry = existing ?? throw new InvalidOperationException("PR acquisition was not initialized.");
             }
-
-            entry.RequestedIndex = Math.Max(entry.RequestedIndex, index);
-            var demand = entry.Changed;
-            entry.Changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            demand.TrySetResult();
         }
 
         if (cancelPrevious is not null)
@@ -102,7 +86,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 if (!_entries.TryGetValue(key, out var current) || !ReferenceEquals(current, entry))
                 {
-                    throw new InvalidOperationException("The PR snapshot was refreshed; discard earlier evidence and fetch its current first page.");
+                    throw new InvalidOperationException("The PR snapshot was refreshed; discard earlier evidence and fetch the current snapshot.");
                 }
 
                 if (entry.Failure is not null)
@@ -110,12 +94,21 @@ internal sealed class PrFetchCache : IAsyncDisposable
                     throw new InvalidOperationException("PR acquisition is incomplete. " + entry.Failure);
                 }
 
-                if (entry.Metadata is { } metadata && index < entry.Pages.Count)
+                if (entry.Metadata is { } metadata && entry.Finished)
                 {
-                    var page = entry.Pages[index];
-                    var complete = page.Kind == "complete";
-                    var projection = index == 0 ? metadata : metadata with { Description = string.Empty };
-                    return new PrFetchOutput(providerId, input.Kind, input.Cursor is not null, entry.Id, entry.CapturedAt, projection, page, hit, entry.Pages[^1].Kind == "complete", complete, complete ? null : entry.Id.ToString("N") + ":" + (index + 1).ToString(CultureInfo.InvariantCulture));
+                    var diff = new StringBuilder();
+                    foreach (var item in entry.Pages)
+                    {
+                        diff.Append(item.Diff);
+                    }
+
+                    var page = new PullRequestPage(
+                        "complete",
+                        entry.Pages.SelectMany(item => item.Files).ToArray(),
+                        diff.ToString(),
+                        entry.Pages.Where(item => item.Kind != "metadata")
+                            .SelectMany(item => item.Limitations).Distinct(StringComparer.Ordinal).ToArray());
+                    return new PrFetchOutput(providerId, input.Kind, entry.Id, entry.CapturedAt, metadata, page, hit, true);
                 }
 
                 changed = entry.Changed.Task;
@@ -190,11 +183,6 @@ internal sealed class PrFetchCache : IAsyncDisposable
                 _bytes += metadataBytes;
             }
 
-            var initialLimitation = kind == PrFetchKind.Diff
-                ? "Provider PR diff; destination commit is not a merge base. Evidence remains provisional until the complete page confirms unchanged PR metadata. Binary contents and provider-omitted patches are not assessed."
-                : "Provider PR changed-file inventory; destination commit is not a merge base. Evidence remains provisional until the complete page confirms unchanged PR metadata. Diff content was not requested.";
-            Publish(new PullRequestPage("metadata", [], string.Empty, [initialLimitation]));
-            await WaitForDemandAsync();
             var files = 0;
             var scopedDiff = kind == PrFetchKind.Diff && isFileAllowed is not null;
             var bufferedPages = new List<PullRequestPage>();
@@ -221,7 +209,6 @@ internal sealed class PrFetchCache : IAsyncDisposable
                 }
 
                 Publish(page);
-                await WaitForDemandAsync();
             }
 
             var after = await provider.GetMetadataAsync(target, account, token);
@@ -238,7 +225,6 @@ internal sealed class PrFetchCache : IAsyncDisposable
             foreach (var page in bufferedPages)
             {
                 Publish(page);
-                await WaitForDemandAsync();
             }
 
             if (scopedDiff && entry.HasDisallowedFiles)
@@ -296,7 +282,6 @@ internal sealed class PrFetchCache : IAsyncDisposable
                 foreach (var page in diffPages)
                 {
                     Publish(page);
-                    await WaitForDemandAsync();
                 }
             }
 
@@ -344,36 +329,6 @@ internal sealed class PrFetchCache : IAsyncDisposable
                 entry.Pages.Add(page);
                 entry.Bytes += bytes;
                 _bytes += bytes;
-                var signal = entry.Changed;
-                entry.Changed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-                signal.TrySetResult();
-            }
-        }
-
-        async Task WaitForDemandAsync()
-        {
-            // Model reasoning between pages consumes no transport deadline.
-            entry.Cancellation.CancelAfter(Timeout.InfiniteTimeSpan);
-            while (true)
-            {
-                entry.Cancellation.Token.ThrowIfCancellationRequested();
-                Task changed;
-                lock (_gate)
-                {
-                    if (entry.RequestedIndex >= entry.Pages.Count)
-                    {
-                        if (_options.TimeoutSeconds > 0)
-                        {
-                            entry.Cancellation.CancelAfter(TimeSpan.FromSeconds(_options.TimeoutSeconds));
-                        }
-
-                        return;
-                    }
-
-                    changed = entry.Changed.Task;
-                }
-
-                await changed.WaitAsync(entry.Cancellation.Token);
             }
         }
     }
@@ -395,8 +350,6 @@ internal sealed class PrFetchCache : IAsyncDisposable
         public bool IsRefresh { get; }
 
         public List<PullRequestPage> Pages { get; } = [];
-
-        public int RequestedIndex { get; set; }
 
         public TaskCompletionSource Changed { get; set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 

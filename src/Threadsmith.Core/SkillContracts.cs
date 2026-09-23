@@ -529,6 +529,9 @@ public sealed record SkillInvocationHostContext
     /// <summary>Currently opened workspace, if any.</summary>
     public WorkspaceId? WorkspaceId { get; init; }
 
+    /// <summary>Current repository root used to resolve repository-relative artifact paths.</summary>
+    public string? RepositoryPath { get; init; }
+
     /// <summary>Current effective repository trust.</summary>
     public RepositoryTrustLevel Trust { get; init; }
 
@@ -550,6 +553,9 @@ public sealed record SkillInvocationPlan
 {
     /// <summary>Original request.</summary>
     public required SkillInvocationRequest Request { get; init; }
+
+    /// <summary>Host-resolved repository root for this invocation.</summary>
+    public string? RepositoryPath { get; init; }
 
     /// <summary>Immutable selected package.</summary>
     public required SkillPackageIdentity Package { get; init; }

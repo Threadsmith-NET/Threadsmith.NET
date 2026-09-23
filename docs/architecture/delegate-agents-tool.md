@@ -85,7 +85,7 @@ Conversation delegation creates:
 - configured ordinary child operational budgets;
 - one frozen generation.
 
-`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution, writes, and skills when available. Tools whose `ToolDefinition.SubagentAvailable` is `false` are removed before constructing the child policy. This property defaults to `true`; `delegate_agents` sets it to `false`. The child runner also filters the captured registrations, including for directly constructed or older assignments. A child-invoked native skill uses that filtered caller snapshot and cannot reintroduce excluded tools. It preserves the caller's trust, path, executable, network, approval, and tool restrictions. `readOnly` is the explicit narrower option: approval-free, non-network read tools, excluding workflow, process/code execution, and writes. Retained inspection tools can still use their declared executable dependencies under the caller's allowlist. Shared-workspace children do not receive isolated worktrees; overlapping edits and builds need coordinated ownership.
+`inherit` retains the parent's enabled, permitted advertised tools, including process/code execution and writes when available. Tools whose `ToolDefinition.SubagentAvailable` is `false` are removed before constructing the child policy. This property defaults to `true`; `delegate_agents`, `invoke_skill`, and the parent-owned `pr_fetch` acquisition tool set it to `false`, so a child cannot start another delegation or skill workflow or reacquire delegated PR evidence. The child runner also filters the captured registrations, including for directly constructed or older assignments. The retained tools preserve the caller's trust, path, executable, network, approval, and tool restrictions. `readOnly` is the explicit narrower option: approval-free, non-network read tools, excluding workflow, process/code execution, and writes. Retained inspection tools can still use their declared executable dependencies under the caller's allowlist. Shared-workspace children do not receive isolated worktrees; overlapping edits and builds need coordinated ownership.
 
 Primary implementation:
 
@@ -189,7 +189,7 @@ Primary implementation:
 
 ### 8. The parent receives a compact projection
 
-`DelegateAgentsResultProjector` maps the durable checkpoint to a model-facing envelope containing the returned child text and separate host metadata. `DelegateAgentsResultRenderer` applies the active final-envelope bounds.
+`DelegateAgentsResultProjector` maps the durable checkpoint to a model-facing envelope containing the returned child text and separate host metadata. `DelegateAgentsResultRenderer` renders every supplied child response and detail block without a separate character cap. Model context-capacity and existing tool/transport checks remain applicable; the renderer does not discard reports to fit a character budget.
 
 Ordinary text is not semantically deduplicated, graded, or converted into reviewer/implementer fields. Legacy structured result projection remains compatible without treating new JSON-looking replies as legacy DTOs.
 
@@ -265,6 +265,6 @@ Operational usage and troubleshooting are documented in [Parallel-agent operatio
 
 Native model procedures use the same request-scoped tool snapshot and `delegate_agents` entry as conversation models. The actual model call owns the snapshot and frozen parent model/reasoning selection. Role configuration still takes precedence over inherited selection. A skill name, prompt or manifest cannot grant delegation authority. There is no special review entry.
 
-An inherited `invoke_skill` call retains the caller's scope and selected model, intersects that scope with current session authority, and uses the ordinary procedure runner and tool pipeline. Its caller snapshot is valid only for the owning model request's lifetime. Explicit host resume or continuation revalidates the durable workflow against current session authority; it does not reuse that transient snapshot. All model calls and child tools feed the existing usage projection and lifecycle rendering.
+`invoke_skill` remains available to eligible parent conversation and native-procedure requests, but it is not included in child tool snapshots. Explicit host resume or continuation revalidates a durable workflow against current session authority; it does not reuse a transient caller snapshot. All model calls and child tools feed the existing usage projection and lifecycle rendering.
 
 The workspace baseline identity records provenance; it does not freeze live files. For committed reviews, resolve branch tips to commit SHAs and use those SHAs in Git reads. Keep working changes stable during a review or repeat affected reads after edits. There is no review-specific capture engine. Remote acquisition needs an available ordinary tool, such as `run_process`, with its normal trust, executable allowlist, and approval policy.

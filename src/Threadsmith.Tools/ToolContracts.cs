@@ -602,6 +602,7 @@ public abstract class Tool<TInput, TOutput> : ITool
         ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
         try
         {
+            argumentsJson = ModelJsonCleanup.Clean(argumentsJson);
             var normalizedArgumentsJson = NormalizeOptionalNullArguments(argumentsJson);
             var input = JsonSerializer.Deserialize<TInput>(normalizedArgumentsJson, _jsonOptions)
                 ?? throw new ToolArgumentValidationException("Tool arguments were empty.");

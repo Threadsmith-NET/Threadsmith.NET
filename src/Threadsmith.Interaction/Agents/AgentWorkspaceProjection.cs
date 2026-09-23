@@ -372,9 +372,15 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         var safe = TerminalControlEncoder.Encode(reason);
         safe = safe.Replace('\r', ' ').Replace('\n', ' ');
         safe = safe.Length > _limits.MaximumAgentProgressCharacters ? safe[..(_limits.MaximumAgentProgressCharacters - 1)] + "…" : safe;
+        var role = snapshot.State switch
+        {
+            AgentRunStatus.Completed => PresentationTextRole.Success,
+            AgentRunStatus.Failed or AgentRunStatus.Discarded => PresentationTextRole.Error,
+            _ => PresentationTextRole.Status,
+        };
         var entry = new PresentationTextSegment(
             $"{snapshot.Label}: {snapshot.State}{(safe.Length > 0 ? " — " + safe : string.Empty)}",
-            snapshot.State is AgentRunStatus.Failed or AgentRunStatus.Discarded ? PresentationTextRole.Error : PresentationTextRole.Status);
+            role);
         var unchanged = _progress.GetValueOrDefault(snapshot.Target) == entry;
         _progress[snapshot.Target] = entry;
         if (_delegationTools.ContainsKey(snapshot.Target.DelegationId) || !snapshot.IsTerminal || unchanged)
@@ -383,7 +389,7 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
         }
 
         var text = $"{(correction ? "Updated outcome: " : string.Empty)}{snapshot.Label}: {snapshot.State}{(safe.Length > 0 ? " — " + safe : string.Empty)}\n";
-        return _surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new(text, snapshot.State is AgentRunStatus.Failed or AgentRunStatus.Discarded ? PresentationTextRole.Error : PresentationTextRole.Status)])]), cancellationToken);
+        return _surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new(text, entry.Role)])]), cancellationToken);
     }
 
     private void ForgetTargets(DelegationId delegation)

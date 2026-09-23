@@ -348,7 +348,7 @@ internal static class ApplicationComposition
             host.Paths.RepositoryConfiguration,
             host.Events);
         var planSanityChecker = new PlanSanityChecker(host.PromptLoader, host.ExecutionLimits);
-        var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);
+        var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader, host.Sanitizer);
         var runSteering = new RunSteeringCoordinator(host.ExecutionLimits);
         var validationStages = GetValidationStages(host.Configuration);
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? resolvedFallbackSelector = null;
@@ -837,6 +837,7 @@ internal static class ApplicationComposition
                     return new SkillInvocationHostContext
                     {
                         WorkspaceId = state.WorkspaceId,
+                        RepositoryPath = state.RepositoryPath ?? host.Paths.RepositoryRoot,
                         Trust = state.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
                         Phase = state.Phase,
                         DefaultBudget = host.TrustedConfiguration.GetSection("skills:budget").Get<SkillBudget>() ?? new SkillBudget(),

@@ -58,6 +58,7 @@ public static class ModelOutputValidator
     public static PlanModelOutput ParsePlan(string json, PlanResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
+        json = ModelJsonCleanup.Clean(json);
         PlanModelOutput output;
         try
         {
@@ -100,6 +101,7 @@ public static class ModelOutputValidator
     public static MutationSetModelOutput ParseMutationSet(string json, WorkspaceResourceLimits? limits = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json);
+        json = ModelJsonCleanup.Clean(json);
         MutationSetModelOutput output;
         try
         {
@@ -201,7 +203,7 @@ public static class ModelOutputValidator
 
         try
         {
-            var arguments = JsonDocument.Parse(tool.ArgumentsJson);
+            var arguments = JsonDocument.Parse(ModelJsonCleanup.Clean(tool.ArgumentsJson));
             if (arguments.RootElement.ValueKind == JsonValueKind.Object)
             {
                 return arguments;

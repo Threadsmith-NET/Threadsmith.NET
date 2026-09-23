@@ -23,6 +23,15 @@ public static class PlanContentTests
         }
         """;
 
+    /// <summary>Plan parsing accepts model prose around a complete proposal.</summary>
+    [Fact]
+    public static void PlanContentAcceptsFramedJson()
+    {
+        var output = ModelOutputValidator.ParsePlan("Proposed plan:\n```json\n" + Proposal + "\n```\nReady.");
+
+        Assert.Equal("Remove the test field.", output.Plan.Summary);
+    }
+
     /// <summary>Content-only JSON becomes a versioned plan with host-generated identities.</summary>
     [Fact]
     public static void PlanContentReceivesHostVersionRevisionAndUniqueStepIdentities()

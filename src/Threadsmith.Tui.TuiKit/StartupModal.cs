@@ -16,6 +16,7 @@ internal sealed class StartupModal : Modal
     private readonly IReadOnlyList<string> _completed;
     private readonly IReadOnlyList<string> _details;
     private readonly CachedTextRun _text = new();
+    private bool _isComplete;
 
     /// <summary>Initializes a new instance of the <see cref="StartupModal"/> class.</summary>
     internal StartupModal(string logo, string label, IReadOnlyList<string> completed, Action cancel, Func<PresentationTextRole, CellStyle> style, IReadOnlyList<string>? details = null)
@@ -57,24 +58,31 @@ internal sealed class StartupModal : Modal
         }
 
         var lines = _logo.ReplaceLineEndings("\n").Split('\n');
-        var logoHeight = Math.Min(lines.Length, Math.Max(1, view.Size.Height - _completed.Count - _details.Count - 4));
+        var logoHeight = Math.Min(lines.Length, Math.Max(1, view.Size.Height - _completed.Count - _details.Count - 3));
         for (var index = 0; index < logoHeight; index++)
         {
             _text.Draw(view, 0, index, lines[index], _style(PresentationTextRole.Brand));
         }
 
         var y = logoHeight + 1;
-        foreach (var detail in _details.Take(Math.Max(0, view.Size.Height - y - 2)))
+        foreach (var detail in _details.Take(Math.Max(0, view.Size.Height - y - 1)))
         {
             _text.Draw(view, 0, y++, detail, _style(PresentationTextRole.Status));
         }
 
-        foreach (var phase in _completed.Take(Math.Max(0, view.Size.Height - y - 2)))
+        foreach (var phase in _completed.Take(Math.Max(0, view.Size.Height - y - 1)))
         {
             _text.Draw(view, 0, y++, phase, _style(PresentationTextRole.Success));
         }
 
-        _text.Draw(view, 0, y++, $"{_label} · {Elapsed.TotalSeconds:0.0}s", _style(PresentationTextRole.Status));
-        _text.Draw(view, 0, y, "Loading — input discarded; Ctrl+C cancels", _style(PresentationTextRole.Muted));
+        _text.Draw(
+            view,
+            0,
+            y,
+            _isComplete ? $"{_label} Completed" : $"{_label} {Elapsed.TotalSeconds:0.0}s",
+            _style(_isComplete ? PresentationTextRole.Success : PresentationTextRole.Status));
     }
+
+    /// <summary>Marks a successful phase for its final rendered frame.</summary>
+    internal void Complete() => _isComplete = true;
 }

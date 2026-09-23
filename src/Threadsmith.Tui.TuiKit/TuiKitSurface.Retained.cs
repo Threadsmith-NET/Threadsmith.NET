@@ -65,11 +65,22 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         {
             if (!_stop.IsCancellationRequested)
             {
+                if (outcome == "Completed")
+                {
+                    await EnqueueAsync(modal.Complete, _stop.Token);
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), _stop.Token);
+                }
+
                 await EnqueueAsync(
                     () =>
                 {
-                    var completed = $"{label}: {outcome} · {modal.Elapsed.TotalSeconds:0.0}s";
+                    var completed = $"{label} {outcome}";
                     _startupPhases.Add(completed);
+                    if (outcome == "Completed" && label.StartsWith("Loading ", StringComparison.Ordinal))
+                    {
+                        _startupPhases.Add("Reticulating Splines ... Completed");
+                    }
+
                     if (outcome != "Completed")
                     {
                         _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(completed + "\n", PresentationTextRole.Error)])]));

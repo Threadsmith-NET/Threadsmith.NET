@@ -888,7 +888,7 @@ public static class RepositoryLifecycleTests
         Assert.Collection(
             surface.TransientStatuses,
             text => Assert.StartsWith("Opening repository...", text, StringComparison.Ordinal),
-            text => Assert.StartsWith("Loading solution...", text, StringComparison.Ordinal),
+            text => Assert.StartsWith("Loading solution ...", text, StringComparison.Ordinal),
             text => Assert.StartsWith("Semantic confidence: Loading...", text, StringComparison.Ordinal));
         Assert.DoesNotContain("Semantic confidence: Loading...", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Semantic confidence: TextOnly", surface.Output, StringComparison.Ordinal);
@@ -915,7 +915,7 @@ public static class RepositoryLifecycleTests
             modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(10));
 
         Assert.Contains(
-            "Loading remembered solution: Sample.sln",
+            "Remembered: Sample.sln",
             surface.Output,
             StringComparison.Ordinal);
         Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
@@ -936,7 +936,7 @@ public static class RepositoryLifecycleTests
         await coordinator.RunAsync(repository.RootPath, RepositoryTrustLevel.TrustedRead)
             .WaitAsync(TimeSpan.FromSeconds(15));
 
-        Assert.Equal(["Loading remembered solution: Sample.sln"], surface.StartupDetails);
+        Assert.Equal(["Remembered: Sample.sln"], surface.StartupDetails);
         Assert.True(surface.DetailsShownDuringSemanticLoading);
         Assert.DoesNotContain("Loading remembered solution", surface.Output, StringComparison.Ordinal);
         Assert.DoesNotContain("Use --solution to change", surface.Output, StringComparison.Ordinal);
@@ -1083,7 +1083,7 @@ public static class RepositoryLifecycleTests
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation awaited by this test surface.")]
         public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
         {
-            if (label == "Semantic loading")
+            if (label == "Semantic Loading ...")
             {
                 DetailsShownDuringSemanticLoading = StartupDetails.Count > 0;
             }

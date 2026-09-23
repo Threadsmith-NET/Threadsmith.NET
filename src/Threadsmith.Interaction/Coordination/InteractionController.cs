@@ -8,6 +8,7 @@ public class InteractionController
     private readonly Lock _gate = new();
     private readonly InteractionPresenter _presenter;
     private readonly Func<string, Task, CancellationToken, Task>? _presentProgressAsync;
+    private readonly Func<string, CancellationToken, Task>? _presentRememberedSolutionAsync;
     private RunId? _activeRunId;
     private RunId? _backgroundValidationRunId;
     private WorkspaceBaseline? _baseline;
@@ -24,11 +25,13 @@ public class InteractionController
     /// <summary>Initializes a new instance of the <see cref="InteractionController"/> class with repository progress presentation.</summary>
     public InteractionController(
         InteractionPresenter presenter,
-        Func<string, Task, CancellationToken, Task>? presentProgressAsync)
+        Func<string, Task, CancellationToken, Task>? presentProgressAsync,
+        Func<string, CancellationToken, Task>? presentRememberedSolutionAsync = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         _presenter = presenter;
         _presentProgressAsync = presentProgressAsync;
+        _presentRememberedSolutionAsync = presentRememberedSolutionAsync;
     }
 
     /// <summary>Gets the current session when the shell is open.</summary>
@@ -532,15 +535,19 @@ public class InteractionController
             return new InteractionRepositoryOpenWorkflowResult(opened, null);
         }
 
+        if (useRememberedSolution && _presentRememberedSolutionAsync is not null)
+        {
+            await _presentRememberedSolutionAsync(solutionPath, cancellationToken);
+        }
+
         var solutionOperation = SelectSolutionAsync(
             opened.WorkspaceId,
             solutionPath,
             cancellationToken);
         if (_presentProgressAsync is not null)
         {
-            var label = opened.Trust.Level >= RepositoryTrustLevel.TrustedBuild
-                ? "Loading solution and restoring packages..."
-                : "Loading solution...";
+            var isProject = Path.GetExtension(solutionPath).EndsWith("proj", StringComparison.OrdinalIgnoreCase);
+            var label = isProject ? "Loading project ..." : "Loading solution ...";
             await _presentProgressAsync(label, solutionOperation, cancellationToken);
         }
 

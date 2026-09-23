@@ -241,8 +241,9 @@ public sealed class Plan91DelegationToolTests
                 ToolCategory.ExternalSearch,
                 ToolSideEffect.ReadOnly,
                 readOnlySubagentNetworkAvailable: true),
-            new MetadataTool("invoke_skill", ToolCategory.Workflow, ToolSideEffect.ReadOnly),
+            new MetadataTool("invoke_skill", ToolCategory.Workflow, ToolSideEffect.ReadOnly, subagentAvailable: false),
             new MetadataTool(DelegateAgentsContract.ToolId, ToolCategory.Workflow, ToolSideEffect.ReadOnly, subagentAvailable: false),
+            new MetadataTool("pr_fetch", ToolCategory.ExternalSearch, ToolSideEffect.ReadOnly, subagentAvailable: false),
             new MetadataTool("parent_only_read", ToolCategory.FileRead, ToolSideEffect.ReadOnly, subagentAvailable: false),
             new MetadataTool(
                 "approval_read",
@@ -271,6 +272,7 @@ public sealed class Plan91DelegationToolTests
                 "parent_only_read",
                 DelegateAgentsContract.ToolId,
                 "invoke_skill",
+                "pr_fetch",
                 "jira",
                 "read_file",
                 "run_process",
@@ -312,7 +314,7 @@ public sealed class Plan91DelegationToolTests
         Assert.True(plan.Assignments[0].Policy.AllowNetwork);
         Assert.False(plan.Assignments[0].Policy.AllowProcesses);
         Assert.Equal(
-            ["approval_read", "invoke_skill", "jira", "read_file", "run_process", "web_search"],
+            ["approval_read", "jira", "read_file", "run_process", "web_search"],
             plan.Assignments[1].Policy.AllowedToolIds);
         Assert.Equal(plan.Assignments[1].Policy.AllowedToolIds, plan.Assignments[1].Policy.AllowedNetworkToolIds);
         Assert.True(plan.Assignments[1].Policy.AllowNetwork);
@@ -325,13 +327,15 @@ public sealed class Plan91DelegationToolTests
             Assert.DoesNotContain("hidden_read", assignment.Policy.AllowedToolIds);
             Assert.DoesNotContain("parent_only_read", assignment.Policy.AllowedToolIds);
             Assert.DoesNotContain(DelegateAgentsContract.ToolId, assignment.Policy.AllowedToolIds);
+            Assert.DoesNotContain("invoke_skill", assignment.Policy.AllowedToolIds);
+            Assert.DoesNotContain("pr_fetch", assignment.Policy.AllowedToolIds);
         });
         Assert.Equal(
             plan.Assignments.Sum(assignment => assignment.Budget.ModelTokens),
             plan.ParentBudget.ModelTokens);
     }
 
-    /// <summary>Verifies model-controlled child counts and text remain inside host-owned bounds.</summary>
+    /// <summary>Verifies malformed delegation input is rejected before creating child IDs.</summary>
     [Fact]
     public void PlanFactory_RejectsOutOfBoundsInputBeforeCreatingIds()
     {
@@ -351,8 +355,6 @@ public sealed class Plan91DelegationToolTests
             new DelegateAgentsOptions
             {
                 MaximumAgents = 1,
-                MaximumTaskCharacters = 4,
-                MaximumContextCharacters = 4,
             });
         var context = CreateExecutionContext(
             workspaceId,
@@ -371,20 +373,6 @@ public sealed class Plan91DelegationToolTests
                 [
                     new DelegateAgentRequest
                     {
-                        Task = "too long",
-                        Context = "ok",
-                        ToolAccess = DelegateAgentToolAccess.ReadOnly,
-                    },
-                ],
-            },
-            context));
-        Assert.Throws<ToolArgumentValidationException>(() => factory.Create(
-            new DelegateAgentsInput
-            {
-                Agents =
-                [
-                    new DelegateAgentRequest
-                    {
                         Task = "ok",
                         Context = "ok",
                         ToolAccess = (DelegateAgentToolAccess)42,
@@ -392,20 +380,24 @@ public sealed class Plan91DelegationToolTests
                 ],
             },
             context));
-        Assert.Throws<ToolArgumentValidationException>(() => factory.Create(
+        var longTask = new string('t', 4_097);
+        var longContext = new string('c', 8_193);
+        var plan = factory.Create(
             new DelegateAgentsInput
             {
                 Agents =
                 [
                     new DelegateAgentRequest
                     {
-                        Task = "ok",
-                        Context = "too long",
+                        Task = longTask,
+                        Context = longContext,
                         ToolAccess = DelegateAgentToolAccess.ReadOnly,
                     },
                 ],
             },
-            context));
+            context);
+        Assert.Equal(longTask, Assert.Single(plan.Assignments).Objective);
+        Assert.Equal(longContext, Assert.Single(plan.Assignments).InitialContext);
     }
 
     /// <summary>Verifies delegation fails closed without the exact parent-visible registration snapshot.</summary>

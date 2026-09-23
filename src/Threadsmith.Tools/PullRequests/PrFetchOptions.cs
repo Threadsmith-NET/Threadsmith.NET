@@ -46,10 +46,10 @@ public sealed record PrFetchOptions
     /// <summary>Maximum provider pages per PR acquisition; zero disables this ceiling.</summary>
     public int MaximumFilePages { get; init; } = 200;
 
-    /// <summary>Active page acquisition timeout in seconds, excluding idle time between calls; zero disables it.</summary>
+    /// <summary>Complete acquisition timeout in seconds; zero disables it.</summary>
     public int TimeoutSeconds { get; init; } = 120;
 
-    /// <summary>Character size of diff chunks, leaving space for escaped JSON and metadata.</summary>
+    /// <summary>Internal provider diff chunk size; does not split the model-facing result.</summary>
     public int PageCharacters { get; init; } = 8192;
 
     /// <summary>Reads trusted account bindings and repository-narrowable operational limits.</summary>

@@ -247,12 +247,6 @@ public sealed record DelegateAgentsOptions
     /// <summary>Maximum children in one tool call.</summary>
     public int MaximumAgents { get; init; } = 5;
 
-    /// <summary>Maximum characters in one child task.</summary>
-    public int MaximumTaskCharacters { get; init; } = 4_096;
-
-    /// <summary>Maximum characters in one child context.</summary>
-    public int MaximumContextCharacters { get; init; } = 8_192;
-
     /// <summary>Maximum characters retained for one compact child summary.</summary>
     public int MaximumSummaryCharacters
     {
@@ -289,9 +283,6 @@ public sealed record DelegateAgentsOptions
 
     /// <summary>Maximum structured delegation result bytes; zero disables this limit.</summary>
     public int MaximumStructuredResultBytes { get; init; } = 196_608;
-
-    /// <summary>Maximum parent-model projection characters; zero disables this limit.</summary>
-    public int MaximumModelProjectionCharacters { get; init; } = 49_152;
 
     /// <summary>Maximum projected detail characters; zero disables this limit.</summary>
     public int MaximumProjectedDetailCharacters { get; init; } = 2_048;
@@ -336,8 +327,8 @@ public sealed record DelegateAgentsOptions
         {
             EnforceLimits = EnforceOperationalLimits,
             MaximumAssignments = MaximumAgents,
-            MaximumTextCharacters = MaximumTaskCharacters,
-            MaximumContextCharacters = MaximumContextCharacters,
+            MaximumTextCharacters = 0,
+            MaximumContextCharacters = 0,
             MaximumTasksPerAssignment = MaximumTasksPerAssignment,
             MaximumScopeCharacters = MaximumScopeCharacters,
         };
@@ -351,11 +342,11 @@ public sealed record DelegateAgentsOptions
         int[] limits =
         [
             MaximumDisagreements, MaximumDisagreementSubjectCharacters,
-            MaximumAgents, MaximumTaskCharacters, MaximumContextCharacters, _maximumSummaryCharacters,
+            MaximumAgents, _maximumSummaryCharacters,
             MaximumTasksPerAssignment, MaximumScopeCharacters, MaximumChildOutputCharacters,
             MaximumToolNameCharacters, MaximumToolArgumentBytes, MaximumToolArgumentsAggregateBytes,
             MaximumToolRequestsPerRound, MaximumCorrectionReasonCharacters, MaximumOutputBytes,
-            MaximumStructuredResultBytes, MaximumModelProjectionCharacters,
+            MaximumStructuredResultBytes,
             MaximumProjectedDetailCharacters, MaximumProjectedOmissionCharacters,
             MaximumPreparedValidationItems, MaximumPreparedValidationCharacters,
         ];
@@ -395,12 +386,6 @@ public sealed record DelegateAgentsOptions
     internal int EffectiveStructuredResultBytes()
     {
         return EffectiveLimit(MaximumStructuredResultBytes);
-    }
-
-    /// <summary>Returns the effective parent-model projection character limit; zero means disabled.</summary>
-    internal int EffectiveModelProjectionCharacters()
-    {
-        return EffectiveLimit(MaximumModelProjectionCharacters);
     }
 
     /// <summary>Formats the effective child-count range for model-facing guidance.</summary>
@@ -451,20 +436,16 @@ internal static class DelegateAgentsInputValidator
                 throw new ToolArgumentValidationException("agents[].role must name a supported subagent role.");
             }
 
-            if (string.IsNullOrWhiteSpace(agent.Task)
-                || (options.EffectiveLimit(options.MaximumTaskCharacters) is > 0 and var maximumTask
-                    && agent.Task.Length > maximumTask))
+            if (string.IsNullOrWhiteSpace(agent.Task))
             {
                 throw new ToolArgumentValidationException(
-                    "agents[].task must contain non-empty text within the configured task length limit.");
+                    "agents[].task must contain non-empty text.");
             }
 
-            if (string.IsNullOrWhiteSpace(agent.Context)
-                || (options.EffectiveLimit(options.MaximumContextCharacters) is > 0 and var maximumContext
-                    && agent.Context.Length > maximumContext))
+            if (string.IsNullOrWhiteSpace(agent.Context))
             {
                 throw new ToolArgumentValidationException(
-                    "agents[].context must contain non-empty text within the configured context length limit.");
+                    "agents[].context must contain non-empty text.");
             }
         }
     }

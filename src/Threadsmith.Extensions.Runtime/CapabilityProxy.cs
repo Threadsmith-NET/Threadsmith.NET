@@ -54,9 +54,9 @@ public sealed class CapabilityProxy : ITool
         ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
 
         // The extension deserializes and validates its own arguments because the host cannot resolve
-        // extension-owned input types from the default load context (plan-14). Keep the raw JSON as the
+        // extension-owned input types from the default load context (plan-14). Keep the cleaned JSON as
         // opaque input the pipeline carries through policy and execution.
-        return new ExtensionToolArguments(argumentsJson);
+        return new ExtensionToolArguments(ModelJsonCleanup.Clean(argumentsJson));
     }
 
     /// <inheritdoc />

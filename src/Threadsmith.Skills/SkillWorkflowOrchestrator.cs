@@ -119,6 +119,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         var plan = new SkillInvocationPlan
         {
             Request = request with { InputJson = input },
+            RepositoryPath = host.RepositoryPath,
             Package = candidate.Identity,
             Scope = candidate.Provenance.Scope,
             CatalogGeneration = _catalog.Snapshot.Generation,
@@ -564,7 +565,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
                     procedure.OutputJson,
                     cancellationToken);
                 using var output = System.Text.Json.JsonDocument.Parse(validatedOutput);
-                ValidateArtifactClaim(output.RootElement, sideEffects);
+                ValidateArtifactClaim(output.RootElement, sideEffects, plan.RepositoryPath);
                 return new SkillWorkflowStepResult
                 {
                     Succeeded = step.SuccessProperty is null || output.RootElement.GetProperty(step.SuccessProperty).GetBoolean(),
@@ -670,6 +671,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         return (candidate, new SkillInvocationPlan
         {
             Request = request,
+            RepositoryPath = current.RepositoryPath,
             Package = checkpoint.Package,
             Scope = checkpoint.Scope,
             CatalogGeneration = checkpoint.CatalogGeneration,
@@ -804,7 +806,8 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
 
     private static void ValidateArtifactClaim(
         JsonElement output,
-        IReadOnlyList<SkillSideEffectRecord> sideEffects)
+        IReadOnlyList<SkillSideEffectRecord> sideEffects,
+        string? repositoryPath)
     {
         if (output.ValueKind != JsonValueKind.Object
             || !output.TryGetProperty("delivery", out var delivery)
@@ -829,7 +832,7 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
         }
 
         var path = pathElement.GetString()!;
-        if (!sideEffects.Any(item => IsMatchingArtifactSideEffect(item, path, bytesWritten)))
+        if (!sideEffects.Any(item => IsMatchingArtifactSideEffect(item, path, bytesWritten, repositoryPath)))
         {
             throw new InvalidDataException(
                 "Skill value declares artifact delivery that was not observed in artifact side effects.");
@@ -839,17 +842,34 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     private static bool IsMatchingArtifactSideEffect(
         SkillSideEffectRecord sideEffect,
         string declaredPath,
-        long declaredBytesWritten)
+        long declaredBytesWritten,
+        string? repositoryPath)
     {
         return sideEffect.Kind.Equals("artifact", StringComparison.OrdinalIgnoreCase)
             && sideEffect.BytesWritten == declaredBytesWritten
             && sideEffect.Path is { Length: > 0 } observedPath
-            && ArtifactPathsMatch(declaredPath, observedPath);
+            && ArtifactPathsMatch(declaredPath, observedPath, repositoryPath);
     }
 
-    private static bool ArtifactPathsMatch(string declaredPath, string observedPath)
+    private static bool ArtifactPathsMatch(string declaredPath, string observedPath, string? repositoryPath)
     {
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!string.IsNullOrWhiteSpace(repositoryPath))
+        {
+            try
+            {
+                var root = Path.GetFullPath(repositoryPath);
+                return string.Equals(
+                    Path.GetFullPath(declaredPath, root),
+                    Path.GetFullPath(observedPath, root),
+                    comparison);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                return false;
+            }
+        }
+
         return string.Equals(
             declaredPath.Replace('\\', '/'),
             observedPath.Replace('\\', '/'),

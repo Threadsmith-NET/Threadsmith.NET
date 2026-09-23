@@ -23,6 +23,15 @@ public static partial class ToolRuntimeTests
 {
     private const string SanitizerExpansionMarker = "token=x";
 
+    /// <summary>Model prose around tool arguments is removed before typed input validation.</summary>
+    [Fact]
+    public static void ToolInput_AcceptsFramedJson()
+    {
+        var tool = new DateTimeTool(TestPromptLoader.Instance);
+
+        Assert.IsType<DateTimeInput>(tool.DeserializeInput("Calling datetime with ```json\n{}\n``` now."));
+    }
+
     /// <summary>Increasing read content admits the serialized result through the actual tool pipeline.</summary>
     [Theory]
     [InlineData('x')]
@@ -321,9 +330,16 @@ public static partial class ToolRuntimeTests
         Assert.Equal(
             "query",
             Assert.Single(schema.RootElement.GetProperty("required").EnumerateArray()).GetString());
+        var query = schema.RootElement.GetProperty("properties").GetProperty("query");
+        Assert.Equal("string", query.GetProperty("type").GetString());
+        Assert.Contains("both endpoints", query.GetProperty("description").GetString(), StringComparison.Ordinal);
+        var maxFiles = schema.RootElement.GetProperty("properties").GetProperty("maxFiles");
+        Assert.Equal("integer", maxFiles.GetProperty("type").GetString());
+        Assert.Contains("configured host default", maxFiles.GetProperty("description").GetString(), StringComparison.Ordinal);
+        Assert.Contains("does not set the source-length budget", maxFiles.GetProperty("description").GetString(), StringComparison.Ordinal);
         Assert.True(tool.Definition.PreferStrictArguments);
         Assert.Contains("traversal and result budgets are managed by the tool", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.DoesNotContain("limits", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
+        Assert.False(schema.RootElement.GetProperty("properties").TryGetProperty("limits", out _));
         Assert.DoesNotContain("mode", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         Assert.DoesNotContain("pathAnchors", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
         var strictSchemaJson = ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
@@ -335,6 +351,12 @@ public static partial class ToolRuntimeTests
             .Select(property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
         Assert.True(strictProperties.SetEquals(["query", "maxFiles"]));
+        Assert.Equal(
+            query.GetProperty("description").GetString(),
+            strictSchema.RootElement.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
+        Assert.Equal(
+            maxFiles.GetProperty("description").GetString(),
+            strictSchema.RootElement.GetProperty("properties").GetProperty("maxFiles").GetProperty("description").GetString());
     }
 
     /// <summary>The optional file-count hint is clamped by the host without a corrective turn.</summary>

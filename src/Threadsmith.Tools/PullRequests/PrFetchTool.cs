@@ -53,11 +53,12 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             options.TimeoutSeconds == 0 ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(options.TimeoutSeconds),
-            256 * 1024) with
+            int.MaxValue) with
         {
             DisplayName = "Fetch Pull Request",
             EnabledByDefault = false,
             RequiresOutboundConsent = true,
+            SubagentAvailable = false,
         };
     }
 
@@ -71,6 +72,12 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
         var (providerId, account, provider, target) = ResolveProvider(input);
         var scope = context.Invocation.OperationScope
             ?? throw new InvalidOperationException("PR fetching requires an active tool operation scope.");
+        var handoff = scope.GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry());
+        if (input.Refresh)
+        {
+            handoff.Clear(context.SessionId, context.RunId, providerId, target.Url);
+        }
+
         var cache = scope.GetOrCreate(this, () => new PrFetchCache(_options, scope.CancellationToken));
         var invocation = context.Invocation;
         var key = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
@@ -97,6 +104,7 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
                 IsPathScopeRestricted(invocation) ? file => IsAllowed(file, invocation) : null,
                 cancellationToken),
             invocation);
+        handoff.Register(context.SessionId, context.RunId, result);
         return new ToolExecution<PrFetchOutput>(
             result,
             [new ToolProvenanceSource("pull-request-untrusted", target.Url, $"snapshot={result.SnapshotId:N};source={result.Metadata.SourceCommit};destination={result.Metadata.DestinationCommit}")],
@@ -107,11 +115,6 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
     /// <inheritdoc />
     protected override void ValidateInput(PrFetchInput input)
     {
-        if ((input.Refresh && input.Cursor is not null) || input.Cursor?.Length > 128)
-        {
-            throw new ArgumentException("Refresh cannot accompany a cursor; use only the cursor returned by pr_fetch.");
-        }
-
         ResolveProvider(input);
     }
 
@@ -132,18 +135,13 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
 
     private static string FormatStartedActivityDetail(string providerId, string url, PrFetchInput input)
     {
-        var pageState = input.Cursor is null ? "first page" : "continuation";
         var refreshState = input.Refresh ? " · refresh" : string.Empty;
-        return $"{providerId} · {FormatKind(input.Kind)} · {pageState}{refreshState} · {url}";
+        return $"{providerId} · {FormatKind(input.Kind)} · acquiring{refreshState} · {url}";
     }
 
     private static string FormatCompletedActivityDetail(PrFetchOutput result)
     {
-        var pageState = result.IsContinuation ? "continuation" : "first page";
-        var cursorState = result.Cursor is null ? "no cursor" : "cursor returned";
-        var acquisitionState = result.AcquisitionComplete ? "acquisition complete" : "acquisition pending";
-        var deliveryState = result.DeliveryComplete ? "delivery complete" : "delivery pending";
-        return $"{result.Provider} · {FormatKind(result.Kind)} · {result.Page.Kind} · {pageState} · {cursorState} · {acquisitionState} · {deliveryState} · {result.Metadata.Url}";
+        return $"{result.Provider} · {FormatKind(result.Kind)} · acquisition complete · {result.Page.Files.Count} files · {result.Metadata.Url}";
     }
 
     private static string FormatKind(PrFetchKind kind) => kind.ToString().ToLowerInvariant();

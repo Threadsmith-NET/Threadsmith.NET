@@ -3741,6 +3741,10 @@ public static partial class Milestone1Tests
             Assert.Contains("│", text, StringComparison.Ordinal);
             Assert.Contains("└", text, StringComparison.Ordinal);
             Assert.DoesNotContain("Updated outcome", text, StringComparison.Ordinal);
+            Assert.Contains(surface.Segments, segment => segment.Text.Contains("providers located", StringComparison.Ordinal)
+                && segment.Role == PresentationTextRole.Success);
+            Assert.Contains(surface.Segments, segment => segment.Text.Contains("test lookup failed", StringComparison.Ordinal)
+                && segment.Role == PresentationTextRole.Error);
         }
         finally
         {

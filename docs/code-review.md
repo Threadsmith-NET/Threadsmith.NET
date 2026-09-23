@@ -53,7 +53,7 @@ Configure a GitHub.com or Bitbucket Cloud account and enable `pr_fetch` as descr
 /skills use Maintained:review@1.0.0 {"mode":"pullRequest","url":"https://bitbucket.org/workspace/repository/pull-requests/123"}
 ```
 
-The lead obtains the provider's PR metadata and complete changed-file inventory with `kind:"inventory"` before delegation. Specialists fetch `kind:"diff"` pages only when their assigned review questions need patch evidence, and they verify returned PR metadata against the handoff. The review reports binary, omitted or incomplete coverage and does not substitute a branch comparison if retrieval fails. The five specialists, report sections and delivery remain the same. Natural language uses these same inputs; the model asks for an account when ambiguous.
+The lead calls `pr_fetch` with `kind:"diff"` once to obtain metadata, the complete changed-file inventory, and all available diff content before delegation. The host handles provider pagination. Specialists receive the acquired evidence; `pr_fetch` is absent from their catalogs. Retrieval failures and provider omissions are reported explicitly.
 
 ### Review a remote branch
 
@@ -115,7 +115,7 @@ You can also provide a Jira ticket or pasted acceptance criteria. For example:
 Before invoking Maintained:review@1.0.0 for the current Threadsmith branch against main, retrieve the Jira ticket I linked using the available Jira tool. Pass its description and acceptance criteria into the review context, especially for BugReviewer. If the ticket cannot be retrieved, ask me for its contents before starting the review.
 ```
 
-Retrieving a ticket requires an available tool and access to that Jira instance. Alternatively, paste the ticket contents into the request or save them in a local requirements file. The lead passes situational objectives in each delegated task and requirements, source locations, and evidence in its context; the specialist's role prompt supplies its general focus.
+Retrieving a ticket requires an available tool and access to that Jira instance. Alternatively, paste the ticket contents into the request or save them in a local requirements file. The lead passes situational objectives, requirements, and source locations in each delegated task; the specialist's role prompt supplies its general focus. For PR reviews, the host also supplies each specialist a reference to the lead's already captured PR snapshot. Specialists inspect that evidence with `read_agent_evidence`, including selected line ranges for a large diff. They cannot invoke `pr_fetch` to acquire the PR again.
 
 ## The five specialists
 
@@ -127,7 +127,7 @@ Retrieving a ticket requires an available tool and access to that Jira instance.
 | **BugReviewer** | Functional bugs and regressions against intended behavior and supplied acceptance criteria. It traces callers, state transitions, error handling, boundary cases, and integration behavior, and checks repository coding standards. Without explicit requirements it looks for demonstrable bugs and identifies assumptions. |
 | **ArchitectureReviewer** | Applicable `AGENTS.md`, architecture documents, dependency direction, ownership, public contracts, subsystem boundaries, reuse, duplicated code, and .NET/package usage. For this repo, that includes established execution paths and the separation of core, execution, interaction, and TUI concerns. |
 
-The prompt asks for all five roles. Configured delegation capacity determines how many can run at once; some may wait for a slot. Each receives the normal child-agent context plus its role prompt and the lead's task/context. Specialists can use inherited tools, including processes when enabled. They cannot call `delegate_agents` themselves.
+The prompt asks for all five roles. Configured delegation capacity determines how many can run at once; some may wait for a slot. Each receives the normal child-agent context plus its role prompt and the lead's task/context. Specialists can use inherited tools, including processes when enabled. Child catalogs exclude both `delegate_agents` and `invoke_skill`.
 
 Reviewers are asked for JSON containing `status` (`complete`, `partial`, or `failed`), `summary`, `findings`, `coverage`, and `limitations`. Each finding should include severity, title, path, source lines, explanation, evidence, and recommendation. This is prompt-guided reviewer output, not a separate host-enforced per-reviewer schema. An empty findings list is valid; reviewers should not invent issues to fill a quota.
 
@@ -176,4 +176,4 @@ In a deployed application, these files live together under `prompts/` beside the
 
 ## Notice
 
-AI code reviews can be a use code-quality tool, but should be considered advisory and not authoritative. They are best used in conjunction with human reviews. 
+AI code reviews can be a use code-quality tool, but should be considered advisory and not authoritative. They are best used in conjunction with human reviews.

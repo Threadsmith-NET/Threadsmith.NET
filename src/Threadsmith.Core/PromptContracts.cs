@@ -590,6 +590,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the SkillProcedureContinuation prompt asset.</summary>
     public const string SkillProcedureContinuation = "Skill-Procedure-Continuation.md";
 
+    /// <summary>Formatting-only correction for invalid skill procedure output.</summary>
+    public const string SkillProcedureOutputCorrection = "Skill-Procedure-OutputCorrection.md";
+
     /// <summary>Gets the stable filename for the SkillWorkflowNextActionExecuteFirstEligibleStep prompt asset.</summary>
     public const string SkillWorkflowNextActionExecuteFirstEligibleStep = "Skill-Workflow-NextAction-ExecuteFirstEligibleStep.md";
 
@@ -712,9 +715,6 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the ToolDelegateAgentsSteering prompt asset.</summary>
     public const string ToolDelegateAgentsSteering = "Tool-delegate_agents-Steering.md";
-
-    /// <summary>Gets the stable filename for the ToolDelegateAgentsTruncation prompt asset.</summary>
-    public const string ToolDelegateAgentsTruncation = "Tool-delegate_agents-Truncation.md";
 
     /// <summary>Gets the stable filename for the ToolCodeExploreResultHeader prompt asset.</summary>
     public const string ToolCodeExploreResultHeader = "Tool-code_explore-ResultHeader.md";
@@ -1237,6 +1237,7 @@ public static class PromptFileNames
         SkillProcedureSystem,
         SkillProcedureRequest,
         SkillProcedureContinuation,
+        SkillProcedureOutputCorrection,
         SkillWorkflowNextActionExecuteFirstEligibleStep,
         SkillWorkflowNextActionResumeNextIncompleteSafeStep,
         SkillWorkflowNextActionExecuteAfterHostResult,
@@ -1278,7 +1279,6 @@ public static class PromptFileNames
         ToolDelegateAgentsDisagreement,
         ToolDelegateAgentsDelegationOmission,
         ToolDelegateAgentsSteering,
-        ToolDelegateAgentsTruncation,
         ToolCodeExploreResultHeader,
         ToolCodeExploreAvailabilitySection,
         ToolCodeExploreBlastRadiusSection,
@@ -1537,7 +1537,6 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolDelegateAgentsDisagreement,
             PromptFileNames.ToolDelegateAgentsDelegationOmission,
             PromptFileNames.ToolDelegateAgentsSteering,
-            PromptFileNames.ToolDelegateAgentsTruncation,
             PromptFileNames.ContextActiveRunSteering,
             PromptFileNames.ContextExecutionOutcome,
             PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
@@ -1566,6 +1565,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SkillProcedureSystem,
             PromptFileNames.SkillProcedureRequest,
             PromptFileNames.SkillProcedureContinuation,
+            PromptFileNames.SkillProcedureOutputCorrection,
             PromptFileNames.SkillWorkflowNextActionExecuteFirstEligibleStep,
             PromptFileNames.SkillWorkflowNextActionResumeNextIncompleteSafeStep,
             PromptFileNames.SkillWorkflowNextActionExecuteAfterHostResult,
@@ -1771,7 +1771,8 @@ public static class PromptAssetCatalog
                     [PromptFileNames.CorrectionMutationProposal] = Set(
                         "AttemptNumber",
                         "MaximumAttempts",
-                        "Reason"),
+                        "Reason",
+                        "RecoveryEvidence"),
                     [PromptFileNames.CorrectionMutationPostApplyValidation] = Set(
                         "AttemptNumber",
                         "MaximumAttempts",
@@ -1829,6 +1830,7 @@ public static class PromptAssetCatalog
                         "SkillAssets",
                         "InputJson"),
                     [PromptFileNames.SkillProcedureContinuation] = Set("ToolName", "ToolResult"),
+                    [PromptFileNames.SkillProcedureOutputCorrection] = Set("FailureSummary"),
                     [PromptFileNames.SkillWorkflowNextActionResolveHostAction] = Set("HostActionKind"),
                     [PromptFileNames.ContextChildAgentTask] = Set(
                         "BaselineIdentity",
@@ -1876,7 +1878,6 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ToolDelegateAgentsDisagreement] = Set("Disagreement"),
                     [PromptFileNames.ToolDelegateAgentsDelegationOmission] = Set("Omission"),
                     [PromptFileNames.ToolDelegateAgentsSteering] = Set("Submitted", "Delivered", "Undelivered"),
-                    [PromptFileNames.ToolDelegateAgentsTruncation] = Set("OmittedBlockCount"),
                     [PromptFileNames.ToolCodeExploreResultHeader] = Set(
                         "DisplayQuery",
                         "SymbolCount",

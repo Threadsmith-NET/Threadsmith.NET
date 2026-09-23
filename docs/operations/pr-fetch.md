@@ -1,6 +1,10 @@
 # Pull-request retrieval
 
-`pr_fetch` reads a GitHub.com or Bitbucket Cloud PR's metadata and complete changed-file inventory, with optional provider diff content. It never checks out a branch, writes source files, posts comments or compares two branch-tip trees. The maintained [review skill](../code-review.md) uses inventory retrieval for its lead handoff, then lets specialists request diff pages only when their assigned review work needs patch evidence.
+`pr_fetch` reads a GitHub.com or Bitbucket Cloud PR's metadata and complete changed-file inventory, with optional provider diff content. It never checks out a branch, writes source files, posts comments or compares two branch-tip trees. The maintained [review skill](../code-review.md) retrieves the complete inventory and diff in one call in the lead review, then supplies that evidence to its specialists. The tool is parent-only and is omitted from subagent tool catalogs.
+
+## Captured evidence for delegated children
+
+Successful parent PR acquisitions are retained in the owning operation scope. Delegated children receive the completed snapshot ID automatically and can inspect its metadata, full changed-file inventory, and diff through `read_agent_evidence`. The reader supports one-based line ranges for selective inspection. It reads the captured result and makes no provider request; `pr_fetch` remains absent from child tool catalogs. Snapshots expire with the operation scope and refresh replaces the prior handoff.
 
 ## Configure and enable
 
@@ -38,25 +42,19 @@ Enable `pr_fetch` using `/tools`, accepting its ordinary outbound consent. Allow
 {"url":"https://github.com/owner/repo/pull/123","kind":"inventory"}
 ```
 
-`kind` is required and has two values. Use `"kind":"inventory"` for PR metadata or a complete list of added, modified, removed and renamed files. This mode retrieves all file-inventory pages, rechecks PR metadata and completes without requesting the provider diff. Use `"kind":"diff"` when the current task requires patch content or changed-line evidence. The maintained review skill uses `inventory` before delegation and instructs specialists to request `diff` pages only for assigned evidence.
+`kind` is required and has two values. Use `"kind":"inventory"` for PR metadata or a complete list of added, modified, removed and renamed files. This mode retrieves all file-inventory pages, rechecks PR metadata and completes without requesting the provider diff. Use `"kind":"diff"` when the current task requires patch content or changed-line evidence. The maintained review skill calls `kind:"diff"` once before delegation; that call includes the inventory as well as the diff.
 
 The tool selects the unique enabled account whose configured `urlPatterns` match the canonical PR URL. These are routing configuration consumed by host code, not instructions exposed to the model. Patterns are case-insensitive whole-URL globs: `*` matches any characters, including slashes. Use HTTPS, the adapter's exact host and optional wildcards in the path; queries, fragments, credentials and other wildcard syntax are unsupported. The adapter validates the actual PR URL before matching; supported PR subviews and fragments normalize to the same canonical URL.
 
 Omitted or empty `urlPatterns` use adapter defaults: `https://github.com/*/*/pull/*` or `https://bitbucket.org/*/*/pull-requests/*`. Custom patterns replace those defaults and belong in user/machine configuration; repository configuration cannot replace them. Changes require restart. Overlapping patterns do not establish priority: if multiple accounts match, the tool asks for an explicit `provider` ID. With no match, it reports a configuration/selection error. An explicit `provider` selects that enabled account regardless of its automatic routing patterns, but the adapter still validates the URL. In the example above, the public GitHub account overlaps the work account; remove it or narrow its patterns to avoid that ambiguity.
 
-When a result has a non-null `cursor`, call `pr_fetch` exactly once with the same URL, the same `kind` and that returned cursor. Do not repeat the previous arguments. Continue this sequence until `deliveryComplete` is true and the cursor is null:
+Each successful call returns the entire requested evidence after the host follows all provider API pages and verifies that PR metadata still matches. There are no model-facing cursors, continuation calls, or delivery-pending states. The result includes metadata, snapshot identity, the complete file list, available diff, limitations, and cache/acquisition status. Destination commit is the destination tip, not a claimed merge base.
 
-```json
-{"url":"https://github.com/owner/repo/pull/123","kind":"inventory","cursor":"<returned cursor>"}
-```
+A moving PR, failed provider page, inconsistent file count, or exceeded configured acquisition bound fails the call rather than returning provisional evidence as complete. Binary files and provider-omitted patches remain explicit limitations. The before/after metadata check is not an atomic provider snapshot.
 
-`provider` remains optional after automatic selection, or can be the account ID returned by the tool. Provider, canonical URL and `kind` form the acquisition identity; changing the kind creates a separate snapshot, and a cursor cannot cross kinds. Every result reports its `kind` and `isContinuation`; the latter is true when that invocation supplied a cursor, without echoing the incoming cursor value. The separate `cursor` output is the opaque value for the next call. Inventory pages contain metadata, files and a terminal `complete` page. Diff pages additionally contain bounded diff chunks. `acquisitionComplete` means all requested provider data was retrieved with matching PR metadata before and after; `deliveryComplete` and a null cursor mean this reader reached the last page. A cached first page can have acquisition complete but delivery incomplete. The PR description is sent on the first page only. Snapshot ID and commit identities accompany every page. Destination commit is the destination tip, not a claimed merge base. Identical calls in one model execution receive the shared corrective duplicate result. Separate parent, skill and subagent executions can make their own first call and reuse the operation cache; continuation calls are distinct because they carry the returned cursor.
+Acquisition is retained in the existing operation cache. Concurrent authorized readers share the acquisition; cancellation of one waiter does not cancel other readers. Owner cancellation or completion disposes state and joins pending transport. Delegated children receive the evidence through the ordinary governed handoff; the tool itself is omitted from their catalogs. There is no disk or cross-session cache.
 
-Before completion, evidence is provisional. A moving PR, failed page, inconsistent file count or exceeded bound fails acquisition rather than substituting scope. Completion means the API response was acquired, not that every binary or omitted patch can be reviewed. File inventory limitations and raw diff markers remain coverage gaps. Metadata text has explicit truncation markers when bounded. The before/after check is not an atomic snapshot. GitHub file-list ceilings are detected against its reported changed-file count.
-
-Pages are acquired on demand, streamed and retained in a bounded operation cache. Parent, equally authorized children and nested skills share that cache; every invocation still passes ordinary tool/network/disclosure policy and tool accounting. Cancelling one waiter does not cancel another reader. Owner cancellation or completion disposes state and joins pending transport. Manual skills own a scope when no caller scope exists; resume starts fresh acquisition. There is no disk or cross-session cache.
-
-To clear and reacquire one PR, call the same tool with `refresh:true` and no cursor. This replaces its generation and invalidates old cursors; concurrent refresh callers join the active replacement. Discard or reassess earlier reviewer evidence. Failed refresh does not restore old evidence. An ordinary first-page call can retry a failed acquisition.
+Use `refresh:true` to explicitly replace the snapshot. Earlier evidence must then be discarded or reassessed. Failed acquisitions can be retried by a later call. Every invocation, including a cache hit, still passes ordinary tool and network policy.
 
 ## Limits
 
@@ -67,10 +65,10 @@ All keys are under `tools.prFetch`; trusted settings are ceilings for repository
 | `maximumResponseBytes` | 16777216 | Decoded bytes per API response or raw diff stream; zero disables the ceiling. |
 | `maximumCacheBytes` | 33554432 | Retained UTF-8 serialized metadata/pages across PRs in one operation; zero disables the ceiling. Exhaustion fails without evicting a captured revision. |
 | `maximumFilePages` | 200 | File-inventory API pages per acquisition; metadata, diff and bounded redirects are additional. Zero disables the ceiling. |
-| `timeoutSeconds` | 120 | Active acquisition deadline per requested page and declared tool timeout; zero disables it. Idle model time between pages is excluded. |
-| `pageCharacters` | 8192 | Diff chunk / file-identity grouping size, 256–16384. Page size cannot be disabled. |
+| `timeoutSeconds` | 120 | Complete acquisition deadline and declared tool timeout; zero disables it. |
+| `pageCharacters` | 8192 | Internal provider read/grouping size, 256–16384; the model receives the complete result regardless of this size. |
 
-Ordinary runtime overrides, budgets and cancellation still apply. Serialized tool output defaults to 256 KiB for escaped page content and metadata. Secrets resolve at the HTTP boundary with user-owned minimum trust. Redirects/pagination stay on the adapter's API authority and repository route; public-IP validation pins connections. Tokens are absent from cache keys, evidence and diagnostics.
+Ordinary runtime overrides, budgets and cancellation still apply. The tool has no separate small output cap; configured runtime overrides and the model's context capacity still apply. Secrets resolve at the HTTP boundary with user-owned minimum trust. Redirects/pagination stay on the adapter's API authority and repository route; public-IP validation pins connections. Tokens are absent from cache keys, evidence and diagnostics.
 
 ## Extending providers
 

@@ -763,6 +763,11 @@ public static class AgentWorkspaceTests
         Assert.Empty(sink.Agents);
         Assert.Equal(2, sink.Output.Count);
         Assert.All(sink.Output, batch => Assert.Null(batch.Target));
+        Assert.Equal(
+            [PresentationTextRole.Success, PresentationTextRole.Error],
+            sink.Output.SelectMany(batch => batch.Items.OfType<PresentationTextItem>())
+                .SelectMany(item => item.Segments)
+                .Select(segment => segment.Role));
         Assert.Contains("Updated outcome: Avery", string.Concat(sink.Output[1].Items.OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text)), StringComparison.Ordinal);
     }
 
@@ -942,7 +947,13 @@ public static class AgentWorkspaceTests
         Assert.Contains("second queued", Assert.Single(await projection.GetToolProgressAsync(secondTool, false, timeout.Token)).Text, StringComparison.Ordinal);
         await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Completed, Revision = 2, Reason = "first done" }, timeout.Token);
         await projection.ObserveAsync(lifecycle, timeout.Token);
-        Assert.Contains("first done", Assert.Single(await projection.GetToolProgressAsync(firstTool, false, timeout.Token)).Text, StringComparison.Ordinal);
+        var completedProgress = Assert.Single(await projection.GetToolProgressAsync(firstTool, false, timeout.Token));
+        Assert.Contains("first done", completedProgress.Text, StringComparison.Ordinal);
+        Assert.Equal(PresentationTextRole.Success, completedProgress.Role);
+        await projection.ObserveAsync(lifecycle with { DelegationId = second.DelegationId, AssignmentId = second.AssignmentId, ChildRunId = second.RunId, Status = AgentRunStatus.Failed, Revision = 2, Reason = "second failed" }, timeout.Token);
+        var failedProgress = Assert.Single(await projection.GetToolProgressAsync(secondTool, false, timeout.Token));
+        Assert.Contains("second failed", failedProgress.Text, StringComparison.Ordinal);
+        Assert.Equal(PresentationTextRole.Error, failedProgress.Role);
         await projection.ObserveAsync(checkpoint with { Generation = 2, Revision = 3 }, timeout.Token);
         Assert.Empty(await projection.GetToolProgressAsync(firstTool, false, timeout.Token));
         await projection.ObserveAsync(lifecycle with { Status = AgentRunStatus.Cancelled, Generation = 2, Revision = 4, Reason = "cancelled" }, timeout.Token);

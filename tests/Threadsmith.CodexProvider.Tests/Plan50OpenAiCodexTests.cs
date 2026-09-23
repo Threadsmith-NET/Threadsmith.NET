@@ -464,6 +464,11 @@ public sealed class Plan50OpenAiCodexTests
         using var document = JsonDocument.Parse(handler.RequestBody ?? string.Empty);
         Assert.True(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
         Assert.Equal(2, document.RootElement.GetProperty("tools").GetArrayLength());
+        Assert.All(
+            document.RootElement.GetProperty("tools").EnumerateArray(),
+            tool => Assert.Equal(
+                "Repository-relative file path.",
+                tool.GetProperty("parameters").GetProperty("properties").GetProperty("path").GetProperty("description").GetString()));
     }
 
     /// <summary>Codex JSON rejection details expose only safe structured identifiers.</summary>
@@ -966,7 +971,7 @@ public sealed class Plan50OpenAiCodexTests
         {
             Name = name,
             Description = "Read one file.",
-            ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"],\"additionalProperties\":false}",
+            ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Repository-relative file path.\"}},\"required\":[\"path\"],\"additionalProperties\":false}",
         };
     }
 

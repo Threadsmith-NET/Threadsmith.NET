@@ -374,6 +374,10 @@ public sealed partial class SkillSubsystemTests
 
         public Exception? FinalException { get; init; }
 
+        public IReadOnlyList<string> FinalResponses { get; init; } = [];
+
+        public bool RequestToolDuringCorrection { get; init; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public List<string> ReplayedWireIds { get; } = [];
@@ -423,7 +427,19 @@ public sealed partial class SkillSubsystemTests
                     throw FinalException;
                 }
 
-                yield return new ModelChunk { Text = "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Fixture complete\"}" };
+                if (RequestToolDuringCorrection && Requests.Count > AdditionalBatches.Count + 2)
+                {
+                    yield return new ModelChunk { Output = Calls[0] };
+                    yield break;
+                }
+
+                var responseIndex = Requests.Count - AdditionalBatches.Count - 2;
+                yield return new ModelChunk
+                {
+                    Text = FinalResponses.Count > 0
+                        ? FinalResponses[Math.Min(responseIndex, FinalResponses.Count - 1)]
+                        : "{\"succeeded\":true,\"delivery\":\"inline\",\"response\":\"Fixture complete\"}",
+                };
             }
         }
     }
@@ -508,6 +524,8 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class SkillBatchWriteFileTool : Tool<SkillBatchWriteFileInput, WriteFileOutput>
     {
+        public int Writes { get; private set; }
+
         public SkillBatchWriteFileTool(ToolConcurrencyMode concurrencyMode = ToolConcurrencyMode.ParallelSafe)
         {
             Definition = new ToolDefinition
@@ -534,6 +552,7 @@ public sealed partial class SkillSubsystemTests
             ValidateInput(input);
             cancellationToken.ThrowIfCancellationRequested();
             var content = input.Content ?? throw new InvalidOperationException("No fixture content was supplied.");
+            Writes++;
             return Task.FromResult(new ToolExecution<WriteFileOutput>(
                 new WriteFileOutput(input.Path, Encoding.UTF8.GetByteCount(content), null),
                 []));

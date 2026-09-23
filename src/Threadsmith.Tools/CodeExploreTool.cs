@@ -12,13 +12,15 @@ public sealed record CodeExploreInput
     /// <summary>Natural-language question, symbol, file, or code term to explore.</summary>
     public required string Query { get; init; }
 
-    /// <summary>Optional result-file hint; omission uses the host's adaptive default.</summary>
+    /// <summary>Optional source-bearing file-count hint; omission uses the host's adaptive default.</summary>
     public int MaxFiles { get; init; }
 }
 
 /// <summary>Resolves C# queries and returns bounded current source from one semantic generation.</summary>
 public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 {
+    private const string MaxFilesArgumentDescription = "Optional source-bearing file count hint. Omit or use a nonpositive value for the configured host default. A positive value requests a narrower source-bearing file count subject to host limits; it does not set the source-length budget.";
+    private const string QueryArgumentDescription = "A C# question, symbol, file, or code term. Name related targets together; for a flow, include both endpoints. Natural-language questions are supported without a preliminary symbol search.";
     private const string ResultBoundOmission = "Code exploration metadata was bounded to fit the effective output budget.";
     private readonly CodeExploreOptions _options;
     private readonly IPromptLoader _prompts;
@@ -35,7 +37,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(promptLoader);
         _options = (options ?? new CodeExploreOptions()).Resolve();
-        Definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
+        var definition = ToolDefinitionFactory.Create<CodeExploreInput, CodeExploreResult>(
             "code_explore",
             promptLoader.Get(PromptFileNames.ToolCodeExploreDescription),
             ToolCategory.SemanticSearch,
@@ -49,6 +51,10 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             RequiresWorkspace = false,
             PreferStrictArguments = true,
         };
+        Definition = ToolDefinitionFactory.WithPropertyDescriptions(
+            definition,
+            ("query", QueryArgumentDescription),
+            ("maxFiles", MaxFilesArgumentDescription));
         _prompts = promptLoader;
         _service = service;
         _processManager = processManager;

@@ -1114,6 +1114,11 @@ public sealed class SemanticRefreshCoordinator :
 
     private void QueueChange(WorkspaceBinding binding, SemanticFileChange change)
     {
+        if (IsStopping(binding))
+        {
+            return;
+        }
+
         var fullPath = NormalizePath(binding, change.Path);
         if (fullPath is null)
         {
@@ -1132,7 +1137,7 @@ public sealed class SemanticRefreshCoordinator :
 
         lock (binding.Gate)
         {
-            if (binding.IsObsolete)
+            if (binding.IsObsolete || Volatile.Read(ref _disposed) != 0)
             {
                 return;
             }
@@ -1174,7 +1179,7 @@ public sealed class SemanticRefreshCoordinator :
         SemanticRefreshMetrics.RecoveryRequested.Add(1);
         lock (binding.Gate)
         {
-            if (binding.IsObsolete)
+            if (binding.IsObsolete || Volatile.Read(ref _disposed) != 0)
             {
                 return;
             }
@@ -1224,13 +1229,30 @@ public sealed class SemanticRefreshCoordinator :
 
         lock (binding.Gate)
         {
+            if (binding.IsObsolete || Volatile.Read(ref _disposed) != 0)
+            {
+                return false;
+            }
+
             if (binding.IsLoading)
             {
                 return !SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, path);
             }
         }
 
-        var inventory = _backend.GetRefreshInventory(binding.Request.WorkspaceId);
+        SemanticRefreshInventory inventory;
+        try
+        {
+            inventory = _backend.GetRefreshInventory(binding.Request.WorkspaceId);
+        }
+        catch (ObjectDisposedException) when (IsStopping(binding))
+        {
+            // FileSystemWatcher can deliver a callback that was already queued when shutdown
+            // disabled and disposed the watcher. Suppress disposal only after this binding or
+            // the coordinator has actually entered shutdown.
+            return false;
+        }
+
         if (inventory.SourceDocuments.Contains(path))
         {
             return !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
@@ -1261,6 +1283,19 @@ public sealed class SemanticRefreshCoordinator :
             or SemanticFileChangeKind.Deleted
             or SemanticFileChangeKind.Renamed;
         return isLifecycleChange;
+    }
+
+    private bool IsStopping(WorkspaceBinding binding)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return true;
+        }
+
+        lock (binding.Gate)
+        {
+            return binding.IsObsolete;
+        }
     }
 
     private Task EnsureWorkerLockedAsync(WorkspaceBinding binding)

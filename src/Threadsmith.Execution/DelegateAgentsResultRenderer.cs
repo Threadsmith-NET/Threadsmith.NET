@@ -1,58 +1,27 @@
 namespace Threadsmith.Execution;
 
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
 
-/// <summary>Renders complete model-visible detail blocks within a fixed character budget.</summary>
+/// <summary>Renders complete model-visible detail blocks without a separate character cap.</summary>
 internal sealed class DelegateAgentsResultRenderer
 {
-    private readonly int _maximumModelProjectionCharacters;
     private readonly IPromptLoader _prompts;
 
     /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultRenderer"/> class.</summary>
     public DelegateAgentsResultRenderer(IPromptLoader prompts)
-        : this(prompts, new DelegateAgentsOptions().EffectiveModelProjectionCharacters())
-    {
-    }
-
-    /// <summary>Initializes a new instance of the <see cref="DelegateAgentsResultRenderer"/> class.</summary>
-    internal DelegateAgentsResultRenderer(IPromptLoader prompts, int maximumModelProjectionCharacters)
     {
         ArgumentNullException.ThrowIfNull(prompts);
-        ArgumentOutOfRangeException.ThrowIfNegative(maximumModelProjectionCharacters);
-        _maximumModelProjectionCharacters = maximumModelProjectionCharacters;
         _prompts = prompts;
     }
 
     /// <summary>Creates a compact projection without cutting fields or child status lines.</summary>
-    public string Render(DelegateAgentsResult result, out bool truncated)
+    public string Render(DelegateAgentsResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         var builder = new StringBuilder();
-        var maximumCharacters = _maximumModelProjectionCharacters;
-        var maximumOmittedBlocks = checked(
-            2
-            + (result.Children.Count * 3)
-            + result.Children.Sum(child => (child.Findings.Count * 2) + child.Omissions.Count)
-            + result.Disagreements.Count
-            + result.Omissions.Count);
-        var detailLimit = maximumCharacters;
-        if (maximumCharacters > 0)
-        {
-            var maximumFooter = RenderTruncationFooter(maximumOmittedBlocks);
-            if (maximumFooter.Length > maximumCharacters)
-            {
-                throw new InvalidOperationException(
-                    "The delegate_agents truncation prompt exceeds the model projection bound.");
-            }
-
-            detailLimit = maximumCharacters - maximumFooter.Length;
-        }
-
-        var omittedBlocks = 0;
-        AppendCompleteBlockOrCountOmission(
+        builder.Append(
             _prompts.Render(
                 PromptFileNames.ToolDelegateAgentsResultHeader,
                 Tokens(
@@ -60,7 +29,7 @@ internal sealed class DelegateAgentsResultRenderer
                     ("Status", $"{result.Status}"))));
         foreach (var child in result.Children)
         {
-            AppendCompleteBlockOrCountOmission(
+            builder.Append(
                 _prompts.Render(
                     PromptFileNames.ToolDelegateAgentsChildStatus,
                     Tokens(
@@ -79,7 +48,7 @@ internal sealed class DelegateAgentsResultRenderer
                     ("Summary", child.Summary),
                     ("ModelTokens", $"{child.Usage.ModelTokens}"),
                     ("ToolCalls", $"{child.Usage.ToolCalls}")));
-            AppendCompleteBlockOrCountOmission(summaryBlock);
+            builder.Append(summaryBlock);
             if (child.ModelSelection is not null || child.Implementation is not null)
             {
                 var details = JsonSerializer.Serialize(new
@@ -87,7 +56,7 @@ internal sealed class DelegateAgentsResultRenderer
                     modelSelection = child.ModelSelection,
                     implementation = child.Implementation,
                 });
-                AppendCompleteBlockOrCountOmission(_prompts.Render(
+                builder.Append(_prompts.Render(
                     PromptFileNames.ToolDelegateAgentsChildDetails,
                     Tokens(
                         ("AssignmentId", child.AssignmentId),
@@ -100,7 +69,7 @@ internal sealed class DelegateAgentsResultRenderer
         {
             foreach (var child in result.Children.Where(item => index < item.Findings.Count))
             {
-                AppendCompleteBlockOrCountOmission(RenderFinding(child, child.Findings[index]));
+                builder.Append(RenderFinding(child, child.Findings[index]));
                 var finding = child.Findings[index];
                 if (finding.Severity is not null)
                 {
@@ -113,7 +82,7 @@ internal sealed class DelegateAgentsResultRenderer
                         finding.Consequence,
                         finding.Recommendation,
                     });
-                    AppendCompleteBlockOrCountOmission(_prompts.Render(
+                    builder.Append(_prompts.Render(
                         PromptFileNames.ToolDelegateAgentsReviewDetails,
                         Tokens(
                             ("AssignmentId", child.AssignmentId),
@@ -129,7 +98,7 @@ internal sealed class DelegateAgentsResultRenderer
                 var block = _prompts.Render(
                     PromptFileNames.ToolDelegateAgentsChildOmission,
                     Tokens(("AssignmentId", $"{child.AssignmentId}"), ("Omission", omission)));
-                AppendCompleteBlockOrCountOmission(block);
+                builder.Append(block);
             }
         }
 
@@ -138,7 +107,7 @@ internal sealed class DelegateAgentsResultRenderer
             var block = _prompts.Render(
                 PromptFileNames.ToolDelegateAgentsDisagreement,
                 Tokens(("Disagreement", disagreement)));
-            AppendCompleteBlockOrCountOmission(block);
+            builder.Append(block);
         }
 
         foreach (var omission in result.Omissions)
@@ -146,7 +115,7 @@ internal sealed class DelegateAgentsResultRenderer
             var block = _prompts.Render(
                 PromptFileNames.ToolDelegateAgentsDelegationOmission,
                 Tokens(("Omission", omission)));
-            AppendCompleteBlockOrCountOmission(block);
+            builder.Append(block);
         }
 
         var steeringBlock = _prompts.Render(
@@ -155,36 +124,9 @@ internal sealed class DelegateAgentsResultRenderer
                 ("Submitted", $"{result.Steering.Submitted}"),
                 ("Delivered", $"{result.Steering.Delivered}"),
                 ("Undelivered", $"{result.Steering.Undelivered}")));
-        AppendCompleteBlockOrCountOmission(steeringBlock);
-
-        truncated = omittedBlocks > 0;
-        if (truncated)
-        {
-            var footer = RenderTruncationFooter(omittedBlocks);
-            if (!TryAppend(builder, footer, maximumCharacters))
-            {
-                throw new InvalidOperationException(
-                    "The complete delegate_agents truncation footer does not fit its reserved projection space.");
-            }
-        }
+        builder.Append(steeringBlock);
 
         return builder.ToString().TrimEnd();
-
-        void AppendCompleteBlockOrCountOmission(string block)
-        {
-            if (!TryAppend(builder, block, detailLimit))
-            {
-                omittedBlocks++;
-            }
-        }
-    }
-
-    private string RenderTruncationFooter(int omittedBlocks)
-    {
-        return PromptAssetRenderer.RenderWithPlatformLineEndings(
-            _prompts,
-            PromptFileNames.ToolDelegateAgentsTruncation,
-            Tokens(("OmittedBlockCount", omittedBlocks.ToString(CultureInfo.InvariantCulture))));
     }
 
     private string RenderFinding(
@@ -214,19 +156,5 @@ internal sealed class DelegateAgentsResultRenderer
         params (string Name, string Value)[] values)
     {
         return values.ToDictionary(value => value.Name, value => value.Value, StringComparer.Ordinal);
-    }
-
-    private static bool TryAppend(
-        StringBuilder builder,
-        string block,
-        int maximumCharacters)
-    {
-        if (maximumCharacters > 0 && builder.Length + block.Length > maximumCharacters)
-        {
-            return false;
-        }
-
-        builder.Append(block);
-        return true;
     }
 }

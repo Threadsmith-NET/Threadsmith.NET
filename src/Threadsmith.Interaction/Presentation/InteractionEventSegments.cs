@@ -11,11 +11,13 @@ internal static class InteractionEventSegments
     /// <param name="domainEvent">Rendered domain event.</param>
     /// <param name="transcriptDelta">Text appended through the conversation transcript boundary.</param>
     /// <param name="showOperationDurations">Whether authoritative completion duration is displayed.</param>
+    /// <param name="toolProgress">Final progress entries included in a completed tool block.</param>
     internal static void Append(
         IList<PresentationTextSegment> segments,
         IDomainEvent domainEvent,
         string transcriptDelta,
-        bool showOperationDurations = true)
+        bool showOperationDurations = true,
+        IReadOnlyList<PresentationTextSegment>? toolProgress = null)
     {
         ArgumentNullException.ThrowIfNull(segments);
         ArgumentNullException.ThrowIfNull(domainEvent);
@@ -23,7 +25,7 @@ internal static class InteractionEventSegments
 
         if (transcriptDelta.Length > 0)
         {
-            AppendTranscriptDelta(segments, domainEvent, transcriptDelta);
+            AppendTranscriptDelta(segments, domainEvent, transcriptDelta, toolProgress);
         }
 
         switch (domainEvent)
@@ -125,15 +127,13 @@ internal static class InteractionEventSegments
     private static void AppendTranscriptDelta(
         IList<PresentationTextSegment> segments,
         IDomainEvent domainEvent,
-        string text)
+        string text,
+        IReadOnlyList<PresentationTextSegment>? toolProgress)
     {
         switch (domainEvent)
         {
             case ToolInvocationCompleted completed:
-                AppendLifecycleBlock(
-                    segments,
-                    text,
-                    GetToolCompletionRole(completed));
+                AppendToolCompletionBlock(segments, text, GetToolCompletionRole(completed), toolProgress);
                 return;
             case SkillWorkflowCheckpointWritten skill:
                 var skillRole = skill.Status switch
@@ -204,6 +204,33 @@ internal static class InteractionEventSegments
                 Add(segments, text, PresentationTextRole.Status);
                 return;
         }
+    }
+
+    private static void AppendToolCompletionBlock(
+        IList<PresentationTextSegment> segments,
+        string text,
+        PresentationTextRole outcomeRole,
+        IReadOnlyList<PresentationTextSegment>? progress)
+    {
+        // FormatToolCompletion emits a header, one detail line, then progress lines in order.
+        var contentLine = 0;
+        AppendLines(segments, text, line =>
+        {
+            if (contentLine == 0 && line.Length == 0)
+            {
+                return outcomeRole;
+            }
+
+            var role = contentLine switch
+            {
+                0 => outcomeRole,
+                1 => PresentationTextRole.Muted,
+                _ when progress is not null && contentLine - 2 < progress.Count => progress[contentLine - 2].Role,
+                _ => PresentationTextRole.Muted,
+            };
+            contentLine++;
+            return role;
+        });
     }
 
     private static void AppendLines(

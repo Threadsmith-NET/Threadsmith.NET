@@ -167,7 +167,7 @@ public sealed class AnthropicRequestMapperTests
     [Fact]
     public void Create_StrictSchemas_PreservesCanonicalAndFallsBackForRecursion()
     {
-        const string optional = "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\"}},\"additionalProperties\":false}";
+        const string optional = "{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\",\"description\":\"A documented value.\"}},\"additionalProperties\":false}";
         const string recursive = "{\"type\":\"object\",\"properties\":{\"node\":{\"$ref\":\"#/$defs/node\"}},\"$defs\":{\"node\":{\"type\":\"object\",\"properties\":{\"next\":{\"$ref\":\"#/$defs/node\"}},\"additionalProperties\":false}},\"additionalProperties\":false}";
         var request = TestAnthropic.Request() with { Tools = [TestAnthropic.Tool("strict", optional) with { PreferStrictArguments = true }, TestAnthropic.Tool("fallback", recursive) with { PreferStrictArguments = true }] };
         var body = AnthropicRequestMapper.CreateBody(request, TestAnthropic.Profile(), TestAnthropic.Compatibility());
@@ -175,6 +175,7 @@ public sealed class AnthropicRequestMapperTests
         var strict = tools.Single(tool => tool?["name"]?.GetValue<string>() == "strict");
         Assert.True(strict?["strict"]?.GetValue<bool>());
         Assert.Contains("null", strict?["input_schema"]?.ToJsonString() ?? string.Empty, StringComparison.Ordinal);
+        Assert.Equal("A documented value.", strict?["input_schema"]?["properties"]?["value"]?["description"]?.GetValue<string>());
         var fallback = Assert.IsType<JsonObject>(tools.Single(tool => tool?["name"]?.GetValue<string>() == "fallback"));
         Assert.False(fallback.ContainsKey("strict"));
         Assert.Equal(optional, request.Tools[0].ArgumentsJsonSchema);

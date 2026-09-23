@@ -1,0 +1,2 @@
+The final response is invalid: {{FailureSummary}}
+Repair only the final response. Return exactly one JSON value matching the declared output schema, without leading or trailing prose or Markdown fences. Preserve the existing result and facts; do not invent missing results. All completed tool operations and recorded side effects remain completed, including any successfully saved artifacts. Use their existing paths and metadata from the tool results. Do not repeat the workflow or rewrite artifacts. Tools are unavailable during this formatting correction.

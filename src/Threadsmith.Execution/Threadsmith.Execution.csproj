@@ -12,6 +12,7 @@
     <ProjectReference Include="..\Threadsmith.Context\Threadsmith.Context.csproj" />
     <ProjectReference Include="..\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
+    <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
     <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
   </ItemGroup>
 

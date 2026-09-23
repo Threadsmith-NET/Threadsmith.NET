@@ -57,8 +57,9 @@ public sealed class McpImportedTool : ITool
     public object DeserializeInput(string argumentsJson)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
+        argumentsJson = ModelJsonCleanup.Clean(argumentsJson);
 
-        // MCP tools receive raw JSON; the server validates the schema. Keep the raw JSON as the
+        // MCP tools receive cleaned JSON; the server validates the schema. Keep that JSON as the
         // opaque input the pipeline carries through policy and execution.
         try
         {

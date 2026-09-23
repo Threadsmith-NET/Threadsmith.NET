@@ -1,6 +1,7 @@
 namespace Threadsmith.Skills;
 
 using System.Text.Json;
+using Threadsmith.Core;
 
 /// <summary>Structural limits for data-only JSON schemas and values.</summary>
 public sealed record SkillSchemaOptions
@@ -96,6 +97,7 @@ public sealed class BoundedJsonSchemaValidator
     {
         ArgumentNullException.ThrowIfNull(schema);
         ArgumentException.ThrowIfNullOrWhiteSpace(valueJson);
+        valueJson = ModelJsonCleanup.Clean(valueJson);
         if (System.Text.Encoding.UTF8.GetByteCount(valueJson) > _options.MaximumValueBytes)
         {
             throw new InvalidDataException("Skill JSON value exceeds its byte limit.");

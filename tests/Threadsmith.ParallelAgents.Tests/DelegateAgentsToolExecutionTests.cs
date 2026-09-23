@@ -80,7 +80,7 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Contains(response, execution.ModelResultContent, StringComparison.Ordinal);
     }
 
-    /// <summary>Configured delegation limits flow into the advertised schema and production tool envelope.</summary>
+    /// <summary>Delegation schema leaves task and context unbounded while retaining child-count and output bounds.</summary>
     [Fact]
     public async Task Definition_ConfiguredLimitsDriveSchemaAndOutputBounds()
     {
@@ -91,8 +91,6 @@ public sealed class DelegateAgentsToolExecutionTests
         var options = new DelegateAgentsOptions
         {
             MaximumAgents = 5,
-            MaximumTaskCharacters = 12,
-            MaximumContextCharacters = 34,
             MaximumOutputBytes = 123_456,
         };
         var fixture = CreateTool(
@@ -110,8 +108,8 @@ public sealed class DelegateAgentsToolExecutionTests
         Assert.Equal(123_456, definition.MaximumOutputBytes);
         Assert.Contains("1-5 children", definition.Description, StringComparison.Ordinal);
         Assert.Equal(5, agentsSchema.GetProperty("maxItems").GetInt32());
-        Assert.Equal(12, agentProperties.GetProperty("task").GetProperty("maxLength").GetInt32());
-        Assert.Equal(34, agentProperties.GetProperty("context").GetProperty("maxLength").GetInt32());
+        Assert.False(agentProperties.GetProperty("task").TryGetProperty("maxLength", out _));
+        Assert.False(agentProperties.GetProperty("context").TryGetProperty("maxLength", out _));
     }
 
     /// <summary>Verifies two requested children overlap, checkpoint progress, join, and remain inspectable.</summary>
@@ -213,7 +211,7 @@ public sealed class DelegateAgentsToolExecutionTests
         var projection = new DelegateAgentsResultProjector(options, TestPromptLoader.Instance)
             .Project(plan, CreateJoinedCheckpoint(plan, outcome));
         var modelContent = new DelegateAgentsResultRenderer(TestPromptLoader.Instance)
-            .Render(projection.Result, out var truncated);
+            .Render(projection.Result);
 
         // Assert
         var expected = PromptAssetRenderer.RenderWithPlatformLineEndings(
@@ -225,7 +223,6 @@ public sealed class DelegateAgentsToolExecutionTests
             });
         Assert.Contains(expected, modelContent, StringComparison.Ordinal);
         Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
-        Assert.False(truncated);
     }
 
     /// <summary>Verifies an active delegation can be inspected while its child is still running.</summary>
@@ -663,12 +660,11 @@ public sealed class DelegateAgentsToolExecutionTests
         var projection = new DelegateAgentsResultProjector(new DelegateAgentsOptions(), TestPromptLoader.Instance)
             .Project(plan, CreateJoinedCheckpoint(plan, outcomes));
         var modelContent = new DelegateAgentsResultRenderer(TestPromptLoader.Instance)
-            .Render(projection.Result, out var truncated);
+            .Render(projection.Result);
 
         Assert.Equal(DelegateAgentsStatus.Completed, projection.Result.Status);
         Assert.Contains("Shared.Symbol", Assert.Single(projection.Result.Disagreements), StringComparison.Ordinal);
         Assert.Contains("Disagreement:", modelContent, StringComparison.Ordinal);
-        Assert.False(truncated);
     }
 
     /// <summary>Verifies ordinary opposing replies remain intact without host-invented findings or disagreements.</summary>
@@ -908,12 +904,11 @@ public sealed class DelegateAgentsToolExecutionTests
             StringComparison.Ordinal));
     }
 
-    /// <summary>Enlarged editable blocks cannot bypass the model projection bound or hide truncation.</summary>
+    /// <summary>Enlarged editable blocks remain complete without a renderer character cap.</summary>
     [Fact]
-    public async Task ExecuteAsync_EnlargedPromptBlocks_RemainBoundedAndCountOmissions()
+    public async Task ExecuteAsync_EnlargedPromptBlocks_RemainComplete()
     {
         // Arrange
-        const int maximumModelProjectionCharacters = 48 * 1024;
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
@@ -935,35 +930,38 @@ public sealed class DelegateAgentsToolExecutionTests
 
         // Assert
         var modelContent = Assert.IsType<string>(execution.ModelResultContent);
-        Assert.True(execution.IsTruncated);
-        Assert.True(modelContent.Length <= maximumModelProjectionCharacters);
-        Assert.Contains(
-            "2 complete detail block(s) omitted by the model projection bound.",
-            modelContent,
-            StringComparison.Ordinal);
+        Assert.False(execution.IsTruncated);
+        Assert.Contains(new string('h', 100_000), modelContent, StringComparison.Ordinal);
+        Assert.Contains(new string('c', 100_000), modelContent, StringComparison.Ordinal);
     }
 
-    /// <summary>An editable truncation footer that cannot fit fails without returning partial prose.</summary>
+    /// <summary>All five complete child reports reach the parent beyond the former combined character cap.</summary>
     [Fact]
-    public async Task ExecuteAsync_EnlargedTruncationPrompt_FailsWithoutPartialProjection()
+    public async Task ExecuteAsync_FiveLargeReports_PreservesEveryReport()
     {
         // Arrange
         await using var events = new DomainEventStream();
         await using var scheduler = CreateScheduler();
         var checkpoints = new RecordingCheckpointStore();
         var coordinator = new DelegationCoordinator(scheduler, checkpoints, events);
-        var prompts = TestPromptLoader.Instance.WithPrompt(
-            PromptFileNames.ToolDelegateAgentsTruncation,
-            "{{OmittedBlockCount}}" + new string('t', 100_000));
+        var response = new string('r', 15_000);
         var fixture = CreateTool(
             coordinator,
-            new FixedRunnerFactory(new CompletedResponseRunner()),
-            prompts: prompts);
+            new FixedRunnerFactory(new ResponseRunner(response)));
 
-        // Act and assert
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => fixture.Tool.ExecuteAsync(CreateInput(1), fixture.Context));
-        Assert.Contains("truncation prompt exceeds", exception.Message, StringComparison.Ordinal);
+        // Act
+        var execution = await fixture.Tool.ExecuteAsync(CreateInput(5), fixture.Context);
+
+        // Assert
+        Assert.False(execution.IsTruncated);
+        Assert.Equal(5, execution.Value.Children.Count);
+        var modelContent = Assert.IsType<string>(execution.ModelResultContent);
+        Assert.True(modelContent.Length > 49_152);
+        Assert.All(execution.Value.Children, child =>
+        {
+            Assert.Equal(response, child.Summary);
+            Assert.Contains($"Response {child.AssignmentId}:\n{response}", modelContent.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+        });
     }
 
     /// <summary>Verifies a non-cooperative progress store cannot indefinitely block child completion.</summary>

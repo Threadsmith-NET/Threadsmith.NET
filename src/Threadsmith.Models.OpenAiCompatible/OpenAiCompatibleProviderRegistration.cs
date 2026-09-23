@@ -170,7 +170,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 || openAiModel.SupportedReasoningLevels.Count == 0
                 || openAiModel.SupportedReasoningLevels.Distinct().Count()
                     != openAiModel.SupportedReasoningLevels.Count
-                || !openAiModel.SupportedReasoningLevels.Contains(ReasoningLevel.None)
+                || (openAiModel.ReasoningCompatibility is null
+                    && !openAiModel.SupportedReasoningLevels.Contains(ReasoningLevel.None))
                 || !openAiModel.SupportedReasoningLevels.Contains(openAiModel.DefaultReasoningLevel))
             {
                 throw new InvalidOperationException(
@@ -364,6 +365,9 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             DefaultLevel = controllability == ReasoningControllability.Selectable
                 ? model.DefaultReasoningLevel
                 : null,
+            SupportsReasoningOff = controllability == ReasoningControllability.Selectable
+                ? model.SupportedReasoningLevels.Contains(ReasoningLevel.None)
+                : null,
             RequestMode = compatibility.Mode.ToString(),
             SchemaVersion = compatibility.SchemaVersion,
             ResponseMode = compatibility.ResponseMode.ToString(),
@@ -389,18 +393,15 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             throw new InvalidOperationException($"{identity} has an unsupported reasoning compatibility mode or version.");
         }
 
-        if (compatibility.LevelMap.Count > 128
-            || compatibility.LevelMap.Any(item => string.IsNullOrWhiteSpace(item.Value)
-                || item.Value.Length > 32
-                || item.Value.Any(char.IsControl)))
+        if (compatibility.LevelMap.Any(item => string.IsNullOrWhiteSpace(item.Value)))
         {
-            throw new InvalidOperationException($"{identity} has an invalid bounded reasoning level map.");
+            throw new InvalidOperationException($"{identity} has an empty reasoning level map value.");
         }
 
         var selectable = compatibility.Mode is OpenAiReasoningControlMode.StandardEffort
             or OpenAiReasoningControlMode.MappedEffort
             or OpenAiReasoningControlMode.ChatTemplate;
-        if (selectable && model.SupportedReasoningLevels.Count < 2)
+        if (selectable && !model.SupportedReasoningLevels.Any(level => level != ReasoningLevel.None))
         {
             throw new InvalidOperationException($"{identity} declares selectable reasoning without an enabled level.");
         }

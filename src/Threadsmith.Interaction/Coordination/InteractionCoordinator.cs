@@ -1160,6 +1160,14 @@ public sealed partial class InteractionCoordinator
                     var action = arguments.Length == 3
                         ? Enum.Parse<ModelProviderAuthenticationAction>(arguments[2], ignoreCase: true)
                         : ModelProviderAuthenticationAction.Login;
+                    if (action == ModelProviderAuthenticationAction.Login)
+                    {
+                        await _surface.WriteAsync(
+                            "Signing in and getting latest Codex model list...\n",
+                            PresentationTextRole.Status,
+                            lifetime.Token);
+                    }
+
                     var result = await _presenter
                         .ManageModelProviderAuthenticationAsync("openai-codex", action, lifetime.Token);
                     var resultRole = result.IsAuthenticated

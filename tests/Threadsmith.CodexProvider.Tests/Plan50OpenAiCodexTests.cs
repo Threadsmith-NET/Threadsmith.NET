@@ -21,7 +21,7 @@ public sealed class Plan50OpenAiCodexTests
         const string response = """
             {"models":[
               {"slug":"codex-a","display_name":"Codex A","context_window":128000,"default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}]},
-              {"slug":"future-model","display_name":"Future Model","max_context_window":272000,"default_reasoning_level":"xhigh","supported_reasoning_levels":[{"effort":"xhigh"},{"effort":"max"}]}
+              {"slug":"gpt-6-astra","display_name":"GPT-6-Astra","max_context_window":1050000,"default_reasoning_level":"xhigh","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"},{"effort":"high"},{"effort":"xhigh"},{"effort":"max"}]}
             ]}
             """;
         var handler = new RecordingHandler(_ => JsonResponse(response));
@@ -32,12 +32,63 @@ public sealed class Plan50OpenAiCodexTests
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, catalog.Models.Count);
-        Assert.Contains(catalog.Models, model => model.Name == "Future Model");
-        var future = Assert.Single(catalog.Models, model => model.Name == "Future Model");
-        Assert.Equal(new ReasoningLevel("xhigh"), future.DefaultReasoningLevel);
-        Assert.Contains(new ReasoningLevel("max"), future.SupportedReasoningLevels);
-        Assert.Contains("client_version=0.144.0", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
+        var astra = Assert.Single(catalog.Models, model => model is OpenAiCodexModelConfiguration codex
+            && codex.ModelId == "gpt-6-astra");
+        Assert.Equal("GPT-6-Astra", astra.Name);
+        Assert.Equal(1_050_000, astra.ContextWindow);
+        Assert.Equal(new ReasoningLevel("xhigh"), astra.DefaultReasoningLevel);
+        Assert.Contains(new ReasoningLevel("max"), astra.SupportedReasoningLevels);
+        Assert.Contains("client_version=0.155.1", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
         Assert.Equal("account-1", handler.Request?.Headers.GetValues("ChatGPT-Account-Id").Single());
+    }
+
+    /// <summary>Discovery uses the latest official Codex release instead of a stale compiled version.</summary>
+    [Fact]
+    public async Task Discovery_UsesLatestCodexReleaseVersion()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
+            ? JsonResponse("{\"tag_name\":\"rust-v0.156.1\"}")
+            : JsonResponse("{\"models\":[{\"slug\":\"gpt-6-astra\",\"display_name\":\"GPT-6 Astra\"}]}"));
+        var client = new OpenAiCodexCatalogClient(new HttpClient(handler));
+
+        var catalog = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.RequestCount);
+        Assert.Contains("client_version=0.156.1", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
+        Assert.Equal("gpt-6-astra", Assert.IsType<OpenAiCodexModelConfiguration>(Assert.Single(catalog.Models)).ModelId);
+        Assert.Equal([null, "not-a-jwt"], handler.AuthorizationParameters);
+    }
+
+    /// <summary>An unavailable release service does not prevent authenticated model discovery.</summary>
+    [Fact]
+    public async Task Discovery_UsesKnownVersionWhenReleaseLookupFails()
+    {
+        var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
+            ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+            : JsonResponse("{\"models\":[{\"slug\":\"gpt-5.6-sol\"}]}"));
+        var client = new OpenAiCodexCatalogClient(new HttpClient(handler));
+
+        var catalog = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, handler.RequestCount);
+        Assert.Contains("client_version=0.155.1", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
+        Assert.Single(catalog.Models);
+    }
+
+    /// <summary>Malformed or older release tags cannot change the protected models request.</summary>
+    [Theory]
+    [InlineData("rust-v0.156.1/other")]
+    [InlineData("rust-v0.100.0")]
+    public async Task Discovery_IgnoresUnusableReleaseTags(string tag)
+    {
+        var handler = new RecordingHandler(request => request.RequestUri?.Host == "api.github.com"
+            ? JsonResponse(JsonSerializer.Serialize(new { tag_name = tag }))
+            : JsonResponse("{\"models\":[{\"slug\":\"gpt-5.6-sol\"}]}"));
+        var client = new OpenAiCodexCatalogClient(new HttpClient(handler));
+
+        _ = await client.DiscoverAsync("not-a-jwt", cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains("client_version=0.155.1", handler.Request?.RequestUri?.Query, StringComparison.Ordinal);
     }
 
     /// <summary>Discovery requires the source-backed Codex backend model slug.</summary>

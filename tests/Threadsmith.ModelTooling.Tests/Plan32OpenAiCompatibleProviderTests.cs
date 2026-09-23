@@ -95,6 +95,29 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.Equal(6, catalog.ModelCatalog.Get(FirstModelId).SupportedReasoningLevels.Count);
     }
 
+    /// <summary>Provider effort strings are opaque and a single enabled level needs no off option.</summary>
+    [Fact]
+    public static void ReasoningCompatibility_MappedEffort_AcceptsOpaqueProviderValue()
+    {
+        var level = new ReasoningLevel("provider-specific-level");
+        var value = new string('x', 40);
+        var model = CreateModel(FirstModelId, "opaque-effort") with
+        {
+            DefaultReasoningLevel = level,
+            SupportedReasoningLevels = [level],
+            ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
+            {
+                Mode = OpenAiReasoningControlMode.MappedEffort,
+                LevelMap = new Dictionary<ReasoningLevel, string> { [level] = value },
+            },
+        };
+
+        var profile = CreateEffectiveCatalog(model).ModelCatalog.Get(FirstModelId);
+
+        Assert.Equal(level, profile.DefaultReasoningLevel);
+        Assert.False(profile.SupportsReasoningLevel(ReasoningLevel.None));
+    }
+
     /// <summary>Multiple compiled providers and nested models retain distinct host policy metadata.</summary>
     [Fact]
     public static void EffectiveCatalog_MultipleProvidersAndModels_ProjectsDistinctProfiles()
@@ -811,6 +834,104 @@ public static class Plan32OpenAiCompatibleProviderTests
         Assert.Contains(chunks, chunk => chunk.Reasoning == "think");
         Assert.Contains(chunks, chunk => chunk.Text == "answer");
         Assert.Equal(ReasoningControllability.Selectable, catalog.ModelCatalog.Get(FirstModelId).ReasoningCapability.Controllability);
+    }
+
+    /// <summary>Known-field extraction uses a populated reasoning field after an empty earlier alias.</summary>
+    [Fact]
+    public static async Task ReasoningCompatibility_KnownFields_SkipsEmptyEarlierField()
+    {
+        using var client = new HttpClient(new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"\",\"reasoning\":\"think\"}}]}\n\ndata: [DONE]\n",
+                Encoding.UTF8,
+                "text/event-stream"),
+        }));
+        var model = CreateModel(FirstModelId, "known-fields") with
+        {
+            DefaultReasoningLevel = ReasoningLevel.High,
+            SupportedReasoningLevels = [ReasoningLevel.None, ReasoningLevel.High],
+            ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
+            {
+                Mode = OpenAiReasoningControlMode.StandardEffort,
+                ResponseMode = OpenAiReasoningResponseMode.KnownFields,
+            },
+        };
+        var provider = new ConfiguredModelProvider(
+            client,
+            CreateEffectiveCatalog(model),
+            (_, _) => Task.FromResult<string?>(null));
+        var chunks = new List<ModelChunk>();
+
+        await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "hello",
+            ReasoningLevel = ReasoningLevel.High,
+        }))
+        {
+            chunks.Add(chunk);
+        }
+
+        Assert.Equal("think", Assert.Single(chunks, chunk => chunk.Reasoning is not null).Reasoning);
+    }
+
+    /// <summary>Reasoning-only models can map every selectable level without advertising an off switch.</summary>
+    [Theory]
+    [InlineData("low", "low")]
+    [InlineData("medium", "high")]
+    [InlineData("high", "max")]
+    public static async Task ReasoningCompatibility_MappedEffort_WithoutReasoningOffUsesConfiguredEffort(
+        string levelName,
+        string expectedEffort)
+    {
+        string? requestJson = null;
+        var handler = new RecordingHandler(request =>
+        {
+            requestJson = request.Content?.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: [DONE]\n", Encoding.UTF8, "text/event-stream"),
+            };
+        });
+        var model = CreateModel(FirstModelId, "glm-5.3:cloud") with
+        {
+            DefaultReasoningLevel = ReasoningLevel.High,
+            SupportedReasoningLevels = [ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High],
+            ReasoningCompatibility = new OpenAiReasoningCompatibilityConfiguration
+            {
+                Mode = OpenAiReasoningControlMode.MappedEffort,
+                ResponseMode = OpenAiReasoningResponseMode.ReasoningContent,
+                LevelMap = new Dictionary<ReasoningLevel, string>
+                {
+                    [ReasoningLevel.Low] = "low",
+                    [ReasoningLevel.Medium] = "high",
+                    [ReasoningLevel.High] = "max",
+                },
+            },
+        };
+        var catalog = CreateEffectiveCatalog(model);
+        var profile = catalog.ModelCatalog.Get(FirstModelId);
+        Assert.Equal(ReasoningLevel.High, profile.DefaultReasoningLevel);
+        Assert.False(profile.SupportsReasoningLevel(ReasoningLevel.None));
+        Assert.False(profile.ReasoningCapability.SupportsReasoningOff);
+
+        var provider = new ConfiguredModelProvider(
+            new HttpClient(handler),
+            catalog,
+            (_, _) => Task.FromResult<string?>(null));
+        await foreach (var chunk in provider.StreamAsync(new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "hello",
+            ReasoningLevel = new ReasoningLevel(levelName),
+        }))
+        {
+            Assert.Null(chunk.Output);
+        }
+
+        Assert.NotNull(requestJson);
+        Assert.Contains($"\"reasoning_effort\":\"{expectedEffort}\"", requestJson, StringComparison.Ordinal);
     }
 
     /// <summary>The existing boolean-only template shape stays unchanged for every model name and level.</summary>

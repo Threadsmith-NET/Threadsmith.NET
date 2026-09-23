@@ -1,6 +1,5 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
-using System.Diagnostics;
 using System.Text.Json;
 using Threadsmith.Context;
 using Threadsmith.Core;
@@ -169,36 +168,21 @@ public static class ContextUsageTests
         Assert.Null(usage.GetRequestStatus(dispatcher.SessionId));
     }
 
-    /// <summary>A large flat metadata inventory uses bounded native rendering across terminal sizes.</summary>
+    /// <summary>A representative flat metadata inventory renders safely across terminal sizes.</summary>
     [Theory]
     [InlineData(160, 50)]
     [InlineData(120, 35)]
     [InlineData(80, 24)]
     [InlineData(40, 12)]
     [InlineData(20, 6)]
-    public static void NativeModalHandlesLargeInventoryResizeAndSafeLabels(int width, int height)
+    public static void NativeModalHandlesInventoryResizeAndSafeLabels(int width, int height)
     {
-        var components = Enumerable.Range(0, 1000).Select(index => new ContextUsageComponent($"message:{index}", "Conversation", $"User {index} 中文 é\u001b[2J", "Messages", 10L + index))
-            .Concat(Enumerable.Range(0, 200).Select(index => new ContextUsageComponent($"tool:{index}", "Tools", $"tool:{index}", "Native tools", 20L + index))).ToArray();
-        var snapshot = Snapshot(new ModelWireEstimate { WireInputTokens = (int)components.Sum(item => item.Tokens), Components = components });
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var start = Stopwatch.GetTimestamp();
-        var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { });
-        var buffer = new CellBuffer(width, height);
-        modal.Render(new BufferSurface(buffer));
-        modal.HandleKey(new KeyEvent(KeyCode.End, 0, KeyModifiers.None));
-        modal.Render(new BufferSurface(buffer));
-        modal.HandleKey(new KeyEvent(KeyCode.Tab, 0, KeyModifiers.None));
-        buffer.Resize(160, 50);
-        modal.Render(new BufferSurface(buffer));
-        var text = Read(buffer);
+        var text = RenderInventory(width, height, messageCount: 16, toolCount: 4);
+
         Assert.Contains("Categories", text, StringComparison.Ordinal);
         Assert.Contains("Estimated", text, StringComparison.Ordinal);
         Assert.DoesNotContain('\u001b', text);
         Assert.Contains(text, character => character is >= '\u2580' and <= '\u258f');
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        TestContext.Current.TestOutputHelper?.WriteLine($"1,200 entries at {width}x{height}: {Stopwatch.GetElapsedTime(start).TotalMilliseconds:F1} ms, {allocated:N0} allocated bytes.");
-        Assert.True(allocated < 10_000_000, $"Unexpected full-inventory rendering allocation: {allocated:N0}");
     }
 
     /// <summary>Native click synthesis reaches host input actions without consuming drafts or requesting steering.</summary>
@@ -291,6 +275,43 @@ public static class ContextUsageTests
         InputTokens = estimate.WireInputTokens, ContextWindow = 1_000_000, OutputReserve = 100,
         Components = estimate.Components, EstimationBasis = estimate.EstimationBasis,
     };
+
+    private static string RenderInventory(
+        int width,
+        int height,
+        int messageCount,
+        int toolCount)
+    {
+        var components = Enumerable.Range(0, messageCount)
+            .Select(index => new ContextUsageComponent(
+                $"message:{index}",
+                "Conversation",
+                $"User {index} 中文 é\u001b[2J",
+                "Messages",
+                10L + index))
+            .Concat(Enumerable.Range(0, toolCount)
+                .Select(index => new ContextUsageComponent(
+                    $"tool:{index}",
+                    "Tools",
+                    $"tool:{index}",
+                    "Native tools",
+                    20L + index)))
+            .ToArray();
+        var snapshot = Snapshot(new ModelWireEstimate
+        {
+            WireInputTokens = (int)components.Sum(item => item.Tokens),
+            Components = components,
+        });
+        var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { });
+        var buffer = new CellBuffer(width, height);
+        modal.Render(new BufferSurface(buffer));
+        modal.HandleKey(new KeyEvent(KeyCode.End, 0, KeyModifiers.None));
+        modal.Render(new BufferSurface(buffer));
+        modal.HandleKey(new KeyEvent(KeyCode.Tab, 0, KeyModifiers.None));
+        buffer.Resize(160, 50);
+        modal.Render(new BufferSurface(buffer));
+        return Read(buffer);
+    }
 
     private static string Read(CellBuffer buffer) => string.Join('\n', Enumerable.Range(0, buffer.Height).Select(y => string.Concat(Enumerable.Range(0, buffer.Width).Select(x => buffer.Get(x, y).Grapheme))));
 

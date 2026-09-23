@@ -16,7 +16,8 @@ using Xunit;
 public sealed class Plan68AllocationMeasurementTests
 {
     /// <summary>Measures TuiMarkdownLayout.Format allocations across representative document sizes.</summary>
-    [Fact]
+    [Fact(Explicit = true)]
+    [Trait("Category", "Performance")]
     public void Measure_TuiMarkdownLayout_Format_Allocations()
     {
         var small = BuildSmallDocument();
@@ -36,7 +37,8 @@ public sealed class Plan68AllocationMeasurementTests
     }
 
     /// <summary>Measures SecretOutputSanitizer.Sanitize allocations across representative input sizes.</summary>
-    [Fact]
+    [Fact(Explicit = true)]
+    [Trait("Category", "Performance")]
     public void Measure_SecretOutputSanitizer_Sanitize_Allocations()
     {
         var sanitizer = new SecretOutputSanitizer();

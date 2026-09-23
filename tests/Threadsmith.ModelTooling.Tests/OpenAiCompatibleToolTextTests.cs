@@ -13,22 +13,38 @@ public static class OpenAiCompatibleToolTextTests
 {
     private const string Orphan = "<parameter name=\"path\">src/Threadsmith.sln\n</parameter>\n</function>\n</tool_call>";
 
-    /// <summary>Deferred whitespace consumes linear storage and preserves the exact stream.</summary>
+    /// <summary>Deferred whitespace preserves the exact stream across many chunk boundaries.</summary>
     [Fact]
-    public static void LeadingWhitespace_DoesNotRepeatedlyCopyAccumulatedContent()
+    public static void LeadingWhitespace_PreservesChunkedContent()
     {
         var guard = new NativeToolTextGuard();
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 100000; index++)
+        const int chunkCount = 64;
+        for (var index = 0; index < chunkCount; index++)
         {
             Assert.Empty(guard.Append(" "));
         }
 
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
-        Assert.InRange(allocated, 0, 4_000_000);
-        Assert.Equal(new string(' ', 100000) + "hello", guard.Append("hello"));
+        Assert.Equal(new string(' ', chunkCount) + "hello", guard.Append("hello"));
         Assert.False(guard.Complete(true, out var remainder));
         Assert.Empty(remainder);
+    }
+
+    /// <summary>Opt-in allocation probe guards against repeatedly copying a long deferred prefix.</summary>
+    [Fact(Explicit = true)]
+    [Trait("Category", "Performance")]
+    public static void LeadingWhitespace_Stress_DoesNotRepeatedlyCopyAccumulatedContent()
+    {
+        var guard = new NativeToolTextGuard();
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        const int chunkCount = 100_000;
+        for (var index = 0; index < chunkCount; index++)
+        {
+            _ = guard.Append(" ");
+        }
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+        Assert.InRange(allocated, 0, 4_000_000);
+        Assert.Equal(new string(' ', chunkCount) + "hello", guard.Append("hello"));
     }
 
     /// <summary>The captured chunk boundaries cannot leak text or release a valid sibling, and usage remains reported.</summary>

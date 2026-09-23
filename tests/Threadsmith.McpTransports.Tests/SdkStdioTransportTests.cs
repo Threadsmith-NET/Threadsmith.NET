@@ -121,12 +121,10 @@ public sealed class SdkStdioTransportTests
             Assert.True(connection.Succeeded, connection.Status.Error);
             await WaitForFileAsync(pidFile, TimeSpan.FromSeconds(5));
             var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
-            var stopwatch = Stopwatch.StartNew();
+            await adapter.DisconnectAsync(profile.Id).WaitAsync(
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
 
-            await adapter.DisconnectAsync(profile.Id);
-
-            stopwatch.Stop();
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5));
             Assert.True(WaitForExit(processId, TimeSpan.FromSeconds(3)), $"MCP fixture process {processId} remained alive.");
         }
         finally
@@ -154,12 +152,9 @@ public sealed class SdkStdioTransportTests
             await WaitForFileAsync(pidFile, TimeSpan.FromSeconds(5));
             var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
-            var stopwatch = Stopwatch.StartNew();
+            _ = await transport.StopAsync(TimeSpan.FromMilliseconds(200), deadline.Token)
+                .WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
 
-            _ = await transport.StopAsync(TimeSpan.FromMilliseconds(200), deadline.Token);
-
-            stopwatch.Stop();
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(1));
             Assert.True(
                 WaitForExit(processId, TimeSpan.FromMilliseconds(500)),
                 $"MCP fixture process {processId} survived the remaining shutdown deadline.");

@@ -11,7 +11,7 @@ using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Verifies Plan-94 natural-language code-explore ranking for agent semantic tool questions.</summary>
-public sealed class Plan94CodeExploreAgentQualityTests
+public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94CodeExploreRepositoryFixture>
 {
     private static readonly string[] _semanticToolFamilyMarkers =
     [
@@ -25,11 +25,19 @@ public sealed class Plan94CodeExploreAgentQualityTests
         "SymbolImpact",
     ];
 
+    private readonly Plan94CodeExploreRepositoryFixture _repositoryFixture;
+
+    /// <summary>Initializes a new instance of the <see cref="Plan94CodeExploreAgentQualityTests"/> class.</summary>
+    public Plan94CodeExploreAgentQualityTests(Plan94CodeExploreRepositoryFixture repositoryFixture)
+    {
+        _repositoryFixture = repositoryFixture;
+    }
+
     /// <summary>The first semantic query tolerates acronym fragments and returns evidence or retry guidance.</summary>
     [Fact]
     public async Task CodeExplore_FirstToolLifecycleQuery_ReturnsStructuredResult()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -59,7 +67,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_NoMatchingCandidates_ReturnsRetryableAvailability()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -83,7 +91,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_ProjectScopedNoMatch_ReturnsRetryableAvailability()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+        await using var fixture = await CreateFixtureAsync(
             "src/Threadsmith.App/Threadsmith.App.csproj");
 
         var result = await fixture.Service.QueryCodeExploreAsync(
@@ -108,7 +116,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_ShortSemanticToolQuestion_SelectsToolSurface()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -131,7 +139,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_ExpandedSemanticToolQuestion_CoversNamedToolFamilies()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -168,7 +176,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_MixedToolProseWithBareExactIdentifier_PreservesExactCandidate()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -188,7 +196,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_MultipleSameFileExactIdentifiers_BypassDiversityCaps()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -210,7 +218,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_NonToolReferenceImplementationQuestion_DoesNotSelectToolSurface()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -235,7 +243,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_DeclarationNameSegmentCoOccurrence_PrioritizesNamedDeclaration()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -261,7 +269,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_ProjectScopedMissingNamedSubject_UsesCompactFallback()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+        await using var fixture = await CreateFixtureAsync(
             "src/Threadsmith.Tools/Threadsmith.Tools.csproj");
 
         var result = await fixture.Service.QueryCodeExploreAsync(
@@ -283,53 +291,60 @@ public sealed class Plan94CodeExploreAgentQualityTests
     }
 
     /// <summary>Named-file questions resolve each file rather than substituting loose declaration matches.</summary>
-    [Theory]
-    [InlineData("Explain tool validation in MissingTools.cs and MissingTests.cs", null, 2)]
-    [InlineData("Explain tool validation in CodeExploreTool.cs and MissingTests.cs", "src/Threadsmith.Tools/CodeExploreTool.cs", 1)]
-    [InlineData("Explain behavior in src/Threadsmith.App/WidgetService.cs and MissingTests.cs", "src/Threadsmith.App/WidgetService.cs", 1)]
-    public async Task CodeExplore_ProjectScopedNamedFiles_ReportsExactCoverage(string query, string? expectedPath, int missingCount)
+    [Fact]
+    public async Task CodeExplore_ProjectScopedNamedFiles_ReportsExactCoverage()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+        await using var fixture = await CreateFixtureAsync(
             "src/Threadsmith.Tools/Threadsmith.Tools.csproj");
         var tool = new CodeExploreOutputFormattingTool(
             new CodeExploreTool(fixture.Service, TestPromptLoader.Instance),
             new CodeExploreOutputOptions(),
             TestPromptLoader.Instance);
-        var execution = await tool.ExecuteAsync(
-            new CodeExploreInput { Query = query },
-            fixture.CreateToolExecutionContext(32_000),
-            TestContext.Current.CancellationToken);
-        var result = Assert.IsType<CodeExploreResult>(execution.Value);
-
-        Assert.Equal(2, result.ResolvedAnchors.Count);
-        Assert.Equal(missingCount, result.ResolvedAnchors.Count(anchor => anchor.Outcome == CodeExploreResolutionOutcome.NotFound));
-        if (expectedPath is null)
+        (string Query, string? ExpectedPath, int MissingCount)[] cases =
+        [
+            ("Explain tool validation in MissingTools.cs and MissingTests.cs", null, 2),
+            ("Explain tool validation in CodeExploreTool.cs and MissingTests.cs", "src/Threadsmith.Tools/CodeExploreTool.cs", 1),
+            ("Explain behavior in src/Threadsmith.App/WidgetService.cs and MissingTests.cs", "src/Threadsmith.App/WidgetService.cs", 1),
+        ];
+        foreach (var testCase in cases)
         {
-            Assert.Empty(result.FileSections);
-        }
-        else
-        {
-            Assert.Equal(expectedPath, Assert.Single(result.FileSections).FilePath);
-            Assert.Equal(expectedPath, Assert.Single(result.ResolvedAnchors, anchor => anchor.Outcome == CodeExploreResolutionOutcome.Resolved).SelectedLocation?.FilePath);
-        }
+            TestContext.Current.TestOutputHelper?.WriteLine(testCase.Query);
+            var execution = await tool.ExecuteAsync(
+                new CodeExploreInput { Query = testCase.Query },
+                fixture.CreateToolExecutionContext(32_000),
+                TestContext.Current.CancellationToken);
+            var result = Assert.IsType<CodeExploreResult>(execution.Value);
 
-        Assert.Empty(result.CandidateSummaries ?? []);
-        var markdown = execution.ModelResultContent ?? throw new InvalidOperationException("Expected Markdown output.");
-        foreach (var missing in result.ResolvedAnchors.Where(anchor => anchor.Outcome == CodeExploreResolutionOutcome.NotFound))
-        {
-            Assert.Contains(missing.Input, markdown, StringComparison.Ordinal);
-            Assert.Contains("Other repository directories were not searched", missing.Reason, StringComparison.Ordinal);
-        }
+            Assert.Equal(2, result.ResolvedAnchors.Count);
+            Assert.Equal(testCase.MissingCount, result.ResolvedAnchors.Count(anchor => anchor.Outcome == CodeExploreResolutionOutcome.NotFound));
+            if (testCase.ExpectedPath is null)
+            {
+                Assert.Empty(result.FileSections);
+            }
+            else
+            {
+                Assert.Equal(testCase.ExpectedPath, Assert.Single(result.FileSections).FilePath);
+                Assert.Equal(testCase.ExpectedPath, Assert.Single(result.ResolvedAnchors, anchor => anchor.Outcome == CodeExploreResolutionOutcome.Resolved).SelectedLocation?.FilePath);
+            }
 
-        Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
-        Assert.Contains(result.Availability?.RecommendedActions ?? [], action => action.Kind == CodeExploreNextActionKind.UseGranularFallback);
+            Assert.Empty(result.CandidateSummaries ?? []);
+            var markdown = execution.ModelResultContent ?? throw new InvalidOperationException("Expected Markdown output.");
+            foreach (var missing in result.ResolvedAnchors.Where(anchor => anchor.Outcome == CodeExploreResolutionOutcome.NotFound))
+            {
+                Assert.Contains(missing.Input, markdown, StringComparison.Ordinal);
+                Assert.Contains("Other repository directories were not searched", missing.Reason, StringComparison.Ordinal);
+            }
+
+            Assert.Equal(CodeExploreAvailabilityStatus.ProjectScopedPartial, result.Availability?.Status);
+            Assert.Contains(result.Availability?.RecommendedActions ?? [], action => action.Kind == CodeExploreNextActionKind.UseGranularFallback);
+        }
     }
 
     /// <summary>A filename shared by different files requires a path rather than silently selecting one.</summary>
     [Fact]
     public async Task CodeExplore_AmbiguousFileName_ReturnsPathsWithoutSource()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(
+        await using var fixture = await CreateFixtureAsync(
             "src/Threadsmith.Tools/Threadsmith.Tools.csproj", duplicateFileNames: true);
 
         var tool = new CodeExploreOutputFormattingTool(
@@ -357,7 +372,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_NamedFiles_PreservesRootFileAndReportsAnchorLimit()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(rootFile: true);
+        await using var fixture = await CreateFixtureAsync(rootFile: true);
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
             new CodeExploreRequest
@@ -374,110 +389,133 @@ public sealed class Plan94CodeExploreAgentQualityTests
     }
 
     /// <summary>Quoted file paths retain spaces instead of becoming a different suffix path.</summary>
-    [Theory]
-    [InlineData("Explain \"src/My Tests/Foo.cs\"")]
-    [InlineData("Explain `src/My Tests/Foo.cs`")]
-    [InlineData("Explain 'src/My Tests/Foo.cs'")]
-    public async Task CodeExplore_QuotedFilePath_PreservesWholePath(string query)
+    [Fact]
+    public async Task CodeExplore_QuotedFilePath_PreservesWholePath()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync(quotedPaths: true);
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest { Query = query, Limits = CreateAgentQuestionLimits() },
-            fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
+        await using var fixture = await CreateFixtureAsync(quotedPaths: true);
+        string[] queries =
+        [
+            "Explain \"src/My Tests/Foo.cs\"",
+            "Explain `src/My Tests/Foo.cs`",
+            "Explain 'src/My Tests/Foo.cs'",
+        ];
+        foreach (var query in queries)
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(query);
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest { Query = query, Limits = CreateAgentQuestionLimits() },
+                fixture.CreateSourceReader(),
+                TestContext.Current.CancellationToken);
 
-        Assert.Equal("src/My Tests/Foo.cs", Assert.Single(result.FileSections).FilePath);
+            Assert.Equal("src/My Tests/Foo.cs", Assert.Single(result.FileSections).FilePath);
+        }
     }
 
     /// <summary>Generic tool/workflow prose falls back to repository declarations instead of forcing semantic-tool families.</summary>
-    [Theory]
-    [InlineData("Explain how deployment tools improve workflow efficiency.")]
-    [InlineData("Explain how the deployment tool implementation works.")]
-    public async Task CodeExplore_GenericToolWorkflowQuestion_SelectsRepositoryDeclaration(string query)
+    [Fact]
+    public async Task CodeExplore_GenericToolWorkflowQuestion_SelectsRepositoryDeclaration()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
+        string[] queries =
+        [
+            "Explain how deployment tools improve workflow efficiency.",
+            "Explain how the deployment tool implementation works.",
+        ];
+        foreach (var query in queries)
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(query);
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = query,
+                    Mode = CodeExploreMode.Auto,
+                    Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
+                },
+                fixture.CreateSourceReader(),
+                TestContext.Current.CancellationToken);
 
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = query,
-                Mode = CodeExploreMode.Auto,
-                Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
-            },
-            fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
-
-        Assert.Contains(result.CandidateSummaries ?? [], summary =>
-            summary.Selected
-            && summary.Symbol?.DisplayName.Contains(
-                "Threadsmith.Tools.DeploymentWorkflow",
-                StringComparison.Ordinal) == true);
-        Assert.DoesNotContain(result.Omissions, omission =>
-            omission.Contains("No matching C# declarations", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(result.CandidateSummaries ?? [], summary =>
+                summary.Selected
+                && summary.Symbol?.DisplayName.Contains(
+                    "Threadsmith.Tools.DeploymentWorkflow",
+                    StringComparison.Ordinal) == true);
+            Assert.DoesNotContain(result.Omissions, omission =>
+                omission.Contains("No matching C# declarations", StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     /// <summary>Each advertised semantic-tool id directly activates its matching tool specialization.</summary>
-    [Theory]
-    [InlineData("code_explore", "CodeExploreTool")]
-    [InlineData("find_symbol", "FindSymbolTool")]
-    [InlineData("find_references", "FindReferencesTool")]
-    [InlineData("FIND_REFERENCES", "FindReferencesTool")]
-    [InlineData("find_implementations", "FindImplementationsTool")]
-    [InlineData("symbol_impact", "SymbolImpactTool")]
-    [InlineData("call_hierarchy", "CallHierarchyTool")]
-    [InlineData("csharp_pattern_search", "CSharpPatternSearchTool")]
-    [InlineData("generated_code_query", "GeneratedCodeTool")]
-    public async Task CodeExplore_ExactSemanticToolId_SelectsMatchingDefinition(
-        string toolId,
-        string containingTypeName)
+    [Fact]
+    public async Task CodeExplore_ExactSemanticToolId_SelectsMatchingDefinition()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
+        (string ToolId, string ContainingTypeName)[] cases =
+        [
+            ("code_explore", "CodeExploreTool"),
+            ("find_symbol", "FindSymbolTool"),
+            ("find_references", "FindReferencesTool"),
+            ("FIND_REFERENCES", "FindReferencesTool"),
+            ("find_implementations", "FindImplementationsTool"),
+            ("symbol_impact", "SymbolImpactTool"),
+            ("call_hierarchy", "CallHierarchyTool"),
+            ("csharp_pattern_search", "CSharpPatternSearchTool"),
+            ("generated_code_query", "GeneratedCodeTool"),
+        ];
+        foreach (var testCase in cases)
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(testCase.ToolId);
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = testCase.ToolId,
+                    Mode = CodeExploreMode.Auto,
+                    Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+                },
+                fixture.CreateSourceReader(),
+                TestContext.Current.CancellationToken);
 
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = toolId,
-                Mode = CodeExploreMode.Auto,
-                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
-            },
-            fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
-
-        AssertSelectedToolFamily(result, containingTypeName);
-        AssertNoOtherSelectedSemanticToolFamily(result, containingTypeName);
+            AssertSelectedToolFamily(result, testCase.ContainingTypeName);
+            AssertNoOtherSelectedSemanticToolFamily(result, testCase.ContainingTypeName);
+        }
     }
 
     /// <summary>Generic prose around one exact tool id does not reserve another semantic family.</summary>
-    [Theory]
-    [InlineData("Explain the find_references tool implementation")]
-    [InlineData("Explain the semantic find_references tool")]
-    public async Task CodeExplore_ExactSemanticToolId_IgnoresAmbiguousCapabilityContext(string query)
+    [Fact]
+    public async Task CodeExplore_ExactSemanticToolId_IgnoresAmbiguousCapabilityContext()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
+        string[] queries =
+        [
+            "Explain the find_references tool implementation",
+            "Explain the semantic find_references tool",
+        ];
+        foreach (var query in queries)
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(query);
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = query,
+                    Mode = CodeExploreMode.Auto,
+                    Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
+                },
+                fixture.CreateSourceReader(),
+                TestContext.Current.CancellationToken);
 
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = query,
-                Mode = CodeExploreMode.Auto,
-                Limits = CreateAgentQuestionLimits(maximumAnchors: 3, maximumFiles: 3),
-            },
-            fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
-
-        AssertSelectedToolFamily(result, "FindReferencesTool");
-        AssertNoOtherSelectedSemanticToolFamily(result, "FindReferencesTool");
+            AssertSelectedToolFamily(result, "FindReferencesTool");
+            AssertNoOtherSelectedSemanticToolFamily(result, "FindReferencesTool");
+        }
     }
 
     /// <summary>A known tool id retains a separately named semantic-tool family.</summary>
     [Fact]
     public async Task CodeExplore_ExactSemanticToolId_PreservesStrongAdditionalFamily()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -499,63 +537,70 @@ public sealed class Plan94CodeExploreAgentQualityTests
     }
 
     /// <summary>Explicit flow and impact modes keep their graph profiles even when the query mentions semantic tools.</summary>
-    [Theory]
-    [InlineData(CodeExploreMode.Flow)]
-    [InlineData(CodeExploreMode.Impact)]
-    public async Task CodeExplore_ExplicitGraphMode_DoesNotUseToolCapabilityProfile(CodeExploreMode mode)
+    [Fact]
+    public async Task CodeExplore_ExplicitGraphMode_DoesNotUseToolCapabilityProfile()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
+        foreach (var mode in new[] { CodeExploreMode.Flow, CodeExploreMode.Impact })
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(mode.ToString());
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = mode == CodeExploreMode.Flow
+                        ? "trace FindSymbolAsync to FindDispatchImplementationSymbolsAsync"
+                        : "impact of changing FindSymbolAsync",
+                    Mode = mode,
+                    Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
+                },
+                fixture.CreateSourceReader(),
+                TestContext.Current.CancellationToken);
 
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = mode == CodeExploreMode.Flow
-                    ? "trace FindSymbolAsync to FindDispatchImplementationSymbolsAsync"
-                    : "impact of changing FindSymbolAsync",
-                Mode = mode,
-                Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
-            },
-            fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
-
-        Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
-            IsToolCapabilitySelectionReason(summary.Reason));
-        Assert.DoesNotContain(result.Omissions, omission =>
-            omission.Contains("tool/capability explanation intent", StringComparison.Ordinal));
+            Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
+                IsToolCapabilitySelectionReason(summary.Reason));
+            Assert.DoesNotContain(result.Omissions, omission =>
+                omission.Contains("tool/capability explanation intent", StringComparison.Ordinal));
+        }
     }
 
     /// <summary>Natural impact/flow phrasing is not treated as tool capability explanation without agent-facing context.</summary>
-    [Theory]
-    [InlineData("what is the impact of changing AdvancedSemanticQueryService")]
-    [InlineData("trace semantic dispatch flow through AdvancedSemanticQueryService")]
-    public async Task CodeExplore_NaturalGraphQuestion_DoesNotUseToolCapabilityProfile(string query)
+    [Fact]
+    public async Task CodeExplore_NaturalGraphQuestion_DoesNotUseToolCapabilityProfile()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
+        string[] queries =
+        [
+            "what is the impact of changing AdvancedSemanticQueryService",
+            "trace semantic dispatch flow through AdvancedSemanticQueryService",
+        ];
+        foreach (var query in queries)
+        {
+            TestContext.Current.TestOutputHelper?.WriteLine(query);
+            var result = await fixture.Service.QueryCodeExploreAsync(
+                fixture.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = query,
+                    Mode = CodeExploreMode.Survey,
+                    Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
+                },
+                fixture.CreateSourceReader(),
+                TestContext.Current.CancellationToken);
 
-        var result = await fixture.Service.QueryCodeExploreAsync(
-            fixture.WorkspaceId,
-            new CodeExploreRequest
-            {
-                Query = query,
-                Mode = CodeExploreMode.Survey,
-                Limits = CreateAgentQuestionLimits(maximumAnchors: 4, maximumFiles: 4),
-            },
-            fixture.CreateSourceReader(),
-            TestContext.Current.CancellationToken);
-
-        Assert.NotEmpty(result.CandidateSummaries ?? []);
-        Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
-            IsToolCapabilitySelectionReason(summary.Reason));
-        Assert.DoesNotContain(result.Omissions, omission =>
-            omission.Contains("tool/capability explanation intent", StringComparison.Ordinal));
+            Assert.NotEmpty(result.CandidateSummaries ?? []);
+            Assert.DoesNotContain(result.CandidateSummaries ?? [], summary =>
+                IsToolCapabilitySelectionReason(summary.Reason));
+            Assert.DoesNotContain(result.Omissions, omission =>
+                omission.Contains("tool/capability explanation intent", StringComparison.Ordinal));
+        }
     }
 
     /// <summary>Exact private helper requests still resolve to the named helper despite tool-intent down-ranking.</summary>
     [Fact]
     public async Task CodeExplore_ExactPrivateHelperQuery_IsPreserved()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -584,7 +629,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExplore_MixedCapabilityAndExactSymbolQuestion_ReturnsCompactQuestionSpecificEvidence()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
 
         var result = await fixture.Service.QueryCodeExploreAsync(
             fixture.WorkspaceId,
@@ -634,7 +679,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
     [Fact]
     public async Task CodeExploreTool_MixedCapabilityAndExactSymbolQuestion_RendersCompactEvidence()
     {
-        await using var fixture = await CodeExploreAgentQualityFixture.CreateAsync();
+        await using var fixture = await CreateFixtureAsync();
         var tool = new CodeExploreOutputFormattingTool(
             new CodeExploreTool(fixture.Service, TestPromptLoader.Instance),
             new CodeExploreOutputOptions(CodeExploreOutputFormat.Markdown),
@@ -707,6 +752,23 @@ public sealed class Plan94CodeExploreAgentQualityTests
             Encoding.UTF8.GetByteCount(markdown) <= maximumSerializedResultBytes,
             "The Markdown result exceeded the model-derived UTF-8 byte ceiling.");
         Assert.True(markdown.Length < 30_000, markdown.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    private Task<CodeExploreAgentQualityFixture> CreateFixtureAsync(
+        string workspaceRelativePath = "Repo.slnx",
+        bool duplicateFileNames = false,
+        bool rootFile = false,
+        bool quotedPaths = false)
+    {
+        var sharedRepositoryPath = duplicateFileNames || rootFile || quotedPaths
+            ? null
+            : _repositoryFixture.RepositoryPath;
+        return CodeExploreAgentQualityFixture.CreateAsync(
+            workspaceRelativePath,
+            duplicateFileNames,
+            rootFile,
+            quotedPaths,
+            sharedRepositoryPath);
     }
 
     private static CodeExploreLimits CreateAgentQuestionLimits(
@@ -875,7 +937,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
         ];
     }
 
-    private sealed class TestCodeExploreSourceReader : ICodeExploreSourceReader
+    internal sealed class TestCodeExploreSourceReader : ICodeExploreSourceReader
     {
         private readonly ToolInvocationContext _context;
 
@@ -947,19 +1009,22 @@ public sealed class Plan94CodeExploreAgentQualityTests
             : StringComparison.Ordinal;
     }
 
-    private sealed class CodeExploreAgentQualityFixture : IAsyncDisposable
+    internal sealed class CodeExploreAgentQualityFixture : IAsyncDisposable
     {
         private readonly DomainEventStream _events;
+        private readonly bool _ownsRepositoryPath;
         private readonly string _repositoryPath;
 
         private CodeExploreAgentQualityFixture(
             string repositoryPath,
             DomainEventStream events,
             SemanticEngineRegistry registry,
-            WorkspaceId workspaceId)
+            WorkspaceId workspaceId,
+            bool ownsRepositoryPath)
         {
             _repositoryPath = repositoryPath;
             _events = events;
+            _ownsRepositoryPath = ownsRepositoryPath;
             Registry = registry;
             WorkspaceId = workspaceId;
             Service = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance, new CodeExploreOptions { Limits = CreateAgentQuestionLimits() });
@@ -975,15 +1040,11 @@ public sealed class Plan94CodeExploreAgentQualityTests
             string workspaceRelativePath = "Repo.slnx",
             bool duplicateFileNames = false,
             bool rootFile = false,
-            bool quotedPaths = false)
+            bool quotedPaths = false,
+            string? sharedRepositoryPath = null)
         {
-            var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan94-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(repositoryPath);
-            WriteSolution(repositoryPath);
-            WriteCoreProject(repositoryPath);
-            WriteToolsProject(repositoryPath);
-            WriteAppProject(repositoryPath);
-            WriteDotNetProject(repositoryPath);
+            var ownsRepositoryPath = sharedRepositoryPath is null;
+            var repositoryPath = sharedRepositoryPath ?? CreateRepository();
             if (duplicateFileNames)
             {
                 Write(repositoryPath, "src/Threadsmith.Tools/First/Shared.cs", "public class FirstShared { }");
@@ -1015,7 +1076,7 @@ public sealed class Plan94CodeExploreAgentQualityTests
             Assert.True(
                 load.Confidence >= SemanticConfidenceLevel.PartialCompilation,
                 string.Join(Environment.NewLine, load.Diagnostics));
-            return new(repositoryPath, events, registry, workspaceId);
+            return new(repositoryPath, events, registry, workspaceId, ownsRepositoryPath);
         }
 
         public TestCodeExploreSourceReader CreateSourceReader()
@@ -1051,7 +1112,34 @@ public sealed class Plan94CodeExploreAgentQualityTests
         {
             await Registry.DisposeAsync();
             await _events.DisposeAsync();
-            Directory.Delete(_repositoryPath, recursive: true);
+            if (_ownsRepositoryPath)
+            {
+                DeleteRepository(_repositoryPath);
+            }
+        }
+
+        internal static void DeleteRepository(string repositoryPath)
+        {
+            var path = Path.GetFullPath(repositoryPath);
+            if (Path.GetDirectoryName(path) == Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()))
+                && Path.GetFileName(path).StartsWith("threadsmith-plan94-", StringComparison.Ordinal))
+            {
+                Directory.Delete(path, recursive: true);
+            }
+        }
+
+        internal static string CreateRepository()
+        {
+            var repositoryPath = Path.Combine(
+                Path.GetTempPath(),
+                $"threadsmith-plan94-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(repositoryPath);
+            WriteSolution(repositoryPath);
+            WriteCoreProject(repositoryPath);
+            WriteToolsProject(repositoryPath);
+            WriteAppProject(repositoryPath);
+            WriteDotNetProject(repositoryPath);
+            return repositoryPath;
         }
 
         private static void WriteSolution(string repositoryPath)
@@ -1654,5 +1742,26 @@ public sealed class Plan94CodeExploreAgentQualityTests
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath) ?? root);
             File.WriteAllText(fullPath, content);
         }
+    }
+}
+
+/// <summary>Owns the immutable Plan-94 repository input shared across isolated semantic workspaces.</summary>
+public sealed class Plan94CodeExploreRepositoryFixture : IDisposable
+{
+    /// <summary>Initializes a new instance of the <see cref="Plan94CodeExploreRepositoryFixture"/> class.</summary>
+    public Plan94CodeExploreRepositoryFixture()
+    {
+        RepositoryPath = Plan94CodeExploreAgentQualityTests.CodeExploreAgentQualityFixture
+            .CreateRepository();
+    }
+
+    /// <summary>Gets the shared repository path.</summary>
+    public string RepositoryPath { get; }
+
+    /// <summary>Removes the owned repository tree after the class finishes.</summary>
+    public void Dispose()
+    {
+        Plan94CodeExploreAgentQualityTests.CodeExploreAgentQualityFixture
+            .DeleteRepository(RepositoryPath);
     }
 }

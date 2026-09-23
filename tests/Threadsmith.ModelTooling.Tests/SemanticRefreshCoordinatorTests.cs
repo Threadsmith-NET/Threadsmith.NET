@@ -396,7 +396,6 @@ public static class SemanticRefreshCoordinatorTests
         var result = await coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
-        await Task.Delay(TimeSpan.FromMilliseconds(200));
 
         Assert.Equal(SemanticRefreshReason.Recovery, result.Reason);
         Assert.Equal(SemanticRefreshMode.Full, result.Mode);

@@ -885,7 +885,7 @@ public sealed class ParallelAgentTests
                 };
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             return CreateFindingOutcome(assignment, plan.Provenance.Generation);
         }
     }

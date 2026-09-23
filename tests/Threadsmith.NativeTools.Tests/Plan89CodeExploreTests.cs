@@ -1,7 +1,5 @@
 namespace Threadsmith.NativeTools.Tests;
 
-using System.Diagnostics;
-using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.DotNet;
@@ -9,58 +7,9 @@ using Threadsmith.Execution;
 using Threadsmith.Tools;
 using Xunit;
 
-/// <summary>Focused allocation fixtures and before/after evidence for configurable code exploration.</summary>
+/// <summary>Shared fixture for focused configurable code-exploration contracts.</summary>
 public sealed partial class Plan89CodeExploreTests
 {
-    /// <summary>Records matched exact-file, small-member, and cross-file source requests.</summary>
-    [Fact]
-    public async Task CodeExplore_AllocationComparison_RecordsCurrentBehavior()
-    {
-        await using var fixture = await AllocationFixture.CreateAsync();
-        var reports = new List<object>();
-        foreach (var allowance in new[] { 1_600, 5_000 })
-        {
-            foreach (var query in new[] { "Small.cs Large.cs", "Small.cs:4", "Large.cs", "Trace Small.Value and Large.Calculate" })
-            {
-                var watch = Stopwatch.StartNew();
-                var execution = await fixture.Tool.ExecuteAsync(
-                    new CodeExploreRequest
-                    {
-                        Query = query,
-                        Limits = new CodeExploreLimits
-                        {
-                            MaximumSourceCharacters = allowance,
-                            MaximumPerFileSourceCharacters = allowance,
-                            MaximumFiles = 2,
-                            TimeoutMilliseconds = 30_000,
-                        },
-                    },
-                    fixture.Context,
-                    TestContext.Current.CancellationToken);
-                var result = execution.Value;
-                Assert.NotNull(result.Coverage);
-                reports.Add(new
-                {
-                    query,
-                    allowance,
-                    watch.ElapsedMilliseconds,
-                    result,
-                });
-            }
-        }
-
-        if (Environment.GetEnvironmentVariable("THREADSMITH_PLAN89_REPORT") is { Length: > 0 } path)
-        {
-            await File.WriteAllTextAsync(
-                path,
-                JsonSerializer.Serialize(reports, new JsonSerializerOptions
-                {
-                    WriteIndented = true,
-                }),
-                TestContext.Current.CancellationToken);
-        }
-    }
-
     private sealed class AllocationFixture : IAsyncDisposable
     {
         private readonly DomainEventStream _events;

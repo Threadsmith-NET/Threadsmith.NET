@@ -134,7 +134,8 @@ Test-Contract 'legal artifacts are deterministic and cover the exact restore clo
         }
         $notices = Get-Content (Join-Path $temp 'a/THIRD-PARTY-NOTICES.txt') -Raw
         if (-not $notices.Contains('TUIKit 0.10.1') -or -not $notices.Contains('DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE')) { throw 'TUIKit code/font notices are missing.' }
-        if (-not $notices.Contains('MPL source availability:', [StringComparison]::Ordinal) -or -not $notices.Contains('SQLite is in the public domain.', [StringComparison]::Ordinal)) { throw 'Critical MPL or SQLite notice treatment is missing.' }
+        if (-not $notices.Contains('SQLite is in the public domain.', [StringComparison]::Ordinal)) { throw 'Critical SQLite notice treatment is missing.' }
+        if ($notices.Contains('PrettyPrompt 6.0.4', [StringComparison]::Ordinal)) { throw 'Retired frontend remains in the release notices.' }
     } finally { Remove-Item $temp -Recurse -Force }
 }
 Test-Contract 'runtime legal staging binds exact RID and rejects omissions' {

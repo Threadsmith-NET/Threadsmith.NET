@@ -111,7 +111,7 @@ Launch the interactive terminal from the repository you want to inspect:
 dotnet run --project C:\source\repos\Threadsmith\src\Threadsmith.App -- --tui
 ```
 
-Bare `--tui` launches the retained TUIKit interface; `--tui=tuikit` is the equivalent explicit form. Use `--tui=original` for the previous PrettyPrompt/Spectre interface. Both use the same commands and approval workflows. TUIKit moves each committed ordinary entry into retained output before the composer clears. If Enter is pressed while the initial semantic model is loading, TUIKit visibly queues one message and submits it when repository semantics are ready. See the [user guide](docs/user-guide.md#retained-tuikit-frontend-default) for keys, fixed status, and selection.
+Bare `--tui` launches the retained TUIKit interface; `--tui=tuikit` is the equivalent explicit form. TUIKit moves each committed ordinary entry into retained output before the composer clears. If Enter is pressed while the initial semantic model is loading, TUIKit visibly queues one message and submits it when repository semantics are ready. See the [user guide](docs/user-guide.md#retained-tuikit-frontend-default) for keys, fixed status, and selection.
 
 When running Threadsmith against its own source tree:
 
@@ -278,7 +278,6 @@ Threadsmith/
 │   ├── Threadsmith.Persistence/           # durable events, facts, artifacts, and migrations
 │   ├── Threadsmith.Telemetry/             # metrics, tracing, logging, and diagnostics
 │   ├── Threadsmith.Interaction/           # frontend-neutral interactive coordination and presentation
-│   ├── Threadsmith.Tui/                   # original PrettyPrompt/Spectre terminal adapter
 │   ├── Threadsmith.Tui.TuiKit/            # default retained TUIKit terminal adapter
 │   ├── Threadsmith.Cli/                   # headless command adapter
 │   ├── Threadsmith.Mcp/                   # host-owned MCP boundary

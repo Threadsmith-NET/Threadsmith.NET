@@ -39,21 +39,17 @@ internal static class CommandLineParser
             {
                 if (useInteractiveTerminal)
                 {
-                    return CommandLineParseResult.Failure("Specify --tui only once: --tui, --tui=tuikit, or --tui=original.");
+                    return CommandLineParseResult.Failure("Specify --tui only once: --tui or --tui=tuikit.");
                 }
 
                 var name = args[index].Length == 5 ? "tuikit" : args[index][6..];
-                if (string.Equals(name, "original", StringComparison.OrdinalIgnoreCase))
-                {
-                    frontend = InteractiveFrontendKind.Original;
-                }
-                else if (string.Equals(name, "tuikit", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(name, "tuikit", StringComparison.OrdinalIgnoreCase))
                 {
                     frontend = InteractiveFrontendKind.TuiKit;
                 }
                 else
                 {
-                    return CommandLineParseResult.Failure("Unknown TUI frontend. Use --tui, --tui=tuikit, or --tui=original.");
+                    return CommandLineParseResult.Failure("Unknown TUI frontend. Use --tui or --tui=tuikit.");
                 }
 
                 useInteractiveTerminal = true;

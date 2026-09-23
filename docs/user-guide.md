@@ -39,7 +39,7 @@ Threadsmith can run from source or from a self-contained release artifact. Sourc
 
 - .NET 10 SDK;
 - PowerShell for the commands shown in this guide;
-- a terminal with ordinary native scrollback and clipboard support for the best interactive experience;
+- a terminal with clipboard support for the best interactive experience;
 - a model endpoint only when using a configured non-fake model profile.
 
 Clone the repository, then restore and build it:
@@ -129,7 +129,6 @@ Common arguments include:
 |---|---|
 | `--tui` | Start the default retained TUIKit terminal. |
 | `--tui=tuikit` | Explicitly start the retained TUIKit terminal. |
-| `--tui=original` | Start the original PrettyPrompt/Spectre terminal. |
 | `--repository <path>` | Open a repository other than the current directory. |
 | `--solution <path>` | Select a solution or supported project explicitly. |
 | `--trust <level>` | Request a trust level without an interactive selector. |
@@ -221,7 +220,7 @@ Grant `TrustedBuild` or above only to repositories whose build scripts, analyzer
 
 ## Using the interactive terminal
 
-Startup displays the Threadsmith identity, repository and solution state, effective model, trust, target frameworks, semantic confidence, and terminal mode. The default TUIKit composer uses `Threadsmith >`; the repository appears in the fixed footer. The original frontend labels its composer with the current repository directory name.
+Startup displays the Threadsmith identity, repository and solution state, effective model, trust, target frameworks, semantic confidence, and terminal mode. The composer uses `Threadsmith >`; the repository appears in the fixed footer.
 
 Ordinary prompts are conversational. A greeting or question can complete as a normal assistant response. A repository-change request remains in the same model turn, but the model must call the host-owned `propose_plan` tool before each governed plan tranche begins. After a validated tranche, `complete_objective` with `{}` explicitly confirms the whole objective is complete and triggers cumulative-scope validation; ordinary text, questions, and blockers leave it resumable.
 
@@ -241,7 +240,7 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/context mode <conversation-aware\|governed-memory\|stateless>` | Change mode for the next request. |
 | `/extensions` | Open the loaded-extension checkbox dialog. |
 | `/fetch-authorize <url> [redirect ...]` | Authorize an exact URL chain for `web_fetch`. |
-| `/help` | Open a scrollable command/description modal in TUIKit; print command help in the original frontend. |
+| `/help` | Open a scrollable command/description modal. |
 | `/hooks [list\|inspect\|enable\|disable\|test\|approve\|revoke\|audit]` | Open the hook checkbox dialog or manage a specific handler. |
 | `/mcp [action] [profile]` | Open the connection checkbox dialog, authenticate eligible profiles, or manage capabilities and identity. See [MCP commands](operations/mcp-connections.md#lifecycle-commands). |
 | `/memory remember [--type standingPreference\|situational] <text>` | Explicitly save a repository note; the default type is situational. |
@@ -277,7 +276,7 @@ A resumed session reconstructs tolerant event projections and the sanitized conv
 
 ### Retained TUIKit frontend (default)
 
-Run `threadsmith --tui` for the default full-screen interface; `threadsmith --tui=tuikit` is equivalent. Run `threadsmith --tui=original` for the previous PrettyPrompt/Spectre interface with native scrollback. Both use the same commands, repository/session workflows, approvals, policies, models, themes, source/Markdown settings, and run coordination. No frontend is selected by configuration. Invalid or repeated frontend selectors fail before startup, and the former `--tui=pretty` spelling is rejected.
+Run `threadsmith --tui` for the full-screen interface; `threadsmith --tui=tuikit` is equivalent. No frontend is selected by configuration. Invalid or repeated frontend selectors fail before startup; `--tui=original` and `--tui=pretty` are rejected.
 
 TUIKit keeps a title bar, MAIN and active-child tabs, a bordered output pane with the selected agent’s status and activity, a bordered multiline composer (normally five content rows), and a fixed repository footer. The footer shows the folder, branch/detached state, and staged/modified/untracked/conflict counts from a bounded periodic Git query. It requires at least 40 columns by 12 rows; at that minimum it retains two output rows and one editor row. Shrinking further preserves state until the terminal grows again. `tui:footer:enabled=false` hides the repository footer while agent status and accounting remain available.
 
@@ -291,7 +290,7 @@ F1 opens a non-selectable key-help list; arrows or PageUp/PageDown scroll it whe
 
 F3 opens the command palette when the ordinary composer is focused and contains only whitespace or a partial leading slash command. Search names and descriptions with a fuzzy query, navigate with arrows/PageUp/PageDown/Home/End, and press Enter to insert the selected canonical name. Usage and description appear below the results, with F6 to copy them. Escape or F3 closes without changing the draft; paste stays within a single-line, 256-character query.
 
-Typing a partial slash token, such as `/rea`, shows up to six prefix suggestions. Unmodified navigation keys choose a result, Tab or Enter inserts it, and Escape dismisses only the suggestions. Acceptance never executes a command, submits input, or appends a space: add arguments and press Enter separately. Undo restores the prior draft in one step. Exact names, arguments, prose, multiline or selected text, secondary/steering prompts, other modals, transcript focus, and undersized terminals do not show suggestions. Modified Enter retains its existing behavior. Argument completion is not supported. These discovery interfaces are specific to TUIKit; the original frontend is unchanged.
+Typing a partial slash token, such as `/rea`, shows up to six prefix suggestions. Unmodified navigation keys choose a result, Tab or Enter inserts it, and Escape dismisses only the suggestions. Acceptance never executes a command, submits input, or appends a space: add arguments and press Enter separately. Undo restores the prior draft in one step. Exact names, arguments, prose, multiline or selected text, secondary/steering prompts, other modals, transcript focus, and undersized terminals do not show suggestions. Modified Enter retains its existing behavior. Argument completion is not supported.
 
 Selectors use centered frames and block background keys, paste, and mouse input. They filter labels while preserving stable option identities. Arrows/PageUp/PageDown/Home/End navigate, Enter selects, and Escape cancels. F2 opens complete scrollable option details, including long paths and model descriptions. F8 lists validated links from retained output; Enter copies the selected target and F2 shows the complete target. Links never execute automatically.
 
@@ -309,29 +308,13 @@ Live tool blocks appear in the selected agent’s output pane before their opera
 
 When supplied by a provider, usage adds a breakdown such as `out 2,000 (reasoning 1,200)`. Missing counts leave the display unchanged, and reported zero is shown. Reasoning is already included in output totals and cost. Cumulative reasoning is hidden if any contributing request lacks the count; F2 can still show a reported count for the latest request. This is independent of `/thinking` text visibility. F2 also shows per-request cache reads, writes, and hit percentage; see [cache reporting](operations/cache-optimized-context.md).
 
-The retained transcript keeps up to 1024 chunks/512 KiB and visibly announces eviction. Child source and projected text additionally share a 4 MiB budget, with at most 8192 logical chunks across children. Transient display queues hold 256 fragments of at most 4096 UTF-16 units each; overflow is reported without dropping execution decisions, lifecycle, or usage. Completed child views are released. It is a view, not durable session history or native terminal scrollback. Themes and `NO_COLOR` remain supported; selector markers remain visible without color.
+The retained transcript keeps up to 1024 chunks/512 KiB and visibly announces eviction. Child source and projected text additionally share a 4 MiB budget, with at most 8192 logical chunks across children. Transient display queues hold 256 fragments of at most 4096 UTF-16 units each; overflow is reported without dropping execution decisions, lifecycle, or usage. Completed child views are released. It is a view, not durable session history. Themes and `NO_COLOR` remain supported; selector markers remain visible without color.
 
 For name configuration and full themed defaults, see [Agent workspace operations](operations/agent-workspace.md).
 
-### Original frontend keyboard and clipboard
-
-The following keys apply to `--tui=original`. The default retained TUIKit frontend has its own keyboard and clipboard details [above](#retained-tuikit-frontend-default).
-
-| Input | Action |
-|---|---|
-| `Enter` | Submit the composer. |
-| `Shift+Enter` | Insert a soft newline. |
-| `Ctrl+V` or `Shift+Insert` | Paste clipboard content as one operation. |
-| `Ctrl+C` | Cancel current input or an active run; with a native terminal selection, copy that selection. |
-| `Ctrl+Shift+C` | Copy a PrettyPrompt editor selection where supported. |
-| `Ctrl+T` | On an empty composer, toggle future reasoning streaming. |
-| Mouse drag / terminal mark mode | Select across the native transcript and composer output. |
-
-Threadsmith deliberately retains native terminal scrollback and does not enable mouse capture. Terminal-specific selection shortcuts remain controlled by the terminal emulator.
-
 ### Reasoning display
 
-Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. During active-turn candidate work, `COMPACTING CONTEXT` temporarily replaces `THINKING`, shows the current before/target token counts, candidate profile, and elapsed time, then emits one bounded completion line with actual before/after/savings/status/profile/duration before `THINKING` resumes. No summary, prompt, source, or tool-result content is displayed by default. `/thinking on` enables live streaming of future sanitized reasoning chunks using the `Reasoning` semantic style. In the default TUIKit frontend, the separate `THINKING` row stays active alongside that text, including the wait after the last reasoning chunk and while the answer is buffered. The original frontend releases its transient spinner before writing reasoning into native scrollback. `/thinking off` disables future streaming, and `/thinking` or `Ctrl+T` toggles the same in-session setting. Turning streaming off cannot remove reasoning already written to native scrollback. This does not expose credentials or raw unsanitized provider content.
+Reasoning is hidden by default. While a turn is active, Threadsmith shows transient `THINKING` activity and removes it before the first visible answer or terminal outcome; completed transcripts contain no host-generated `THINKING` marker. During active-turn candidate work, `COMPACTING CONTEXT` temporarily replaces `THINKING`, shows the current before/target token counts, candidate profile, and elapsed time, then emits one bounded completion line with actual before/after/savings/status/profile/duration before `THINKING` resumes. No summary, prompt, source, or tool-result content is displayed by default. `/thinking on` enables live streaming of future sanitized reasoning chunks using the `Reasoning` semantic style. The separate `THINKING` row stays active alongside that text, including the wait after the last reasoning chunk and while the answer is buffered. `/thinking off` disables future streaming, and `/thinking` or `Ctrl+T` toggles the same in-session setting. Turning streaming off cannot remove reasoning already displayed. This does not expose credentials or raw unsanitized provider content.
 
 ### Cross-turn conversation context
 
@@ -1430,7 +1413,7 @@ The default `MarkdownFriendlyDark` theme uses a dark workspace palette with dist
 - `ocean`;
 - `high-contrast`.
 
-Use `/theme`, `/theme <id>`, or `/theme current`. TUIKit repaints retained views immediately; the original frontend applies the selection to future output. Selection atomically updates only `tui.defaultTheme` in `~/.threadsmith/config.json`, preserving unrelated settings, comments, trailing commas, and surrounding formatting. Normal configuration precedence still applies, so a higher-precedence repository, session, CLI, or environment value may override the user default at startup. Theme changes do not rewrite the original frontend’s native scrollback or create domain events.
+Use `/theme`, `/theme <id>`, or `/theme current`. TUIKit repaints retained views immediately. Selection atomically updates only `tui.defaultTheme` in `~/.threadsmith/config.json`, preserving unrelated settings, comments, trailing commas, and surrounding formatting. Normal configuration precedence still applies, so a higher-precedence repository, session, CLI, or environment value may override the user default at startup. Theme changes do not create domain events.
 
 Configured themes use semantic roles rather than fixed screen coordinates. A configured theme's `styles` object may contain these role names:
 
@@ -1440,7 +1423,7 @@ Configured themes use semantic roles rather than fixed screen coordinates. A con
 | `Brand` | Startup branding and identity. |
 | `Muted` | Secondary or de-emphasized information. |
 | `Status` | General host status messages. |
-| `SessionStatus` | TUIKit’s fixed repository footer; composer-adjacent repository/model/context/token status in the original frontend. |
+| `SessionStatus` | The fixed repository footer. |
 | `Hyperlink` | Validated clickable links. |
 | `ToolSuccess` | Successful tool completion. |
 | `ToolFailure` | Failed tool completion. |
@@ -1450,8 +1433,8 @@ Configured themes use semantic roles rather than fixed screen coordinates. A con
 | `Success` | General successful outcomes. |
 | `Warning` | Warnings. |
 | `Error` | Errors and failures. |
-| `UserPrompt` | User-authored transcript content. TUIKit moves each committed ordinary composer entry into its retained transcript once; the original frontend keeps the native prompt line in terminal scrollback. |
-| `ComposerPrompt` | `Threadsmith >` in TUIKit; the repository-name prompt in the original frontend. |
+| `UserPrompt` | User-authored transcript content. Each committed ordinary composer entry moves into the retained transcript once. |
+| `ComposerPrompt` | `Threadsmith >` in the composer. |
 | `ThinkingIndicator` | The transient `THINKING` indicator. |
 | `Reasoning` | Streaming reasoning enabled with `/thinking` or `Ctrl+T`. |
 | `DiffAdded` | Added diff lines. |
@@ -1522,11 +1505,11 @@ For example:
 
 `NO_COLOR`, redirected output, and limited terminals use plain-text fallback without changing semantic words or markers.
 
-The composer-adjacent status row can show working folder, repository, current local Git branch, model profile name (without the redundant provider model id), reasoning, governed context use, and cumulative provider token usage. It remains ordinary native scrollback rather than a cursor-managed pinned footer. Disable it with `tui:footer:enabled=false`.
+The fixed repository footer shows the working folder, current Git branch, and repository status. Disable it with `tui:footer:enabled=false`; model, reasoning, context, and usage remain in the agent header.
 
 ### Interactive Markdown answers
 
-Ordinary interactive model answers render as complete semantic Markdown documents by default. Threadsmith buffers each contiguous answer block while `THINKING` remains active, then writes it once before a tool, status, diagnostic, completion, or other visible lifecycle boundary. Every new interactive model answer begins after one blank line, including answers that follow tool activity; redirected raw output does not gain this presentation separator. Native scrollback is never rewritten and a raw duplicate is not printed. Headings remove their source `#`/setext delimiters and use semantic styling plus block spacing; H1 and H2 additionally use bounded double/single underline rules so they remain visibly distinct even when terminal decoration is unavailable; emphasis, strikethrough, lists and tasks, blockquotes, inline and fenced code, public HTTPS links, thematic breaks, and pipe tables use host-owned semantic roles and structural layout. Narrow tables degrade to labeled rows. `NO_COLOR` removes decoration without restoring heading delimiters or changing words, structural markers, indentation, or layout.
+Ordinary interactive model answers render as complete semantic Markdown documents by default. Threadsmith buffers each contiguous answer block while `THINKING` remains active, then writes it once before a tool, status, diagnostic, completion, or other visible lifecycle boundary. Every new interactive model answer begins after one blank line, including answers that follow tool activity; redirected raw output does not gain this presentation separator. The retained transcript receives no raw duplicate. Headings remove their source `#`/setext delimiters and use semantic styling plus block spacing; H1 and H2 additionally use bounded double/single underline rules so they remain visibly distinct even when terminal decoration is unavailable; emphasis, strikethrough, lists and tasks, blockquotes, inline and fenced code, public HTTPS links, thematic breaks, and pipe tables use host-owned semantic roles and structural layout. Narrow tables degrade to labeled rows. `NO_COLOR` removes decoration without restoring heading delimiters or changing words, structural markers, indentation, or layout.
 
 Raw Markdown remains authoritative for conversation state, persistence, context, restoration, and headless output. Markdig is used only inside the TUI parser; HTML is inert, unsafe link schemes are plain visible text, parser/size failures fall back once to visibly escaped source, and terminal controls never pass through the interactive source or fallback path unchanged.
 
@@ -1613,7 +1596,7 @@ Operational principles:
 - hot replacement publishes the new generation without allowing an old unload to remove it;
 - load-context isolation is not a security boundary, so in-process extensions must be trusted.
 
-In TUIKit, `/extensions` opens a checkbox tree: checked means loaded. Toggle several extensions or a filtered group without closing the dialog; each load/unload takes effect immediately and the checkbox reflects the resulting state. Esc keeps completed changes. The original frontend retains its selector. Repository-level selection uses `.threadsmith/extensions.json`.
+In TUIKit, `/extensions` opens a checkbox tree: checked means loaded. Toggle several extensions or a filtered group without closing the dialog; each load/unload takes effect immediately and the checkbox reflects the resulting state. Esc keeps completed changes. Repository-level selection uses `.threadsmith/extensions.json`.
 
 Extension authors should read [extension-authoring/authoring-guide.md](extension-authoring/authoring-guide.md).
 
@@ -1635,7 +1618,7 @@ See [the pinned compatibility contract](skill-compatibility-spec-v1.md) and [ski
 
 ### Finding and selecting skills
 
-Run `/skills` to open the Tools-style tree dialog. It groups packages by Claude/Native, then scope. Use arrows to navigate, type to filter, Space to enable/disable a package or filtered group, F2 for details, and F3 → Verify to verify a package or filtered group. Space disables a mixed group when any eligible member is enabled, and enables it when none is enabled. Progress and completion counts show partial outcomes; Esc stops a toggle batch after the current package finishes. Status updates immediately after host checks. Opening revalidates maintained packages and candidates with persisted enablement decisions so their saved state is restored; unrelated packages remain metadata-only. Maintained verification may enable a package under existing policy, while unsigned Claude packages need explicit enablement. Esc cancels active verification or closes the idle dialog, preserving completed changes. The original frontend offers sequential choices. Use `/skills list` for text output; explicit commands remain available.
+Run `/skills` to open the Tools-style tree dialog. It groups packages by Claude/Native, then scope. Use arrows to navigate, type to filter, Space to enable/disable a package or filtered group, F2 for details, and F3 → Verify to verify a package or filtered group. Space disables a mixed group when any eligible member is enabled, and enables it when none is enabled. Progress and completion counts show partial outcomes; Esc stops a toggle batch after the current package finishes. Status updates immediately after host checks. Opening revalidates maintained packages and candidates with persisted enablement decisions so their saved state is restored; unrelated packages remain metadata-only. Maintained verification may enable a package under existing policy, while unsigned Claude packages need explicit enablement. Esc cancels active verification or closes the idle dialog, preserving completed changes. Use `/skills list` for text output; explicit commands remain available.
 
 ```text
 /skills list [text]
@@ -1791,7 +1774,7 @@ The second-to-last command rolls back future selection without modifying an alre
 /skills cancel <invocation-id>
 ```
 
-Invocation validates bounded JSON input and current host/tool/trust/model/phase requirements before loading content. It loads only current-step assets, rechecks hashes, uses strict UTF-8 and sanitization, omits optional references under pressure, and fails if required content does not fit. Procedure turns advertise only declared available tools and still use the central tool pipeline. All manual, model-driven, and internal skills use checkpoint events in the existing tool/MCP activity collection and renderer. A manual invocation shows one live `SKILLS` block with invocation identity, bounded phase progress, and optional elapsed time. A model-driven invocation adds progress to its existing `invoke_skill` block. Completion replaces the live activity once; genuine host-input waits release it. Child runs use the same activity projection in their agent tabs. The original frontend uses the existing transient activity and prompt-preemption path. No command wrapper or separate activity store owns skill rendering.
+Invocation validates bounded JSON input and current host/tool/trust/model/phase requirements before loading content. It loads only current-step assets, rechecks hashes, uses strict UTF-8 and sanitization, omits optional references under pressure, and fails if required content does not fit. Procedure turns advertise only declared available tools and still use the central tool pipeline. All manual, model-driven, and internal skills use checkpoint events in the existing tool/MCP activity collection and renderer. A manual invocation shows one live `SKILLS` block with invocation identity, bounded phase progress, and optional elapsed time. A model-driven invocation adds progress to its existing `invoke_skill` block. Completion replaces the live activity once; genuine host-input waits release it. Child runs use the same activity projection in their agent tabs. No command wrapper or separate activity store owns skill rendering.
 
 A skill's tool declarations cannot expand `tools:allow` or override `tools:deny`. Each procedure turn offers only the intersection of the skill's declared tools and current tool-ID policy, then checks current policy again before executing a call. No overlap means no tools are permitted. An absent or empty configured `tools:allow` keeps its existing meaning of no additional allowlist restriction; this is different from an empty computed intersection. The same checks apply after `continue` or `resume`, including policy narrowed while the workflow was paused. Calling a skill through the model also requires permission for the outer `invoke_skill` tool.
 

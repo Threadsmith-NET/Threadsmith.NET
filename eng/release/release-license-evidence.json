@@ -7,7 +7,6 @@
     "MIT",
     "Apache-2.0",
     "BSD-2-Clause",
-    "MPL-2.0",
     "MIT OR Unlicense",
     "custom-approved",
     "platform-terms-approved",
@@ -467,19 +466,6 @@
       "copyrightText": "Copyright holders and contributors of ModelContextProtocol.Core (ModelContextProtocol)"
     },
     {
-      "id": "PrettyPrompt",
-      "version": "6.0.4",
-      "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/PrettyPrompt/6.0.4",
-      "packageSha512": "15WBvBFCzhb7XY531kZxzMsQQTYf4s1Qn9dVcR/jAqijqC4yYNJJxb5dqmbGQgQGOVQy94fagbDVkNquiqKzlg==",
-      "licenseExpression": "MPL-2.0",
-      "licenseText": "legal/licenses/MPL-2.0.txt",
-      "noticeTreatment": "MPL source offer included",
-      "sourceAvailability": "https://github.com/waf/PrettyPrompt/tree/6.0.4",
-      "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of PrettyPrompt (Will Fuqua)"
-    },
-    {
       "id": "Roslynator.Analyzers",
       "version": "4.15.0",
       "scope": "bundled-package",
@@ -490,30 +476,6 @@
       "noticeTreatment": "full license text",
       "reviewState": "approved",
       "copyrightText": "Copyright holders and contributors of Roslynator.Analyzers (Josef Pihrt)"
-    },
-    {
-      "id": "Spectre.Console.Ansi",
-      "version": "0.57.0",
-      "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Spectre.Console.Ansi/0.57.0",
-      "packageSha512": "DGeYljyWAIHSeUAoUGqyzyOqS8WlsHKW+y4zOZ0OO61oqrhx90jHS+XG5Kpq/wWz6ovIs2VL/0CTKpUVa7tdWg==",
-      "licenseExpression": "MIT",
-      "licenseText": "legal/licenses/MIT.txt",
-      "noticeTreatment": "full license text",
-      "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Spectre.Console.Ansi (Patrik Svensson, Phil Scott, Nils Andresen, Cédric Luthi)"
-    },
-    {
-      "id": "Spectre.Console",
-      "version": "0.57.0",
-      "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/Spectre.Console/0.57.0",
-      "packageSha512": "X5+4ZsUYTPlTs5PEoKRlxUuKOa1AkEoAGM34pUeJPjsBdtOnvnaVb31hqewhooomihl1i9fEBid1fz8XxZTacQ==",
-      "licenseExpression": "MIT",
-      "licenseText": "legal/licenses/MIT.txt",
-      "noticeTreatment": "full license text",
-      "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of Spectre.Console (Patrik Svensson, Phil Scott, Nils Andresen, Cédric Luthi)"
     },
     {
       "id": "SQLitePCLRaw.bundle_e_sqlite3",
@@ -658,18 +620,6 @@
       "noticeTreatment": "full license text",
       "reviewState": "approved",
       "copyrightText": "Copyright holders and contributors of System.Composition (Microsoft)"
-    },
-    {
-      "id": "TextCopy",
-      "version": "6.2.1",
-      "scope": "bundled-package",
-      "provenance": "https://www.nuget.org/packages/TextCopy/6.2.1",
-      "packageSha512": "ryejViUBmHQ2XMie2AiRBn7KVKu2Gh/hqrctGSAUf1BufwfPjr+MWuACNBaiG+40TMbWRDJZgV73Tpl9hggeRw==",
-      "licenseExpression": "MIT",
-      "licenseText": "legal/licenses/MIT.txt",
-      "noticeTreatment": "full license text",
-      "reviewState": "approved",
-      "copyrightText": "Copyright holders and contributors of TextCopy (https://github.com/CopyText/TextCopy/graphs/contributors)"
     },
     {
       "id": "dotnet-runtime",

@@ -6,8 +6,8 @@ using System.Security;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Tools;
-using Threadsmith.Tui;
 using Threadsmith.Validation;
 using Xunit;
 
@@ -1206,7 +1206,7 @@ public sealed class Milestone6Tests
             diagnostic.Code,
             diagnostic.Message,
             diagnostic));
-        var presenter = new TuiPresenter(new RejectingDispatcher(), projections);
+        var presenter = new InteractionPresenter(new RejectingDispatcher(), projections);
 
         var snapshot = await presenter.RenderAsync(sessionId);
 
@@ -1593,7 +1593,7 @@ public sealed class Milestone6Tests
             Failed: 0,
             Skipped: 0,
             StructuredResult: validation));
-        var presenter = new TuiPresenter(new RejectingDispatcher(), projections);
+        var presenter = new InteractionPresenter(new RejectingDispatcher(), projections);
 
         var snapshot = await presenter.RenderAsync(sessionId);
 

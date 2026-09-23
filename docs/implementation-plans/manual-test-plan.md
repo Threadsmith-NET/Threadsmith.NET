@@ -208,14 +208,9 @@ Expected: structured checks identify safe configuration/auth/translation/ping ou
 Expected: existing MCP adapter/transport/OAuth behavior stays compatible; real stdio coverage is deterministic; live network/IdP behavior is operator-authorized and does not weaken any secret, network, callback, policy, or redaction boundary.
 
 
-## MTP-231 — Original-frontend semantic Markdown and native scrollback
+MTP-231 — Retired: original scrollback Markdown procedure
 
-1. In Windows Terminal, launch `--tui=original` with `tui:renderMarkdown` omitted and a controlled provider that chunks one response inside delimiters, words, links, and table rows.
-2. Include headings, emphasis/strong/strikethrough, ordered/unordered/task lists, a blockquote, inline/fenced code, a thematic break, a public HTTPS link, and a wide table.
-3. Confirm `THINKING` remains active while chunks arrive and disappears immediately before one complete rendered document becomes visible.
-4. Select and copy across the rendered answer and earlier transcript with mouse and keyboard mark mode; resize before a second response.
-
-Expected: one blank line separates the preceding prompt/tool activity from the answer, which appears once; heading text has semantic styling/spacing without visible ATX/setext delimiters, H1/H2 use bounded double/single underline rules, and lists, quotes, tasks, code fences, tables, and thematic breaks retain stable structural markers. There is no scrollback rewrite, duplicate source copy, mouse capture, or composer corruption; resizing affects only later documents.
+Retired: use MTP-257 for the retained TUIKit frontend.
 
 ## MTP-232 — Source mode, controls, bounds, and content safety
 
@@ -225,22 +220,13 @@ Expected: one blank line separates the preceding prompt/tool activity from the a
 
 Expected: source mode retains chunk cadence for safe text and visibly escapes controls; unsafe content is inert or falls back once, performs no fetch/execution, and sends no raw control to the terminal. Raw Markdown remains exact and authoritative outside interactive presentation.
 
-## MTP-233 — Ordered activity, tool, status, and cancellation compatibility
+MTP-233 — Retired: original scrollback activity procedure
 
-1. Using `--tui=original`, run under a controlled monotonic fixture: model answer A → `read_file` → answer B and model answer A → MCP → answer B with operation durations enabled and disabled.
-2. Allow multiple 250 ms `THINKING` refreshes during each buffered answer; verify each refresh updates only the active row.
-3. Cancel while collecting, at a tool boundary, while waiting for output, and during shutdown; repeat with reviewed `run_process` detail and the composer-adjacent session status enabled.
+Retired: use MTP-257 for the retained TUIKit frontend.
 
-Expected: each answer flushes before the triggering tool/MCP/status/completion projection; refreshes never fragment it. Existing source/detail/outcome/final-duration rows and session-status fields remain unchanged, cancellation loses no accepted text, no write overtakes another, and the composer opens only after final output.
+MTP-234 — Retired: original frontend terminal matrix
 
-## MTP-234 — Themes, terminal matrix, and release payload
-
-1. Repeat MTP-231–233 with system/light/dark/custom themes under ordinary styling, `NO_COLOR`, `TERM=dumb`, Windows Terminal, one Linux/macOS terminal, SSH or a multiplexer, and widths from 20 to 200 columns.
-2. Confirm narrow tables degrade to labeled rows, Unicode width is stable, code remains selectable, and style suppression changes decoration only—not words, structural markers, indentation, heading-delimiter removal, or line layout.
-3. Build or inspect all six supported release RID payloads and SBOM/license data. Confirm Markdig 1.3.2/BSD-2-Clause is present only through `Threadsmith.Interaction`, PrettyPrompt and Spectre.Console remain in `Threadsmith.Tui`, no package introduces a native/runtime-specific dependency, and no Markdig/Spectre/PrettyPrompt type crosses the semantic document boundary.
-
-Expected: original-frontend terminal behavior is deterministic and native-scrollback-safe across the matrix; release/package architecture checks pass without a RID-specific rendering dependency. MTP-257 owns equivalent default-TUIKit projection and retained-screen checks.
-
+Retired: use MTP-257 for the retained TUIKit frontend.
 
 ## MTP-227 — Static-secret source precedence and trust
 
@@ -500,16 +486,16 @@ Expected:
 
 1. Copy `ManualTarget.sln` to `SecondCandidate.sln` under `$ManualRoot`.
 2. Run `Push-Location $ManualRoot`.
-3. Launch `dotnet run --project $AppProject -- --tui=original` without `--repository`.
-4. In the numbered trust list, use Up/Down and Enter to choose Trusted Read.
-5. In the numbered solution list, use Up/Down and Enter to choose `ManualTarget.sln`.
+3. Launch `dotnet run --project $AppProject -- --tui` without `--repository`.
+4. In the trust selector, use Up/Down and Enter to choose Trusted Read.
+5. In the solution selector, use Up/Down and Enter to choose `ManualTarget.sln`.
 6. Exit and run `Pop-Location`.
 
 Expected:
 
 - Neither candidate is silently selected.
 - `$ManualRoot` is used as the repository automatically.
-- The highlighted choice moves with arrow keys and Enter activates it; each label is numbered.
+- The highlighted choice moves with arrow keys and Enter activates it.
 - The transcript reports exactly `ManualTarget.sln` and its target framework.
 
 ### MTP-026 - Persisted read trust is not silently upgraded (positive and negative)
@@ -538,23 +524,9 @@ Expected:
 
 ## 7. Inline conversational terminal
 
-### MTP-030 - Launch, resize, and native scrollback (positive)
+MTP-030 - Retired: original scrollback launch procedure
 
-1. Launch `dotnet run --configuration Release --project $AppProject -- --tui=original` in Windows Terminal.
-2. Confirm the ASCII Threadsmith.NET wordmark and `Forge better code, not slop.` tagline appear.
-3. Verify a blank line separates the tagline from Current status.
-4. Verify Model, Repository, Trust, Solution, target frameworks when selected, Semantic confidence, and Mode match the effective session.
-5. Confirm the composer label is the current repository directory name followed by ` > `.
-6. Resize narrower, wider, shorter, and taller.
-7. Enter `/help`.
-
-Expected:
-
-- Composer redraw is responsive without corrupting prior output.
-- Prior output remains ordinary terminal scrollback.
-- Startup shows an animated `Opening repository...` activity before waiting for repository opening, followed by `Loading solution and restoring packages...` at compiler-capable trust (or `Loading solution...` at read trust), then `Semantic confidence: Loading...` while semantic loading runs. Hold restore pending and confirm the existing spinner remains animated with elapsed time before any semantic-completion event. Trust and solution selectors retain input ownership; cancellation or failure clears the activity. The transient spinner clears when semantic completion is published, then Current status prints the resolved confidence or `Unavailable` for a completed load with no usable project state before showing the composer.
-- The status contains no credentials, endpoint secrets, or stale repository values.
-- Help lists `/help`, `/open`, `/quit`, `/reasoning`, `/semantic_refresh`, `/thinking [on|off]`, and `/trust` in alphabetical command order, notes `Ctrl+T` for toggling reasoning streaming, and aligns every description at one column; commands wider than that column place their descriptions on the next line at the same indent.
+Retired: use MTP-257 for the retained TUIKit frontend.
 
 ### MTP-030C - Terminal-native system theme and plain-text fallback (positive and negative)
 
@@ -571,45 +543,13 @@ Expected:
 - `NO_COLOR` and redirected output suppress colors and decorations.
 - Redirected text contains no ANSI/OSC control sequences.
 
-### MTP-030D - Configured and built-in theme selection (positive and negative)
+MTP-030D - Retired: original theme selector procedure
 
-1. Launch `--tui=original` without `tui` configuration and enter `/theme current`; confirm `system` is active.
-2. Enter `/theme`, inspect the four built-ins, choose `ocean`, and exercise transcript, spinner, selector, hyperlink, success, and failure output.
-3. Confirm `~/.threadsmith/config.json` now contains `tui.defaultTheme: ocean` with unrelated settings preserved, relaunch without a higher-layer override, and confirm `ocean` is active.
-4. Enter `/theme high-contrast`, then `/theme current`.
-5. Enter `/theme missing` and confirm it fails locally without changing the persisted default.
-6. Open `/theme` again and choose Cancel; confirm neither active nor persisted selection changes.
-7. Configure the `project-blue` example from `.threadsmith/config.example` in a higher-precedence layer as `tui:defaultTheme`, relaunch, and confirm it appears after the built-ins and overrides the user default.
-8. Add an invalid color, control character, unknown role/UI key, or more than 32 configured themes and relaunch.
-9. Repeat a colored selection with `NO_COLOR=1`.
+Retired: use MTP-257 for the retained TUIKit frontend.
 
-Expected:
+MTP-030F - Retired: original tool selector procedure
 
-- Theme selection uses the numbered Up/Down/Enter interaction and labels the active theme.
-- Direct and selector changes apply only to subsequent output, atomically persist the user default without overwriting unrelated settings, and leave prior native scrollback unchanged.
-- Cancel and persistence failure leave the theme unchanged, and unknown direct ids never reach the model.
-- Configured themes append in declared order or replace a matching id as a complete case-insensitive entry.
-- Unsafe or oversized presentation data fails before rendering and cannot inject terminal controls.
-- `NO_COLOR` preserves the selected theme identity while suppressing its colors and decorations.
-
-### MTP-030F - Repository tool availability selector (positive and negative)
-
-1. Launch `--tui=original` with the repository `tools:enabled` and `tools:disabled` settings omitted, enter `/tools`, and inspect every built-in tool.
-2. Select a non-essential enabled tool, reopen the list, and confirm it is disabled; restart Threadsmith and confirm the state survives.
-3. Re-enable that tool and confirm the persisted repository state changes immediately.
-4. Select each essential tool and inspect `.threadsmith/config.json` afterward.
-5. Configure the same optional id in both `tools:enabled` and `tools:disabled`, relaunch, and inspect `/tools`.
-6. Load an extension that contributes a tool, inspect its extension-name source, disable it, unload and reload the extension, and inspect the list after each lifecycle change.
-7. Choose Back, then enter `/help`.
-
-Expected:
-
-- The numbered Up/Down/Enter list shows every registered tool with its stable id, display name, category, built-in or extension source, and enabled/disabled state.
-- Non-essential changes persist immediately without removing unrelated `.threadsmith/config.json` content and survive restart.
-- Essential tools are marked `(essential)`, remain enabled, and cannot be persisted as disabled.
-- `tools:disabled` wins over `tools:enabled`; Back makes no changes; `/help` lists `/tools`.
-- Disabled tools disappear from model-facing advertisement and cannot be resolved for invocation.
-- Extension activation adds tools dynamically, unload removes them, and reload restores their persisted availability preference without exposing a stale generation.
+Retired: use MTP-257 for the retained TUIKit frontend.
 
 ### MTP-030G - Date/time and isolated C# scripting tools (positive and negative)
 
@@ -645,44 +585,20 @@ Expected:
 Expected:
 
 - Selection writes nested `solution.path` as a slash-normalized repository-relative path while preserving unrelated configuration.
-- A valid preference auto-loads without the numbered solution prompt and prints `Loading remembered solution: <relative-path>`; explicit `--solution` wins and becomes the new preference.
+- A valid preference auto-loads without a solution prompt and shows `Remembered: <name>` in the startup splash; explicit `--solution` wins and becomes the new preference.
 - A missing remembered file is cleared, normal discovery/ambiguity resumes, and escaping, prohibited, or linked paths remain rejected.
 - Trusted headless inspection also auto-loads valid memory; ambiguity without explicit or remembered selection returns exit code 2.
 - Initialization is offered only when both `.threadsmith/` and supported candidates are absent. Accepting atomically creates minimal strict JSON and confirms its path; declining creates nothing; repetition never overwrites.
 - The scaffold contains neutral `solution.path`, `tools.disabled`, and `tools.config` values and does not create an empty `tools.enabled` deny-all allowlist.
 - Repositories containing a supported project or an existing `.threadsmith/` directory are not prompted.
 
-### MTP-030E - Composer-adjacent session status compatibility (positive and negative)
+MTP-030E - Retired: composer-adjacent status procedure
 
-1. Launch `--tui=original` in Windows Terminal with `tui:footer:enabled` omitted or `true`; confirm one status row appears immediately before each composer.
-2. Exercise a normal model response with reported usage, a reasoning change, and `/open` to another repository; inspect the next status row after each operation.
-3. Resize through approximately 40, 80, 120, and 200 columns between prompts.
-4. Select and copy text across earlier transcript and status rows with mouse selection and terminal keyboard mark mode.
-5. Paste exact 10 KB and 100 KB payloads, exercise an Up/Down selector, cancel active work, and confirm streaming/spinner cleanup remains unchanged.
-6. Launch with `tui:footer:enabled=false`, then redirect an enabled launch to a file.
-7. Repeat the interactive checks in one available Linux or macOS terminal.
+Retired: use MTP-257 for the retained TUIKit frontend.
 
-Expected:
+MTP-030A - Retired: repository-named composer prompt procedure
 
-- Status reports folder, repository, model/reasoning, context estimate/limit/percentage, and cumulative session tokens; `~` identifies estimates and `--` identifies unknown context.
-- Usage is counted once per provider request/continuation. Disabling display does not disable accounting.
-- Narrow layouts omit folder/repository first and truncate rather than wrap; a frame too narrow for model/context/tokens emits no row. Every non-empty row occupies exactly the measured window width and uses reversed effective default colors across text and padding in each compiled theme.
-- Status remains ordinary native scrollback. Selection, `Ctrl+C`, exact paste, selectors, streaming, cancellation, resizing, and shutdown retain plan-03 behavior.
-- Disabled and redirected launches emit no status row or footer control sequences. `NO_COLOR` retains the same full-width semantic text row without reverse-video control sequences.
-- No permanently pinned row is expected: PrettyPrompt 6.0.4 has no public fixed-status API, and cursor-managed pinning remains deferred.
-
-### MTP-030A - Repository prompt changes safely (positive and negative)
-
-1. Enter `/open $ManualRoot` and complete trust/solution selection.
-2. Confirm the next composer prompt begins with the `$ManualRoot` directory name.
-3. Open another disposable repository and confirm the next prompt changes to that directory name.
-4. Attempt `/open` with a nonexistent repository.
-
-Expected:
-
-- Only a successful open changes the prompt.
-- The prompt contains only the bounded repository directory name, not its full path.
-- A failed/cancelled open retains the prior prompt and status; it never displays control sequences from a path.
+Retired: use MTP-257 for the retained TUIKit frontend.
 
 ### MTP-030B - Startup menu cancellation exits cleanly (positive)
 
@@ -699,13 +615,12 @@ Expected:
 ### MTP-031 - Multiline compose and submit (positive)
 
 1. In default TUIKit, type `first line`, press `Ctrl+Enter`, type `second line`, then press `Enter`.
-2. Relaunch with `--tui=original` and repeat using `Shift+Enter` for the newline.
 
 Expected:
 
-- Ctrl+Enter in TUIKit and Shift+Enter in the original frontend insert a newline without submitting.
-- Enter submits both lines as one request in each frontend.
-- The committed composer entry and streamed response remain visible once, followed by a fresh composer; neither frontend adds redundant speaker labels.
+- Ctrl+Enter inserts a newline without submitting.
+- Enter submits both lines as one request.
+- The committed composer entry and streamed response remain visible once, followed by a fresh composer without redundant speaker labels.
 
 ### MTP-032 - Empty and unknown commands are rejected (negative)
 
@@ -922,7 +837,7 @@ Expected:
 - Reasoning content is hidden by default, transient `THINKING` disappears before final output, and the completed transcript contains no host-generated `THINKING` marker or redundant assistant label.
 - `/thinking on` streams future sanitized reasoning chunks using the `Reasoning` semantic style, `/thinking off` suppresses future reasoning chunks, and `/thinking` plus `Ctrl+T` toggle the same in-session state without enabling mouse capture.
 - Turning streaming off does not remove reasoning already present in the visible transcript.
-- The default TUIKit activity row remains active alongside visible reasoning until the answer is displayed or a completion, cancellation, review, or steering boundary ends the activity. The original frontend continues to release its transient spinner before streaming reasoning into native scrollback.
+- The TUIKit activity row remains active alongside visible reasoning until the answer is displayed or a completion, cancellation, review, or steering boundary ends the activity.
 - Reasoning-only completion emits no empty `Threadsmith:` label.
 - Mutation reasoning remains sanitized and separated from structured JSON, which stages normally.
 
@@ -2074,7 +1989,7 @@ Expected: interaction stays responsive and selectable, labels remain bounded, `T
 
 1. Run `pwsh -File eng/release/Test-ReleaseContracts.ps1`; confirm closed/current evidence, deterministic notice/SPDX output, expired-decision rejection, exact RID runtime staging, and aggregate compliance binding pass.
 2. On each maintained runner, build its two exact RIDs from an empty output root. Inspect the staged payload and resulting archive/installer for `LICENSE`, ripgrep provenance, `third-party/THIRD-PARTY-NOTICES.txt`, `third-party/sbom.spdx.json`, all three `third-party/dotnet-runtime/` files, and `release-compliance.json`.
-3. Confirm PrettyPrompt's MPL full text/source URL, SQLitePCLRaw's Apache/SQLite notice, TUIKit's MIT package license, and the supplemental embedded-font attribution/WTFPL notices appear. Confirm SBOM package identities and TUIKit's aggregate embedded-resource entry equal the exact reviewed restore closure.
+3. Confirm SQLitePCLRaw's Apache/SQLite notice, TUIKit's MIT package license, and the supplemental embedded-font attribution/WTFPL notices appear. Confirm SBOM package identities and TUIKit's aggregate embedded-resource entry equal the exact reviewed restore closure; retired frontend packages are absent.
 4. Remove or modify one runtime notice, SBOM, compliance sidecar, artifact, RID, or digest and confirm packaging/aggregate publication fails before attachment. Expire the Windows decision in a temporary evidence copy and confirm validation rejects it without changing repository authority.
 5. Rehearse Windows x64/arm64 install, upgrade, uninstall and legal-file accessibility; Linux x64/arm64 archive/install/uninstall; macOS x64/arm64 package/sign/notarize/install/uninstall. Confirm clean reruns, user-state preservation, immutable tag/head fencing, and no signing/OAuth canary leakage.
 
@@ -2094,17 +2009,17 @@ Expected: Useful unconstrained role responses with periodic, optional history re
 
 Run this on Windows Terminal/PowerShell, a Linux terminal, and macOS Terminal; record the OS, terminal, and dimensions for each run.
 
-1. Confirm `--tui` and `--tui=tuikit` both select TUIKit, while `--tui=original` selects PrettyPrompt/Spectre. Confirm `--tui=pretty`, empty/unknown selectors, and duplicate selectors fail before startup. Check MCP/auth precedence without creating a terminal UI.
+1. Confirm `--tui` and `--tui=tuikit` both select TUIKit. Confirm `--tui=original`, `--tui=pretty`, empty/unknown selectors, and duplicate selectors fail before startup. Check MCP/auth precedence without creating a terminal UI.
 2. Open a trusted solution with a deliberately delayed initial semantic load. Complete required trust/solution choices before the splash. Type and paste `hello` while the splash is active; confirm it is discarded and no run/model call or later submission results. Successful phase and remembered-solution text stays only in the splash. After readiness, type `next draft` and confirm it remains editable and unsent. Test queued input separately during an external semantic refresh after startup.
 3. Enter two lines using Ctrl+Enter. Confirm Ctrl+Enter inserts a newline and ordinary Enter moves the exact multiline text once into the retained transcript before submitting it. Verify the model request contains that text unchanged as the `current-user` message after sanitization. Repeat with multiline Unicode paste including combining marks and emoji, history, undo/redo, indentation, selection replacement, OS clipboard paste, and terminal bracketed paste.
 4. Confirm the repository prompt and first input cell share the same composer row and all four composer rows form one contiguous surface without partial-width background blocks. Confirm the status footer occupies the final terminal row with no blank row beneath it, remains fixed while output scrolls, and has no protruding cell or scroll artifact at the right edge.
 5. Open F1 help. Confirm it is a static list without a selection marker, arrow-key selection, or stray characters at the left edge; Esc closes it. Open model, reasoning, theme, repository/session, MCP, and retained-link selectors; confirm each clears the complete frame above the status row with no underlying characters visible at either edge. Verify F7 focus, F8 validated-link copying, F12 terminal-native selection handoff, and return to application mouse control.
 6. Select text in the transcript and composer, then press Ctrl+C. Confirm the selected text reaches the clipboard and the process remains running. Clear all selection and press Ctrl+C; confirm normal cancellation/exit behavior. Repeat with F6 and Ctrl+Shift+C according to the displayed help.
 7. Scroll up while a model run is active, let its answer finish, and confirm the ready prompt still shows an unseen-output notice at the start of the activity row at both 40 and 80 columns. Confirm F7 then End from the composer reveals the answer; with transcript focus the notice should say End. Verify resize below and above 40 x 12, F2 long option details, themes, and `NO_COLOR`. Run every Scenario AR workflow with the same scripted fixture and compare host outcomes. While output streams and a selector is open, verify the footer refreshes usage/context without moving focus or changing option IDs. Verify exact ordinary draft restoration after secondary/steering prompts and cancelled selections.
-8. Submit an ordinary greeting and a repository request. Confirm both invoke the configured model after applicable semantic admission, neither reports `ChannelClosedException` or `channel has been closed`, and commands, reviews, trust, session, repository, model, reasoning, tool, mutation, and cancellation outcomes match `--tui=original`.
+8. Submit an ordinary greeting and a repository request. Confirm both invoke the configured model after applicable semantic admission, neither reports `ChannelClosedException` or `channel has been closed`, and commands, reviews, trust, session, repository, model, reasoning, tool, mutation, and cancellation outcomes remain governed by the shared coordinator.
 9. Exit normally and via `/quit`, Ctrl+C, cancellation during a modal, startup failure, and render failure. Verify cooked input, echo, cursor, mouse reporting, bracketed paste, enhanced keyboard flags, and alternate-screen restoration.
 
-Expected: TUIKit is the default interactive frontend and the original remains explicitly available. Committed ordinary input remains visible once and is assembled as the exact `current-user` content; input is never silently discarded; retained rendering has no composer/help/footer artifacts; copy and newline keys match their documentation; shared host outcomes remain frontend-neutral; and every exit restores terminal state. Record observed results. A successful headless check is not a physical-terminal sign-off.
+Expected: TUIKit is the sole interactive frontend. Committed ordinary input remains visible once and is assembled as the exact `current-user` content; input is never silently discarded; retained rendering has no composer/help/footer artifacts; copy and newline keys match their documentation; shared host outcomes remain frontend-neutral; and every exit restores terminal state. Record observed results. A successful headless check is not a physical-terminal sign-off.
 
 ### MTP-259 - TUIKit Command Palette and Autocomplete
 
@@ -2117,7 +2032,7 @@ Prerequisites: run `threadsmith --tui=tuikit` in a supported interactive termina
 5. With suggestions visible near a wrapped/right-edge caret, resize smaller and larger. Confirm all shown names remain readable, selected rows remain distinct without color, the activity/status rows are untouched, and shrinking below 40 x 12 preserves drafts and blocks editing. Open another selector and verify it owns all input until closed.
 6. Cancel a pending read or shut down with the palette open. Confirm no late completion changes a new prompt. Exercise normal quit, Ctrl+C, active-run cancellation, and forced render failure; verify terminal restoration. Open F1 at minimum height and scroll to the final help entries.
 
-Expected: discovery only edits eligible command names; shared command execution begins only after separate submission. Exact drafts, focus, bounds, Unicode, themes, reserved rows, and terminal lifecycle remain intact. The original frontend has no new discovery UI. Record physical observations separately from headless test results.
+Expected: discovery only edits eligible command names; shared command execution begins only after separate submission. Exact drafts, focus, bounds, Unicode, themes, reserved rows, and terminal lifecycle remain intact. Record physical observations separately from headless test results.
 
 ### MTP-260 — Explicit memory operations and complete-input bounds
 
@@ -2222,7 +2137,7 @@ Prerequisites: a disposable repository with native and Claude-style skill fixtur
 3. Select an unverified maintained package, press F3, choose Verify, and confirm `[Maintained] enabled` appears immediately unless explicitly disabled. Verify a Claude package and confirm verification alone does not authorize it. Verify a filtered scope or format group and confirm only visible group members are touched.
 4. Use Space on leaves and groups to enable/disable several packages without closing. Include a large Claude group with one unsupported package: check progress and the partial completion count, then press Space again and confirm every eligible member is disabled. A mixed group disables on Space; a wholly disabled group enables. Press Esc during a slow toggle batch: the current package finishes, remaining packages are skipped, and the tree stays usable with acknowledged state. Confirm actual outcomes after policy rejection, an invalid asset, or revocation; repair a fixture and verify it again. Confirm an explicitly disabled maintained package stays disabled after verification. Close with Esc and inspect the same states with `/skills list` and `/skills inspect`.
 5. During a sufficiently slow verification, press Esc; confirm the operation stops, remaining group members are skipped, completed results remain, and the tree still accepts input. Change a selected catalog identity and refresh it through a controlled fixture; the old selection must request reopening instead of enabling new content.
-6. Exercise `/skills list`, `/skills refresh`, `/skills verify`, `/skills enable`, `/skills disable`, and an existing workflow command. Run bare `/skills` with the original frontend and use its Verify/Enable/Disable choices. Recheck `/tools` filtered group toggles and MCP's individual authentication actions.
+6. Exercise `/skills list`, `/skills refresh`, `/skills verify`, `/skills enable`, `/skills disable`, and an existing workflow command. Recheck `/tools` filtered group toggles and MCP's individual authentication actions.
 
 Expected: all outcomes use shared host commands and existing trust rules; failed/cancelled actions never appear as successful, unsigned Claude authorization remains explicit, and completed changes survive closing. Record physical terminal dimensions, theme, keyboard protocol, and resize/cancellation results separately from headless terminal checks.
 
@@ -2232,7 +2147,7 @@ Expected: all outcomes use shared host commands and existing trust rules; failed
 2. Launch a skill through model-driven `invoke_skill`. Confirm internal phase progress joins its existing tool block without a duplicate skill block. Observe concurrent tool/MCP work; completion must preserve sibling activity.
 3. Run an authorized remote branch comparison. Fetch progress must appear immediately, followed by ordinary `git_show` and `git_diff` tool activity during preparation. Confirm only source/base tips are fetched with depth one, no history/merge-base walk occurs, and changed files plus applicable instructions/requirements are captured.
 4. Confirm reviewer agents appear in the existing tabs when their assignments are admitted, and child tool/skill progress uses the same activity projection. Genuine host-input waits must release activity ownership; internal preparation must remain running.
-5. Repeat with the original frontend and a skill requesting host input. Its ordinary transient activity must yield to prompts, preserve outcome output, and join cancellation cleanup before session shutdown.
+5. Run a skill requesting host input. Its live activity must yield to prompts, preserve outcome output, and join cancellation cleanup before session shutdown.
 
 ## MTP-271 — Ordered context usage inspector
 
@@ -2244,7 +2159,7 @@ Expected: all outcomes use shared host commands and existing trust rules; failed
 4. In the disposable fixture, shorten the large instruction file or disable a tool through its existing workflow. Reopen without a new model request and confirm the captured snapshot is unchanged. Submit another request and verify the expected source/tool contribution changes; the inspector itself must not apply an edit, toggle, retrieval, or context rebuild.
 5. With an ongoing request, open and navigate the modal while tool events and completion occur. Verify stable captured rows, continued execution, and a newer snapshot on reopen. Exercise arrows, PageUp/PageDown, Home/End, Tab category/order switching, Esc, existing Ctrl+C interruption, and F12/mouse wheel where supported. Confirm Enter/Left/Right do not expand or collapse rows. Check preserved composer draft/focus and shutdown cleanup.
 6. Resize through 160x50, 120x35, 80x24, 40x12, and below minimum. Test current themes, long/CJK/combining-character paths, terminal-control labels, and a large metadata fixture. Confirm readable adaptive layout, safe labels, stable bar scale during scrolling, unchanged sidebar totals, and no unbounded off-screen surface. Recheck an ordinary existing modal's size/behavior.
-7. Start a new session, clone/resume, change the selected model after capture, and exercise unavailable/evicted metadata. Confirm captured identity/limits remain honest and historical prompt bodies are not loaded to reconstruct the chart. Repeat `/context map` with the original frontend and verify matching text totals and existing `/context`, `mode`, `inspect`, and `compact` behavior.
+7. Start a new session, clone/resume, change the selected model after capture, and exercise unavailable/evicted metadata. Confirm captured identity/limits remain honest and historical prompt bodies are not loaded to reconstruct the chart. Verify existing `/context`, `mode`, `inspect`, and `compact` behavior.
 
 8. With application mouse capture enabled, double-click the top-right Context meter on MAIN and compare with `/context map`. Repeat on the label, bar, percentage/capacity, and compact form after resizing. Verify one shared invocation/modal, including an unavailable snapshot, active execution, and a nonempty unsent draft. Close and confirm the draft is unchanged and no gesture became model input or steering. Try a single click, right-button double-click, drag, outside click, and triple-click; these must not open an extra dialog. Disable capture with F12 and verify terminal-owned selection remains available. Confirm existing modals/startup block the gesture and child meters never open unrelated MAIN accounting.
 
@@ -2282,7 +2197,7 @@ Expected: all outcomes use shared host commands and existing trust rules; failed
 9. Trigger a post-apply validation correction for a batch that originally claimed completion. Have the correction omit or contradict the hint. Confirm correction stays within the active approved step, retains the original completion intent, uses current source, repeats exact-diff authorization and validation, and cannot complete another step. Exercise one safely normalizable mutation shape and conflicting/invalid aliases; confirm only lossless unambiguous structure is normalized and other failures receive same-conversation corrective feedback.
 10. Configure small positive `planning:incrementalPlans:targetSteps` and `targetFiles` values. Use a larger objective that needs a second tranche, confirm the continuation request contains the original objective, cumulative authoritative receipt even with history disabled, current repository tools, plans-used count (including interrupted plans), and configured targets, then approve and execute the second ordinary plan. Confirm plan revision and ordinal advance while cumulative original-file/diff evidence and budget use remain on the same run. Continue beyond twelve plans and confirm `propose_plan` remains available while existing execution budgets, cancellation, and approval policy remain enforced. Return an ordinary explanation of remaining work or a question: neither may record success. Resume that boundary both in-process and after restart and confirm planning restarts without repeating mutations. Fail a later tranche and confirm the final receipt still reports previously completed steps, summaries, risks, and changed files.
 11. With incremental planning enabled, return `request_replan` alone with `{"reason":"Inspect the missing dependency before continuing."}` before the first mutation, after a partial step's fully authorized batch, and from a failed-validation correction. Confirm no new mutation is staged or applied, a visible `PlanReplanningPending` checkpoint retains current changes/progress/failures/budget, and ordinary evidence tools are available in the same planning conversation but not inside mutation generation. Confirm `complete_objective` is withheld and an attempted call receives existing corrective feedback. Inspect evidence, propose a replacement, and verify ordinary plan display/approval plus fresh exact-diff authorization before writes. Confirm retained diagnostic evidence prevents failed changes from becoming ignored baseline failures; cumulative scope/diff and completed steps survive. Pause and restart at this boundary without replaying mutations. Reject mixed mutation/replan decisions, duplicate reason properties, and empty reasons through the existing correction mechanism. Repeat replacement plans beyond twelve without count-based refusal. Disable incremental planning and confirm `request_replan` is not advertised.
-12. Repeat the successful, partial, corrected, interrupted, cancelled, and hard-limit cases through TUIKit, `--tui=original`, and headless execution. Confirm ordinary next-batch review is not labeled as a correction, plan completion is labeled as remaining-objective assessment, partial authorization reports the existing resume command, batch success is not terminal success, pending-review versus terminal state is consistent, and cancellation prevents future model requests.
+12. Repeat the successful, partial, corrected, interrupted, cancelled, and hard-limit cases through TUIKit and headless execution. Confirm ordinary next-batch review is not labeled as a correction, plan completion is labeled as remaining-objective assessment, partial authorization reports the existing resume command, batch success is not terminal success, pending-review versus terminal state is consistent, and cancellation prevents future model requests.
 13. Restore default mutation targets (`8` mutations, `3` distinct paths, and `24000` mutation-content characters) and plan targets (`4` steps and `8` paths). Run the maintained build and focused orchestration/mutation/core/architecture suites. When a live model is authorized, record profile/reasoning, time to first exact diff, total duration, request count, plan/batch counts, actual mutation/path counts, completion hints, corrections, and final content verification without recording prompts, source bodies, credentials, or provider payloads.
 
 **Expected:** Threadsmith proposes and approves one complete plan tranche before implementing it, then exposes useful exact diffs incrementally by host-selected approved step. A validated tranche or explicit replan request returns to the same ordinary planning loop. Only a validated tranche can offer objective completion; an unfinished tranche requires a replacement plan or a resumable pause. Soft targets guide but do not authorize or hard-reject coherent work. Every tranche and batch uses the existing formatter, proposal, correction, approval, exact-diff policy, transaction, validation, checkpoint, and shared presentation paths. Partial consent and interruption preserve honest durable progress, later work requires fresh authorization, and terminal success plus final net diff represent the complete multi-plan objective.

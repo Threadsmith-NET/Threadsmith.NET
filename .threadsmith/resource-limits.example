@@ -110,7 +110,6 @@
   },
   "tui": {
     "limits": {
-      "maximumBufferedKeys": 100000,
       "maximumDraftBytes": 1048576,
       "maximumUndoBytes": 1048576,
       "maximumUndoEntries": 200,

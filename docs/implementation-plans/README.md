@@ -157,6 +157,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-skills-management-dialog.md` | Hierarchical skill verification and enablement dialog |
 | Maintenance | `maintenance-mid-tranche-replanning.md` | Implementation-requested replanning through the ordinary conversation cycle |
 | Maintenance | `maintenance-test-suite-runtime-and-signal.md` | Incremental test runtime, reliability, and assertion-signal improvements |
+| Maintenance | `maintenance-retire-original-tui.md` | Retire the original scrollback frontend and its product dependencies |
 
 ## Update discipline
 

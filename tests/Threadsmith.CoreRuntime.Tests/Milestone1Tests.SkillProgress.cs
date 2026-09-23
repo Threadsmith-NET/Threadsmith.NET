@@ -6,7 +6,6 @@ using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Runs;
 using Threadsmith.Models;
-using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Verifies visible ownership before manual skill workflows reach a provider.</summary>

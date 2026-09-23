@@ -29,7 +29,6 @@ $notice = [Text.StringBuilder]::new()
 foreach ($package in $resolved) {
     $entry = @($approvedPackages | Where-Object { $_.id -eq $package.id -and $_.version -eq $package.version })[0]
     [void]$notice.AppendLine("================================================================================").AppendLine("$($entry.id) $($entry.version)").AppendLine("License: $($entry.licenseExpression)").AppendLine("Copyright: $($entry.copyrightText)").AppendLine("Source: $($entry.provenance)")
-    if ($entry.id -eq 'PrettyPrompt') { [void]$notice.AppendLine("MPL source availability: $($entry.sourceAvailability)") }
     [void]$notice.AppendLine().AppendLine((Get-Content -LiteralPath (Join-Path $PSScriptRoot ([string]$entry.licenseText)) -Raw).Trim()).AppendLine()
     if ($entry.PSObject.Properties.Name -contains 'additionalNotices') {
         foreach ($relativeNotice in $entry.additionalNotices) {

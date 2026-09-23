@@ -8,8 +8,6 @@ using System.Text.Json.Nodes;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
-using PrettyPrompt;
-using PrettyPrompt.Rendering;
 using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -21,11 +19,12 @@ using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Sessions;
+using Threadsmith.Interaction.Themes;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
-using Threadsmith.Tui;
+using Threadsmith.Tui.TuiKit;
 using Xunit;
 
 /// <summary>Verifies the complete Milestone 1 command, event, shell, and durability contracts.</summary>
@@ -814,13 +813,13 @@ public static partial class Milestone1Tests
 
     /// <summary>The TUI controller maps open, submit, wait, and cancel gestures to commands.</summary>
     [Fact]
-    public static async Task TuiController_DrivesInteractiveCommandBoundary()
+    public static async Task InteractionController_DrivesInteractiveCommandBoundary()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
             Turns = [new ScriptedTurn { Text = "interactive" }],
         });
-        var controller = new TuiController(new TuiPresenter(harness.Dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(harness.Dispatcher, harness.Projections));
 
         var sessionId = await controller.OpenAsync("TUI");
         var runId = await controller.SubmitAsync("request");
@@ -836,7 +835,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The interactive shell queues plan review only from explicit approval requests.</summary>
     [Fact]
-    public static void ConversationalShell_PlanReviewQueue_UsesApprovalRequestedOnly()
+    public static void InteractionCoordinator_PlanReviewQueue_UsesApprovalRequestedOnly()
     {
         var sessionId = SessionId.New();
         var now = DateTimeOffset.UtcNow;
@@ -862,7 +861,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The TUI controller routes cancellation through the application command boundary.</summary>
     [Fact]
-    public static async Task TuiController_CancelActiveRun_ProducesCancelledState()
+    public static async Task InteractionController_CancelActiveRun_ProducesCancelledState()
     {
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession
@@ -870,7 +869,7 @@ public static partial class Milestone1Tests
                 Turns = [new ScriptedTurn { Text = "cancel this interactive run" }],
             },
             TimeSpan.FromSeconds(1));
-        var controller = new TuiController(new TuiPresenter(harness.Dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(harness.Dispatcher, harness.Projections));
 
         await controller.OpenAsync("TUI");
         await controller.SubmitAsync("request");
@@ -883,10 +882,10 @@ public static partial class Milestone1Tests
 
     /// <summary>Discarding a staged mutation clears the correction guard before the next submission.</summary>
     [Fact]
-    public static async Task TuiController_DiscardStagedMutation_AllowsNextSubmission()
+    public static async Task InteractionController_DiscardStagedMutation_AllowsNextSubmission()
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: false);
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await controller.OpenAsync("TUI");
         await controller.SelectSolutionAsync(fixture.WorkspaceId, fixture.SolutionPath);
         fixture.Projections.Session = fixture.CreatePlanProjection();
@@ -903,10 +902,10 @@ public static partial class Milestone1Tests
 
     /// <summary>A review-ready mutation can be loaded without waiting for execution-checkpoint hydration.</summary>
     [Fact]
-    public static async Task TuiController_LoadMutationReview_AllowsAutoApprovedPlanMutationReview()
+    public static async Task InteractionController_LoadMutationReview_AllowsAutoApprovedPlanMutationReview()
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: false);
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await controller.OpenAsync("TUI");
         await controller.SelectSolutionAsync(fixture.WorkspaceId, fixture.SolutionPath);
         var projection = fixture.CreatePlanProjection();
@@ -935,10 +934,10 @@ public static partial class Milestone1Tests
 
     /// <summary>Interrupted post-apply validation keeps the controller guard so new work cannot start.</summary>
     [Fact]
-    public static async Task TuiController_PostApplyValidationFailure_RetainsRunGuard()
+    public static async Task InteractionController_PostApplyValidationFailure_RetainsRunGuard()
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: true);
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await StageAndApplyMutationAsync(controller, fixture);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -952,10 +951,10 @@ public static partial class Milestone1Tests
 
     /// <summary>Interrupted post-apply validation can be retried through the retained run identity.</summary>
     [Fact]
-    public static async Task TuiController_PostApplyValidationFailure_CanRetryRetainedRun()
+    public static async Task InteractionController_PostApplyValidationFailure_CanRetryRetainedRun()
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: true);
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await StageAndApplyMutationAsync(controller, fixture);
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             controller.ResumeAppliedMutationValidationAsync(fixture.RunId));
@@ -970,10 +969,10 @@ public static partial class Milestone1Tests
 
     /// <summary>Terminal post-apply validation releases the controller guard.</summary>
     [Fact]
-    public static async Task TuiController_PostApplyValidationCompleted_ReleasesRunGuard()
+    public static async Task InteractionController_PostApplyValidationCompleted_ReleasesRunGuard()
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: false);
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await StageAndApplyMutationAsync(controller, fixture);
 
         var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
@@ -984,20 +983,20 @@ public static partial class Milestone1Tests
 
     /// <summary>A partial-approval pause retains the existing explicit retry route and run guard.</summary>
     [Fact]
-    public static async Task TuiController_PartialApprovalPause_RemainsResumable()
+    public static async Task InteractionController_PartialApprovalPause_RemainsResumable()
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: false)
         {
             ResumePhase = ExecutionCheckpointPhase.ContinuationPending,
         };
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await StageAndApplyMutationAsync(controller, fixture);
 
         var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
 
         Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, continuation.Phase);
         Assert.Equal(fixture.RunId, controller.BackgroundValidationRunId);
-        (var message, var role) = ConversationalShell.FormatPostApplyValidationResult(continuation.Phase, string.Empty);
+        (var message, var role) = InteractionCoordinator.FormatPostApplyValidationResult(continuation.Phase, string.Empty);
         Assert.Contains("/validation retry", message, StringComparison.Ordinal);
         Assert.DoesNotContain("completed", message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(PresentationTextRole.Warning, role);
@@ -1007,7 +1006,7 @@ public static partial class Milestone1Tests
     [Theory]
     [InlineData(ExecutionCheckpointPhase.PlanContinuationPending, "assessing the remaining objective", PresentationTextRole.Status)]
     [InlineData(ExecutionCheckpointPhase.PlanReplanningPending, "applied changes are retained", PresentationTextRole.Warning)]
-    public static async Task TuiController_PlanContinuation_RestoresActiveRunAndReleasesValidationGuard(
+    public static async Task InteractionController_PlanContinuation_RestoresActiveRunAndReleasesValidationGuard(
         ExecutionCheckpointPhase phase,
         string expectedMessage,
         PresentationTextRole expectedRole)
@@ -1016,7 +1015,7 @@ public static partial class Milestone1Tests
         {
             ResumePhase = phase,
         };
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await StageAndApplyMutationAsync(controller, fixture);
 
         var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
@@ -1024,7 +1023,7 @@ public static partial class Milestone1Tests
         Assert.Equal(phase, continuation.Phase);
         Assert.Equal(fixture.RunId, controller.ActiveRunId);
         Assert.Null(controller.BackgroundValidationRunId);
-        (var message, var role) = ConversationalShell.FormatPostApplyValidationResult(
+        (var message, var role) = InteractionCoordinator.FormatPostApplyValidationResult(
             continuation.Phase,
             string.Empty);
         Assert.Contains(expectedMessage, message, StringComparison.Ordinal);
@@ -1033,12 +1032,12 @@ public static partial class Milestone1Tests
 
     /// <summary>Post-apply validation failure is not presented as successful completion.</summary>
     [Fact]
-    public static void ConversationalShell_PostApplyValidationFailure_IsReportedSeparately()
+    public static void InteractionCoordinator_PostApplyValidationFailure_IsReportedSeparately()
     {
-        (var failedMessage, var failedRole) = ConversationalShell.FormatPostApplyValidationResult(
+        (var failedMessage, var failedRole) = InteractionCoordinator.FormatPostApplyValidationResult(
             ExecutionCheckpointPhase.Failed,
             " (1.7s)");
-        (var completedMessage, var completedRole) = ConversationalShell.FormatPostApplyValidationResult(
+        (var completedMessage, var completedRole) = InteractionCoordinator.FormatPostApplyValidationResult(
             ExecutionCheckpointPhase.Completed,
             " (1.7s)");
 
@@ -1051,15 +1050,15 @@ public static partial class Milestone1Tests
 
     /// <summary>Post-apply validation start remains visible when no semantic-check activity will follow.</summary>
     [Fact]
-    public static void ConversationalShell_PostApplyValidationStart_RendersWhenSemanticStageIsDisabled()
+    public static void InteractionCoordinator_PostApplyValidationStart_RendersWhenSemanticStageIsDisabled()
     {
-        Assert.Null(ConversationalShell.FormatPostApplyValidationStartSegments(
+        Assert.Null(InteractionCoordinator.FormatPostApplyValidationStartSegments(
         [
             MutationValidationStage.Semantic,
             MutationValidationStage.Compile,
         ]));
 
-        var segments = ConversationalShell.FormatPostApplyValidationStartSegments(
+        var segments = InteractionCoordinator.FormatPostApplyValidationStartSegments(
         [
             MutationValidationStage.Compile,
             MutationValidationStage.Diagnostics,
@@ -1089,13 +1088,13 @@ public static partial class Milestone1Tests
 
     /// <summary>Post-apply correction review restores the owning active run for discard cancellation.</summary>
     [Fact]
-    public static async Task TuiController_PostApplyCorrectionReview_RestoresActiveRunForDiscard()
+    public static async Task InteractionController_PostApplyCorrectionReview_RestoresActiveRunForDiscard()
     {
         var fixture = new PostApplyValidationFixture(throwOnResume: false)
         {
             ResumePhase = ExecutionCheckpointPhase.MutationApprovalPending,
         };
-        var controller = new TuiController(new TuiPresenter(fixture.Dispatcher, fixture.Projections));
+        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
         await StageAndApplyMutationAsync(controller, fixture);
 
         var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
@@ -1173,14 +1172,14 @@ public static partial class Milestone1Tests
             StringComparison.Ordinal);
     }
 
-    /// <summary>The inline shell starts without a full-screen driver and exits through its command loop.</summary>
+    /// <summary>The coordinator starts and exits through the shared command loop.</summary>
     [Fact]
-    public static async Task ConversationalShell_Quit_UsesNativeTerminalSurface()
+    public static async Task InteractionCoordinator_Quit_UsesInteractionSurface()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1414,7 +1413,7 @@ public static partial class Milestone1Tests
 
     /// <summary>An empty-composer output yield rebuilds status before the shell reads the composer again.</summary>
     [Fact]
-    public static async Task ConversationalShell_IdleOutputYield_RendersStatusBeforeNextComposer()
+    public static async Task InteractionCoordinator_IdleOutputYield_RendersStatusBeforeNextComposer()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(
@@ -1424,8 +1423,8 @@ public static partial class Milestone1Tests
                 string.Empty,
                 CancellationToken.None,
                 InteractionInputKind.IdleOutputYield));
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1442,7 +1441,7 @@ public static partial class Milestone1Tests
     [Theory]
     [InlineData("Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n", "1")]
     [InlineData("Mutation review: 1 apply approved set, 2 discard\n", "2")]
-    public static async Task ConversationalShell_SecondaryReviewYield_RetriesWithoutChoosing(
+    public static async Task InteractionCoordinator_SecondaryReviewYield_RetriesWithoutChoosing(
         string prompt,
         string response)
     {
@@ -1470,7 +1469,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The inline shell routes lifecycle-hook management locally through /hooks.</summary>
     [Fact]
-    public static async Task ConversationalShell_HooksCommand_ListsConfiguredHandlers()
+    public static async Task InteractionCoordinator_HooksCommand_ListsConfiguredHandlers()
     {
         var hookStore = new InMemoryHookStore();
         var descriptor = HookDescriptorValidator.Normalize([
@@ -1499,8 +1498,8 @@ public static partial class Milestone1Tests
             new ScriptedSession(),
             additionalHandlers: [hookApplication]);
         var surface = new FakeConsoleSurface(["/hooks list", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1654,15 +1653,15 @@ public static partial class Milestone1Tests
 
     /// <summary>The inline shell parses MCP capability-kind filters and dispatches them through Core contracts.</summary>
     [Fact]
-    public static async Task ConversationalShell_McpCapabilities_DispatchesSharedManagerRequest()
+    public static async Task InteractionCoordinator_McpCapabilities_DispatchesSharedManagerRequest()
     {
         var mcpHandler = new RecordingMcpManagementHandler();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             additionalHandlers: [mcpHandler]);
         var surface = new FakeConsoleSurface(["/mcp capabilities fixture tools", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1678,7 +1677,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The inline MCP parser preserves quoted resource and prompt argument values.</summary>
     [Fact]
-    public static async Task ConversationalShell_McpPrompt_PreservesQuotedArgumentValue()
+    public static async Task InteractionCoordinator_McpPrompt_PreservesQuotedArgumentValue()
     {
         var mcpHandler = new RecordingMcpManagementHandler();
         await using var harness = await SessionHarness.CreateAsync(
@@ -1686,8 +1685,8 @@ public static partial class Milestone1Tests
             additionalHandlers: [mcpHandler]);
         var surface = new FakeConsoleSurface(
             ["/mcp prompt get fixture fixture:prompt:review name=\"review this file\"", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1701,12 +1700,12 @@ public static partial class Milestone1Tests
 
     /// <summary>Disabling the status surface leaves the composer operational and reports the selected mode once.</summary>
     [Fact]
-    public static async Task ConversationalShell_DisabledSessionStatus_DoesNotRenderRow()
+    public static async Task InteractionCoordinator_DisabledSessionStatus_DoesNotRenderRow()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             showSessionStatus: false);
@@ -1722,12 +1721,12 @@ public static partial class Milestone1Tests
 
     /// <summary>A surface that cannot safely display status suppresses it without affecting input.</summary>
     [Fact]
-    public static async Task ConversationalShell_SuppressedSessionStatus_StillReadsComposer()
+    public static async Task InteractionCoordinator_SuppressedSessionStatus_StillReadsComposer()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/quit"], suppressSessionStatus: true);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1743,7 +1742,7 @@ public static partial class Milestone1Tests
     [InlineData("unauthorized")]
     [InlineData("timeout")]
     [InlineData("removed")]
-    public static async Task ConversationalShell_CurrentBranchUnavailable_ReturnsNull(string failureKind)
+    public static async Task InteractionCoordinator_CurrentBranchUnavailable_ReturnsNull(string failureKind)
     {
         Exception failure = failureKind switch
         {
@@ -1753,7 +1752,7 @@ public static partial class Milestone1Tests
             _ => throw new ArgumentOutOfRangeException(nameof(failureKind)),
         };
 
-        var branch = await ConversationalShell.ResolveCurrentBranchAsync(
+        var branch = await InteractionCoordinator.ResolveCurrentBranchAsync(
             new FailingGitQueryService(failure),
             "repository",
             repositoryIsOpen: true,
@@ -1766,15 +1765,15 @@ public static partial class Milestone1Tests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public static async Task ConversationalShell_ProviderFailure_RendersOncePerTurn(bool retainsActivity)
+    public static async Task InteractionCoordinator_ProviderFailure_RendersOncePerTurn(bool retainsActivity)
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
             Turns = [new ScriptedTurn { Failure = ScriptFailureKind.TransientProvider }],
         });
         var surface = new FakeConsoleSurface(["first", "second", "/quit"], retainsActivity: retainsActivity);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1790,7 +1789,7 @@ public static partial class Milestone1Tests
 
     /// <summary>A failed waiter without terminal events remains visible and does not block the next prompt.</summary>
     [Fact]
-    public static async Task ConversationalShell_UnreportedWaitFailure_RemainsVisible()
+    public static async Task InteractionCoordinator_UnreportedWaitFailure_RemainsVisible()
     {
         var sessionId = SessionId.New();
         var projections = new InMemoryProjectionStore();
@@ -1803,8 +1802,8 @@ public static partial class Milestone1Tests
         });
         const string message = "Unreported waiter failure.";
         var surface = new FakeConsoleSurface(["request", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(new FixedRunDispatcher(sessionId, RunId.New(), message), projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(new FixedRunDispatcher(sessionId, RunId.New(), message), projections),
             new DomainEventStream(),
             surface);
 
@@ -1815,15 +1814,15 @@ public static partial class Milestone1Tests
 
     /// <summary>Submitted prompts retain raw state while one semantic answer is emitted into terminal scrollback.</summary>
     [Fact]
-    public static async Task ConversationalShell_Submission_RendersOneCopyableSemanticAnswer()
+    public static async Task InteractionCoordinator_Submission_RendersOneCopyableSemanticAnswer()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
             Turns = [new ScriptedTurn { Text = "amber reply", Usage = new ModelUsage(11, 4) }],
         });
         var surface = new FakeConsoleSurface(["hi", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             sessionUsage: harness.Usage);
@@ -1855,7 +1854,7 @@ public static partial class Milestone1Tests
 
     /// <summary>A large multiline paste reaches the command boundary as one unchanged submission.</summary>
     [Fact]
-    public static async Task ConversationalShell_LargeMultilinePaste_IsNotReplayedPerCharacter()
+    public static async Task InteractionCoordinator_LargeMultilinePaste_IsNotReplayedPerCharacter()
     {
         var pastedText = " leading line\n" + new string('x', 100_000) + "\ntrailing line ";
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
@@ -1863,8 +1862,8 @@ public static partial class Milestone1Tests
             Turns = [new ScriptedTurn { Text = "received" }],
         });
         var surface = new FakeConsoleSurface([pastedText, "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1878,12 +1877,12 @@ public static partial class Milestone1Tests
 
     /// <summary>An unknown slash command is rejected locally instead of reaching the model.</summary>
     [Fact]
-    public static async Task ConversationalShell_UnknownCommand_IsNotSubmitted()
+    public static async Task InteractionCoordinator_UnknownCommand_IsNotSubmitted()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/destructive-mystery", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1895,13 +1894,13 @@ public static partial class Milestone1Tests
 
     /// <summary>An overlong fetch authorization chain is reported locally without escaping the shell boundary.</summary>
     [Fact]
-    public static async Task ConversationalShell_OverlongFetchAuthorizationChain_IsRejectedLocally()
+    public static async Task InteractionCoordinator_OverlongFetchAuthorizationChain_IsRejectedLocally()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface([]);
         var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions { MaximumRedirects = 1 });
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             webFetchAuthorization: authority);
@@ -1921,12 +1920,12 @@ public static partial class Milestone1Tests
 
     /// <summary>The trust host command is discoverable and fails closed without an open repository.</summary>
     [Fact]
-    public static async Task ConversationalShell_TrustWithoutRepository_IsRejectedLocally()
+    public static async Task InteractionCoordinator_TrustWithoutRepository_IsRejectedLocally()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/help", "/trust build", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -1942,7 +1941,7 @@ public static partial class Milestone1Tests
     [InlineData(ReasoningControllability.Selectable, "selectable (none, low, medium, high)")]
     [InlineData(ReasoningControllability.AlwaysOn, "always on (not user-controllable)")]
     [InlineData(ReasoningControllability.Unsupported, "unsupported")]
-    public static async Task ConversationalShell_ReasoningNoArg_ShowsSingleCapabilitySummary(
+    public static async Task InteractionCoordinator_ReasoningNoArg_ShowsSingleCapabilitySummary(
         ReasoningControllability controllability,
         string expectedControl)
     {
@@ -1966,8 +1965,8 @@ public static partial class Milestone1Tests
         var preferences = new SessionModelPreferences();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             catalog,
@@ -1985,7 +1984,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The command uses the effective profile identity even without a separate startup preference.</summary>
     [Fact]
-    public static async Task ConversationalShell_ReasoningNoArg_UsesSharedEffectiveProfileIdentity()
+    public static async Task InteractionCoordinator_ReasoningNoArg_UsesSharedEffectiveProfileIdentity()
     {
         var profileId = new ModelProfileId(Guid.NewGuid());
         var profile = CreateReasoningProfile(
@@ -1996,8 +1995,8 @@ public static partial class Milestone1Tests
         var preferences = new SessionModelPreferences(profileId, ReasoningLevel.Medium);
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             catalog,
@@ -2012,7 +2011,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The command follows a workload-driven profile transition instead of the startup profile.</summary>
     [Fact]
-    public static async Task ConversationalShell_ReasoningNoArg_FollowsRuntimeProfileTransition()
+    public static async Task InteractionCoordinator_ReasoningNoArg_FollowsRuntimeProfileTransition()
     {
         var startupId = new ModelProfileId(Guid.NewGuid());
         var runtimeId = new ModelProfileId(Guid.NewGuid());
@@ -2023,8 +2022,8 @@ public static partial class Milestone1Tests
         Assert.Equal(ReasoningLevel.None, preferences.ResolveFor(runtimeId));
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             catalog,
@@ -2043,7 +2042,7 @@ public static partial class Milestone1Tests
     [InlineData("medium")]
     [InlineData("xhigh")]
     [InlineData("provider-Custom")]
-    public static async Task ConversationalShell_ReasoningWithLevel_SetsSessionPreference(string reasoning)
+    public static async Task InteractionCoordinator_ReasoningWithLevel_SetsSessionPreference(string reasoning)
     {
         var profileId = new ModelProfileId(Guid.NewGuid());
         var profile = CreateReasoningProfile(
@@ -2054,8 +2053,8 @@ public static partial class Milestone1Tests
         var preferences = new SessionModelPreferences();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface([$"/reasoning {reasoning}", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             catalog,
@@ -2071,7 +2070,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The /reasoning command rejects an unknown level string.</summary>
     [Fact]
-    public static async Task ConversationalShell_ReasoningUnknownLevel_ShowsError()
+    public static async Task InteractionCoordinator_ReasoningUnknownLevel_ShowsError()
     {
         var profileId = new ModelProfileId(Guid.NewGuid());
         var profile = CreateReasoningProfile(
@@ -2082,8 +2081,8 @@ public static partial class Milestone1Tests
         var preferences = new SessionModelPreferences();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/reasoning bogus", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             catalog,
@@ -2098,7 +2097,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The /reasoning command rejects a level not supported by the active model.</summary>
     [Fact]
-    public static async Task ConversationalShell_ReasoningUnsupportedLevel_ShowsError()
+    public static async Task InteractionCoordinator_ReasoningUnsupportedLevel_ShowsError()
     {
         var profileId = new ModelProfileId(Guid.NewGuid());
         var profile = CreateReasoningProfile(
@@ -2109,8 +2108,8 @@ public static partial class Milestone1Tests
         var preferences = new SessionModelPreferences(profileId, ReasoningLevel.Medium);
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/reasoning high", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             catalog,
@@ -2125,12 +2124,12 @@ public static partial class Milestone1Tests
 
     /// <summary>The /reasoning command reports no model when no catalog is configured.</summary>
     [Fact]
-    public static async Task ConversationalShell_ReasoningWithoutModel_ShowsNoModelConfigured()
+    public static async Task InteractionCoordinator_ReasoningWithoutModel_ShowsNoModelConfigured()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/reasoning", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -2141,7 +2140,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The code_explore output commands route through host-owned per-session state.</summary>
     [Fact]
-    public static async Task ConversationalShell_CodeExploreOutputCommands_UpdateHostSessionOptions()
+    public static async Task InteractionCoordinator_CodeExploreOutputCommands_UpdateHostSessionOptions()
     {
         var options = new CodeExploreOutputOptions();
         await using var harness = await SessionHarness.CreateAsync(
@@ -2152,8 +2151,8 @@ public static partial class Milestone1Tests
             "/code_explore_inspect on",
             "/quit",
         ]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             codeExploreOutputOptions: options);
@@ -2178,12 +2177,12 @@ public static partial class Milestone1Tests
 
     /// <summary>The /help text contains every command alphabetically and preserves aligned descriptions.</summary>
     [Fact]
-    public static async Task ConversationalShell_HelpIsCompleteAlphabeticalAndAligned()
+    public static async Task InteractionCoordinator_HelpIsCompleteAlphabeticalAndAligned()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/help", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -2265,15 +2264,15 @@ public static partial class Milestone1Tests
 
     /// <summary>The /plan-policy command uses the shared command boundary and reports the selected policy.</summary>
     [Fact]
-    public static async Task ConversationalShell_PlanPolicyCommand_UsesCommandBoundary()
+    public static async Task InteractionCoordinator_PlanPolicyCommand_UsesCommandBoundary()
     {
         var planPolicy = new RecordingPlanApprovalPolicyHandler();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             additionalHandlers: [planPolicy]);
         var surface = new FakeConsoleSurface(["/plan-policy ReviewRisky", "/plan-policy current", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             planApprovalPolicy: planPolicy);
@@ -2284,27 +2283,6 @@ public static partial class Milestone1Tests
         Assert.Equal(["repository"], planPolicy.Scopes);
         Assert.Contains("Plan policy changed to ReviewRisky.", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Current plan policy: ReviewRisky.", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>Ctrl+T toggles thinking streaming only from an empty composer so typed input is preserved.</summary>
-    [Fact]
-    public static async Task PrettyPromptConsoleSurface_ControlT_MapsToThinkingToggleOnEmptyInput()
-    {
-        IPromptCallbacks callbacks = new PrettyPromptConsoleSurface.ThinkingPromptCallbacks();
-        var key = new ConsoleKeyInfo(
-            '\u0014',
-            ConsoleKey.T,
-            shift: false,
-            alt: false,
-            control: true);
-
-        Assert.True(callbacks.TryGetKeyPressCallbacks(key, out var callback));
-        Assert.NotNull(callback);
-        var emptyResult = await callback(string.Empty, 0, CancellationToken.None);
-        var typedResult = await callback("draft", 5, CancellationToken.None);
-
-        Assert.NotNull(emptyResult);
-        Assert.Null(typedResult);
     }
 
     /// <summary>Session usage replaces duplicate request observations and accumulates distinct rounds.</summary>
@@ -2347,7 +2325,7 @@ public static partial class Milestone1Tests
 
         Assert.NotEmpty(rendered);
         Assert.DoesNotContain('\n', rendered);
-        Assert.True(UnicodeWidth.GetWidth(rendered.AsSpan()) <= 80);
+        Assert.True(UnicodeWidth.GetWidth(rendered) <= 80);
         Assert.Contains("model ", rendered, StringComparison.Ordinal);
         Assert.Contains("(high)", rendered, StringComparison.Ordinal);
         Assert.Contains("ctx ~12k/32k 38%", rendered, StringComparison.Ordinal);
@@ -2452,7 +2430,7 @@ public static partial class Milestone1Tests
         var rendered = TuiSessionStatusFormatter.Format(status, width, " | ");
 
         Assert.DoesNotContain('\n', rendered);
-        Assert.True(string.IsNullOrEmpty(rendered) || UnicodeWidth.GetWidth(rendered.AsSpan()) == width);
+        Assert.True(string.IsNullOrEmpty(rendered) || UnicodeWidth.GetWidth(rendered) == width);
         if (!string.IsNullOrEmpty(rendered))
         {
             Assert.Contains("ctx ", rendered, StringComparison.Ordinal);
@@ -2495,7 +2473,7 @@ public static partial class Milestone1Tests
         var rendered = TuiSessionStatusFormatter.Format(status, 60, "｜");
 
         Assert.NotEmpty(rendered);
-        Assert.Equal(60, UnicodeWidth.GetWidth(rendered.AsSpan()));
+        Assert.Equal(60, UnicodeWidth.GetWidth(rendered));
         Assert.Contains("(high)", rendered, StringComparison.Ordinal);
         Assert.Contains('…', rendered);
     }
@@ -2772,8 +2750,8 @@ public static partial class Milestone1Tests
 
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             themePreferences: preferences);
@@ -2816,7 +2794,7 @@ public static partial class Milestone1Tests
 
     /// <summary>The theme command persists the user default, reports current state, and rejects unknown ids.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThemeCommands_PersistUserDefault()
+    public static async Task InteractionCoordinator_ThemeCommands_PersistUserDefault()
     {
         var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
         var configurationPath = Path.Combine(directory, "config.json");
@@ -2842,8 +2820,8 @@ public static partial class Milestone1Tests
             var surface = new FakeConsoleSurface(
                 ["/theme", "/theme current", "/theme missing", "/theme", "/quit"],
                 [1]);
-            var shell = new ConversationalShell(
-                new TuiPresenter(harness.Dispatcher, harness.Projections),
+            var shell = CreateCoordinator(
+                new InteractionPresenter(harness.Dispatcher, harness.Projections),
                 harness.EventStream,
                 surface,
                 themePreferences: preferences,
@@ -2960,7 +2938,7 @@ public static partial class Milestone1Tests
 
     /// <summary>A failed user-default write leaves the active theme unchanged.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThemePersistenceFailure_LeavesSelectionUnchanged()
+    public static async Task InteractionCoordinator_ThemePersistenceFailure_LeavesSelectionUnchanged()
     {
         var directory = Path.Combine(Path.GetTempPath(), "Threadsmith", "theme-tests", Guid.NewGuid().ToString("N"));
         var configurationPath = Path.Combine(directory, "config.json");
@@ -2971,8 +2949,8 @@ public static partial class Milestone1Tests
             await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
             var preferences = new SessionThemePreferences(new ConfiguredThemeCatalog(BuiltInThemes.Create()), "system");
             var surface = new FakeConsoleSurface(["/theme forge-dark", "/quit"]);
-            var shell = new ConversationalShell(
-                new TuiPresenter(harness.Dispatcher, harness.Projections),
+            var shell = CreateCoordinator(
+                new InteractionPresenter(harness.Dispatcher, harness.Projections),
                 harness.EventStream,
                 surface,
                 themePreferences: preferences,
@@ -2992,13 +2970,13 @@ public static partial class Milestone1Tests
 
     /// <summary>The tools command lists metadata, protects essential tools, and persists optional toggles.</summary>
     [Fact]
-    public static async Task ConversationalShell_ToolsCommand_ManagesRepositoryAvailability()
+    public static async Task InteractionCoordinator_ToolsCommand_ManagesRepositoryAvailability()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var toolStates = new FakeToolStateManager();
         var surface = new FakeConsoleSurface(["/tools", "/quit"], [0, 1, 2]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             toolStateManager: toolStates);
@@ -3015,15 +2993,15 @@ public static partial class Milestone1Tests
 
     /// <summary>The policy command lists every policy, changes state, reports current state, and warns for persistent trust.</summary>
     [Fact]
-    public static async Task ConversationalShell_PolicyCommand_ChangesAndReportsPolicy()
+    public static async Task InteractionCoordinator_PolicyCommand_ChangesAndReportsPolicy()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var policy = new FakeMutationApprovalPolicy();
         var surface = new FakeConsoleSurface(
             ["/policy", "/policy current", "/policy missing", "/quit"],
             [4]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface,
             mutationApprovalPolicy: policy);
@@ -3389,7 +3367,7 @@ public static partial class Milestone1Tests
 
     /// <summary>Reasoning is hidden by default and streams only while the thinking toggle is enabled.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThinkingOn_StreamsFutureReasoningUntilOff()
+    public static async Task InteractionCoordinator_ThinkingOn_StreamsFutureReasoningUntilOff()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
@@ -3403,8 +3381,8 @@ public static partial class Milestone1Tests
             ],
         });
         var surface = new FakeConsoleSurface(["/thinking on", "hello", "/thinking off", "hello again", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -3426,7 +3404,7 @@ public static partial class Milestone1Tests
 
     /// <summary>Streaming reasoning takes permanent scrollback ownership from transient thinking activity.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThinkingStreaming_DoesNotRestartTransientActivity()
+    public static async Task InteractionCoordinator_ThinkingStreaming_DoesNotRestartTransientActivity()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession
         {
@@ -3440,8 +3418,8 @@ public static partial class Milestone1Tests
             ],
         });
         var surface = new FakeConsoleSurface(["/thinking on", "hello", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -3474,14 +3452,14 @@ public static partial class Milestone1Tests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public static async Task ConversationalShell_ThinkingStreaming_RetainsActivityWhenSupported(bool retainsActivity)
+    public static async Task InteractionCoordinator_ThinkingStreaming_RetainsActivityWhenSupported(bool retainsActivity)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
         var provider = new PausedReasoningModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["/thinking on", "hello", "/quit"], retainsActivity: retainsActivity);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
@@ -3524,12 +3502,12 @@ public static partial class Milestone1Tests
 
     /// <summary><c>/thinking</c> without arguments toggles future reasoning streaming.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThinkingNoArgument_TogglesStreamingMode()
+    public static async Task InteractionCoordinator_ThinkingNoArgument_TogglesStreamingMode()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/thinking", "/thinking", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -3541,12 +3519,12 @@ public static partial class Milestone1Tests
 
     /// <summary>Invalid <c>/thinking</c> arguments are rejected locally.</summary>
     [Fact]
-    public static async Task ConversationalShell_ThinkingInvalidArgument_ShowsUsage()
+    public static async Task InteractionCoordinator_ThinkingInvalidArgument_ShowsUsage()
     {
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
         var surface = new FakeConsoleSurface(["/thinking maybe", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -3558,15 +3536,15 @@ public static partial class Milestone1Tests
 
     /// <summary>Answer-only model turns show transient thinking status while the request is pending.</summary>
     [Fact]
-    public static async Task ConversationalShell_AnswerOnlyTurn_ShowsThinkingStatus()
+    public static async Task InteractionCoordinator_AnswerOnlyTurn_ShowsThinkingStatus()
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         var provider = new GatedAnswerModelProvider(leadingWhitespace: false);
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -3590,13 +3568,13 @@ public static partial class Milestone1Tests
     [Theory]
     [InlineData(ToolActivitySourceKind.Mcp, "MCP: Green Street/search_sectors")]
     [InlineData(ToolActivitySourceKind.BuiltIn, "TOOLS: search_sectors")]
-    public static async Task ConversationalShell_ToolStartIsVisibleBeforeCompletion(ToolActivitySourceKind kind, string label)
+    public static async Task InteractionCoordinator_ToolStartIsVisibleBeforeCompletion(ToolActivitySourceKind kind, string label)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"], retainsActivity: true);
-        var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
@@ -3635,13 +3613,13 @@ public static partial class Milestone1Tests
     [InlineData(true, OperationActivityOutcome.Failed)]
     [InlineData(true, OperationActivityOutcome.Cancelled)]
     [InlineData(false, OperationActivityOutcome.TimedOut)]
-    public static async Task ConversationalShell_ConcurrentMcpCallsKeepTheirOwnActivityAndOutcome(bool reverse, OperationActivityOutcome outcome)
+    public static async Task InteractionCoordinator_ConcurrentMcpCallsKeepTheirOwnActivityAndOutcome(bool reverse, OperationActivityOutcome outcome)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new ConcurrentToolConsoleSurface();
-        var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
@@ -3690,13 +3668,13 @@ public static partial class Milestone1Tests
 
     /// <summary>Agent progress reaches the live tool before completion and is retained once beneath its timer.</summary>
     [Fact]
-    public static async Task ConversationalShell_DelegationProgressUpdatesInsideItsTool()
+    public static async Task InteractionCoordinator_DelegationProgressUpdatesInsideItsTool()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(new ScriptedSession(), modelProvider: provider);
         var surface = new AgentToolConsoleSurface();
-        var shell = new ConversationalShell(new TuiPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+        var shell = CreateCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model", cancellationToken: timeout.Token);
         try
         {
@@ -3755,15 +3733,15 @@ public static partial class Milestone1Tests
 
     /// <summary>Overlapping semantic-check completion keeps the still-running semantic check live.</summary>
     [Fact]
-    public static async Task ConversationalShell_OverlappingSemanticChecks_KeepsDisplayedRunningCheckActive()
+    public static async Task InteractionCoordinator_OverlappingSemanticChecks_KeepsDisplayedRunningCheckActive()
     {
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
         var shellTask = shell.RunAsync(modelStatus: "Test model");
@@ -3841,15 +3819,15 @@ public static partial class Milestone1Tests
 
     /// <summary>Leading whitespace-only model chunks leave thinking active until visible answer text arrives.</summary>
     [Fact]
-    public static async Task ConversationalShell_LeadingWhitespace_KeepsThinkingActive()
+    public static async Task InteractionCoordinator_LeadingWhitespace_KeepsThinkingActive()
     {
         var provider = new GatedAnswerModelProvider();
         await using var harness = await SessionHarness.CreateAsync(
             new ScriptedSession(),
             modelProvider: provider);
         var surface = new FakeConsoleSurface(["hello", "/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -3872,7 +3850,7 @@ public static partial class Milestone1Tests
 
     /// <summary>Activity-display failures escape while a verbose active run fills the event dispatcher.</summary>
     [Fact]
-    public static async Task ConversationalShell_ActivityDisplayFailure_DuringVerboseRun_IsPropagated()
+    public static async Task InteractionCoordinator_ActivityDisplayFailure_DuringVerboseRun_IsPropagated()
     {
         var provider = new GatedAnswerModelProvider(trailingChunkCount: 1024);
         await using var harness = await SessionHarness.CreateAsync(
@@ -3880,8 +3858,8 @@ public static partial class Milestone1Tests
             modelProvider: provider);
         var expected = new InvalidOperationException("status rendering failed");
         var surface = new FakeConsoleSurface(["hello"], statusFailure: expected);
-        var shell = new ConversationalShell(
-            new TuiPresenter(harness.Dispatcher, harness.Projections),
+        var shell = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
             surface);
 
@@ -4562,9 +4540,9 @@ public static partial class Milestone1Tests
 
     /// <summary>The UI dispatcher processes a flood in bounded redraw batches without losing events.</summary>
     [Fact]
-    public static async Task UiEventDispatcher_Flooding_CoalescesWithoutLoss()
+    public static async Task InteractionEventDispatcher_Flooding_CoalescesWithoutLoss()
     {
-        var dispatcher = new UiEventDispatcher(2);
+        var dispatcher = new InteractionEventDispatcher(2);
         var sessionId = SessionId.New();
         IDomainEvent[] expected =
         [
@@ -4601,7 +4579,7 @@ public static partial class Milestone1Tests
         {
             Turns = [new ScriptedTurn { Text = "hello world" }],
         });
-        var controller = new TuiController(new TuiPresenter(harness.Dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(harness.Dispatcher, harness.Projections));
         await controller.OpenAsync("TUI");
         await controller.SubmitAsync("request");
         await controller.WaitForActiveRunAsync();
@@ -5224,24 +5202,96 @@ public static partial class Milestone1Tests
         }
     }
 
-    private class FakeConsoleSurface : IConsoleSurface
+    private static InteractionCoordinator CreateCoordinator(
+        InteractionPresenter presenter,
+        IDomainEventStream events,
+        FakeConsoleSurface surface,
+        ConfiguredModelCatalog? modelCatalog = null,
+        ModelProfileId? activeProfileId = null,
+        SessionModelPreferences? sessionPreferences = null,
+        IExtensionManager? extensionManager = null,
+        SessionThemePreferences? themePreferences = null,
+        SessionUsageProjection? sessionUsage = null,
+        bool showSessionStatus = true,
+        IToolStateManager? toolStateManager = null,
+        IMutationApprovalPolicy? mutationApprovalPolicy = null,
+        IPlanApprovalPolicy? planApprovalPolicy = null,
+        bool activeModelSelectionAvailable = false,
+        IClaudeSkillCompatibilityCatalog? claudeSkills = null,
+        bool sessionLifecycleAvailable = false,
+        TuiDisplayOptions? displayOptions = null,
+        TimeProvider? timeProvider = null,
+        IGitQueryService? gitQueries = null,
+        WebFetchAuthorizationAuthority? webFetchAuthorization = null,
+        DirectFetchApprovalPromptRouter? directFetchApprovalPrompt = null,
+        IThemePreferenceStore? themePreferenceStore = null,
+        IReadOnlyList<MutationValidationStage>? validationStages = null,
+        CodeExploreOutputOptions? codeExploreOutputOptions = null)
+    {
+        var themes = themePreferences ?? new SessionThemePreferences(
+            new ConfiguredThemeCatalog(BuiltInThemes.Create()),
+            BuiltInThemes.DefaultThemeId);
+        return new InteractionCoordinator(
+            presenter,
+            events,
+            surface,
+            modelCatalog,
+            activeProfileId,
+            sessionPreferences,
+            extensionManager,
+            sessionUsage,
+            showSessionStatus,
+            toolStateManager,
+            mutationApprovalPolicy,
+            planApprovalPolicy,
+            activeModelSelectionAvailable,
+            claudeSkills,
+            sessionLifecycleAvailable,
+            displayOptions?.ToInteractionOptions(),
+            displayWarnings: themes.Catalog.Warnings.Concat(displayOptions?.Diagnostics ?? []).ToArray(),
+            timeProvider: timeProvider,
+            gitQueries: gitQueries,
+            webFetchAuthorization: webFetchAuthorization,
+            directFetchApprovalPrompt: directFetchApprovalPrompt,
+            frontendCommands: new ThemeCommandContribution(themes, surface.SetThemeAsync, themePreferenceStore),
+            validationStages: validationStages,
+            codeExploreOutputOptions: codeExploreOutputOptions);
+    }
+
+    private class FakeConsoleSurface : IInteractionSurface
     {
         private readonly Lock _gate = new();
+
         private readonly Queue<InteractionInput> _inputs;
+
         private readonly StringBuilder _output = new();
+
         private readonly Queue<int> _selections = [];
+
         private readonly List<string> _statuses = [];
+
         private readonly List<string> _activeStatuses = [];
+
         private readonly List<PresentationTextSegment> _segments = [];
+
         private readonly List<string> _lifecycle = [];
+
         private readonly List<string> _operations = [];
+
         private readonly List<PresentationItem> _outputItems = [];
+
         private readonly List<string> _sessionStatuses = [];
+
         private readonly List<ComposerRequest> _composerRequests = [];
+
         private readonly List<string> _writes = [];
+
         private readonly int _statusWidth;
+
         private readonly Exception? _statusFailure;
+
         private readonly bool _suppressSessionStatus;
+
         private readonly TaskCompletionSource _statusStarted = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -5393,6 +5443,29 @@ public static partial class Milestone1Tests
 
         public InteractionSurfaceCapabilities Capabilities { get; }
 
+        public async Task<InteractionSelectionResult> SelectAsync(
+            InteractionSelectionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var selected = await SelectAsync(
+                request.Title,
+                request.Options.Select(option => option.Label).ToArray(),
+                cancellationToken);
+            return selected < 0 || selected >= request.Options.Count
+                ? new InteractionSelectionResult(null, IsCancelled: true)
+                : new InteractionSelectionResult(request.Options[selected].Id);
+        }
+
+        public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
+            => WriteOutputAsync(batch.Items, cancellationToken);
+
+        public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
+            => ShowSessionStatusAsync(status, " | ", cancellationToken);
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation represented by this test surface.")]
+        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
+            => ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+
         public IReadOnlyList<string> Writes
         {
             get
@@ -5415,16 +5488,6 @@ public static partial class Milestone1Tests
             }
         }
 
-        /// <inheritdoc />
-        public Task SetPromptAsync(
-            string prompt,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        /// <inheritdoc />
         public Task SetThemeAsync(ConfiguredTheme theme, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -5432,7 +5495,6 @@ public static partial class Milestone1Tests
             return Task.CompletedTask;
         }
 
-        /// <inheritdoc />
         public Task ShowSessionStatusAsync(
             SessionStatusSnapshot status,
             string separator,
@@ -5462,13 +5524,12 @@ public static partial class Milestone1Tests
             return Task.CompletedTask;
         }
 
-        /// <inheritdoc />
         public async Task<InteractionInput> ReadComposerAsync(
             ComposerRequest request,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(request);
-            await SetPromptAsync(request.Prompt, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             lock (_gate)
             {
                 _composerRequests.Add(request);
@@ -5477,7 +5538,6 @@ public static partial class Milestone1Tests
             return await ReadAsync(cancellationToken);
         }
 
-        /// <inheritdoc />
         public Task<InteractionInput> ReadAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -5490,7 +5550,6 @@ public static partial class Milestone1Tests
             }
         }
 
-        /// <inheritdoc />
         public Task<int> SelectAsync(
             string title,
             IReadOnlyList<string> choices,
@@ -5511,7 +5570,6 @@ public static partial class Milestone1Tests
             }
         }
 
-        /// <inheritdoc />
         public async Task ShowStatusUntilAsync(
             string text,
             Task operation,
@@ -5548,7 +5606,6 @@ public static partial class Milestone1Tests
             }
         }
 
-        /// <inheritdoc />
         public async Task WriteOutputAsync(
             IReadOnlyList<PresentationItem> items,
             CancellationToken cancellationToken = default)
@@ -5571,8 +5628,17 @@ public static partial class Milestone1Tests
 
             foreach (var item in items)
             {
-                var segments =
-                    PrettyPromptConsoleSurface.ProjectInteractiveOutputItem(item, _statusWidth);
+                var segments = item switch
+                {
+                    PresentationTextItem textItem => textItem.Segments,
+                    PresentationSourceItem sourceItem => PrefixAnswer(
+                        sourceItem.StartsAnswerBlock,
+                        [new PresentationTextSegment(sourceItem.SafeSource, PresentationTextRole.Default)]),
+                    PresentationMarkdownItem markdownItem => PrefixAnswer(
+                        markdownItem.StartsAnswerBlock,
+                        TuiMarkdownLayout.Format(markdownItem.Document, _statusWidth)),
+                    _ => throw new InvalidOperationException($"Unsupported test output: {item.GetType().Name}"),
+                };
                 foreach (var segment in segments)
                 {
                     await WriteAsync(segment.Text, segment.Role, CancellationToken.None);
@@ -5585,7 +5651,6 @@ public static partial class Milestone1Tests
             }
         }
 
-        /// <inheritdoc />
         public Task WriteAsync(
             string text,
             PresentationTextRole role = PresentationTextRole.Default,
@@ -5601,6 +5666,13 @@ public static partial class Milestone1Tests
 
             return Task.CompletedTask;
         }
+
+        private static IReadOnlyList<PresentationTextSegment> PrefixAnswer(
+            bool startsAnswerBlock,
+            IReadOnlyList<PresentationTextSegment> segments)
+            => startsAnswerBlock
+                ? [new PresentationTextSegment("\n", PresentationTextRole.Default), .. segments]
+                : segments;
     }
 
     private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution, IStartupProgressSurface, IInteractionHelpSurface
@@ -6253,7 +6325,7 @@ public static partial class Milestone1Tests
     }
 
     private static async Task StageAndApplyMutationAsync(
-        TuiController controller,
+        InteractionController controller,
         PostApplyValidationFixture fixture)
     {
         await controller.OpenAsync("TUI");

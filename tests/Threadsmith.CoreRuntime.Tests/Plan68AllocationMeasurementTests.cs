@@ -4,7 +4,7 @@ using System.Globalization;
 using System.Text;
 using Threadsmith.Interaction.Markdown;
 using Threadsmith.Telemetry;
-using Threadsmith.Tui;
+using Threadsmith.Tui.TuiKit;
 using Xunit;
 
 /// <summary>

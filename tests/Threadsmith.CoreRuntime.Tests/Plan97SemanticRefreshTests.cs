@@ -4,7 +4,6 @@ using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Coordination;
-using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Verifies semantic-refresh command parity and serialized TUI lifecycle projection.</summary>
@@ -12,13 +11,13 @@ public static class Plan97SemanticRefreshTests
 {
     /// <summary>The TUI controller forces refresh through the host command boundary without submitting a request.</summary>
     [Fact]
-    public static async Task TuiController_ForceSemanticRefresh_DispatchesLocalCommand()
+    public static async Task InteractionController_ForceSemanticRefresh_DispatchesLocalCommand()
     {
         var sessionId = SessionId.New();
         var expected = CreateResult(SemanticRefreshReason.Manual);
         var dispatcher = new RecordingDispatcher(sessionId, expected);
-        var controller = new TuiController(
-            new TuiPresenter(dispatcher, new InMemoryProjectionStore()));
+        var controller = new InteractionController(
+            new InteractionPresenter(dispatcher, new InMemoryProjectionStore()));
         _ = await controller.OpenAsync("refresh-test");
 
         var actual = await controller.ForceSemanticRefreshAsync();

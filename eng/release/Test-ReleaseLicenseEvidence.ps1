@@ -31,7 +31,7 @@ foreach ($component in $evidence.components) {
         if (-not (Test-Path -LiteralPath $licensePath -PathType Leaf) -or (Get-Item $licensePath).Length -eq 0) { throw "Bundled package $($component.id) has no reviewed full license text." }
     }
 }
-foreach ($critical in @('TUIKit', 'PrettyPrompt', 'SQLitePCLRaw.lib.e_sqlite3', 'dotnet-runtime', 'ripgrep')) {
+foreach ($critical in @('TUIKit', 'SQLitePCLRaw.lib.e_sqlite3', 'dotnet-runtime', 'ripgrep')) {
     if (-not @($evidence.components | Where-Object id -EQ $critical)) { throw "Required legal evidence is missing for $critical." }
 }
 Write-Output $evidence

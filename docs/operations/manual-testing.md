@@ -2,7 +2,7 @@
 
 This is a short operator check for a packaged release. The exhaustive regression plan remains [source-repository material](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md) and is intentionally not installed as product help.
 
-Run `Threadsmith.App --tui` from a small repository you can safely inspect. Bare `--tui` launches the retained TUIKit frontend; use `--tui=original` only when testing the previous PrettyPrompt/Spectre frontend. Add `--repository`, `--trust`, or `--solution` when the current directory and automatic choices are unsuitable.
+Run `Threadsmith.App --tui` from a small repository you can safely inspect. Bare `--tui` launches the retained TUIKit frontend; `--tui=tuikit` is equivalent. Add `--repository`, `--trust`, or `--solution` when the current directory and automatic choices are unsuitable.
 
 ## Startup and terminal
 
@@ -10,7 +10,7 @@ Run `Threadsmith.App --tui` from a small repository you can safely inspect. Bare
 2. In TUIKit, confirm `Enter` submits, `Ctrl+Enter` inserts a newline, paste arrives as one operation, `F7` switches transcript/composer focus, and `Ctrl+C` copies selected text or cancels when nothing is selected.
 3. In TUIKit, confirm required startup choices precede the splash. Type/paste during initial loading and confirm it is discarded without a later submission. Successful startup phases and remembered-solution hints must remain only in the splash; warnings/failures remain visible afterward.
 4. Run `/help` and verify a scrollable modal with command/description columns, no help appended to the transcript, and Esc returning to the draft. Compare its catalog with the [interactive command reference](keyboard-shortcuts.md).
-5. Run `/open` against another disposable repository and confirm the footer/status identify it only after selection succeeds. TUIKit retains `Threadsmith >`; the original frontend updates its repository-named prompt. Check rounded borders, heading spacing, provider/model sorting, and visible gaps between agent tabs.
+5. Run `/open` against another disposable repository and confirm the footer/status identify it only after selection succeeds. The composer retains `Threadsmith >`. Check rounded borders, heading spacing, provider/model sorting, and visible gaps between agent tabs.
 
 ## Governed behavior
 

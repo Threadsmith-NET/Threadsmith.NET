@@ -1,10 +1,8 @@
 namespace Threadsmith.App;
 
-using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
-using Threadsmith.Tui;
 using Threadsmith.Tui.TuiKit;
 using Threadsmith.Workspaces;
 
@@ -17,22 +15,14 @@ internal static class InteractiveFrontendRunner
         var (catalog, defaultId) = TuiThemeConfigurationLoader.Load(context.Configuration);
         var themes = new SessionThemePreferences(catalog, defaultId);
         var display = TuiDisplayOptions.Load(context.Configuration);
-        if (context.CommandLine.InteractiveFrontend == InteractiveFrontendKind.TuiKit)
-        {
-            return RunTuiKitAsync(context, themes, display, processCancellation);
-        }
-
-        if (context.CommandLine.InteractiveFrontend != InteractiveFrontendKind.Original)
+        if (context.CommandLine.InteractiveFrontend != InteractiveFrontendKind.TuiKit)
         {
             throw new InvalidOperationException("Interactive startup requires a selected frontend.");
         }
 
-        var surface = new PrettyPromptConsoleSurface(themes.ActiveTheme, limits: display.Limits);
-        return RunCoordinatorAsync(CreateCoordinator(context, themes, display, surface, surface.SetThemeAsync), context, processCancellation.Token);
+        return RunTuiKitAsync(context, themes, display, processCancellation);
     }
 
-    // Keep backend construction out of the PrettyPrompt/headless JIT and initialization paths.
-    [MethodImpl(MethodImplOptions.NoInlining)]
     private static async Task RunTuiKitAsync(ShellRunContext context, SessionThemePreferences themes, TuiDisplayOptions display, CancellationTokenSource processCancellation)
     {
         await using var surface = new TuiKitSurface(themes.ActiveTheme, processCancellation.Cancel, limits: display.Limits);

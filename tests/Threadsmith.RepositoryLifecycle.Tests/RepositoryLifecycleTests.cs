@@ -14,7 +14,6 @@ using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Interaction.Sessions;
 using Threadsmith.Persistence;
-using Threadsmith.Tui;
 using Threadsmith.Workspaces;
 using Xunit;
 
@@ -580,7 +579,7 @@ public static class RepositoryLifecycleTests
         File.Copy(repository.SolutionPath, secondSolutionPath);
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("Remembered solution");
         var solutionPromptCount = 0;
 
@@ -626,7 +625,7 @@ public static class RepositoryLifecycleTests
                 repository.RootPath,
                 RepositoryTrustLevel.TrustedRead,
                 repository.SolutionPath);
-        var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI");
         var opened = await controller.OpenRepositoryAsync(
             repository.RootPath,
@@ -681,7 +680,7 @@ public static class RepositoryLifecycleTests
             RepositoryTrustLevel.TrustedRead));
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI persisted trust");
         var trustPromptCount = 0;
         var solutionPromptCount = 0;
@@ -715,7 +714,7 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI trusted build");
         var trustPromptCount = 0;
 
@@ -747,7 +746,7 @@ public static class RepositoryLifecycleTests
             RepositoryTrustLevel.TrustedRead));
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI trust upgrade");
         var initialTrustPromptCount = 0;
         var upgradePromptCount = 0;
@@ -788,7 +787,7 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI multiple solutions");
         var trustPromptCount = 0;
         var solutionPromptCount = 0;
@@ -825,7 +824,7 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
-        var controller = new TuiController(new TuiPresenter(dispatcher, harness.Projections));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, harness.Projections));
         await controller.OpenAsync("TUI startup options");
         var trustPromptCount = 0;
         var solutionPromptCount = 0;
@@ -857,15 +856,15 @@ public static class RepositoryLifecycleTests
 
     /// <summary>Interactive startup reports live state and labels the composer with the repository name.</summary>
     [Fact]
-    public static async Task ConversationalShell_Startup_ReportsStateAndUsesRepositoryPrompt()
+    public static async Task InteractionCoordinator_Startup_ReportsStateAndUsesRepositoryPrompt()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var surface = new RepositoryConsoleSurface(["/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(dispatcher, harness.Projections),
+        var shell = new InteractionCoordinator(
+            new InteractionPresenter(dispatcher, harness.Projections),
             harness.Events,
             surface);
 
@@ -896,7 +895,7 @@ public static class RepositoryLifecycleTests
 
     /// <summary>Interactive startup reports remembered auto-loading before normal status.</summary>
     [Fact]
-    public static async Task ConversationalShell_RememberedSolution_PrintsNotification()
+    public static async Task InteractionCoordinator_RememberedSolution_PrintsNotification()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
         var secondSolutionPath = Path.Combine(repository.RootPath, "Second.sln");
@@ -904,8 +903,8 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var surface = new RepositoryConsoleSurface(["/quit"]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(dispatcher, harness.Projections),
+        var shell = new InteractionCoordinator(
+            new InteractionPresenter(dispatcher, harness.Projections),
             harness.Events,
             surface);
 
@@ -944,7 +943,7 @@ public static class RepositoryLifecycleTests
 
     /// <summary>Interactive startup offers scaffolding when runtime storage creates .threadsmith after eligibility is captured.</summary>
     [Fact]
-    public static async Task ConversationalShell_EmptyRepository_OffersInitialization()
+    public static async Task InteractionCoordinator_EmptyRepository_OffersInitialization()
     {
         var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-m2-shell-init-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repositoryPath);
@@ -956,8 +955,8 @@ public static class RepositoryLifecycleTests
             await using var harness = await RepositoryHarness.CreateAsync(repositoryPath);
             var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
             var surface = new RepositoryConsoleSurface(["/quit"], [0]);
-            var shell = new ConversationalShell(
-                new TuiPresenter(dispatcher, harness.Projections),
+            var shell = new InteractionCoordinator(
+                new InteractionPresenter(dispatcher, harness.Projections),
                 harness.Events,
                 surface);
 
@@ -984,7 +983,7 @@ public static class RepositoryLifecycleTests
     [InlineData("/trust", 4, true)]
     [InlineData("/trust", 5, false)]
     [InlineData("/trust automations", -1, false)]
-    public static async Task ConversationalShell_AutomationTrust_RequiresExplicitChoice(
+    public static async Task InteractionCoordinator_AutomationTrust_RequiresExplicitChoice(
         string command,
         int selection,
         bool expectedAutomation)
@@ -993,8 +992,8 @@ public static class RepositoryLifecycleTests
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher([new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var surface = new RepositoryConsoleSurface([command, "/quit"], selection < 0 ? [] : [selection]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(dispatcher, harness.Projections),
+        var shell = new InteractionCoordinator(
+            new InteractionPresenter(dispatcher, harness.Projections),
             harness.Events,
             surface);
         await shell.RunAsync(
@@ -1017,15 +1016,15 @@ public static class RepositoryLifecycleTests
 
     /// <summary>Cancelling the startup trust menu exits before the composer is read.</summary>
     [Fact]
-    public static async Task ConversationalShell_StartupCancel_ExitsCleanly()
+    public static async Task InteractionCoordinator_StartupCancel_ExitsCleanly()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
         var dispatcher = new CommandDispatcher(
             [new CreateSessionHandler(harness.Events), harness.Lifecycle]);
         var surface = new RepositoryConsoleSurface([]);
-        var shell = new ConversationalShell(
-            new TuiPresenter(dispatcher, harness.Projections),
+        var shell = new InteractionCoordinator(
+            new InteractionPresenter(dispatcher, harness.Projections),
             harness.Events,
             surface);
 
@@ -1092,11 +1091,14 @@ public static class RepositoryLifecycleTests
         }
     }
 
-    private sealed class RepositoryConsoleSurface : IConsoleSurface
+    private sealed class RepositoryConsoleSurface : IInteractionSurface
     {
         private readonly Queue<InteractionInput> _inputs;
+
         private readonly Queue<int> _selections;
+
         private readonly StringBuilder _output = new();
+
         private readonly List<string> _transientStatuses = [];
 
         public RepositoryConsoleSurface(
@@ -1112,11 +1114,59 @@ public static class RepositoryLifecycleTests
 
         public string Output => _output.ToString();
 
+        public InteractionSurfaceCapabilities Capabilities { get; } = new();
+
         public IReadOnlyList<string> TransientStatuses => _transientStatuses;
 
         public string Prompt { get; private set; } = string.Empty;
 
-        /// <inheritdoc />
+        public async Task<InteractionInput> ReadComposerAsync(
+            ComposerRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            await SetPromptAsync(request.Prompt, cancellationToken);
+            return await ReadAsync(cancellationToken);
+        }
+
+        public async Task<InteractionSelectionResult> SelectAsync(
+            InteractionSelectionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            var selected = await SelectAsync(request.Title, request.Options.Select(option => option.Label).ToArray(), cancellationToken);
+            return selected < 0 || selected >= request.Options.Count
+                ? new InteractionSelectionResult(null, IsCancelled: true)
+                : new InteractionSelectionResult(request.Options[selected].Id);
+        }
+
+        public async Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
+        {
+            foreach (var item in batch.Items)
+            {
+                switch (item)
+                {
+                    case PresentationTextItem textItem:
+                        foreach (var segment in textItem.Segments)
+                        {
+                            await WriteAsync(segment.Text, segment.Role, cancellationToken);
+                        }
+
+                        break;
+                    case PresentationSourceItem sourceItem:
+                        await WriteAsync(sourceItem.SafeSource, cancellationToken: cancellationToken);
+                        break;
+                    default:
+                        throw new InvalidOperationException($"Unsupported repository test output: {item.GetType().Name}");
+                }
+            }
+        }
+
+        public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation represented by this test surface.")]
+        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
+            => ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+
         public Task SetPromptAsync(
             string prompt,
             CancellationToken cancellationToken = default)
@@ -1126,14 +1176,12 @@ public static class RepositoryLifecycleTests
             return Task.CompletedTask;
         }
 
-        /// <inheritdoc />
         public Task<InteractionInput> ReadAsync(CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(_inputs.Dequeue());
         }
 
-        /// <inheritdoc />
         public Task<int> SelectAsync(
             string title,
             IReadOnlyList<string> choices,
@@ -1146,7 +1194,6 @@ public static class RepositoryLifecycleTests
             return Task.FromResult(selection);
         }
 
-        /// <inheritdoc />
         public async Task ShowStatusUntilAsync(
             string text,
             Task operation,
@@ -1159,7 +1206,6 @@ public static class RepositoryLifecycleTests
             await operation.WaitAsync(cancellationToken);
         }
 
-        /// <inheritdoc />
         public Task WriteAsync(
             string text,
             PresentationTextRole role = PresentationTextRole.Default,

@@ -3,7 +3,6 @@ namespace Threadsmith.CoreRuntime.Tests;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Markdown;
-using Threadsmith.Tui;
 using Threadsmith.Tui.TuiKit;
 using Xunit;
 

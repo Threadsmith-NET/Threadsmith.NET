@@ -196,7 +196,6 @@ Ordinary configuration. Implementation: `src/Threadsmith.Interaction/Contracts/T
 
 | Field | Default | Purpose |
 |---|---:|---|
-| `maximumBufferedKeys` | `100000` | Maximum buffered keystrokes in the PrettyPrompt frontend. |
 | `maximumDraftBytes` | `1048576` | Maximum editable draft and pasted UTF-8 bytes. |
 | `maximumUndoBytes` | `1048576` | Maximum retained undo text bytes. |
 | `maximumUndoEntries` | `200` | Maximum retained undo operations. |

@@ -5,9 +5,9 @@ using Threadsmith.Cli;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Models;
 using Threadsmith.Telemetry;
-using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Plan 35 conversation modes, assembly, pressure, inspection, and command tests.</summary>
@@ -586,7 +586,7 @@ public static class Plan35ConversationContextTests
     {
         var dispatcher = new RecordingDispatcher();
         var projections = new EmptyProjectionStore();
-        var presenter = new TuiPresenter(dispatcher, projections);
+        var presenter = new InteractionPresenter(dispatcher, projections);
         var headless = new HeadlessShell(dispatcher, projections, TextWriter.Null);
         var sessionId = SessionId.New();
 
@@ -613,7 +613,7 @@ public static class Plan35ConversationContextTests
     public static async Task Tui_controller_retains_latest_completed_run_for_context_inspection()
     {
         var dispatcher = new RecordingDispatcher();
-        var controller = new TuiController(new TuiPresenter(dispatcher, new EmptyProjectionStore()));
+        var controller = new InteractionController(new InteractionPresenter(dispatcher, new EmptyProjectionStore()));
         await controller.OpenAsync("conversation-test");
 
         var runId = await controller.SubmitAsync("hello");

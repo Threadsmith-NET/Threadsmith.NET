@@ -11,11 +11,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
-using Threadsmith.Tui;
 using Xunit;
 
 /// <summary>Verifies the plan-08 tool runtime, policy, persistence, UI, and process lifecycle.</summary>
@@ -128,7 +128,7 @@ public static partial class ToolRuntimeTests
             Assert.Contains("sample.txt", completed.ResultJson, StringComparison.Ordinal);
             Assert.Single(evidence.Snapshot(sessionId), item => item.RunId == runId);
 
-            var snapshot = await new TuiPresenter(dispatcher, projections).RenderAsync(sessionId);
+            var snapshot = await new InteractionPresenter(dispatcher, projections).RenderAsync(sessionId);
             Assert.Contains("Tool list_files (model): succeeded", snapshot.Workspace, StringComparison.Ordinal);
             Assert.Contains("sample.txt", snapshot.Workspace, StringComparison.Ordinal);
         }

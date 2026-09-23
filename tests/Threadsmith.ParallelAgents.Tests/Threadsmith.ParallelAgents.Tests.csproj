@@ -21,6 +21,5 @@
     <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Workspaces\Threadsmith.Workspaces.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Cli\Threadsmith.Cli.csproj" />
-    <ProjectReference Include="..\..\src\Threadsmith.Tui\Threadsmith.Tui.csproj" />
   </ItemGroup>
 </Project>

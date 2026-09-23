@@ -26,7 +26,7 @@ Interactive commands:
 /context compact
 ```
 
-`/context map` explains the latest actual prepared MAIN request using captured sizes. In TUIKit it opens a large modal with ordered source bars, aggregate category shares, and model-window usage. Double-click MAIN's top-right Context meter to open the same view, including during execution; mouse capture must be enabled (F12). The original frontend prints the same accounting as text.
+`/context map` explains the latest actual prepared MAIN request using captured sizes. It opens a large modal with ordered source bars, aggregate category shares, and model-window usage. Double-click MAIN's top-right Context meter to open the same view, including during execution; mouse capture must be enabled (F12).
 
 The view freezes when opened. Reopen it to see a later tool round or compacted request. It never assembles a preview, reloads instruction files, retrieves memories, or invokes a model. Old/resumed sessions can lack this transient detail until a new request is prepared. The captured model and window remain tied to that request even if you subsequently change settings. Submission is labeled only after the normal transport observer confirms it.
 

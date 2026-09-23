@@ -119,8 +119,8 @@ For a category-organized explanation of every file and a glossary defining what 
 | `Tool-git_show-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_show-Description.md` | Bounded Git object reads through one `paths` filter shape, literal-file batches, and filtered inventories with optional revision/untracked-only metadata. | None |
 | `Tool-git_blame-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_blame-Description.md` | Advertised description for `git_blame`. | None |
 | `Tool-git_compare_branches-Description.md` | `Threadsmith.Tools` | `prompts/Tool-git_compare_branches-Description.md` | Advertised description for `git_compare_branches`. | None |
-| `Tool-dotnet_inventory-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_inventory-Description.md` | Advertised description for `dotnet_inventory`. | None |
-| `Tool-nuget_health-Description.md` | `Threadsmith.Tools` | `prompts/Tool-nuget_health-Description.md` | Advertised description for `nuget_health`. | None |
+| `Tool-dotnet_inventory-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_inventory-Description.md` | Complete loaded project and declared package inventory; directs upgrade queries to NuGet tooling. | None |
+| `Tool-nuget_health-Description.md` | `Threadsmith.Tools` | `prompts/Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | None |
 | `Tool-dotnet_build-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_build-Description.md` | Advertised description for `dotnet_build`. | None |
 | `Tool-dotnet_analyzers-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_analyzers-Description.md` | Advertised description for `dotnet_analyzers`. | None |
 | `Tool-dotnet_format_check-Description.md` | `Threadsmith.Tools` | `prompts/Tool-dotnet_format_check-Description.md` | Advertised description for `dotnet_format_check`. | None |

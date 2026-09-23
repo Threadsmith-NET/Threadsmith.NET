@@ -129,9 +129,6 @@ public sealed record SemanticResourceLimits
     /// <summary>Maximum fallback-search input file size in bytes.</summary>
     public long MaximumFallbackFileBytes { get; init; } = 1024 * 1024;
 
-    /// <summary>Maximum projects returned by inventory.</summary>
-    public int MaximumInventoryProjects { get; init; } = 2000;
-
     /// <summary>Maximum project/import XML input bytes for inventory metadata.</summary>
     public long MaximumInventoryXmlBytes { get; init; } = 1024 * 1024;
 
@@ -186,21 +183,6 @@ public sealed record SemanticResourceLimits
     /// <summary>Model-facing maximum omissions.</summary>
     public int ModelMaximumOmissions { get; init; } = 8;
 
-    /// <summary>Inventory maximum model items per project.</summary>
-    public int MaximumModelItemsPerProject { get; init; } = 12;
-
-    /// <summary>Inventory maximum model omissions.</summary>
-    public int MaximumModelOmissions { get; init; } = 20;
-
-    /// <summary>Inventory maximum model projects.</summary>
-    public int MaximumModelProjects { get; init; } = 25;
-
-    /// <summary>Inventory maximum model result characters.</summary>
-    public int MaximumModelResultCharacters { get; init; } = 128 * 1024;
-
-    /// <summary>Inventory maximum model target frameworks.</summary>
-    public int MaximumModelTargetFrameworks { get; init; } = 12;
-
     /// <summary>Rejects nonpositive resource limits.</summary>
     public void Validate()
     {
@@ -221,16 +203,10 @@ public sealed record SemanticResourceLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ModelMaximumGeneratedDocuments);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ModelMaximumGeneratedContentCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ModelMaximumOmissions);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumModelItemsPerProject);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumModelOmissions);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumModelProjects);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumModelResultCharacters);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumModelTargetFrameworks);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFallbackEntries);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFallbackFiles);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFallbackMatches);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumFallbackFileBytes);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumInventoryProjects);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumInventoryXmlBytes);
     }
 }

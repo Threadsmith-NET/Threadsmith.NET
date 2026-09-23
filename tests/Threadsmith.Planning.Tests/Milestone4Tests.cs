@@ -5025,8 +5025,8 @@ public static class Milestone4Tests
                     Output = new ToolRequestModelOutput(
                         "search",
                         _filePath is not null
-                            ? JsonSerializer.Serialize(new { query = "SectorEntityStandardizer", path = _filePath })
-                            : "{\"query\":\"SectorEntityStandardizer\"}"),
+                            ? JsonSerializer.Serialize(new { query = "SectorEntityStandardizer", path = _filePath, glob = _fileScoped ? "*" : "*.cs" })
+                            : "{\"query\":\"SectorEntityStandardizer\",\"glob\":\"*.cs\"}"),
                     FinishReason = ModelFinishReason.ToolCalls,
                 };
                 yield break;

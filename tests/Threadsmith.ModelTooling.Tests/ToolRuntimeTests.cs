@@ -2416,7 +2416,7 @@ public static partial class ToolRuntimeTests
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = "run_process",
-                ArgumentsJson = "{\"command\":\"dotnet --version\"}",
+                ArgumentsJson = "{\"command\":\"dotnet nuget locals all --list\"}",
                 Context = CreateContext(repository) with
                 {
                     TrustLevel = RepositoryTrustLevel.TrustedBuild,
@@ -2425,6 +2425,11 @@ public static partial class ToolRuntimeTests
             });
 
             Assert.True(result.Succeeded);
+            Assert.NotNull(result.ResultJson);
+            var processResult = JsonSerializer.Deserialize<ProcessExecutionResult>(result.ResultJson);
+            Assert.NotNull(processResult);
+            Assert.Equal(0, processResult.ExitCode);
+            Assert.Contains("global-packages:", processResult.StandardOutput, StringComparison.Ordinal);
             Assert.Contains(result.Sources, source => source.Kind == "process");
             Assert.Contains(observed, item => item is ApprovalRequested requested
                 && requested.Kind == ApprovalRequestKind.ToolInvocation

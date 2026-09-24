@@ -29,6 +29,18 @@ public sealed record PrFetchInput
 
     /// <summary>Explicitly replaces the captured PR.</summary>
     public bool Refresh { get; init; }
+
+    /// <summary>Completed operation-scoped snapshot to read without another provider request.</summary>
+    public Guid? SnapshotId { get; init; }
+
+    /// <summary>One-based evidence line for a captured-snapshot read.</summary>
+    public int? StartLine { get; init; }
+
+    /// <summary>Optional inclusive final evidence line.</summary>
+    public int? EndLine { get; init; }
+
+    /// <summary>One-based column for continuing a long evidence line.</summary>
+    public int? StartColumn { get; init; }
 }
 
 /// <summary>Provider-validated web and API identity; no model-supplied API endpoint.</summary>
@@ -64,7 +76,26 @@ public sealed record PrFetchOutput(
     PullRequestMetadata Metadata,
     PullRequestPage Page,
     bool CacheHit,
-    bool AcquisitionComplete);
+    bool AcquisitionComplete)
+{
+    /// <summary>Whether the complete captured evidence requires bounded follow-up reads.</summary>
+    public bool EvidenceReadRequired { get; init; }
+
+    /// <summary>Total changed files in the completed snapshot, including omitted manifest entries.</summary>
+    public int ChangedFileCount { get; init; }
+
+    /// <summary>Number of characters in the captured provider diff.</summary>
+    public int DiffCharacterCount { get; init; }
+
+    /// <summary>Total line count of the line-addressable evidence document, when read.</summary>
+    public int? TotalEvidenceLines { get; init; }
+
+    /// <summary>Next one-based evidence line when a bounded read has more content.</summary>
+    public int? NextLine { get; init; }
+
+    /// <summary>Next one-based column when a bounded read has more content.</summary>
+    public int? NextColumn { get; init; }
+}
 
 /// <summary>Compiled provider contract; all returned values are host-owned evidence DTOs.</summary>
 public interface IPullRequestProvider

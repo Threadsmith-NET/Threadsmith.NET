@@ -43,9 +43,11 @@ public sealed class PrFetchTests
         var context = Context(scope);
         var result = await tool.ExecuteAsync(input, context);
         Assert.Equal("account", result.Value.Provider);
-        Assert.Equal(result.Value, Assert.Single(
-            scope.GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry())
-                .Snapshot(context.SessionId, context.RunId)));
+        var captured = Assert.Single(scope.GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry())
+            .Snapshot(context.SessionId, context.RunId));
+        Assert.Equal(result.Value.SnapshotId, captured.SnapshotId);
+        Assert.Equal(result.Value.Page, captured.Page);
+        Assert.Equal(captured.Page.Files.Count, result.Value.ChangedFileCount);
         Assert.Equal(3, handler.Requests);
         using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
         Assert.True(schema.RootElement.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToHashSet(StringComparer.Ordinal).SetEquals(["kind", "url"]));
@@ -391,9 +393,14 @@ public sealed class PrFetchTests
             limitation => limitation.Contains("outside the caller's approved repository path scope", StringComparison.Ordinal));
         Assert.Equal(SecretProviderTrust.UserOwned, secrets.MinimumTrust);
         Assert.DoesNotContain("test-credential", tool.Definition.Description, StringComparison.Ordinal);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(
+            input with { SnapshotId = first.SnapshotId },
+            parent with { Invocation = disjointChild.Invocation }));
 
         var refreshed = await tool.ExecuteAsync(input with { Refresh = true }, parent);
         Assert.NotEqual(first.SnapshotId, refreshed.Value.SnapshotId);
+        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => tool.ExecuteAsync(
+            input with { SnapshotId = first.SnapshotId }, parent));
         await ReadAllAsync(tool, input, parent);
         Assert.True(handler.Requests > requests);
     }
@@ -690,11 +697,11 @@ public sealed class PrFetchTests
         Assert.False(wrapped.Get("pr_fetch").Definition.AllowDuplicateInvocations);
     }
 
-    /// <summary>Complete evidence larger than the former output cap survives ordinary tool serialization.</summary>
+    /// <summary>Multi-megabyte evidence stays captured while model delivery and continuation reads remain bounded.</summary>
     [Fact]
-    public async Task CompleteLargeDiffPassesThroughToolPipelineWithoutTruncation()
+    public async Task CompleteLargeDiffUsesBoundedManifestAndCapturedReads()
     {
-        var diff = "diff --git a/src/changed.cs b/src/changed.cs\n" + new string('x', 300_000);
+        var diff = "diff --git a/src/changed.cs b/src/changed.cs\n" + new string('x', 2_000_000);
         using var handler = new PrHandler(false) { DiffText = diff, MultipleFilePages = true };
         using var http = new HttpClient(handler);
         var tool = CreateTool(http, new TestSecrets(), Options(false), false);
@@ -713,16 +720,104 @@ public sealed class PrFetchTests
         });
 
         Assert.True(result.Succeeded, result.Error);
-        Assert.False(result.IsTruncated);
+        Assert.True(result.IsTruncated);
+        Assert.True(Encoding.UTF8.GetByteCount(result.ResultJson!) <= tool.Definition.MaximumOutputBytes);
         using var payload = JsonDocument.Parse(result.ResultJson!);
-        Assert.Equal(diff, payload.RootElement.GetProperty("Page").GetProperty("Diff").GetString());
-        Assert.Equal(21, payload.RootElement.GetProperty("Page").GetProperty("Files").GetArrayLength());
+        Assert.True(payload.RootElement.GetProperty("EvidenceReadRequired").GetBoolean());
+        Assert.Equal(string.Empty, payload.RootElement.GetProperty("Page").GetProperty("Diff").GetString());
+        Assert.Empty(payload.RootElement.GetProperty("Page").GetProperty("Files").EnumerateArray());
+        Assert.Equal(21, payload.RootElement.GetProperty("ChangedFileCount").GetInt32());
+        var snapshotId = payload.RootElement.GetProperty("SnapshotId").GetGuid();
+        var deliveredCharacters = new List<int>();
+        foreach (var remainingTokens in new[] { 1_025, 4_096, 16_000 })
+        {
+            var boundedContext = context with
+            {
+                Invocation = context.Invocation with
+                {
+                    ModelEffectiveInputBudgetTokens = 64_000,
+                    ModelRemainingInputBudgetTokens = remainingTokens,
+                },
+            };
+            var boundedRead = await tool.ExecuteAsync(Input(false) with { SnapshotId = snapshotId }, boundedContext);
+            deliveredCharacters.Add(boundedRead.Value.Page.Diff.Length);
+            Assert.True(
+                Encoding.UTF8.GetByteCount(JsonSerializer.Serialize(boundedRead.Value)) <= remainingTokens * 3,
+                $"The {remainingTokens}-token read exceeded its serialized-byte allowance.");
+            Assert.NotNull(boundedRead.Value.NextLine);
+        }
+
+        Assert.True(deliveredCharacters[0] > 0);
+        Assert.True(deliveredCharacters[1] > deliveredCharacters[0]);
+        Assert.True(deliveredCharacters[2] > deliveredCharacters[1]);
+        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => tool.ExecuteAsync(
+            Input(false) with { SnapshotId = snapshotId },
+            context with { RunId = RunId.New() }));
+        var capturedText = new StringBuilder();
+        int? nextLine = 1;
+        int? nextColumn = 1;
+        var reads = 0;
+        while (nextLine is { } line)
+        {
+            var part = await pipeline.InvokeAsync(new ToolInvocationRequest
+            {
+                SessionId = context.SessionId,
+                RunId = context.RunId,
+                ToolId = "pr_fetch",
+                ArgumentsJson = JsonSerializer.Serialize(new
+                {
+                    url = "https://github.com/org/repo/pull/1",
+                    kind = "diff",
+                    snapshotId,
+                    startLine = line,
+                    startColumn = nextColumn,
+                }),
+                Context = context.Invocation,
+            });
+            Assert.True(part.Succeeded, part.Error);
+            Assert.True(Encoding.UTF8.GetByteCount(part.ResultJson!) <= tool.Definition.MaximumOutputBytes);
+            using var page = JsonDocument.Parse(part.ResultJson!);
+            capturedText.Append(page.RootElement.GetProperty("Page").GetProperty("Diff").GetString());
+            nextLine = page.RootElement.GetProperty("NextLine").ValueKind == JsonValueKind.Null
+                ? null : page.RootElement.GetProperty("NextLine").GetInt32();
+            nextColumn = page.RootElement.GetProperty("NextColumn").ValueKind == JsonValueKind.Null
+                ? null : page.RootElement.GetProperty("NextColumn").GetInt32();
+            reads++;
+            Assert.True(reads < 500);
+        }
+
+        Assert.True(reads > 100);
+        Assert.Contains(diff, capturedText.ToString(), StringComparison.Ordinal);
         Assert.Equal(2, handler.MetadataRequests);
         Assert.Equal(1, handler.DiffRequests);
         var cached = (await tool.ExecuteAsync(Input(false), context)).Value;
-        Assert.Equal(diff, cached.Page.Diff);
-        Assert.Equal(21, cached.Page.Files.Count);
+        Assert.True(cached.EvidenceReadRequired);
         Assert.True(cached.CacheHit);
+        var captured = Assert.Single(scope.GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry())
+            .Snapshot(context.SessionId, context.RunId));
+        Assert.Equal(diff, captured.Page.Diff);
+        Assert.Equal(21, captured.Page.Files.Count);
+        var cache = scope.GetOrCreate<PrFetchCache>(tool, static () => throw new InvalidOperationException("Expected the tool-owned cache."));
+        Assert.Equal(0, cache.RetainedPageCount);
+        Assert.Equal(JsonSerializer.SerializeToUtf8Bytes(captured).LongLength, cache.RetainedBytes);
+    }
+
+    /// <summary>Context starvation is rejected before contacting the PR provider.</summary>
+    [Fact]
+    public async Task InsufficientRemainingContextDoesNotStartAcquisition()
+    {
+        using var handler = new PrHandler(false);
+        using var http = new HttpClient(handler);
+        var tool = CreateTool(http, new TestSecrets(), Options(false), false);
+        await using var scope = new ToolOperationScope(CancellationToken.None);
+        var context = Context(scope);
+        context = context with
+        {
+            Invocation = context.Invocation with { ModelRemainingInputBudgetTokens = 512 },
+        };
+
+        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => tool.ExecuteAsync(Input(false), context));
+        Assert.Equal(0, handler.Requests);
     }
 
     private static PrFetchTool CreateTool(HttpClient http, ISecretResolver secrets, PrFetchOptions options, bool bitbucket)

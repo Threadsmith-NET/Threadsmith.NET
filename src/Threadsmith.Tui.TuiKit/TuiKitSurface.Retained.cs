@@ -1,5 +1,6 @@
 namespace Threadsmith.Tui.TuiKit;
 
+using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Commands;
@@ -12,10 +13,18 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
 {
     private readonly List<string> _startupPhases = [];
     private IReadOnlyList<string> _startupDetails = [];
+    private long _startupDwellStart;
 
     /// <inheritdoc />
     public Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default) =>
-        ShowReadOnlyModalAsync(new ContextUsageModal(snapshot, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()), cancellationToken);
+        ShowReadOnlyModalAsync(
+            new ContextUsageModal(
+                snapshot,
+                ResolveStyle,
+                _interrupt,
+                () => _app.ToggleMouseCapture(),
+                () => _app.MouseCaptureEnabled && !_startupBlocked && ModalFrame.Fits(_backend.Size)),
+            cancellationToken);
 
     /// <inheritdoc />
     public Task ShowCommandHelpAsync(IReadOnlyList<InteractiveCommandDescriptor> commands, CancellationToken cancellationToken = default)
@@ -46,6 +55,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             _ = _app.ShowAsync<string>(modal);
         },
             cancellationToken);
+        _ = Interlocked.CompareExchange(ref _startupDwellStart, Stopwatch.GetTimestamp(), 0);
         var outcome = "Completed";
         try
         {
@@ -63,33 +73,44 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         }
         finally
         {
-            if (!_stop.IsCancellationRequested)
+            try
             {
-                if (outcome == "Completed")
+                if (!_stop.IsCancellationRequested && outcome == "Completed")
                 {
                     await EnqueueAsync(modal.Complete, _stop.Token);
-                    await Task.Delay(TimeSpan.FromMilliseconds(250), _stop.Token);
+                    var remaining = TimeSpan.FromMilliseconds(250)
+                        - Stopwatch.GetElapsedTime(Volatile.Read(ref _startupDwellStart));
+                    if (remaining > TimeSpan.Zero)
+                    {
+                        using var dwellCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _stop.Token);
+                        await Task.Delay(remaining, dwellCancellation.Token);
+                    }
                 }
-
-                await EnqueueAsync(
-                    () =>
+            }
+            finally
+            {
+                if (!_stop.IsCancellationRequested)
                 {
-                    var completed = $"{label} {outcome}";
-                    _startupPhases.Add(completed);
-                    if (outcome == "Completed" && label.StartsWith("Loading ", StringComparison.Ordinal))
+                    await EnqueueAsync(
+                        () =>
                     {
-                        _startupPhases.Add("Reticulating Splines ... Completed");
-                    }
+                        var completed = $"{label} {outcome}";
+                        _startupPhases.Add(completed);
+                        if (outcome == "Completed" && label.StartsWith("Loading ", StringComparison.Ordinal))
+                        {
+                            _startupPhases.Add("Reticulating Splines ... Completed");
+                        }
 
-                    if (outcome != "Completed")
-                    {
-                        _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(completed + "\n", PresentationTextRole.Error)])]));
-                    }
+                        if (outcome != "Completed")
+                        {
+                            _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([new(completed + "\n", PresentationTextRole.Error)])]));
+                        }
 
-                    modal.RequestClose(null);
-                    _inputEpoch++;
-                },
-                    _stop.Token);
+                        modal.RequestClose(null);
+                        _inputEpoch++;
+                    },
+                        _stop.Token);
+                }
             }
         }
     }

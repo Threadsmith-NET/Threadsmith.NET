@@ -165,7 +165,7 @@ public sealed record ModelWireEstimate
 
     /// <summary>Human-readable capacity estimation basis.</summary>
     [JsonIgnore]
-    public string EstimationBasis { get; init; } = "Four characters per estimated token, rounded per message field, plus framing. Separate fields have no exposed cross-field prompt order.";
+    public string EstimationBasis { get; init; } = "Four characters per estimated token, rounded per message field, plus framing. Contributions follow model-context order, independent of request-object property serialization.";
 
     /// <summary>Logical unique content tokens.</summary>
     public int LogicalTokens { get; init; }
@@ -175,6 +175,10 @@ public sealed record ModelWireEstimate
 
     /// <summary>Estimated stable-prefix wire tokens.</summary>
     public int StablePrefixTokens { get; init; }
+
+    /// <summary>Number of leading attribution components in the host-stable prefix.</summary>
+    [JsonIgnore]
+    public int StablePrefixComponentCount { get; init; }
 
     /// <summary>Estimated native tool-schema tokens.</summary>
     public int NativeToolTokens { get; init; }
@@ -628,6 +632,13 @@ public static class ModelWireEstimator
         var components = new List<ContextUsageComponent>();
         var logicalTokens = 0;
         var stablePrefixTokens = 0;
+        var toolComponents = new List<ContextUsageComponent>(tools.Components ?? []);
+        var unattributedTools = (long)tools.NativeToolTokens + tools.TextToolTokens - toolComponents.Sum(item => item.Tokens);
+        if (unattributedTools > 0)
+        {
+            toolComponents.Add(new("tools:unallocated", "Tools", "Tool inventory (individual sizes unavailable)", "Tools", unattributedTools));
+        }
+
         var providerInstructionTokens = providerInstructions is null
             ? 0
             : EstimateCharacters(providerInstructions.Content.Length);
@@ -639,8 +650,28 @@ public static class ModelWireEstimator
             components.Add(new("provider-instructions", "System prompt", providerInstructions.SectionId, "Provider instructions", providerInstructionTokens));
         }
 
+        var phasePolicyIndex = messages.Select((message, index) => (message, index))
+            .Where(item => item.message.SectionId == "phase-policy")
+            .Select(item => item.index)
+            .DefaultIfEmpty(-1)
+            .First();
+        var nativeToolInsertionIndex = phasePolicyIndex >= 0
+            ? phasePolicyIndex
+            : messages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).Count();
+        var nativeToolsInStablePrefix = tools.NativeToolTokens > 0
+            && nativeToolInsertionIndex <= stablePrefixMessageCount;
+        if (nativeToolsInStablePrefix)
+        {
+            stablePrefixTokens = checked(stablePrefixTokens + tools.NativeToolTokens);
+        }
+
         for (var index = 0; index < messages.Count; index++)
         {
+            if (tools.NativeToolTokens > 0 && index == nativeToolInsertionIndex)
+            {
+                components.AddRange(toolComponents);
+            }
+
             var message = messages[index];
             var tokens = checked(
                 EstimateCharacters(message.GetModelVisibleContentLength())
@@ -657,26 +688,33 @@ public static class ModelWireEstimator
             }
         }
 
+        if (tools.NativeToolTokens > 0 && nativeToolInsertionIndex == messages.Count)
+        {
+            components.AddRange(toolComponents);
+        }
+
         var framingTokens = checked((messages.Count * 3) + 3 + (providerInstructions is null ? 0 : 3));
         var wireInputTokens = checked(
             logicalTokens
             + tools.NativeToolTokens
             + tools.TextToolTokens
             + framingTokens);
-        components.AddRange(tools.Components ?? []);
-        var unattributedTools = (long)tools.NativeToolTokens + tools.TextToolTokens - (tools.Components?.Sum(item => item.Tokens) ?? 0);
-        if (unattributedTools > 0)
+        if (tools.NativeToolTokens == 0)
         {
-            components.Add(new("tools:unallocated", "Tools", "Tool inventory (individual sizes unavailable)", "Tools", unattributedTools));
+            components.AddRange(toolComponents);
         }
 
         components.Add(new("framing", "Provider overhead/replay", "Message / request framing", "Capacity allowances", framingTokens));
+        var stablePrefixComponentCount = (providerInstructions is null ? 0 : 1)
+            + stablePrefixMessageCount
+            + (nativeToolsInStablePrefix ? toolComponents.Count : 0);
         return new ModelWireEstimate
         {
             Components = components.AsReadOnly(),
             LogicalTokens = logicalTokens,
             WireInputTokens = wireInputTokens,
             StablePrefixTokens = stablePrefixTokens,
+            StablePrefixComponentCount = stablePrefixComponentCount,
             NativeToolTokens = tools.NativeToolTokens,
             TextToolTokens = tools.TextToolTokens,
             FramingTokens = framingTokens,

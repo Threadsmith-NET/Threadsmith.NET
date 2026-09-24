@@ -1,0 +1,1123 @@
+===== Alligator =====
+Alligator by Simon Bradley <syb3@aber.ac.uk>
+17th June, 1994
+
+
+===== Alligator2 =====
+Alligator2 by Daniel Wiz. AKA Merlin Greywolf <merlin@brahms.udel.edu>
+27th July, 1994
+This is the STRAIGHT version of the revised Alligator font I edited.
+It's EXACTLY like my other posted font except the tilt was taken out.
+
+===== AnsiCompact =====
+Font Author: Loic Cressot
+
+This font is free to use and distribute / MIT License
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== AnsiRegular =====
+Font Author: ?
+
+More Info:
+
+https://web.archive.org/web/20120819044459/http://www.roysac.com/thedrawfonts-tdf.asp
+
+FIGFont created with: http://patorjk.com/figlet-editor
+
+===== AnsiShadow =====
+Font Author: ?
+
+More Info:
+
+https://web.archive.org/web/20120819044459/http://www.roysac.com/thedrawfonts-tdf.asp
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== Ascii12 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --half --ascii "Monospace Bold 12"
+================================================================================
+
+===== Ascii9 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --half --ascii "Monospace 9"
+================================================================================
+
+===== Banner3 =====
+banner3 by Merlin Greywolf merlin@brahms.udel.edu
+August 9, 1994
+
+
+===== Banner3D =====
+banner3-D by Merlin Greywolf merlin@brahms.udel.edu
+August 9, 1994
+
+
+===== Banner4 =====
+banner4 by Merlin Greywolf merlin@brahms.udel.edu
+August 9, 1994
+
+
+===== Big =====
+Big by Glenn Chappell 4/93 -- based on Standard
+Includes ISO Latin-1
+Greek characters by Bruce Jakeway <pbjakeway@neumann.uwaterloo.ca>
+figlet release 2.2 -- November 1996
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+===== BigMoneyNe =====
+
+ /$$       /$$                                                                                            
+| $$      |__/                                                                                            
+| $$$$$$$  /$$  /$$$$$$  /$$$$$$/$$$$   /$$$$$$  /$$$$$$$   /$$$$$$  /$$   /$$         /$$$$$$$   /$$$$$$ 
+| $$__  $$| $$ /$$__  $$| $$_  $$_  $$ /$$__  $$| $$__  $$ /$$__  $$| $$  | $$ /$$$$$$| $$__  $$ /$$__  $$
+| $$  \ $$| $$| $$  \ $$| $$ \ $$ \ $$| $$  \ $$| $$  \ $$| $$$$$$$$| $$  | $$|______/| $$  \ $$| $$$$$$$$
+| $$  | $$| $$| $$  | $$| $$ | $$ | $$| $$  | $$| $$  | $$| $$_____/| $$  | $$        | $$  | $$| $$_____/
+| $$$$$$$/| $$|  $$$$$$$| $$ | $$ | $$|  $$$$$$/| $$  | $$|  $$$$$$$|  $$$$$$$        | $$  | $$|  $$$$$$$
+|_______/ |__/ \____  $$|__/ |__/ |__/ \______/ |__/  |__/ \_______/ \____  $$        |__/  |__/ \_______/
+               /$$  \ $$                                             /$$  | $$                            
+              |  $$$$$$/                                            |  $$$$$$/                            
+               \______/                                              \______/                             
+
+#-> bigmoney-ne : by nathan bloomfield (xzovik@gmail.com)
+#-> based on art from the legendary MAKEMONEYFAST chain letter
+#->
+#-> History:
+#->   5-30-2007 : first version (required characters only)
+#->
+#-> (end comments)
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== BigMoneyNw =====
+
+$$\       $$\                                                                                                 
+$$ |      \__|                                                                                                
+$$$$$$$\  $$\  $$$$$$\  $$$$$$\$$$$\   $$$$$$\  $$$$$$$\   $$$$$$\  $$\   $$\         $$$$$$$\  $$\  $$\  $$\ 
+$$  __$$\ $$ |$$  __$$\ $$  _$$  _$$\ $$  __$$\ $$  __$$\ $$  __$$\ $$ |  $$ |$$$$$$\ $$  __$$\ $$ | $$ | $$ |
+$$ |  $$ |$$ |$$ /  $$ |$$ / $$ / $$ |$$ /  $$ |$$ |  $$ |$$$$$$$$ |$$ |  $$ |\______|$$ |  $$ |$$ | $$ | $$ |
+$$ |  $$ |$$ |$$ |  $$ |$$ | $$ | $$ |$$ |  $$ |$$ |  $$ |$$   ____|$$ |  $$ |        $$ |  $$ |$$ | $$ | $$ |
+$$$$$$$  |$$ |\$$$$$$$ |$$ | $$ | $$ |\$$$$$$  |$$ |  $$ |\$$$$$$$\ \$$$$$$$ |        $$ |  $$ |\$$$$$\$$$$  |
+\_______/ \__| \____$$ |\__| \__| \__| \______/ \__|  \__| \_______| \____$$ |        \__|  \__| \_____\____/ 
+              $$\   $$ |                                            $$\   $$ |                                
+              \$$$$$$  |                                            \$$$$$$  |                                
+               \______/                                              \______/                                 
+
+#-> bigmoney-nw : by nathan bloomfield (xzovik@gmail.com)
+#-> based on art from the legendary MAKEMONEYFAST chain letter
+#->
+#-> History:
+#->   5-30-2007 : first version (required characters only)
+#->
+#-> (end comments)
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== BigMoneySe =====
+ __        __                                                                                             
+|  \      |  \                                                                                            
+| $$____   \$$  ______   ______ ____    ______   _______    ______   __    __           _______   ______  
+| $$    \ |  \ /      \ |      \    \  /      \ |       \  /      \ |  \  |  \ ______  /       \ /      \ 
+| $$$$$$$\| $$|  $$$$$$\| $$$$$$\$$$$\|  $$$$$$\| $$$$$$$\|  $$$$$$\| $$  | $$|      \|  $$$$$$$|  $$$$$$\
+| $$  | $$| $$| $$  | $$| $$ | $$ | $$| $$  | $$| $$  | $$| $$    $$| $$  | $$ \$$$$$$ \$$    \ | $$    $$
+| $$__/ $$| $$| $$__| $$| $$ | $$ | $$| $$__/ $$| $$  | $$| $$$$$$$$| $$__/ $$         _\$$$$$$\| $$$$$$$$
+| $$    $$| $$ \$$    $$| $$ | $$ | $$ \$$    $$| $$  | $$ \$$     \ \$$    $$        |       $$ \$$     \
+ \$$$$$$$  \$$ _\$$$$$$$ \$$  \$$  \$$  \$$$$$$  \$$   \$$  \$$$$$$$ _\$$$$$$$         \$$$$$$$   \$$$$$$$
+              |  \__| $$                                            |  \__| $$                            
+               \$$    $$                                             \$$    $$                            
+                \$$$$$$                                               \$$$$$$                             
+
+#-> bigmoney-se : by nathan bloomfield (xzovik@gmail.com)
+#-> based on art from the legendary MAKEMONEYFAST chain letter
+#->
+#-> History:
+#->   5-30-2007 : first version (required characters only)
+#->
+#-> (end comments)
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== BigMoneySw =====
+ __        __                                                                                                 
+/  |      /  |                                                                                                
+$$ |____  $$/   ______   _____  ____    ______   _______    ______   __    __           _______  __   __   __ 
+$$      \ /  | /      \ /     \/    \  /      \ /       \  /      \ /  |  /  | ______  /       |/  | /  | /  |
+$$$$$$$  |$$ |/$$$$$$  |$$$$$$ $$$$  |/$$$$$$  |$$$$$$$  |/$$$$$$  |$$ |  $$ |/      |/$$$$$$$/ $$ | $$ | $$ |
+$$ |  $$ |$$ |$$ |  $$ |$$ | $$ | $$ |$$ |  $$ |$$ |  $$ |$$    $$ |$$ |  $$ |$$$$$$/ $$      \ $$ | $$ | $$ |
+$$ |__$$ |$$ |$$ \__$$ |$$ | $$ | $$ |$$ \__$$ |$$ |  $$ |$$$$$$$$/ $$ \__$$ |         $$$$$$  |$$ \_$$ \_$$ |
+$$    $$/ $$ |$$    $$ |$$ | $$ | $$ |$$    $$/ $$ |  $$ |$$       |$$    $$ |        /     $$/ $$   $$   $$/ 
+$$$$$$$/  $$/  $$$$$$$ |$$/  $$/  $$/  $$$$$$/  $$/   $$/  $$$$$$$/  $$$$$$$ |        $$$$$$$/   $$$$$/$$$$/  
+              /  \__$$ |                                            /  \__$$ |                                
+              $$    $$/                                             $$    $$/                                 
+               $$$$$$/                                               $$$$$$/                                  
+
+#-> bigmoney-sw : by nathan bloomfield (xzovik@gmail.com)
+#-> based on art from the legendary MAKEMONEYFAST chain letter
+#->
+#-> History:
+#->   5-30-2007 : first version (required characters only)
+#->
+#-> (end comments)
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== BigMono12 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --utf8 "Monospace Bold 12"
+================================================================================
+
+===== BigMono9 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --utf8 "Monospace 9"
+================================================================================
+
+===== BlockFiglet =====
+Block by Glenn Chappell 4/93 -- straight version of Lean
+Includes ISO Latin-1
+figlet release 2.1 -- 12 Aug 1994
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+
+===== Blocks =====
+Author : myflix
+Date   : 2004/6/25 18:33:21
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+===== Bloody =====
+
+
+Figlet conversion by patorjk, April 17, 2008
+
+===== BlurVisionAscii =====
+Font Author: Aiden Neuding
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== Bright =====
+Bright Font by Dennis Monk  7/94
+Identical to contrast.flf, but with different characters, making it
+brighter.
+
+===== Caligraphy =====
+caligraphy.flf composed  by Vinney Thai <ssfiit@eris.cc.umb.edu>
+caligraphy font (J, O, R) composed by Jorn <jorn@node.site.cat>
+date: Oct 23, 1994
+
+Explanation of first line:
+flf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+21   - height of a character
+19   - height of a character, not including descenders
+20   - max line length (excluding comment lines) + a fudge factor
+-1   - default smushmode for this font (like "-m 0" on command line)
+15   - number of comment lines
+
+
+===== Caligraphy2 =====
+Modified by Paul Burton September 96 from caligraphy.flf as a demonstration of 
+FigWin features.  Modification took about 5 minutes using FigWin's "rectangle 
+search and replace" feature.  The characters previously consisted of only "*" 
+characters.  These changes required two steps:
+
+First, all instances of "*" were replaced with "#" to give the font a darker 
+appearance.  
+
+                         #                      /
+Then, all instances of: #  were replaced with: /   (Each of these is a 
+rectangle of four squares, including two blanks.)
+
+Also added a period, exclamation point, and question mark and changed the 
+default smushmode.
+
+Original caligraphy.flf composed by Vinney Thai October 94
+ -----------------------------=<< FigWin Hype >>=------------------------------
+ These comments were generated automatically by FigWin, not the author of the
+ font.  FigWin is the Windows clone of FIGlet with a full featured font editor!
+ Forget about doing the math to figure out the smushmode number!  Just check a
+ few boxes for each smushing rule.  Forget about endmarks!  Let the computer
+ figure out how tall and how wide your font is.  Just draw fonts with the mouse
+ and wipe the smudgemarks off your screen from all that counting!
+
+ FigWin is full of features, but it's designed for use by a complete idiot.  If
+ you qualify, visit the FigWin website.  Screen shots are shown, and of course
+ you will be able to download it.
+
+                      http://home.earthlink.net/~solution
+
+
+===== CalvinS =====
+Font Author: ?
+
+More info on font here:
+
+https://web.archive.org/web/20120819044459/http://www.roysac.com/thedrawfonts-tdf.asp
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== Chiseled =====
+Author : LG Beard
+Date   : 2004/3/27 20:45:15
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== Chunky =====
+Square by Chris Gill, 30-JUN-94 -- based on .sig of Jeb Hagan.
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== Classy =====
+Font Author: Loic Cressot
+
+This font is free to use and distribute / MIT License
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== CoderMini =====
+Font Author: Loic Cressot
+
+This font is free to use and distribute / MIT License
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== Colossal =====
+Colossal.flf (Jonathon - jon@mq.edu.au)
+8 June 1994
+
+Explanation of first line:
+flf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+11   - height of a character
+8    - height of a character, not including descenders
+20   - max line length (excluding comment lines) + a fudge factor
+32   - default smushmode for this font
+13   - number of comment lines
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== Contrast =====
+Contrast Font by Dennis Monk  7/94
+Original font, I think.  Maybe inspired by one of Scarecrow's .sigs.
+
+===== Cosmike =====
+cosmic.flf by Mike Rosulek <mjr@netins.net>, 7/11/95. Check out my
+homepage at: http://www.netins.net/showcase/mikewrld/
+---- Modified and corrected by Michel Eftimakis (Michel.Eftimakis@vlsi.com) ----
+
+===== Cosmike2 =====
+Font Author: half Cosmike, half Darth ObiKy
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== Crawford =====
+crawford.flf (FIGlet font)
+
+
+Figlet conversion by Kent Nassen, knassen@umich.edu, 1/2/95
+
+From: s1171180@giaeb.cc.monash.edu.au (Rowan Crawford)
+Newsgroups: alt.ascii-art
+Subject: Font - Style No 2....
+Date: 14 Jan 1994 14:37:30 GMT
+Organization: Monash University
+Lines: 41
+Message-ID: <2h6ana$db6@harbinger.cc.monash.edu.au>
+NNTP-Posting-Host: giaeb.cc.monash.edu.au
+X-Newsreader: NN version 6.5.0 #4 (NOV)
+Status: RO
+
+Had some spare time today, so I have done another font. Different
+form to the last one though:
+
+[...]
+And there you are. "S" looks slightly odd and so does "J", but
+otherwise fairly neat I guess.
+
+Row.
+
+
+===== Crawford2 =====
+crawford2.flf (FIGlet font)
+Font created from original Crawford, update by PAT or JK, Jan 2008
+
+Figlet conversion by Kent Nassen, knassen@umich.edu, 1/2/95
+
+From: s1171180@giaeb.cc.monash.edu.au (Rowan Crawford)
+Newsgroups: alt.ascii-art
+Subject: Font - Style No 2....
+Date: 14 Jan 1994 14:37:30 GMT
+Organization: Monash University
+Lines: 41
+Message-ID: <2h6ana$db6@harbinger.cc.monash.edu.au>
+NNTP-Posting-Host: giaeb.cc.monash.edu.au
+X-Newsreader: NN version 6.5.0 #4 (NOV)
+Status: RO
+
+Had some spare time today, so I have done another font. Different
+form to the last one though:
+
+[...]
+And there you are. "S" looks slightly odd and so does "J", but
+otherwise fairly neat I guess.
+
+Row.
+
+
+===== Cricket =====
+Cricket by Leslie Bates        Jan. 1, 1996
+cricket9@aros.net       http://www.aros.net/~cricket9
+I wish to thank Wade Fincher for the SIG that was used as a base for Cricket as
+well as Chris Gill who designed the Square font, some of which was used in 
+Cricket. And finally I wish to thank Paul Burton, who if it was not for his 
+desire to create FIGWin, I may never have had the motivation to create a 
+FIGfont.
+ FIGWin is the Windows clone of FIGlet with a full featured FIGfont editor!
+ Forget about doing the math to figure out the smushmode number.  Just check a
+ few boxes for each smushing rule.  Forget about endmarks -- let the computer
+ figure out how tall and how wide your font is.  Just draw FIGfonts with the
+ mouse and wipe the smudgemarks off your screen from all that counting!
+
+ FIGWin is full of features, but it's designed for use by a complete idiot.  If
+ you qualify, visit the FIGWin website.  Screen shots are shown, and of course
+ you can download it.  (FREE!)
+
+                      http://home.earthlink.net/~solution
+
+ Also see the FIGlet website:  http://st-www.cs.uiuc.edu/users/chai/figlet.html
+
+---
+
+Font modified June 17, 2007 by patorjk 
+This was to widen the space character.
+
+===== Cyberlarge =====
+Cyberfont - large
+Figlet conversion by Kent Nassen, kentn@cyberspace.org, 8-10-94
+From: stock@fwi.uva.nl (Lennert Stock)
+Date: 15 Jul 1994 00:04:25 GMT
+
+Here are some fonts. Non-figlet I'm afraid, if you wanna convert them, be
+my guest. I posted the isometric fonts before.
+
+------------------------------------------------------------------------------
+
+     .x%%%%%%x.                                             .x%%%%%%x.
+    ,%%%%%%%%%%.                                           .%%%%%%%%%%.
+   ,%%%'  )'  \)                                           :(  `(  `%%%.
+  ,%x%)________) --------- L e n n e r t   S t o c k       ( _   __ (%x%.
+  (%%%~^88P~88P|                                           |~=> .=-~ %%%)
+  (%%::. .:,\ .'                                           `. /,:. .::%%)
+  `;%:`\. `-' |                                             | `-' ./':%:'
+   ``x`. -===.'                   stock@fwi.uva.nl -------- `.===- .'x''
+    / `:`.__.;                                               :.__.':' \
+ .d8b.     ..`.                                             .'..     .d8b.
+
+===== Cybermedium =====
+Cyberfont - medium
+Figlet conversion by Kent Nassen, kentn@cyberspace.org, 8-11-94
+From: stock@fwi.uva.nl (Lennert Stock)
+Date: 15 Jul 1994 00:04:25 GMT
+
+Here are some fonts. Non-figlet I'm afraid, if you wanna convert them, be
+my guest. I posted the isometric fonts before.
+
+------------------------------------------------------------------------------
+
+     .x%%%%%%x.                                             .x%%%%%%x.
+    ,%%%%%%%%%%.                                           .%%%%%%%%%%.
+   ,%%%'  )'  \)                                           :(  `(  `%%%.
+  ,%x%)________) --------- L e n n e r t   S t o c k       ( _   __ (%x%.
+  (%%%~^88P~88P|                                           |~=> .=-~ %%%)
+  (%%::. .:,\ .'                                           `. /,:. .::%%)
+  `;%:`\. `-' |                                             | `-' ./':%:'
+   ``x`. -===.'                   stock@fwi.uva.nl -------- `.===- .'x''
+    / `:`.__.;                                               :.__.':' \
+ .d8b.     ..`.                                             .'..     .d8b.
+
+===== Cybersmall =====
+Cyberfont - small
+Figlet conversion by Kent Nassen, kentn@cyberspace.org, 8-11-94
+From: stock@fwi.uva.nl (Lennert Stock)
+Date: 15 Jul 1994 00:04:25 GMT
+
+Here are some fonts. Non-figlet I'm afraid, if you wanna convert them, be
+my guest. I posted the isometric fonts before.
+
+------------------------------------------------------------------------------
+
+     .x%%%%%%x.                                             .x%%%%%%x.
+    ,%%%%%%%%%%.                                           .%%%%%%%%%%.
+   ,%%%'  )'  \)                                           :(  `(  `%%%.
+  ,%x%)________) --------- L e n n e r t   S t o c k       ( _   __ (%x%.
+  (%%%~^88P~88P|                                           |~=> .=-~ %%%)
+  (%%::. .:,\ .'                                           `. /,:. .::%%)
+  `;%:`\. `-' |                                             | `-' ./':%:'
+   ``x`. -===.'                   stock@fwi.uva.nl -------- `.===- .'x''
+    / `:`.__.;                                               :.__.':' \
+ .d8b.     ..`.                                             .'..     .d8b.
+
+===== DeltaCorpsPriest1 =====
+Font Author: CoSMiC cHiLD
+
+FIGFont created by patorjk.com's FIGFont Editor: http://patorjk.com/figfont-editor
+
+===== Doh =====
+doh.flf by Curtis Wanner (cwanner@acs.bu.edu)
+latest revision - 4/95
+
+
+===== Doom =====
+DOOM by Frans P. de Vries <fpv@xymph.iaf.nl>  18 Jun 1996
+based on Big by Glenn Chappell 4/93 -- based on Standard
+figlet release 2.1 -- 12 Aug 1994
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Explanation of first line:
+flf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+8    - height of a character
+6    - height of a character, not including descenders
+14   - max line length (excluding comment lines) + a fudge factor
+15   - default smushmode for this font
+16   - number of comment lines
+
+
+===== DosRebel =====
+Rebel by Valerie Mates (popcorn@cyberspace.org), based on a font by Ron Bliss
+(who sometimes goes by the name "rebel" because his initials are REB).
+May 27, 1994
+
+Explanation of first line:
+flf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+11   - height of a character
+8    - height of a character, not including descenders
+35   - max line length (excluding comment lines) + a fudge factor
+-1   - default smushmode for this font (like "-m 15" on command line)
+14   - number of comment lines
+
+
+===== FireFontK =====
+Font   : Fire Font-k
+Author : MJP
+Date   : 2003/11/6 11:11:05
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+Based on Small.flf by Glenn Chappell 4/93 -- based on Standard
+
+---
+
+Font modified May 26, 2012 by patorjk
+- Added the 0xCA0 character.
+
+===== FireFontS =====
+Font   : Fire Font-s
+Author : MJP
+Date   : 2003/11/6 11:11:05
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+Based on Small.flf by Glenn Chappell 4/93 -- based on Standard
+
+---
+
+Font modified May 26, 2012 by patorjk
+- Added the 0xCA0 character.
+
+===== Future =====
+===============================================================================
+  This is future.tlf, or “Future”, by Sam Hocevar.
+
+  2006/10/01 -- Sam Hocevar <sam@hocevar.net>
+                font creation
+                still missing: # % ( ) * / < > \ ^ ~
+  2006/10/02 -- Sam Hocevar <sam@hocevar.net>
+                added Unicode block and line glyphs
+                added: % ( ) * / \ ~
+                fixed: & 2 5 X
+
+  This font is free software. It comes without any warranty, to the extent
+permitted by applicable law. You can redistribute it and/or modify it under
+the terms of the Do What The Fuck You Want To Public License, Version 2,
+as published by Sam Hocevar. See http://sam.zoy.org/wtfpl/COPYING for more
+details.
+
+  Missing characters: # < > ^
+
+  This font is part of TOIlet’s official distribution. More information
+on the TOIlet website at http://caca.zoy.org/wiki/toilet
+===============================================================================
+
+===== FutureSmooth =====
+===============================================================================
+  This is "Future Smooth" (Future Smooth.flf), based on "Future" (future.tlf) by Sam Hocevar. This variant uses arcs instead of sharp corners to smooth out the font. Because heavy arc characters don't exist, the font uses light box drawings instead of heavy ones for consistency.
+
+  2006/10/01 -- Sam Hocevar <sam@hocevar.net>
+                font creation
+                still missing: # % ( ) * / < > \ ^ ~
+  2006/10/02 -- Sam Hocevar <sam@hocevar.net>
+                added Unicode block and line glyphs
+                added: % ( ) * / \ ~
+                fixed: & 2 5 X
+  2026/02/19 -- John Goodliff <johng.io>
+                replaced ┏ with ╭
+                replaced ┓ with ╮
+                replaced ┗ with ╰
+                replaced ┛ with ╯
+                replaced heavy box drawings with light box drawings
+
+  This font is free software. It comes without any warranty, to the extent
+permitted by applicable law. You can redistribute it and/or modify it under
+the terms of the Do What The Fuck You Want To Public License, Version 2,
+as published by Sam Hocevar. See http://sam.zoy.org/wtfpl/COPYING for more
+details.
+
+  Missing characters: # < > ^
+
+  This font is part of TOIlet’s official distribution. More information
+on the TOIlet website at http://caca.zoy.org/wiki/toilet
+===============================================================================
+
+===== FutureThin =====
+===============================================================================
+  This is "Future Thin" (Future Thin.flf), based on "Future" (future.tlf) by Sam Hocevar. This variant uses light box drawing characters for a thinner look.
+
+  2006/10/01 -- Sam Hocevar <sam@hocevar.net>
+                font creation
+                still missing: # % ( ) * / < > \ ^ ~
+  2006/10/02 -- Sam Hocevar <sam@hocevar.net>
+                added Unicode block and line glyphs
+                added: % ( ) * / \ ~
+                fixed: & 2 5 X
+  2026/02/19 -- John Goodliff <johng.io>
+                replaced heavy box drawings with light box drawings
+
+  This font is free software. It comes without any warranty, to the extent
+permitted by applicable law. You can redistribute it and/or modify it under
+the terms of the Do What The Fuck You Want To Public License, Version 2,
+as published by Sam Hocevar. See http://sam.zoy.org/wtfpl/COPYING for more
+details.
+
+  Missing characters: # < > ^
+
+  This font is part of TOIlet’s official distribution. More information
+on the TOIlet website at http://caca.zoy.org/wiki/toilet
+===============================================================================
+
+===== Graffiti =====
+Font name is graffiti.flf
+This figlet font designed by Leigh Purdie (purdie@zeus.usq.edu.au)
+'fig-fonted' by Leigh Purdie and Tim Maggio (tim@claremont.com)
+Date: 5 Mar 1994
+
+---
+
+Font modified May 20, 2012 by patorjk 
+- Changed the hardblanks around certain punctuation characters (., and -) to improve smushing.
+- Added the 0xCA0 character
+
+===== Jazmine =====
+
+				  jazmine.flf
+
+	      well, the  original requester might not have liked
+	      the sig i diddled for her, but i decided to make a
+			 font out of it. so there. :)
+
+			       vampyr@acs.bu.edu
+
+
+===== Mono12 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --half --utf8 "Monospace Bold 12"
+================================================================================
+
+===== Mono9 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --half --utf8 "Monospace 9"
+================================================================================
+
+===== Ogre =====
+Standard by Glenn Chappell & Ian Chai 3/93 -- based on .sig of Frank Sheeran
+Figlet release 2.0 -- August 5, 1993
+
+Explanation of first line:
+flf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+6    - height of a character
+5    - height of a character, not including descenders
+20   - max line length (excluding comment lines) + a fudge factor
+15   - default smushmode for this font (like "-m 15" on command line)
+13   - number of comment lines
+
+
+===== Pagga =====
+===============================================================================
+  This is pagga.tlf, or “Pagga”, by Sam Hocevar and pagga.
+
+  2010/01/17 -- Sam Hocevar <sam@hocevar.net>
+                font creation, all base characters
+
+  This font is free software. It comes without any warranty, to the extent
+permitted by applicable law. You can redistribute it and/or modify it under
+the terms of the Do What The Fuck You Want To Public License, Version 2,
+as published by Sam Hocevar. See http://sam.zoy.org/wtfpl/COPYING for more
+details.
+
+  This font is part of TOIlet’s official distribution. More information
+on the TOIlet website at http://caca.zoy.org/wiki/toilet
+===============================================================================
+
+===== Rebel =====
+Rebel by Valerie Mates (popcorn@cyberspace.org), based on a font by Ron Bliss
+(who sometimes goes by the name "rebel" because his initials are REB).
+UTF-8 conversion by Claudio Matsuoka (cmatsuoka@gmail.com)
+Jan 16 2011 (Original MS-DOS Rebel dated May 27, 1994)
+
+Explanation of first line:
+tlf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+11   - height of a character
+8    - height of a character, not including descenders
+35   - max line length (excluding comment lines) + a fudge factor
+-1   - default smushmode for this font (like "-m 15" on command line)
+15   - number of comment lines
+
+
+===== Rectangles =====
+rectangles.flf by David Villegas <mnementh@netcom.com> 12/94
+
+===== Relief =====
+Relief by Nick Miners N.M.Miners@durham.ac.uk
+June 1994
+
+===== Relief2 =====
+Relief2 by Merlin Greywolf merlin@brahms.udel.edu
+August 1994
+
+===== ShadedBlocky =====
+Font Author: Jäger
+
+FIGFont created with: http://patorjk.com/figfont-editor
+
+***Alphabetical only, no numbers or symbols***
+
+===== Slant =====
+Slant by Glenn Chappell 3/93 -- based on Standard
+Includes ISO Latin-1
+figlet release 2.1 -- 12 Aug 1994
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+
+===== SlantRelief =====
+Mega-relief by Nick Bryant 12/9, dmc1@st-and.ac.uk for the moment.
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Explanation of first line:
+flf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+9    - height of a character
+9    - height of a character, not including descenders
+40   - max line length (excluding comment lines) + a fudge factor
+0    - default smushmode for this font
+15   - number of comment lines
+
+
+
+===== Small =====
+Small by Glenn Chappell 4/93 -- based on Standard
+Includes ISO Latin-1
+figlet release 2.1 -- 12 Aug 1994
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+
+===== SmallAscii12 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --quarter --ascii "Monospace Bold 12"
+================================================================================
+
+===== SmallAscii9 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --quarter --ascii "Monospace 9"
+================================================================================
+
+===== SmallBlock =====
+===============================================================================
+  This is smblock.tlf, or “Small Block”, by Sam Hocevar.
+
+  2006/10/04 -- Sam Hocevar <sam@hocevar.net>
+                font creation, all base characters
+                additional characters: latin1, katakana, blocks
+
+  This font is free software. It comes without any warranty, to the extent
+permitted by applicable law. You can redistribute it and/or modify it under
+the terms of the Do What The Fuck You Want To Public License, Version 2,
+as published by Sam Hocevar. See http://sam.zoy.org/wtfpl/COPYING for more
+details.
+
+  This font is part of TOIlet’s official distribution. More information
+on the TOIlet website at http://caca.zoy.org/wiki/toilet
+===============================================================================
+
+===== SmallBraille =====
+===============================================================================
+  This is smbraille.tlf", or “Small Braille”, by Sam Hocevar <sam@hocevar.net>.
+It was created on September 30th, 2006.
+
+  This font is free software. It comes without any warranty, to the extent
+permitted by applicable law. You can redistribute it and/or modify it under
+the terms of the Do What The Fuck You Want To Public License, Version 2,
+as published by Sam Hocevar. See http://sam.zoy.org/wtfpl/COPYING for more
+details.
+
+  Missing characters: # $ % & * + , : ; < > ?
+
+  This font is part of TOIlet’s official distribution. More information
+on the TOIlet website at http://caca.zoy.org/wiki/toilet
+===============================================================================
+
+===== SmallCaps =====
+Author : LG Beard
+Date   : 2004/6/6 16:04:53
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+===== SmallIsometric1 =====
+smisome1.flf
+Downsized version of isometric1.flf - M. Lindsey (mglindse@nyx.cs.du.edu)
+February 24, 1996
+---
+isometric1.flf
+
+Figlet conversion by Kent Nassen (kentn@cyberspace.org), 8-10-94, based
+on the fonts posted by Lennert Stock:
+
+From: stock@fwi.uva.nl (Lennert Stock)
+Date: 15 Jul 1994 00:04:25 GMT
+
+Here are some fonts. Non-figlet I'm afraid, if you wanna convert them, be
+my guest. I posted the isometric fonts before.
+
+------------------------------------------------------------------------------
+                 --------- L e n n e r t   S t o c k                   
+                                  stock@fwi.uva.nl --------         
+
+===== SmallKeyboard =====
+
+smkeyboard.flf
+
+Adapted for figlet by Kent Nassen, kentn@cyberspace.org, 11/22/94, based
+on the idea:
+
+From: bas@damek.kth.se (Bas Meijer)
+Newsgroups: rec.arts.ascii
+Subject: Talk-line: keyboard.flf
+Date: 22 Nov 1994 07:26:10 -0600
+Organization: Royal Institute of Technology
+Lines: 41
+Sender: boba@gagme.wwa.com
+Approved: boba@wwa.com
+Message-ID: <3asrhi$con@gagme.wwa.com>
+References: <3asltp$aog@gagme.wwa.com>
+Reply-To: bas@damek.kth.se
+NNTP-Posting-Host: gagme.wwa.com
+
+
+In article aog@gagme.wwa.com, ssfiit@cs.umb.edu (SuperStreetFighter2Turbo) writes:
+> 
+> I have composed a new figlet font! =)
+> it is called keyboard.flf. It resemble the actual keyboard, well, kinda! =)
+> anyway! here is a sample! =)
+>  _______ _______ _______ _______ _______ _______
+> |\     /|\     /|\     /|\     /|\     /|\     /|
+> | +---+ | +---+ | +---+ | +---+ | +---+ | +---+ |
+> | |   | | |   | | |   | | |   | | |   | | |   | |
+> | |s  | | |a  | | |m  | | |p  | | |l  | | |e  | |
+> | +---+ | +---+ | +---+ | +---+ | +---+ | +---+ |
+> |/_____\|/_____\|/_____\|/_____\|/_____\|/_____\|
+
+ ____ _________ ____ ____ ____ _________ ____ ____ ____ _________ 
+||A |||       |||B |||I |||T |||       |||T |||O |||O |||       ||
+||__|||_______|||__|||__|||__|||_______|||__|||__|||__|||_______||
+|/__\|/_______\|/__\|/__\|/__\|/_______\|/__\|/__\|/__\|/_______\|____
+||B |||I |||G |||       |||I |||F |||       |||Y |||O |||U |||       ||
+||__|||__|||__|||_______|||__|||__|||_______|||__|||__|||__|||_______||
+|/__\|/__\|/__\|/_______\|/__\|/__\|/_______\|/__\|/__\|/__\|/_______\|
+||A |||S |||K |||       |||M |||E |||! |||       |||: |||) |||Return||
+||__|||__|||__|||_______|||__|||__|||__|||_______|||__|||__|||      ||
+|/__\|/__\|/__\|/_______\|/__\|/__\|/__\|/_______\|/__\|/__\|/l     ||
+                                                             l|_____||
+Bas.                                                         |/_____\|
+
+
+email: bas@damek.kth.se     ____  ____      KTH, Dept. of Mach. Design
+ _______  ___  ______      /    \/    \ ____________________________
+(       \/   \/      \    /            \       )   )   )      )     \
+ |   |   )    \   \___)  /              \  \__/\  /\   \  \__/   |   )
+ |      (  |   \_    \  (     (    )     )  )_ (  )_)   \  )_|      (
+ |   |   ) _    )\    )  \     \__/     /  /  \/  \     / /  \   \   \
+(_______/_/ \__/_____/    \     \/     /_______)___)___/______)__/\___)
+                           \____/\____/
+tel.: +46-(0)8-790 6308                     S-100 44 Stockholm, Sweden
+
+
+===== SmallMono12 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --quarter --utf8 "Monospace Bold 12"
+================================================================================
+
+===== SmallMono9 =====
+================================================================================
+  This font was automatically generated using:
+   % caca2tlf --quarter --utf8 "Monospace 9"
+================================================================================
+
+===== SmallPoison =====
+smpoison.flf figletized by Vinney Thai <ssfiit@eris.cc.umb.edu>
+poison font composed David Issel <dissel@nunic.nu.edu>
+date: Nov 18, 1994
+
+Explanation of first line:
+flf2 - "magic number" for file identification
+a    - should always be `a', for now
+$    - the "hardblank" -- prints as a blank, but can't be smushed
+7    - height of a character
+5    - height of a character, not including descenders
+16   - max line length (excluding comment lines) + a fudge factor
+-1   - default smushmode for this font (like "-m 0" on command line)
+14   - number of comment lines
+
+
+===== SmallScript =====
+SmScript by Glenn Chappell 4/93 -- based on Script
+Includes ISO Latin-1
+figlet release 2.1 -- 12 Aug 1994
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+
+===== SmallShadow =====
+SmShadow by Glenn Chappell 4/93 -- based on Small
+Includes ISO Latin-1
+figlet release 2.1 -- 12 Aug 1994
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+
+===== SmallSlant =====
+SmSlant by Glenn Chappell 6/93 - based on Small & Slant
+Includes ISO Latin-1
+figlet release 2.1 -- 12 Aug 1994
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+
+===== SmallTengwar =====
+Tiny Tengwar 1.0 by Belinda Asbell <mba@ccd.harris.com>
+Adapted from Mike Urban's <urban@sideshow.jpl.nasa.gov> Tengwar for 
+Metafont (which is, in turn, based on Tolkien :)
+Date: 28 Feb 1996
+
+
+===== Soft =====
+Author : myflix
+Date   : 2004/6/9 7:40:40
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+---
+
+Font modified June 17, 2007 by patorjk 
+- Widened the space character.
+
+Font modified May 26, 2012 by patorjk
+- Added the 0xCA0 character.
+
+===== Standard =====
+Standard by Glenn Chappell & Ian Chai 3/93 -- based on Frank's .sig
+Includes ISO Latin-1
+figlet release 2.1 -- 12 Aug 1994
+Modified for figlet 2.2 by John Cowan <cowan@ccil.org>
+  to add Latin-{2,3,4,5} support (Unicode U+0100-017F).
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Modified by Paul Burton <solution@earthlink.net> 12/96 to include new parameter
+supported by FIGlet and FIGWin.  May also be slightly modified for better use
+of new full-width/kern/smush alternatives, but default output is NOT changed.
+
+Font modified May 20, 2012 by patorjk to add the 0xCA0 character
+
+===== SubZero =====
+
+                  "Sub-Zero" font by Sub-Zero
+                 ==============================
+
+
+-> Conversion to FigLet font by MEPH. (Part of ASCII Editor Service Pack I)
+   (http://studenten.freepage.de/meph/ascii/ascii/editor/_index.htm)
+-> Defined: ASCII code alphabet
+-> Uppercase characters only.
+
+ScarecrowsASCIIArtArchive1.0.txt
+From: "Sub-Zero" <bodom@papaya.ucs.indiana.edu>
+"Here's a font I've been working on lately.  Can someone make the V, Q, and X
+look better?  Also, the B, P, and R could use an improvement too.
+Oh, here it is."
+
+
+===== Terrace =====
+- T E R R A C E -
+
+- a FIGFont by AJN -
+
+created with: http://patorjk.com/figfont-editor
+
+===== Tmplr =====
+Font Name: tmplr
+Font Author: Eugene Ghanizadeh Khoub
+FIGFont created with: http://patorjk.com/figfont-editor
+
+===== Train =====
+Author :myflix
+Date   : 2003/11/6 19:07:12
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+
+Changed 2012-05-21: Update to "!" character by patorjk
+
+===== Varsity =====
+Author : myflix
+Date   : 2004/6/29 12:12:55
+Version: 1.0
+-------------------------------------------------
+
+-------------------------------------------------
+This font has been created using JavE's FIGlet font export assistant.
+Have a look at: http://www.jave.de
+
+Permission is hereby given to modify this font, as long as the
+modifier's name is placed on a comment line.
+

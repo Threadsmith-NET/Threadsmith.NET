@@ -353,7 +353,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-ChildAgent-ToolInvocation-Completed.md` | Generic model-visible completion fallback for a delegated-child tool invocation with no other result content. | `None` |
-| `Tool-ReadAgentEvidence-Description.md` | Child-local retrieval of delivered results and captured parent PR snapshots by evidence ID, with optional line ranges. | `None` |
+| `Tool-ReadAgentEvidence-Description.md` | Bounded child-local retrieval of delivered results and captured parent PR snapshots by evidence ID, with line/column continuation. | `None` |
 
 #### `code_explore` family
 
@@ -718,9 +718,9 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-pr_fetch-Description.md` | Complete single-call PR acquisition, refresh and untrusted evidence guidance. | [`Providers`](#placeholder-providers) |
+| `Tool-pr_fetch-Description.md` | Complete PR capture, bounded snapshot reads, refresh and untrusted evidence guidance. | [`Providers`](#placeholder-providers) |
 
-`Providers` is the ordinally sorted list of enabled configured account IDs, compiled adapter types and recognized web hosts, rendered at startup without resolving credentials. Routing patterns are read from account configuration by host code and are not rendered into this token. The description defines the required `kind` values `inventory` and `diff`, explains cursor continuity and the result's kind/continuation fields, and permits explicit account selection when supplied by the user or needed to resolve ambiguity. Wording cannot change retrieval scope, provider selection, trust, permission or cache authority. `Skill-Review.md` requests `kind:"inventory"` for the lead `pullRequest` handoff and reserves `kind:"diff"` for specialist patch evidence while retaining the five-role/report contract.
+`Providers` is the ordinally sorted list of enabled configured account IDs, compiled adapter types and recognized web hosts, rendered at startup without resolving credentials. Routing patterns are read from account configuration by host code and are not rendered into this token. The description defines the required `kind` values `inventory` and `diff`, bounded manifest delivery and `snapshotId`/line/column continuation, and permits explicit account selection when supplied by the user or needed to resolve ambiguity. Wording cannot change retrieval scope, provider selection, trust, permission or cache authority. `Skill-Review.md` requests `kind:"diff"` once for the lead `pullRequest` capture and delegates the completed snapshot ID for specialist reads while retaining the five-role/report contract.
 
 #### `jira` family
 

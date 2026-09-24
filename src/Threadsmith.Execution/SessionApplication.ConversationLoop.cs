@@ -1145,6 +1145,18 @@ public sealed partial class SessionApplication
         }
 
         var invocationContext = round.InvocationContext;
+        if (invocationContext.ModelContextWindowTokens is { } contextWindow
+            && round.ModelRequest.WireEstimate is { } wireEstimate)
+        {
+            invocationContext = invocationContext with
+            {
+                ModelRemainingInputBudgetTokens = (int)Math.Clamp(
+                    contextWindow - wireEstimate.TotalCapacityTokens,
+                    0L,
+                    int.MaxValue),
+            };
+        }
+
         var requests = streamState.PendingToolCalls
             .Select(call => new ToolBatchRequest(
                 call.Ordinal,

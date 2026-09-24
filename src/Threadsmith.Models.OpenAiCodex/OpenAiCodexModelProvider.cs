@@ -312,6 +312,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         if (suppliedEstimate.LogicalTokens != expectedEstimate.LogicalTokens
             || suppliedEstimate.WireInputTokens != expectedEstimate.WireInputTokens
             || suppliedEstimate.StablePrefixTokens != expectedEstimate.StablePrefixTokens
+            || suppliedEstimate.StablePrefixComponentCount != expectedEstimate.StablePrefixComponentCount
             || suppliedEstimate.NativeToolTokens != expectedEstimate.NativeToolTokens
             || suppliedEstimate.TextToolTokens != expectedEstimate.TextToolTokens
             || suppliedEstimate.FramingTokens != expectedEstimate.FramingTokens

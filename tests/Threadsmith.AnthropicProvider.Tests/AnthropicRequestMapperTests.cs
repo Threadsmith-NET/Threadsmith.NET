@@ -225,6 +225,12 @@ public sealed class AnthropicRequestMapperTests
         Assert.True(prepared.WireEstimate.WireInputTokens >= JsonSerializer.SerializeToUtf8Bytes(body).Length);
         Assert.Equal(prepared.WireEstimate.WireInputTokens, prepared.WireEstimate.Components.Sum(item => item.Tokens));
         Assert.Contains(prepared.WireEstimate.Components, item => item.Label == request.Tools[0].Name && item.Category == "Tools");
+        Assert.Equal(4, prepared.WireEstimate.StablePrefixComponentCount);
+        Assert.Equal(
+            ["System: host-policy", "Developer: repository-instructions", request.Tools[0].Name, "Developer: phase-policy"],
+            [.. prepared.WireEstimate.Components
+                .Where(item => item.Category is "System prompt" or "Repository instructions" or "Tools" or "Phase instructions")
+                .Select(item => item.Label)]);
         var uncached = AnthropicRequestMapper.CreateBody(projected, TestAnthropic.Profile(), compatibility with { PromptCachingEnabled = false });
         RemoveCacheControls(body);
         Assert.True(JsonNode.DeepEquals(body, uncached));
@@ -246,7 +252,7 @@ public sealed class AnthropicRequestMapperTests
         var prepared = AnthropicRequestPreparer.Prepare(sourced, TestAnthropic.Profile(), TestAnthropic.Compatibility(), "anthropic");
         Assert.Equal(original.WireDigest, prepared.WireDigest);
         Assert.Equal(original.WireEstimate.WireInputTokens, prepared.WireEstimate.WireInputTokens);
-        var instructions = prepared.WireEstimate.Components[0];
+        var instructions = prepared.WireEstimate.Components.Single(item => item.Label == "Developer: repository-instructions");
         Assert.Equal(instructions.Tokens, instructions.Children.Sum(item => item.Tokens));
         Assert.Equal(JsonEncodedText.Encode(first).EncodedUtf8Bytes.Length, instructions.Children.Single(item => item.Label == "AGENTS.md").Tokens);
         Assert.Equal(JsonEncodedText.Encode(second).EncodedUtf8Bytes.Length, instructions.Children.Single(item => item.Label == "append.md").Tokens);

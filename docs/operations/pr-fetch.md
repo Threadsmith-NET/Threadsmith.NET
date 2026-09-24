@@ -1,10 +1,10 @@
 # Pull-request retrieval
 
-`pr_fetch` reads a GitHub.com or Bitbucket Cloud PR's metadata and complete changed-file inventory, with optional provider diff content. It never checks out a branch, writes source files, posts comments or compares two branch-tip trees. The maintained [review skill](../code-review.md) retrieves the complete inventory and diff in one call in the lead review, then supplies that evidence to its specialists. The tool is parent-only and is omitted from subagent tool catalogs.
+`pr_fetch` captures a GitHub.com or Bitbucket Cloud PR's metadata and complete changed-file inventory, with optional provider diff content. It never checks out a branch, writes source files, posts comments or compares two branch-tip trees. The maintained [review skill](../code-review.md) captures the complete inventory and diff in one lead call, then supplies the snapshot ID to its specialists. The tool is parent-only and is omitted from subagent tool catalogs.
 
 ## Captured evidence for delegated children
 
-Successful parent PR acquisitions are retained in the owning operation scope. Delegated children receive the completed snapshot ID automatically and can inspect its metadata, full changed-file inventory, and diff through `read_agent_evidence`. The reader supports one-based line ranges for selective inspection. It reads the captured result and makes no provider request; `pr_fetch` remains absent from child tool catalogs. Snapshots expire with the operation scope and refresh replaces the prior handoff.
+Successful parent PR acquisitions are retained in the owning operation scope. Delegated children receive the completed snapshot ID automatically and can inspect its metadata, full changed-file inventory, and diff through bounded `read_agent_evidence` calls. The reader supports one-based line ranges and a column continuation for long lines. It reads the captured result and makes no provider request; `pr_fetch` remains absent from child tool catalogs. Snapshots expire with the operation scope and refresh replaces the prior handoff.
 
 ## Configure and enable
 
@@ -48,7 +48,13 @@ The tool selects the unique enabled account whose configured `urlPatterns` match
 
 Omitted or empty `urlPatterns` use adapter defaults: `https://github.com/*/*/pull/*` or `https://bitbucket.org/*/*/pull-requests/*`. Custom patterns replace those defaults and belong in user/machine configuration; repository configuration cannot replace them. Changes require restart. Overlapping patterns do not establish priority: if multiple accounts match, the tool asks for an explicit `provider` ID. With no match, it reports a configuration/selection error. An explicit `provider` selects that enabled account regardless of its automatic routing patterns, but the adapter still validates the URL. In the example above, the public GitHub account overlaps the work account; remove it or narrow its patterns to avoid that ambiguity.
 
-Each successful call returns the entire requested evidence after the host follows all provider API pages and verifies that PR metadata still matches. There are no model-facing cursors, continuation calls, or delivery-pending states. The result includes metadata, snapshot identity, the complete file list, available diff, limitations, and cache/acquisition status. Destination commit is the destination tip, not a claimed merge base.
+After the host follows all provider API pages and checks matching PR metadata, a small result returns the requested evidence directly. A larger result returns a bounded manifest with `snapshotId`, `changedFileCount`, `diffCharacterCount`, and `evidenceReadRequired`. Its empty `page.files` and `page.diff` are delivery omissions, not provider omissions. Read the captured snapshot with the same URL and kind plus `snapshotId`, optionally `startLine`, `endLine`, and `startColumn`:
+
+```json
+{"url":"https://github.com/owner/repo/pull/123","kind":"diff","snapshotId":"<returned-id>","startLine":1}
+```
+
+Each read returns at most 12,000 evidence characters, potentially fewer for a smaller selected model, and `nextLine`/`nextColumn` when more remains. Follow both fields to continue, including within an unusually long line. The reader does not contact the provider. The snapshot expires with the operation scope or explicit refresh. Destination commit is the destination tip, not a claimed merge base.
 
 A moving PR, failed provider page, inconsistent file count, or exceeded configured acquisition bound fails the call rather than returning provisional evidence as complete. Binary files and provider-omitted patches remain explicit limitations. The before/after metadata check is not an atomic provider snapshot.
 
@@ -63,12 +69,12 @@ All keys are under `tools.prFetch`; trusted settings are ceilings for repository
 | Key | Default | Meaning |
 | --- | ---: | --- |
 | `maximumResponseBytes` | 16777216 | Decoded bytes per API response or raw diff stream; zero disables the ceiling. |
-| `maximumCacheBytes` | 33554432 | Retained UTF-8 serialized metadata/pages across PRs in one operation; zero disables the ceiling. Exhaustion fails without evicting a captured revision. |
+| `maximumCacheBytes` | 33554432 | Retained UTF-8 serialized metadata and in-flight pages, or their canonical completed snapshot, across PRs in one operation; zero disables the ceiling. Completion replaces source pages with the exactly measured canonical snapshot charge. Exhaustion fails without evicting a captured revision. |
 | `maximumFilePages` | 200 | File-inventory API pages per acquisition; metadata, diff and bounded redirects are additional. Zero disables the ceiling. |
 | `timeoutSeconds` | 120 | Complete acquisition deadline and declared tool timeout; zero disables it. |
-| `pageCharacters` | 8192 | Internal provider read/grouping size, 256–16384; the model receives the complete result regardless of this size. |
+| `pageCharacters` | 8192 | Internal provider read/grouping size, 256–16384; unrelated to bounded model delivery. |
 
-Ordinary runtime overrides, budgets and cancellation still apply. The tool has no separate small output cap; configured runtime overrides and the model's context capacity still apply. Secrets resolve at the HTTP boundary with user-owned minimum trust. Redirects/pagination stay on the adapter's API authority and repository route; public-IP validation pins connections. Tokens are absent from cache keys, evidence and diagnostics.
+Ordinary runtime overrides, budgets and cancellation still apply. The tool declares a 256 KiB result ceiling, reduces delivery further for the selected model's available context, and rejects a request with at most 1,024 remaining input tokens before provider acquisition. Each captured-evidence read is bounded. Secrets resolve at the HTTP boundary with user-owned minimum trust. Redirects/pagination stay on the adapter's API authority and repository route; public-IP validation pins connections. Tokens are absent from cache keys, evidence and diagnostics.
 
 ## Extending providers
 

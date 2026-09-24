@@ -18,6 +18,14 @@ public static class ContextUsageFormatter
         return Leaves(snapshot.Components).Where(item => item.Tokens > 0);
     }
 
+    /// <summary>Counts visible rows in the initial host-stable prefix.</summary>
+    public static int StablePrefixContributionCount(ContextUsageSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return Leaves(snapshot.Components.Take(snapshot.StablePrefixComponentCount))
+            .Count(item => item.Tokens > 0);
+    }
+
     /// <summary>Aggregates non-overlapping contributions independently of the viewport.</summary>
     public static IReadOnlyList<ContextUsageComponent> Categories(ContextUsageSnapshot snapshot)
     {
@@ -47,10 +55,17 @@ public static class ContextUsageFormatter
         text.AppendLine($"Context usage — Estimated — {Label(snapshot.ModelName ?? snapshot.ModelProfileId?.Value.ToString() ?? "Model unknown")}");
         text.AppendLine($"{snapshot.Stage}, round {snapshot.Round + 1}; {snapshot.CapturedAt:O}; {(snapshot.DispatchStarted ? "submitted" : "prepared; submission not observed")}");
         text.AppendLine($"Input: {snapshot.InputTokens:N0}; Window: {snapshot.ContextWindow?.ToString("N0", CultureInfo.InvariantCulture) ?? "?"}; Used: {Percent(snapshot.InputTokens, snapshot.ContextWindow)}; Output reserve: {snapshot.OutputReserve:N0}");
+        text.AppendLine($"Host-stable prefix: {snapshot.StablePrefixTokens:N0} tokens; cache eligible. Actual cache use requires provider telemetry.");
         text.AppendLine(snapshot.EstimationBasis);
-        foreach (var item in OrderedContributions(snapshot))
+        var contributions = OrderedContributions(snapshot).ToArray();
+        var stablePrefixCount = StablePrefixContributionCount(snapshot);
+        for (var index = 0; index < contributions.Length; index++)
         {
-            text.AppendLine($"[{Label(item.Container)}] {Label(item.Label)}: {item.Tokens:N0} ({Percent(item.Tokens, snapshot.InputTokens)})");
+            var item = contributions[index];
+            var marker = index < stablePrefixCount
+                ? index == stablePrefixCount - 1 ? '└' : '│'
+                : ' ';
+            text.AppendLine($"{marker}[{Label(item.Container)}] {Label(item.Label)}: {item.Tokens:N0} ({Percent(item.Tokens, snapshot.InputTokens)})");
         }
 
         text.AppendLine("Categories — % of input (rounded)");
@@ -62,6 +77,6 @@ public static class ContextUsageFormatter
         return text.ToString();
     }
 
-    private static IEnumerable<ContextUsageComponent> Leaves(IReadOnlyList<ContextUsageComponent> components) =>
+    private static IEnumerable<ContextUsageComponent> Leaves(IEnumerable<ContextUsageComponent> components) =>
         components.SelectMany(item => item.Children.Count == 0 ? [item] : Leaves(item.Children));
 }

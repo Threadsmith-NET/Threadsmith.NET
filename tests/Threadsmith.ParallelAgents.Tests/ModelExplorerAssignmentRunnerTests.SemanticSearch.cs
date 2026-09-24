@@ -28,8 +28,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var assignment = CreateAssignment(profile.Id, toolIds);
         var plan = CreatePlan(assignment);
         var call = new ToolRequestModelOutput("search", path is null
-            ? "{\"query\":\"Widget\"}"
-            : JsonSerializer.Serialize(new { query = "Widget", path }));
+            ? "{\"query\":\"Widget.cs\"}"
+            : JsonSerializer.Serialize(new { query = "Widget.cs", path }));
         var semanticCall = new ToolRequestModelOutput("code_explore", "{}");
         var provider = new ToolBatchSequenceProvider(requiresSemantic
             ? [[call], [semanticCall], [call], []] : [[call], []]);

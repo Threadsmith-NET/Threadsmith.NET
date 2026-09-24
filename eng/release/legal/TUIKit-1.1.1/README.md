@@ -1,0 +1,7 @@
+# TUIKit 1.1.1 release evidence
+
+The exact NuGet archive identifies source commit `3496eeac430d1718e5acc34520565305e089d5ae` and supplies `lib/net10.0/TUIKit.dll`. Its raw signed-archive SHA-256/SHA-512, NuGet restore content SHA-512, assembly SHA-256, and all 83 embedded font resource SHA-256 values are recorded in `candidate-evidence.json`. The raw archive hash and NuGet restore content hash differ; the release closure uses the content hash recorded in `project.assets.json`. The selected assembly identity is `TUIKit, Version=1.1.0.0`; the NuGet package and resolved dependency version are `1.1.1`. The `net10.0` dependency group is empty.
+
+The source MIT license at that commit, the package's `fonts/LICENSE.figlet.txt` and `fonts/REMOVED.txt`, and every embedded font resource are byte-identical to the material reviewed for 0.10.1. This was checked against the new archive and assembly; the matching notice files are retained here as version-specific release inputs. `TUIKit-font-headers.txt` preserves the declared FIGfont comment headers. `WTFPL-2.0.txt` preserves the applicable permissive license text. The package declares MIT for its code, while the aggregate font inventory remains `NOASSERTION` rather than assigning one license to all fonts.
+
+The previous evidence remains in `TUIKit-0.10.1-candidate/` as a historical record. Canonical release closure uses `release-license-evidence.json` and the existing deterministic notice and SPDX generators.

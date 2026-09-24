@@ -350,6 +350,9 @@ public sealed record ToolInvocationContext
     /// <summary>Effective selected-model input budget after output reserve, when model resolution has occurred.</summary>
     public int? ModelEffectiveInputBudgetTokens { get; init; }
 
+    /// <summary>Capacity remaining after the current request and output reserve, before tool results are appended.</summary>
+    public int? ModelRemainingInputBudgetTokens { get; init; }
+
     /// <summary>Host-derived source ranges already visible in the current canonical model request.</summary>
     public ModelVisibleSourceFrontier? VisibleSourceFrontier { get; init; }
 

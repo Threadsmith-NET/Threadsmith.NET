@@ -24,8 +24,12 @@ internal sealed class TuiKitConsoleBackend : ITerminalBackend
         var useRgb = _console.IsInteractive
             && detected.ColorDepth is TerminalColorDepth.Ansi16 or TerminalColorDepth.Palette256
             && (nativeRgb || directRgb);
-        Capabilities = useRgb
-            ? new TerminalCapabilities(
+        Capabilities = ApplyRgbOverride(detected, useRgb);
+    }
+
+    /// <summary>Changes only color depth while preserving capabilities detected by TUIKit.</summary>
+    internal static TerminalCapabilities ApplyRgbOverride(TerminalCapabilities detected, bool useRgb) => useRgb
+        ? new TerminalCapabilities(
                 TerminalColorDepth.TrueColor,
                 detected.EnhancedKeyboard,
                 detected.SgrMouse,
@@ -33,9 +37,9 @@ internal sealed class TuiKitConsoleBackend : ITerminalBackend
                 detected.ClipboardOsc52,
                 detected.BracketedPaste,
                 detected.AnyMotionMouse,
-                detected.FocusReporting)
-            : detected;
-    }
+                detected.FocusReporting,
+                detected.SynchronizedOutput)
+        : detected;
 
     /// <inheritdoc />
     public TerminalCapabilities Capabilities { get; }

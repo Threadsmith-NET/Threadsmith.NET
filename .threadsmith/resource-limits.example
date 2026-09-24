@@ -25,7 +25,6 @@
       "maximumFallbackFiles": 10000,
       "maximumFallbackMatches": 500,
       "maximumFallbackFileBytes": 1048576,
-      "maximumInventoryProjects": 2000,
       "maximumInventoryXmlBytes": 1048576,
       "maximumGeneratedDocuments": 100,
       "maximumGeneratedContentCharacters": 16384,
@@ -43,12 +42,7 @@
       "modelMaximumPatternMatches": 40,
       "modelMaximumGeneratedDocuments": 12,
       "modelMaximumGeneratedContentCharacters": 4096,
-      "modelMaximumOmissions": 8,
-      "maximumModelItemsPerProject": 12,
-      "maximumModelOmissions": 20,
-      "maximumModelProjects": 25,
-      "maximumModelResultCharacters": 131072,
-      "maximumModelTargetFrameworks": 12
+      "modelMaximumOmissions": 8
     },
     "git": {
       "timeoutMilliseconds": 30000,

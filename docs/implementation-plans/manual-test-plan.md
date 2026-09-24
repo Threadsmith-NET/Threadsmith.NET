@@ -378,7 +378,7 @@ Expected:
 
 - Tests pass for the repository.
 - Core and extension abstractions forbid Terminal.Gui, PrettyPrompt, and Spectre.Console.
-- `Threadsmith.Tui` forbids persistence implementation packages.
+- `Threadsmith.Tui.TuiKit` forbids persistence implementation packages.
 
 ### MTP-004 - Example configuration is data, not code (positive and negative)
 
@@ -2017,7 +2017,7 @@ Run this on Windows Terminal/PowerShell, a Linux terminal, and macOS Terminal; r
 6. Select text in the transcript and composer, then press Ctrl+C. Confirm the selected text reaches the clipboard and the process remains running. Clear all selection and press Ctrl+C; confirm normal cancellation/exit behavior. Repeat with F6 and Ctrl+Shift+C according to the displayed help.
 7. Scroll up while a model run is active, let its answer finish, and confirm the ready prompt still shows an unseen-output notice at the start of the activity row at both 40 and 80 columns. Confirm F7 then End from the composer reveals the answer; with transcript focus the notice should say End. Verify resize below and above 40 x 12, F2 long option details, themes, and `NO_COLOR`. Run every Scenario AR workflow with the same scripted fixture and compare host outcomes. While output streams and a selector is open, verify the footer refreshes usage/context without moving focus or changing option IDs. Verify exact ordinary draft restoration after secondary/steering prompts and cancelled selections.
 8. Submit an ordinary greeting and a repository request. Confirm both invoke the configured model after applicable semantic admission, neither reports `ChannelClosedException` or `channel has been closed`, and commands, reviews, trust, session, repository, model, reasoning, tool, mutation, and cancellation outcomes remain governed by the shared coordinator.
-9. Exit normally and via `/quit`, Ctrl+C, cancellation during a modal, startup failure, and render failure. Verify cooked input, echo, cursor, mouse reporting, bracketed paste, enhanced keyboard flags, and alternate-screen restoration.
+9. In a terminal that supports synchronized output, observe streaming and resize for intact frames; repeat in a terminal without that capability for the ordinary rendering fallback. Exit normally and via `/quit`, Ctrl+C, cancellation during a modal, startup failure, and render failure. Verify cooked input, echo, cursor, mouse reporting, bracketed paste, enhanced keyboard flags, synchronized-output mode, and alternate-screen restoration. Record the terminal and capability evidence for both cases.
 
 Expected: TUIKit is the sole interactive frontend. Committed ordinary input remains visible once and is assembled as the exact `current-user` content; input is never silently discarded; retained rendering has no composer/help/footer artifacts; copy and newline keys match their documentation; shared host outcomes remain frontend-neutral; and every exit restores terminal state. Record observed results. A successful headless check is not a physical-terminal sign-off.
 
@@ -2036,10 +2036,10 @@ Expected: discovery only edits eligible command names; shared command execution 
 
 ### MTP-260 — Explicit memory operations and complete-input bounds
 
-Prerequisites: a disposable trusted repository, working deployed embedding assets, a model/provider or scripted tool fixture, and both terminal frontends plus headless access.
+Prerequisites: a disposable trusted repository, working deployed embedding assets, a model/provider or scripted tool fixture, the retained TUIKit frontend, and headless access.
 
 1. Ask the model to remember a focused preference. Capture its actual advertised `memories` schema and invocation; confirm only `action`, nullable/omitted `id`, and nullable/omitted `text`, with actions add/update/remove/list. Try unknown fields and invalid argument combinations.
-2. Run `/memory remember <text>`, `/memory list`, `/memory inspect <id>`, `/memory update <id> <replacement>`, and `/memory forget <id>` in each frontend/headless adapter. Repeat removal, unknown-ID update, exact normalized duplicate add, unchanged update, and update duplicating another ID. Try `supersede`, `validate`, and old category/validity arguments.
+2. Run `/memory remember <text>`, `/memory list`, `/memory inspect <id>`, `/memory update <id> <replacement>`, and `/memory forget <id>` in the retained frontend and headless adapter. Repeat removal, unknown-ID update, exact normalized duplicate add, unchanged update, and update duplicating another ID. Try `supersede`, `validate`, and old category/validity arguments.
 3. Test text at and beyond 2,000 sanitized characters and at/beyond 256 complete encoder tokens using the maintained tokenizer-boundary fixture. Inject failed/truncated embeddings on an otherwise valid write with capacity full.
 4. Complete ordinary conversation, approval, successful mutation, rollback, failure, `/new`, and restart without explicit memory operations. Compare list/usage before and after.
 
@@ -2184,7 +2184,7 @@ Expected: all outcomes use shared host commands and existing trust rules; failed
 
 ### MTP-273 - Incremental approved-plan execution
 
-**Prerequisites:** Disposable `TrustedMutation` repository with at least four independently editable files and a validation target; deterministic model/provider fixture that records complete requests and can emit controlled `stepComplete` values; both interactive frontends and the headless surface. For optional live measurement, use an explicitly authorized configured model and non-sensitive synthetic files. Configure mutation auto-approval only when the exact-diff decisions are intentionally automated for this procedure.
+**Prerequisites:** Disposable `TrustedMutation` repository with at least four independently editable files and a validation target; deterministic model/provider fixture that records complete requests and can emit controlled `stepComplete` values; the retained TUIKit frontend and headless surface. For optional live measurement, use an explicitly authorized configured model and non-sensitive synthetic files. Configure mutation auto-approval only when the exact-diff decisions are intentionally automated for this procedure.
 
 1. Request a change whose next cohesive structured plan tranche has two ordered steps, with the first step covering at least three independently editable files and the second covering another file. Capture the planning request and response. Confirm one `propose_plan` call contains the complete tranche before approval; no step in that tranche is generated lazily during implementation. Review and approve the whole tranche once.
 2. Configure `execution:mutationBatching:targetMutations`, `targetFiles`, and `targetMutationCharacters` to small positive values, restart, and confirm the effective settings. Begin implementation. Confirm the host selects step 1 and the first implementation request contains the fixed approved-plan identity, active-step scope, current source evidence, progress, and effective soft targets without accumulated prior raw diffs.

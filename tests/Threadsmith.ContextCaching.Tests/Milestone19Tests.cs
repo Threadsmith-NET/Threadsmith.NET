@@ -128,23 +128,40 @@ public sealed partial class Milestone19Tests
         IReadOnlyList<ModelMessage> messages =
         [
             TextMessage(ModelMessageRole.System, "host-policy", "stable"),
+            TextMessage(ModelMessageRole.Developer, "repository-instructions", "repository"),
+            TextMessage(ModelMessageRole.System, "phase-policy", "phase"),
+            TextMessage(ModelMessageRole.User, "recent-user", "prior question"),
+            TextMessage(ModelMessageRole.Assistant, "recent-assistant", "prior answer"),
+            TextMessage(ModelMessageRole.HostContext, "repository-memory", "remembered preference"),
+            TextMessage(ModelMessageRole.HostContext, "governed-request-state", "state"),
             TextMessage(ModelMessageRole.User, "current-user", "question"),
         ];
         var tools = ModelToolCanonicalizer.Canonicalize(
         [
             CreateTool("core:read", "{\"type\":\"object\"}"),
         ]);
+        var providerInstructions = new ModelProviderInstructions
+        {
+            SectionId = "provider-openai-codex-instructions",
+            Content = "provider policy",
+        };
 
         var estimate = ModelWireEstimator.Estimate(
             messages,
             tools,
             ToolTransportMode.Native,
-            stablePrefixMessageCount: 1,
-            outputReserveTokens: 512);
+            stablePrefixMessageCount: 3,
+            outputReserveTokens: 512,
+            providerInstructions);
 
         Assert.True(estimate.NativeToolTokens > 0);
         Assert.Equal(0, estimate.TextToolTokens);
         Assert.Equal((long)estimate.WireInputTokens + 512, estimate.TotalCapacityTokens);
+        Assert.Equal(6, estimate.StablePrefixComponentCount);
+        Assert.True(estimate.StablePrefixTokens > estimate.NativeToolTokens);
+        Assert.Equal(
+            ["provider-openai-codex-instructions", "System: host-policy", "Developer: repository-instructions", "core:read", "Tool inventory framing", "System: phase-policy", "User: recent-user", "Assistant: recent-assistant", "HostContext: repository-memory", "HostContext: governed-request-state", "User: current-user", "Message / request framing"],
+            estimate.Components.Select(item => item.Label));
     }
 
     /// <summary>Provider instructions contribute exact content, framing, stable-prefix, and long capacity totals.</summary>

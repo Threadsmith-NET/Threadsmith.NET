@@ -64,6 +64,8 @@ public sealed class SessionUsageProjection
         ArgumentNullException.ThrowIfNull(request);
         var estimate = request.WireEstimate;
         var snapshot = estimate?.Components.Count is > 0
+            && estimate.StablePrefixComponentCount >= 0
+            && estimate.StablePrefixComponentCount <= estimate.Components.Count
             && estimate.Components.Sum(item => item.Tokens) == estimate.WireInputTokens
             ? new ContextUsageSnapshot
             {
@@ -76,6 +78,8 @@ public sealed class SessionUsageProjection
                 InputTokens = estimate.WireInputTokens,
                 ContextWindow = contextWindow,
                 OutputReserve = estimate.OutputReserveTokens,
+                StablePrefixTokens = estimate.Components.Take(estimate.StablePrefixComponentCount).Sum(item => item.Tokens),
+                StablePrefixComponentCount = estimate.StablePrefixComponentCount,
                 EstimationBasis = estimate.EstimationBasis,
                 Components = estimate.Components,
             }

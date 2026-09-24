@@ -55,6 +55,7 @@ internal sealed class PrFetchCache : IAsyncDisposable
                     _bytes -= existing.Bytes;
                     existing.Pages.Clear();
                     existing.Metadata = null;
+                    existing.CompletedOutput = null;
                     existing.Bytes = 0;
                     existing.Changed.TrySetResult();
                 }
@@ -96,19 +97,40 @@ internal sealed class PrFetchCache : IAsyncDisposable
 
                 if (entry.Metadata is { } metadata && entry.Finished)
                 {
-                    var diff = new StringBuilder();
-                    foreach (var item in entry.Pages)
+                    if (entry.CompletedOutput is null)
                     {
-                        diff.Append(item.Diff);
+                        var diff = new StringBuilder();
+                        foreach (var item in entry.Pages)
+                        {
+                            diff.Append(item.Diff);
+                        }
+
+                        var page = new PullRequestPage(
+                            "complete",
+                            entry.Pages.SelectMany(item => item.Files).ToArray(),
+                            diff.ToString(),
+                            entry.Pages.Where(item => item.Kind != "metadata")
+                                .SelectMany(item => item.Limitations).Distinct(StringComparer.Ordinal).ToArray());
+                        var completedOutput = new PrFetchOutput(providerId, input.Kind, entry.Id, entry.CapturedAt, metadata, page, false, true);
+                        var completedBytes = GetSerializedBytes(completedOutput);
+                        var replacementBytes = _bytes - entry.Bytes + completedBytes;
+                        if (_options.MaximumCacheBytes > 0 && replacementBytes > _options.MaximumCacheBytes)
+                        {
+                            entry.Failure = "PR evidence exceeded tools.prFetch.maximumCacheBytes while creating its canonical completed snapshot.";
+                            entry.Pages.Clear();
+                            entry.Metadata = null;
+                            _bytes -= entry.Bytes;
+                            entry.Bytes = 0;
+                            throw new InvalidOperationException("PR acquisition is incomplete. " + entry.Failure);
+                        }
+
+                        entry.CompletedOutput = completedOutput;
+                        entry.Pages.Clear();
+                        _bytes = replacementBytes;
+                        entry.Bytes = completedBytes;
                     }
 
-                    var page = new PullRequestPage(
-                        "complete",
-                        entry.Pages.SelectMany(item => item.Files).ToArray(),
-                        diff.ToString(),
-                        entry.Pages.Where(item => item.Kind != "metadata")
-                            .SelectMany(item => item.Limitations).Distinct(StringComparer.Ordinal).ToArray());
-                    return new PrFetchOutput(providerId, input.Kind, entry.Id, entry.CapturedAt, metadata, page, hit, true);
+                    return entry.CompletedOutput with { CacheHit = hit };
                 }
 
                 changed = entry.Changed.Task;
@@ -142,6 +164,30 @@ internal sealed class PrFetchCache : IAsyncDisposable
         {
             entry.Pages.Clear();
             entry.Cancellation.Dispose();
+        }
+    }
+
+    /// <summary>Gets the retained serialized-byte charge for completed and in-flight entries.</summary>
+    internal long RetainedBytes
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _bytes;
+            }
+        }
+    }
+
+    /// <summary>Gets provider pages still retained after any completed output has replaced them.</summary>
+    internal int RetainedPageCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _entries.Values.Sum(entry => entry.Pages.Count);
+            }
         }
     }
 
@@ -333,6 +379,13 @@ internal sealed class PrFetchCache : IAsyncDisposable
         }
     }
 
+    private static long GetSerializedBytes(PrFetchOutput output)
+    {
+        using var counter = new CountingWriteStream();
+        JsonSerializer.Serialize(counter, output);
+        return counter.BytesWritten;
+    }
+
     private sealed class Entry
     {
         public Entry(CancellationToken ownerCancellation, bool isRefresh)
@@ -357,6 +410,8 @@ internal sealed class PrFetchCache : IAsyncDisposable
 
         public PullRequestMetadata? Metadata { get; set; }
 
+        public PrFetchOutput? CompletedOutput { get; set; }
+
         public long Bytes { get; set; }
 
         public string? Failure { get; set; }
@@ -364,5 +419,39 @@ internal sealed class PrFetchCache : IAsyncDisposable
         public bool Finished { get; set; }
 
         public bool HasDisallowedFiles { get; set; }
+    }
+
+    /// <summary>Counts serializer output without retaining another complete byte buffer.</summary>
+    private sealed class CountingWriteStream : Stream
+    {
+        public long BytesWritten { get; private set; }
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => BytesWritten;
+
+        public override long Position
+        {
+            get => BytesWritten;
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) => BytesWritten += count;
+
+        public override void Write(ReadOnlySpan<byte> buffer) => BytesWritten += buffer.Length;
     }
 }

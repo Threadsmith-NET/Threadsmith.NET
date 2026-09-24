@@ -179,6 +179,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly IPromptAppendLoader _promptAppendLoader;
     private readonly IPromptLoader _prompts;
     private readonly IOutputSanitizer _sanitizer;
+    private readonly IScratchpadSessionCapabilityProvider? _scratchpad;
     private readonly string _stableSystemPolicy;
     private readonly TokenEstimator _tokenEstimator;
 
@@ -197,7 +198,8 @@ public sealed class ContextAssembler : IContextAssembler
         IRepositoryInstructionResolver? instructionResolver = null,
         IModelProviderInstructionResolver? providerInstructionResolver = null,
         IHybridRepositoryMemoryRetriever? repositoryMemoryRetriever = null,
-        IModelRequestPreparationResolver? requestPreparationResolver = null)
+        IModelRequestPreparationResolver? requestPreparationResolver = null,
+        IScratchpadSessionCapabilityProvider? scratchpad = null)
     {
         ArgumentNullException.ThrowIfNull(evidence);
         ArgumentNullException.ThrowIfNull(tokenEstimator);
@@ -233,6 +235,7 @@ public sealed class ContextAssembler : IContextAssembler
         _repositoryMemoryRetriever = repositoryMemoryRetriever;
         _providerInstructionResolver = providerInstructionResolver;
         _requestPreparationResolver = requestPreparationResolver;
+        _scratchpad = scratchpad;
     }
 
     /// <inheritdoc />
@@ -240,6 +243,10 @@ public sealed class ContextAssembler : IContextAssembler
         ContextAssemblyRequest request,
         CancellationToken cancellationToken = default)
     {
+        var scratchpadPrompt = GetScratchpadPrompt();
+        var systemPolicy = scratchpadPrompt is null
+            ? _stableSystemPolicy
+            : _stableSystemPolicy + Environment.NewLine + scratchpadPrompt;
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Task);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Task.Intent);
@@ -378,7 +385,7 @@ public sealed class ContextAssembler : IContextAssembler
 
         var tokensByCategory = new Dictionary<string, int>(StringComparer.Ordinal)
         {
-            ["systemPolicy"] = TokenEstimator.Estimate(_stableSystemPolicy),
+            ["systemPolicy"] = TokenEstimator.Estimate(systemPolicy),
             ["promptAppend"] = TokenEstimator.Estimate(appendContent),
             ["phaseInstructions"] = TokenEstimator.Estimate(phaseInstructions),
             ["task"] = TokenEstimator.Estimate(taskJson),
@@ -507,6 +514,7 @@ public sealed class ContextAssembler : IContextAssembler
 
         var evidenceContent = BuildEvidenceContent(selected, out var evidenceSources);
         var modelInput = BuildModelInput(
+            systemPolicy,
             appendContent,
             phaseInstructions,
             taskJson,
@@ -524,6 +532,7 @@ public sealed class ContextAssembler : IContextAssembler
             if (conversation.TryReduce() || repositoryMemory.TryReduce())
             {
                 modelInput = BuildModelInput(
+                    systemPolicy,
                     appendContent,
                     phaseInstructions,
                     taskJson,
@@ -555,6 +564,7 @@ public sealed class ContextAssembler : IContextAssembler
             reductions.Add($"{removed.EvidenceId.Value:D}: {reason}");
             evidenceContent = BuildEvidenceContent(selected, out evidenceSources);
             modelInput = BuildModelInput(
+                systemPolicy,
                 appendContent,
                 phaseInstructions,
                 taskJson,
@@ -575,6 +585,7 @@ public sealed class ContextAssembler : IContextAssembler
                 tokensByCategory["nativeToolSchemas"],
                 tokensByCategory["wireFraming"]);
             var currentMessages = BuildStructuredMessages(
+                systemPolicy,
                 appendContent,
                 phaseInstructions,
                 structuredTaskStateJson,
@@ -658,11 +669,21 @@ public sealed class ContextAssembler : IContextAssembler
             CreateAssetReference("host:stable-policy", PromptFileNames.SystemSystemPrompt, 0, _prompts.Get(PromptFileNames.SystemSystemPrompt)),
             CreateAssetReference("host:repository-inspection", PromptFileNames.SystemRepositoryInspection, 1, _prompts.Get(PromptFileNames.SystemRepositoryInspection)),
         };
+        if (scratchpadPrompt is not null)
+        {
+            promptAssets.Add(CreateAssetReference(
+                "host:scratchpad",
+                PromptFileNames.SystemScratchpad,
+                promptAssets.Count,
+                scratchpadPrompt));
+        }
+
+        var instructionAssetOffset = promptAssets.Count;
         promptAssets.AddRange(instructionBundle.Sources.Select(source => new PromptAssetReference(
             source.Id,
             source.Version,
             source.RelativePath,
-            source.Position + 2,
+            source.Position + instructionAssetOffset,
             source.Content.Length)));
         promptAssets.Add(CreateAssetReference(
             $"host:phase:{request.Phase}",
@@ -670,6 +691,7 @@ public sealed class ContextAssembler : IContextAssembler
             promptAssets.Count,
             phaseInstructions));
         var messages = BuildStructuredMessages(
+            systemPolicy,
             appendContent,
             phaseInstructions,
             structuredTaskStateJson,
@@ -1384,6 +1406,7 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     private IReadOnlyList<ModelMessage> BuildStructuredMessages(
+        string systemPolicy,
         string appendContent,
         string phaseInstructions,
         string taskStateJson,
@@ -1400,7 +1423,7 @@ public sealed class ContextAssembler : IContextAssembler
             : appendContent;
         var messages = new List<ModelMessage>
         {
-            CreateTextMessage(ModelMessageRole.System, "host-policy", _stableSystemPolicy),
+            CreateTextMessage(ModelMessageRole.System, "host-policy", systemPolicy),
             CreateTextMessage(
                 ModelMessageRole.Developer,
                 "repository-instructions",
@@ -1481,6 +1504,7 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     private string BuildModelInput(
+        string systemPolicy,
         string appendContent,
         string phaseInstructions,
         string taskJson,
@@ -1496,7 +1520,7 @@ public sealed class ContextAssembler : IContextAssembler
             PromptFileNames.SystemLegacyRequestEnvelope,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
-                ["SystemPolicy"] = $"<system_policy>{Escape(_stableSystemPolicy)}</system_policy>",
+                ["SystemPolicy"] = $"<system_policy>{Escape(systemPolicy)}</system_policy>",
                 ["RepositoryInstructions"] = PrefixLegacySection(appendContent),
                 ["PhaseInstructions"] = PrefixLegacySection(
                     $"<phase_instructions>{Escape(phaseInstructions)}</phase_instructions>"),
@@ -1664,6 +1688,22 @@ public sealed class ContextAssembler : IContextAssembler
                 CosineSimilarity = candidate.CosineSimilarity,
                 CrossEncoderScore = candidate.CrossEncoderScore,
             };
+    }
+
+    private string? GetScratchpadPrompt()
+    {
+        var capability = _scratchpad?.Current;
+        if (capability is not { IsActive: true, ModelPath: { } path })
+        {
+            return null;
+        }
+
+        return _prompts.Render(
+            PromptFileNames.SystemScratchpad,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["ScratchpadPath"] = path,
+            });
     }
 
     private sealed class ConversationAssemblyState

@@ -149,6 +149,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 111 | `plan-111-jira-ticket-tool.md` | Jira ticket body retrieval with trusted account profiles and operation-kind extensibility |
 | 112 | `plan-112-incremental-approved-plan-execution.md` | Incremental approved-plan execution with small mutation batches and shared correction/presentation |
 | 113 | `plan-113-supersession-aware-active-context-management.md` | Supersession-aware deterministic active context and budget-aware compaction |
+| 115 | [plan-115-tuikit-stable-release-upgrade.md](plan-115-tuikit-stable-release-upgrade.md) | TUIKit stable release upgrade, frontend compatibility, and release evidence |
+| 116 | [plan-116-session-scratchpad.md](plan-116-session-scratchpad.md) | Configurable session-scoped scratchpad with bounded tool authority and lifecycle cleanup |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 | Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
 | Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |

@@ -556,6 +556,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
                 _app.PumpInputOnce();
                 Drain();
+                if (_app.Modals.IsActive)
+                {
+                    _mouseOwner = null;
+                }
+
                 _app.RenderOnce();
                 await Task.Delay(TimeSpan.FromMilliseconds(1000d / 30), cancellationToken);
             }
@@ -1046,12 +1051,6 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         Volatile.Read(ref _activeInput)?.DisarmEscape();
         if (!ModalFrame.Fits(_backend.Size))
         {
-            return;
-        }
-
-        if (_app.Modals.IsActive)
-        {
-            _app.Modals.HandlePaste(text);
             return;
         }
 

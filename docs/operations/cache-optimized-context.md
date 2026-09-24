@@ -6,14 +6,16 @@ Threadsmith builds one canonical stateless request for every model invocation. P
 
 Structured requests use this order:
 
-1. stable host policy;
-2. phase policy;
-3. the applicable repository instruction bundle and any initial instruction-only corrections;
-4. chronological complete recent user/assistant turns;
-5. relevant explicit repository-memory IDs/text;
-6. current governed state and attributable evidence;
-7. the current user input;
-8. append-only correlated tool calls/results during an unchanged continuation.
+1. request-owned provider instructions, when present;
+2. stable host policy (the Threadsmith system prompt);
+3. the applicable repository instruction bundle;
+4. canonical native tool definitions when native transport is active;
+5. phase policy and any additional initial instruction-only corrections;
+6. chronological complete recent user/assistant turns;
+7. relevant explicit repository-memory IDs/text;
+8. current governed state and attributable evidence, including text-rendered tool definitions for legacy transport;
+9. the current user input;
+10. append-only correlated tool calls/results during an unchanged continuation.
 
 Hidden reasoning is never archived or reconstructed as ordinary conversation history. Anthropic's active tool continuation retains and validates its private native response blocks for protocol-required replay. A new phase, trust/policy generation, tool inventory, instruction bundle, compaction generation, repository-memory content, model, or layout requires reassembly rather than continuation reuse.
 
@@ -41,7 +43,9 @@ Eligible tools are grouped and ordered deterministically. JSON schemas preserve 
 
 For an ordered graphical breakdown of the **latest actual MAIN request**, use `/context map` (or double-click MAIN's Context meter in TUIKit with mouse capture enabled). `/context inspect` retains its assembly/governance diagnostics. The map and measured header occupancy share the same request observation; auxiliary compaction-generation calls and child requests do not replace MAIN's map.
 
-The map's input total is the admission estimate, not cumulative provider billing. Category shares divide by included input; window usage divides by the captured model window. Output reserve is shown separately. Cache hits do not reduce occupied context. Estimates reconcile through non-overlapping source contributions and explicit framing/allowance entries. The neutral estimator uses rounded character counts; Anthropic conservatively counts serialized UTF-8 bytes plus framing and retained-output allowances. Native fields are shown separately; their hidden cross-field prompt order is unavailable. Opaque replay contributes sizes without exposing its contents.
+The map's input total is the admission estimate, not cumulative provider billing. Category shares divide by included input; window usage divides by the captured model window. Output reserve is shown separately. Cache hits do not reduce occupied context. Estimates reconcile through non-overlapping source contributions and explicit framing/allowance entries. The neutral estimator uses rounded character counts; Anthropic conservatively counts serialized UTF-8 bytes plus framing and retained-output allowances. Contributions retain the host-owned model-context order: provider instructions, host policy, repository instructions, canonical native tools, phase policy, additional prefix instructions, completed conversation history, included memories, governed state and evidence, current user input, and continuations. JSON property serialization does not affect this display. Opaque replay contributes sizes without exposing its contents.
+
+The ordered view marks the initial host-stable block with `│` and closes it with `└`. Its token total is the sum of those displayed contributions and is labeled `cache eligible`. This describes prefix stability, not an observed cache hit; actual cache reads and writes remain available only from provider-reported usage telemetry.
 
 The interactive command reports:
 

@@ -9,14 +9,16 @@ using TUIKit.Modals;
 using TUIKit.Widgets;
 
 /// <summary>Bounded viewport over a frozen request, with graphs rendered by native TUIKit widgets.</summary>
-internal sealed class ContextUsageModal : Modal, IMouseAware
+internal sealed class ContextUsageModal : Modal
 {
     private readonly ContextUsageSnapshot? _snapshot;
     private readonly IReadOnlyList<ContextUsageComponent> _categories;
     private readonly IReadOnlyList<ContextUsageComponent> _components;
+    private readonly int _stablePrefixRows;
     private readonly Func<PresentationTextRole, CellStyle> _style;
     private readonly Action _interrupt;
     private readonly Action _toggleMouse;
+    private readonly Func<bool> _canHandleMouse;
     private readonly BarChart _chart = new();
     private readonly ProgressBar _progress = new();
     private readonly CellBuffer _chartBuffer = new(1, 2);
@@ -32,14 +34,16 @@ internal sealed class ContextUsageModal : Modal, IMouseAware
     private IReadOnlyList<string> _basisLines = [];
 
     /// <summary>Initializes a new instance of the <see cref="ContextUsageModal"/> class with frozen metadata.</summary>
-    internal ContextUsageModal(ContextUsageSnapshot? snapshot, Func<PresentationTextRole, CellStyle> style, Action interrupt, Action toggleMouse)
+    internal ContextUsageModal(ContextUsageSnapshot? snapshot, Func<PresentationTextRole, CellStyle> style, Action interrupt, Action toggleMouse, Func<bool>? canHandleMouse = null)
     {
         _snapshot = snapshot;
         _categories = snapshot is null ? [] : ContextUsageFormatter.Categories(snapshot);
         _components = snapshot is null ? [] : ContextUsageFormatter.OrderedContributions(snapshot).ToArray();
+        _stablePrefixRows = snapshot is null ? 0 : ContextUsageFormatter.StablePrefixContributionCount(snapshot);
         _style = style;
         _interrupt = interrupt;
         _toggleMouse = toggleMouse;
+        _canHandleMouse = canHandleMouse ?? (() => true);
         Reflow();
     }
 
@@ -89,8 +93,13 @@ internal sealed class ContextUsageModal : Modal, IMouseAware
     public override bool HandlePaste(string text) => true;
 
     /// <inheritdoc />
-    public bool HandleMouse(MouseEvent mouse)
+    public override bool HandleMouse(MouseEvent mouse)
     {
+        if (!_canHandleMouse())
+        {
+            return true;
+        }
+
         if (mouse.Kind == MouseEventKind.Wheel)
         {
             _selected = Math.Clamp(_selected + (mouse.Button == MouseButton.WheelUp ? -3 : 3), 0, Math.Max(0, _rows.Count - 1));
@@ -118,6 +127,7 @@ internal sealed class ContextUsageModal : Modal, IMouseAware
         }
 
         Draw(view, 1, $"{snapshot.ModelName ?? snapshot.ModelProfileId?.Value.ToString() ?? "Model unknown"} · {snapshot.Stage} #{snapshot.Round + 1} · {snapshot.CapturedAt:HH:mm:ss} UTC · {(snapshot.DispatchStarted ? "submitted" : "prepared; submission unobserved")}");
+        Draw(view, 2, $"Host-stable prefix {snapshot.StablePrefixTokens:N0} tokens · cache eligible · actual cache use requires provider telemetry");
         if (_basisWidth != view.Size.Width)
         {
             _basisWidth = view.Size.Width;
@@ -179,8 +189,13 @@ internal sealed class ContextUsageModal : Modal, IMouseAware
         {
             var item = _rows[index];
             var y = (index - _top) * 2;
-            Draw(detail, y, $"{(index == _selected ? ">" : " ")}[{item.Container}] {item.Label}", index == _selected ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Default);
-            Graph(detail, y + 1, item.Tokens, _maximum);
+            var prefixMarker = !_categoryView && index < _stablePrefixRows
+                ? index == _stablePrefixRows - 1 ? '└' : '│'
+                : ' ';
+            Draw(detail, y, $"{(index == _selected ? ">" : " ")}{prefixMarker}[{item.Container}] {item.Label}", index == _selected ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Default);
+            Graph(detail, y + 1, item.Tokens, _maximum, leftPadding: 2);
+            var prefixContinuation = !_categoryView && index < _stablePrefixRows - 1 ? '│' : ' ';
+            Draw(detail, y + 1, $" {prefixContinuation}");
         }
 
         for (var index = 0; index < _basisLines.Count; index++)
@@ -188,7 +203,8 @@ internal sealed class ContextUsageModal : Modal, IMouseAware
             Draw(view, view.Size.Height - footerHeight + index, _basisLines[index]);
         }
 
-        Draw(view, view.Size.Height - 2, _rows.Count > 0 ? $"{ContextUsageFormatter.Label(_rows[_selected].Label)} · {_rows[_selected].Tokens:N0} tokens · {ContextUsageFormatter.Percent(_rows[_selected].Tokens, snapshot.InputTokens)} of input" : "No included content.");
+        var stableSuffix = !_categoryView && _selected < _stablePrefixRows ? " · stable prefix" : string.Empty;
+        Draw(view, view.Size.Height - 2, _rows.Count > 0 ? $"{ContextUsageFormatter.Label(_rows[_selected].Label)} · {_rows[_selected].Tokens:N0} tokens · {ContextUsageFormatter.Percent(_rows[_selected].Tokens, snapshot.InputTokens)} of input{stableSuffix}" : "No included content.");
         Draw(view, view.Size.Height - 1, "↑↓ PgUp/Dn Home/End · Tab categories/order · Esc close");
     }
 
@@ -197,13 +213,14 @@ internal sealed class ContextUsageModal : Modal, IMouseAware
         _text[_textIndex++ % _text.Length].Draw(surface, 0, y, ContextUsageFormatter.Label(text), _style(role));
     }
 
-    private void Graph(BufferSurface surface, int y, long tokens, double maximum)
+    private void Graph(BufferSurface surface, int y, long tokens, double maximum, int leftPadding = 0)
     {
         // A clipped second row fixes the native chart's scale across scrolling.
         // The scratch surface is always two rows, independent of the source inventory size.
-        if (_chartBuffer.Width != surface.Size.Width)
+        var width = Math.Max(1, surface.Size.Width - leftPadding);
+        if (_chartBuffer.Width != width)
         {
-            _chartBuffer.Resize(surface.Size.Width, 2);
+            _chartBuffer.Resize(width, 2);
         }
 
         _chart.Clear();
@@ -211,10 +228,10 @@ internal sealed class ContextUsageModal : Modal, IMouseAware
         _chart.Add(string.Empty, maximum);
         _chartBuffer.Clear(_style(PresentationTextRole.Default));
         _chart.Render(new BufferSurface(_chartBuffer));
-        for (var x = 0; x < surface.Size.Width; x++)
+        for (var x = 0; x < width && x + leftPadding < surface.Size.Width; x++)
         {
             var cell = _chartBuffer.Get(x, 0);
-            surface.Set(x, y, Cell.Glyph(cell.Grapheme, _style(PresentationTextRole.Status), 1));
+            surface.Set(x + leftPadding, y, Cell.Glyph(cell.Grapheme, _style(PresentationTextRole.Status), 1));
         }
     }
 

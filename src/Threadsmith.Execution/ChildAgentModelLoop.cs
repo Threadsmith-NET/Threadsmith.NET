@@ -96,8 +96,9 @@ internal sealed class ChildAgentModelLoop
         CancellationToken cancellationToken)
     {
         _sessionUsage?.RegisterChild(plan.Provenance.SessionId, assignment.ChildRunId);
-        var capturedPullRequests = childToolContext.OperationScope?
-            .GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry())
+        var capturedRegistry = childToolContext.OperationScope?
+            .GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry());
+        var capturedPullRequests = capturedRegistry?
             .Snapshot(plan.Provenance.SessionId, plan.Provenance.ParentRunId)
             ?? [];
         var capturedById = capturedPullRequests.ToDictionary(
@@ -110,7 +111,7 @@ internal sealed class ChildAgentModelLoop
             && !childToolContext.DeniedToolIds.Contains(ChildAgentEvidenceTool.ToolId, StringComparer.OrdinalIgnoreCase))
         {
             registrations.Add(new ToolRegistration(
-                new ChildAgentEvidenceTool(_evidence, plan.Provenance.SessionId, assignment.ChildRunId, deliveredEvidenceIds, _prompts, capturedById),
+                new ChildAgentEvidenceTool(_evidence, plan.Provenance.SessionId, assignment.ChildRunId, deliveredEvidenceIds, _prompts, capturedById, capturedRegistry, plan.Provenance.ParentRunId),
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "child-evidence")));
             childToolContext = childToolContext with
             {
@@ -134,9 +135,9 @@ internal sealed class ChildAgentModelLoop
                 InitialContext = context.InitialContext + Environment.NewLine + string.Join(
                     Environment.NewLine,
                     capturedPullRequests.Select(snapshot =>
-                        $"Captured PR evidence: {snapshot.Metadata.Url}; snapshot {snapshot.SnapshotId:D}; {snapshot.Page.Files.Count} changed files. Read the complete captured metadata, inventory, and diff with read_agent_evidence(evidenceId: \"{snapshot.SnapshotId:D}\"). Use startLine/endLine for a portion if the full result exceeds your model context. This reads the parent's captured snapshot without a provider request.")),
+                        $"Captured PR evidence: {snapshot.Metadata.Url}; snapshot {snapshot.SnapshotId:D}; {snapshot.Page.Files.Count} changed files. Read bounded captured metadata, inventory, and diff with read_agent_evidence(evidenceId: \"{snapshot.SnapshotId:D}\"). Follow the returned startLine/startColumn continuation position until complete. This reads the parent's captured snapshot without a provider request.")),
             };
-        var messages = prompt.CreateMessages(handoff, instructions);
+        var messages = prompt.CreateMessages(handoff, instructions, childToolContext, registrations);
         var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
         history.RecordInitialEvidence(deliveredEvidenceIds.ToArray());
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);
@@ -192,6 +193,9 @@ internal sealed class ChildAgentModelLoop
                     ModelContextWindowTokens = model.ContextWindowTokens,
                     ModelRequestOutputReserveTokens = model.OutputReserveTokens,
                     ModelEffectiveInputBudgetTokens = model.ContextWindowTokens - model.OutputReserveTokens,
+                    ModelRemainingInputBudgetTokens = fitted.Request.WireEstimate is { } estimate
+                        ? (int)Math.Clamp(model.ContextWindowTokens - estimate.TotalCapacityTokens, 0L, int.MaxValue)
+                        : null,
                     ModelProfileId = model.ProfileId,
                     ModelUsesTrustedCatalog = model.UsesTrustedCatalog,
                     ModelReasoningLevel = model.ReasoningLevel.ToString(),

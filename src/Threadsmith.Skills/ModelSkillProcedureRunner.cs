@@ -354,6 +354,12 @@ public sealed class ModelSkillProcedureRunner : ISkillProcedureRunner
                         ModelVisibleToolSnapshotId = snapshotId,
                         ModelProfileId = modelRequest.ResolvedProfileId,
                         ModelReasoningLevel = modelRequest.ReasoningLevel.ToString(),
+                        ModelContextWindowTokens = profile?.ContextWindow,
+                        ModelRequestOutputReserveTokens = profile?.EffectiveRequestOutputTokenReserve,
+                        ModelEffectiveInputBudgetTokens = profile is null
+                            ? null : Math.Max(1, profile.ContextWindow - profile.EffectiveRequestOutputTokenReserve),
+                        ModelRemainingInputBudgetTokens = profile is null
+                            ? null : (int)Math.Clamp(profile.ContextWindow - wireEstimate.TotalCapacityTokens, 0L, int.MaxValue),
                     };
                     var batch = new List<ToolBatchRequest>(toolRequests.Count);
                     for (var ordinal = 0; ordinal < toolRequests.Count; ordinal++)

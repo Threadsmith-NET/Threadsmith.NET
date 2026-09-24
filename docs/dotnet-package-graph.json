@@ -238,7 +238,7 @@
             },
             {
               "id": "TUIKit",
-              "resolvedVersion": "0.10.1"
+              "resolvedVersion": "1.1.1"
             }
           ]
         }
@@ -1518,7 +1518,7 @@
             },
             {
               "id": "TUIKit",
-              "resolvedVersion": "0.10.1"
+              "resolvedVersion": "1.1.1"
             },
             {
               "id": "xunit.v3.assert",
@@ -1688,7 +1688,7 @@
             },
             {
               "id": "TUIKit",
-              "resolvedVersion": "0.10.1"
+              "resolvedVersion": "1.1.1"
             },
             {
               "id": "xunit.v3.assert",
@@ -3308,7 +3308,7 @@
             },
             {
               "id": "TUIKit",
-              "resolvedVersion": "0.10.1"
+              "resolvedVersion": "1.1.1"
             },
             {
               "id": "xunit.v3.assert",
@@ -5717,8 +5717,8 @@
             },
             {
               "id": "TUIKit",
-              "requestedVersion": "0.10.1",
-              "resolvedVersion": "0.10.1"
+              "requestedVersion": "1.1.1",
+              "resolvedVersion": "1.1.1"
             }
           ],
           "transitivePackages": [

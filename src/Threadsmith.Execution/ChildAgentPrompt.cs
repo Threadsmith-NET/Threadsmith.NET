@@ -36,12 +36,25 @@ internal sealed class ChildAgentPrompt
     /// <summary>Creates the initial instructions, assignment, and inherited evidence for one child.</summary>
     public List<ModelMessage> CreateMessages(
         AgentContextSnapshot context,
-        RepositoryInstructionBundle instructions)
+        RepositoryInstructionBundle instructions,
+        ToolInvocationContext? toolContext = null,
+        IReadOnlyList<ToolRegistration>? registrations = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(instructions);
         var hostPolicy = _prompts.Get(PromptFileNames.SystemChildAgentHostPolicy)
             + Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryInspection);
+        if (toolContext?.Scratchpad is { IsActive: true, ModelPath: { } scratchpadPath }
+            && HasBuiltInScratchpadTools(registrations))
+        {
+            hostPolicy += Environment.NewLine + _prompts.Render(
+                PromptFileNames.SystemScratchpad,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["ScratchpadPath"] = scratchpadPath,
+                });
+        }
+
         return
         [
             CreateMessage(ModelMessageRole.System, "child-host-policy", hostPolicy),
@@ -244,6 +257,21 @@ internal sealed class ChildAgentPrompt
         }
 
         return builder.ToString();
+    }
+
+    private static bool HasBuiltInScratchpadTools(IReadOnlyList<ToolRegistration>? registrations)
+    {
+        if (registrations is null)
+        {
+            return false;
+        }
+
+        return registrations.Any(registration => registration.Source.Kind == ToolActivitySourceKind.BuiltIn
+                && registration.Implementation is SearchTextTool)
+            && registrations.Any(registration => registration.Source.Kind == ToolActivitySourceKind.BuiltIn
+                && registration.Implementation is ReadFileTool)
+            && registrations.Any(registration => registration.Source.Kind == ToolActivitySourceKind.BuiltIn
+                && registration.Implementation is WriteFileTool);
     }
 
     private static IReadOnlyDictionary<string, string> Tokens(params (string Name, string Value)[] values)

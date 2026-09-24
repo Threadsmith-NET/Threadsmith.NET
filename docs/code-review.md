@@ -53,7 +53,7 @@ Configure a GitHub.com or Bitbucket Cloud account and enable `pr_fetch` as descr
 /skills use Maintained:review@1.0.0 {"mode":"pullRequest","url":"https://bitbucket.org/workspace/repository/pull-requests/123"}
 ```
 
-The lead calls `pr_fetch` with `kind:"diff"` once to obtain metadata, the complete changed-file inventory, and all available diff content before delegation. The host handles provider pagination. Specialists receive the acquired evidence; `pr_fetch` is absent from their catalogs. Retrieval failures and provider omissions are reported explicitly.
+The lead calls `pr_fetch` with `kind:"diff"` once to capture metadata, the complete changed-file inventory, and all available diff content before delegation. The host handles provider pagination. A large result is delivered as a bounded manifest; specialists receive the captured snapshot ID and inspect bounded ranges with `read_agent_evidence`. `pr_fetch` is absent from their catalogs. Retrieval failures and provider omissions are reported explicitly.
 
 ### Review a remote branch
 

@@ -1,14 +1,12 @@
 namespace Threadsmith.Execution;
 
-using System.Collections.Concurrent;
-using System.Text;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Tools;
 using Threadsmith.Tools.PullRequests;
 
 /// <summary>The previously delivered evidence to retrieve.</summary>
-internal sealed record ChildAgentEvidenceInput(Guid EvidenceId, int? StartLine = null, int? EndLine = null);
+internal sealed record ChildAgentEvidenceInput(Guid EvidenceId, int? StartLine = null, int? EndLine = null, int? StartColumn = null);
 
 /// <summary>A request-local read capability for evidence already delivered to one child.</summary>
 internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, string>
@@ -17,7 +15,7 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
     internal const string ToolId = "read_agent_evidence";
 
     private const string InputSchemaJson = """
-        {"type":"object","additionalProperties":false,"required":["evidenceId"],"properties":{"evidenceId":{"type":"string","format":"uuid"},"startLine":{"type":"integer","minimum":1},"endLine":{"type":"integer","minimum":1}}}
+        {"type":"object","additionalProperties":false,"required":["evidenceId"],"properties":{"evidenceId":{"type":"string","format":"uuid"},"startLine":{"type":"integer","minimum":1},"endLine":{"type":"integer","minimum":1},"startColumn":{"type":"integer","minimum":1}}}
         """;
 
     private readonly IEvidenceStore _store;
@@ -25,7 +23,8 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
     private readonly RunId _runId;
     private readonly IReadOnlySet<EvidenceId> _delivered;
     private readonly IReadOnlyDictionary<EvidenceId, PrFetchOutput> _capturedPullRequests;
-    private readonly ConcurrentDictionary<EvidenceId, string> _capturedContent = new();
+    private readonly PrEvidenceRegistry? _capturedRegistry;
+    private readonly RunId _parentRunId;
     private readonly ToolDefinition _definition;
 
     /// <summary>Initializes a new instance of the <see cref="ChildAgentEvidenceTool"/> class.</summary>
@@ -35,13 +34,22 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
         RunId runId,
         IReadOnlySet<EvidenceId> delivered,
         IPromptLoader prompts,
-        IReadOnlyDictionary<EvidenceId, PrFetchOutput>? capturedPullRequests = null)
+        IReadOnlyDictionary<EvidenceId, PrFetchOutput>? capturedPullRequests = null,
+        PrEvidenceRegistry? capturedRegistry = null,
+        RunId parentRunId = default)
     {
         _store = store;
         _sessionId = sessionId;
         _runId = runId;
         _delivered = delivered;
         _capturedPullRequests = capturedPullRequests ?? new Dictionary<EvidenceId, PrFetchOutput>();
+        if (_capturedPullRequests.Count > 0 && capturedRegistry is null)
+        {
+            throw new ArgumentException("Captured PR evidence requires its owning operation registry.", nameof(capturedRegistry));
+        }
+
+        _capturedRegistry = capturedRegistry;
+        _parentRunId = parentRunId;
         _definition = new ToolDefinition
         {
             Id = ToolId,
@@ -55,7 +63,7 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
             Idempotency = ToolIdempotency.Idempotent,
             SupportsCancellation = true,
             Timeout = Timeout.InfiniteTimeSpan,
-            MaximumOutputBytes = int.MaxValue,
+            MaximumOutputBytes = 128 * 1024,
             InputSchema = new ToolSchema("child-evidence-input", 1, InputSchemaJson),
             OutputSchema = new ToolSchema("child-evidence-output", 1, """{"type":"string"}"""),
         };
@@ -77,11 +85,23 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
             throw new UnauthorizedAccessException("This evidence was not delivered to this child.");
         }
 
-        string content;
+        TextEvidenceReadResult read;
         var evidenceId = new EvidenceId(input.EvidenceId);
-        if (_capturedPullRequests.TryGetValue(evidenceId, out var snapshot))
+        if (_capturedPullRequests.ContainsKey(evidenceId))
         {
-            content = _capturedContent.GetOrAdd(evidenceId, _ => RenderPullRequest(snapshot));
+            var effective = context.Invocation.ModelRemainingInputBudgetTokens
+                ?? context.Invocation.ModelEffectiveInputBudgetTokens;
+            var deliveryBudgetBytes = effective is > 0
+                ? (int)Math.Min(_definition.MaximumOutputBytes, (long)effective.Value * 3)
+                : _definition.MaximumOutputBytes;
+            var maximumCharacters = TextEvidenceDocument.GetMaximumReadCharacters(deliveryBudgetBytes, 256);
+            if (maximumCharacters < 1)
+            {
+                throw new ToolArgumentValidationException("The selected model has too little remaining context for a captured PR evidence segment.");
+            }
+
+            read = (_capturedRegistry ?? throw new InvalidOperationException("Captured PR registry is unavailable."))
+                .Read(_sessionId, _parentRunId, input.EvidenceId, context.Invocation, input.StartLine ?? 1, input.EndLine, input.StartColumn ?? 1, maximumCharacters);
         }
         else
         {
@@ -91,18 +111,17 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
                 throw new InvalidOperationException("The requested evidence is missing or stale.");
             }
 
-            content = evidence.Content;
+            read = new TextEvidenceDocument(evidence.Content).Read(input.StartLine ?? 1, input.EndLine, input.StartColumn ?? 1);
         }
 
-        if (input.StartLine is not null || input.EndLine is not null)
-        {
-            var first = input.StartLine ?? 1;
-            content = SliceLines(content, first, input.EndLine);
-        }
+        var content = read.NextLine is { } nextLine
+            ? read.Content + $"\n[More captured evidence: call read_agent_evidence with startLine={nextLine}, startColumn={read.NextColumn}; totalLines={read.TotalLines}.]"
+            : read.Content;
 
         return Task.FromResult(new ToolExecution<string>(
             content,
             [new ToolProvenanceSource("evidence", input.EvidenceId.ToString("D"))],
+            IsTruncated: read.NextLine is not null,
             ModelResultContent: content));
     }
 
@@ -114,93 +133,10 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
             throw new ToolArgumentValidationException("An evidence ID is required.");
         }
 
-        if (input.StartLine is < 1 || input.EndLine is < 1
+        if (input.StartLine is < 1 || input.EndLine is < 1 || input.StartColumn is < 1
             || (input.StartLine is { } start && input.EndLine is { } end && end < start))
         {
             throw new ToolArgumentValidationException("Evidence lines must be positive and ordered.");
         }
-    }
-
-    private static string RenderPullRequest(PrFetchOutput snapshot)
-    {
-        var builder = new StringBuilder();
-        builder.Append("PR snapshot ").Append(snapshot.SnapshotId.ToString("D"))
-            .Append(" (captured ").Append(snapshot.CapturedAt.ToString("O")).AppendLine(")");
-        builder.Append("Provider: ").AppendLine(snapshot.Provider);
-        builder.Append("Kind: ").AppendLine(snapshot.Kind.ToString());
-        builder.Append("URL: ").AppendLine(snapshot.Metadata.Url);
-        builder.Append("Repository: ").AppendLine(snapshot.Metadata.Repository);
-        builder.Append("Number: ").AppendLine(snapshot.Metadata.Number);
-        builder.Append("Title: ").AppendLine(snapshot.Metadata.Title);
-        builder.Append("Description: ").AppendLine(snapshot.Metadata.Description);
-        builder.Append("State: ").AppendLine(snapshot.Metadata.State);
-        builder.Append("Source repository: ").AppendLine(snapshot.Metadata.SourceRepository);
-        builder.Append("Source commit: ").AppendLine(snapshot.Metadata.SourceCommit);
-        builder.Append("Destination repository: ").AppendLine(snapshot.Metadata.DestinationRepository);
-        builder.Append("Destination commit: ").AppendLine(snapshot.Metadata.DestinationCommit);
-        builder.Append("Revision: ").AppendLine(snapshot.Metadata.Revision);
-        builder.Append("Expected files: ").AppendLine(snapshot.Metadata.ExpectedFiles?.ToString() ?? "unknown");
-        builder.AppendLine("Changed files:");
-        foreach (var file in snapshot.Page.Files)
-        {
-            builder.Append(file.Status).Append(' ').Append(file.Path);
-            if (file.PreviousPath is not null)
-            {
-                builder.Append(" (previous: ").Append(file.PreviousPath).Append(')');
-            }
-
-            builder.AppendLine();
-            if (file.Limitation is not null)
-            {
-                builder.Append("File limitation: ").AppendLine(file.Limitation);
-            }
-        }
-
-        foreach (var limitation in snapshot.Page.Limitations)
-        {
-            builder.Append("Limitation: ").AppendLine(limitation);
-        }
-
-        builder.AppendLine("Diff:");
-        builder.Append(snapshot.Page.Diff);
-        return builder.ToString();
-    }
-
-    private static string SliceLines(string content, int first, int? last)
-    {
-        var selected = new StringBuilder();
-        var hasLine = false;
-        var line = 1;
-        var position = 0;
-        while (position <= content.Length && (last is null || line <= last))
-        {
-            var next = content.AsSpan(position).IndexOf('\n');
-            var end = next < 0 ? content.Length : position + next;
-            if (line >= first)
-            {
-                if (hasLine)
-                {
-                    selected.Append('\n');
-                }
-
-                selected.Append(content.AsSpan(position, end - position));
-                hasLine = true;
-            }
-
-            if (next < 0)
-            {
-                break;
-            }
-
-            position = end + 1;
-            line++;
-        }
-
-        if (line < first)
-        {
-            throw new ToolArgumentValidationException("The requested evidence line range is outside the captured content.");
-        }
-
-        return selected.ToString();
     }
 }

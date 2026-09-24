@@ -48,9 +48,15 @@ public sealed record ContextUsageSnapshot
     /// <summary>Output/reasoning reserve, separate from included input.</summary>
     public long OutputReserve { get; init; }
 
+    /// <summary>Estimated tokens in the initial host-stable, cache-eligible block.</summary>
+    public long StablePrefixTokens { get; init; }
+
+    /// <summary>Number of top-level ordered components belonging to the stable prefix.</summary>
+    public int StablePrefixComponentCount { get; init; }
+
     /// <summary>Units and limits of the estimator.</summary>
     public required string EstimationBasis { get; init; }
 
-    /// <summary>Actual order within named transport fields; fields have no implied hidden prompt order.</summary>
+    /// <summary>Model-visible context order, independent of request-object property serialization.</summary>
     public IReadOnlyList<ContextUsageComponent> Components { get; init; } = [];
 }

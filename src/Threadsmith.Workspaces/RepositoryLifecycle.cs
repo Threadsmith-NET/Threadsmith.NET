@@ -72,6 +72,7 @@ public sealed class RepositoryLifecycle :
     private readonly IMutationApprovalPolicy? _mutationApprovalPolicy;
 
     private readonly Func<string, CancellationToken, Task>? _repositoryOpened;
+    private readonly Func<IReadOnlyList<string>>? _repositoryOpenWarnings;
 
     private readonly Lock _sessionGate = new();
 
@@ -89,7 +90,8 @@ public sealed class RepositoryLifecycle :
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
         Func<string, CancellationToken, Task>? repositoryOpened = null,
         WorkspaceResourceLimits? resourceLimits = null,
-        int maximumConfigurationBytes = 1024 * 1024)
+        int maximumConfigurationBytes = 1024 * 1024,
+        Func<IReadOnlyList<string>>? repositoryOpenWarnings = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(factsStore);
@@ -105,6 +107,7 @@ public sealed class RepositoryLifecycle :
         _logger = logger ?? NullLogger<RepositoryLifecycle>.Instance;
         _mutationApprovalPolicy = mutationApprovalPolicy;
         _repositoryOpened = repositoryOpened;
+        _repositoryOpenWarnings = repositoryOpenWarnings;
     }
 
     /// <inheritdoc />
@@ -319,7 +322,10 @@ public sealed class RepositoryLifecycle :
             trust,
             config,
             environment,
-            solutionFiles);
+            solutionFiles)
+        {
+            Warnings = _repositoryOpenWarnings?.Invoke() ?? [],
+        };
     }
 
     /// <inheritdoc />

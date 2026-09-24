@@ -128,23 +128,40 @@ public sealed partial class Milestone19Tests
         IReadOnlyList<ModelMessage> messages =
         [
             TextMessage(ModelMessageRole.System, "host-policy", "stable"),
+            TextMessage(ModelMessageRole.Developer, "repository-instructions", "repository"),
+            TextMessage(ModelMessageRole.System, "phase-policy", "phase"),
+            TextMessage(ModelMessageRole.User, "recent-user", "prior question"),
+            TextMessage(ModelMessageRole.Assistant, "recent-assistant", "prior answer"),
+            TextMessage(ModelMessageRole.HostContext, "repository-memory", "remembered preference"),
+            TextMessage(ModelMessageRole.HostContext, "governed-request-state", "state"),
             TextMessage(ModelMessageRole.User, "current-user", "question"),
         ];
         var tools = ModelToolCanonicalizer.Canonicalize(
         [
             CreateTool("core:read", "{\"type\":\"object\"}"),
         ]);
+        var providerInstructions = new ModelProviderInstructions
+        {
+            SectionId = "provider-openai-codex-instructions",
+            Content = "provider policy",
+        };
 
         var estimate = ModelWireEstimator.Estimate(
             messages,
             tools,
             ToolTransportMode.Native,
-            stablePrefixMessageCount: 1,
-            outputReserveTokens: 512);
+            stablePrefixMessageCount: 3,
+            outputReserveTokens: 512,
+            providerInstructions);
 
         Assert.True(estimate.NativeToolTokens > 0);
         Assert.Equal(0, estimate.TextToolTokens);
         Assert.Equal((long)estimate.WireInputTokens + 512, estimate.TotalCapacityTokens);
+        Assert.Equal(6, estimate.StablePrefixComponentCount);
+        Assert.True(estimate.StablePrefixTokens > estimate.NativeToolTokens);
+        Assert.Equal(
+            ["provider-openai-codex-instructions", "System: host-policy", "Developer: repository-instructions", "core:read", "Tool inventory framing", "System: phase-policy", "User: recent-user", "Assistant: recent-assistant", "HostContext: repository-memory", "HostContext: governed-request-state", "User: current-user", "Message / request framing"],
+            estimate.Components.Select(item => item.Label));
     }
 
     /// <summary>Provider instructions contribute exact content, framing, stable-prefix, and long capacity totals.</summary>
@@ -294,6 +311,80 @@ public sealed partial class Milestone19Tests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    /// <summary>Active scratchpad guidance is conditional and rendered from the host capability.</summary>
+    [Fact]
+    public async Task ContextAssembler_AdvertisesOnlyActiveScratchpad()
+    {
+        var root = CreateTemporaryDirectory();
+        var sanitizer = new PassthroughSanitizer();
+        await using var events = new NullEventStream();
+        var capability = new ScratchpadProvider
+        {
+            Current = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = Path.Combine(root, ".scratch"),
+                ModelPath = ".scratch",
+            },
+        };
+        var assembler = new ContextAssembler(
+            new EmptyEvidenceStore(),
+            new TokenEstimator(),
+            new ContextPolicy(),
+            new PromptAppendLoader(sanitizer),
+            sanitizer,
+            events,
+            TestPromptLoader.Instance,
+            scratchpad: capability);
+
+        try
+        {
+            var result = await assembler.AssembleAsync(
+                new ContextAssemblyRequest
+                {
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    Phase = RunPhase.EvidenceCollection,
+                    Task = new TaskSpecification("use temporary output", []),
+                    RepositoryPath = root,
+                },
+                TestContext.Current.CancellationToken);
+
+            var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
+            Assert.Contains("Scratchpad: `.scratch`", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Contains(
+                result.Inspection.PromptAssets,
+                asset => asset.Source == PromptFileNames.SystemScratchpad);
+            capability.Current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.WriteFileUnavailable);
+            result = await assembler.AssembleAsync(
+                new ContextAssemblyRequest
+                {
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    Phase = RunPhase.EvidenceCollection,
+                    Task = new TaskSpecification("no scratchpad", []),
+                    RepositoryPath = root,
+                },
+                TestContext.Current.CancellationToken);
+            messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
+            Assert.DoesNotContain("Scratchpad:", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                result.Inspection.PromptAssets,
+                asset => asset.Source == PromptFileNames.SystemScratchpad);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class ScratchpadProvider : IScratchpadSessionCapabilityProvider
+    {
+        /// <inheritdoc />
+        public required ScratchpadSessionCapability Current { get; set; }
     }
 
     /// <summary>Explicit cache plans honor capability bounds and include every stable boundary class.</summary>

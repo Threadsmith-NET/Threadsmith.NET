@@ -14,6 +14,55 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class TuiKitFrontendTests
 {
+    /// <summary>The RGB correction preserves every detected input and rendering capability.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public static void RgbOverridePreservesDetectedCapabilities(bool useRgb, bool synchronizedOutput)
+    {
+        var detected = new TerminalCapabilities(
+            TerminalColorDepth.Palette256, true, false, true, false, true, false, true, synchronizedOutput);
+
+        var actual = TuiKitConsoleBackend.ApplyRgbOverride(detected, useRgb);
+
+        Assert.Equal(useRgb ? TerminalColorDepth.TrueColor : detected.ColorDepth, actual.ColorDepth);
+        Assert.Equal(detected.EnhancedKeyboard, actual.EnhancedKeyboard);
+        Assert.Equal(detected.SgrMouse, actual.SgrMouse);
+        Assert.Equal(detected.Hyperlinks, actual.Hyperlinks);
+        Assert.Equal(detected.ClipboardOsc52, actual.ClipboardOsc52);
+        Assert.Equal(detected.BracketedPaste, actual.BracketedPaste);
+        Assert.Equal(detected.AnyMotionMouse, actual.AnyMotionMouse);
+        Assert.Equal(detected.FocusReporting, actual.FocusReporting);
+        Assert.Equal(detected.SynchronizedOutput, actual.SynchronizedOutput);
+    }
+
+    /// <summary>Frames use synchronized updates only when the backend reports support.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task FramesFollowSynchronizedOutputCapability(bool synchronizedOutput)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        var capabilities = new TerminalCapabilities(
+            TerminalColorDepth.TrueColor, false, true, false, false, true, false, false, synchronizedOutput);
+        using var backend = new HeadlessBackend(40, 12, capabilities);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
+        await surface.RunAsync(
+            async token =>
+            {
+                await surface.PresentAsync(new PresentationBatch([new PresentationTextItem([new("sync frame", PresentationTextRole.Default)])]), token);
+                var output = backend.TakeOutput();
+                var begins = output.Split(Ansi.BeginSynchronizedUpdate, StringSplitOptions.None).Length - 1;
+                var ends = output.Split(Ansi.EndSynchronizedUpdate, StringSplitOptions.None).Length - 1;
+                Assert.Equal(synchronizedOutput, begins > 0);
+                Assert.Equal(begins, ends);
+            },
+            timeout.Token);
+        Assert.True(backend.IsStopped);
+    }
+
     /// <summary>Pane fills and ordinary text agree while explicit text backgrounds remain configurable.</summary>
     [Theory]
     [InlineData(false)]
@@ -600,5 +649,10 @@ public static class TuiKitFrontendTests
             token => surface.PresentAsync(new PresentationBatch([new PresentationRawSourceItem("not admitted")]), token),
             timeout.Token));
         Assert.True(backend.IsStopped);
+        var output = backend.TakeOutput();
+        var end = output.LastIndexOf(Ansi.EndSynchronizedUpdate, StringComparison.Ordinal);
+        var alternateScreenExit = output.LastIndexOf(Ansi.ExitAltScreen, StringComparison.Ordinal);
+        Assert.True(end >= 0);
+        Assert.True(end < alternateScreenExit);
     }
 }

@@ -84,13 +84,6 @@ internal sealed partial class TuiKitSurface
 
     private void RouteMouse(MouseEvent mouse)
     {
-        if (_app.MouseCaptureEnabled && !_startupBlocked && ModalFrame.Fits(_backend.Size) && _app.Modals.Top is IMouseAware modal)
-        {
-            _mouseOwner = null;
-            modal.HandleMouse(mouse);
-            return;
-        }
-
         if (_app.Modals.IsActive || _startupBlocked || !_app.MouseCaptureEnabled || !ModalFrame.Fits(_backend.Size))
         {
             _mouseOwner = null;

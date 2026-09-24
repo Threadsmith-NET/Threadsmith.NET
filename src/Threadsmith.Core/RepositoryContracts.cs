@@ -84,7 +84,11 @@ public sealed record RepositoryOpenResult(
     RepositoryTrustState Trust,
     RepositoryConfigurationSnapshot Configuration,
     MsBuildEnvironmentSnapshot? Environment,
-    IReadOnlyList<string> SolutionCandidates);
+    IReadOnlyList<string> SolutionCandidates)
+{
+    /// <summary>Bounded host warnings produced while binding repository-scoped services.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+}
 
 /// <summary>Repository initialization eligibility determined at the host filesystem boundary.</summary>
 /// <param name="RepositoryPath">Normalized repository root.</param>

@@ -91,6 +91,7 @@ internal static class AnthropicRequestPreparer
             var framing = FramingAllowanceTokens + (request.ResponseFormat is null ? 0 : StructuredOutputAllowanceTokens);
             var retained = request.TransientState?.RetainedOutputTokens ?? 0;
             var total = Math.Min(int.MaxValue, (long)bytes.Length + framing + retained);
+            var attributionResult = Attribute(body, bytes, attribution, request, framing, retained, total);
 
             // One token per UTF-8 byte is deliberately conservative until an exact model tokenizer is reviewed.
             // Signed bytes additionally retain reported output usage: ciphertext length does not measure hidden thinking.
@@ -102,11 +103,12 @@ internal static class AnthropicRequestPreparer
                 CachePlan = plan,
                 WireEstimate = new ModelWireEstimate
                 {
-                    Components = Attribute(body, bytes, attribution, request, framing, retained, total),
-                    EstimationBasis = "Conservative provider capacity: one token per serialized UTF-8 byte, plus framing and retained-output allowances. Separate fields have no exposed cross-field prompt order.",
+                    Components = attributionResult.Components,
+                    EstimationBasis = "Conservative provider capacity: one token per serialized UTF-8 byte, plus framing and retained-output allowances. Contributions follow model-context order, independent of request-object property serialization.",
                     LogicalTokens = request.WireEstimate?.LogicalTokens ?? bytes.Length,
                     WireInputTokens = (int)total,
                     StablePrefixTokens = stableBytes,
+                    StablePrefixComponentCount = attributionResult.StablePrefixComponentCount,
                     NativeToolTokens = toolBytes,
                     FramingTokens = framing,
                     ProviderInstructionTokens = Encoding.UTF8.GetByteCount(request.ProviderInstructions?.Content ?? string.Empty),
@@ -121,18 +123,53 @@ internal static class AnthropicRequestPreparer
         }
     }
 
-    private static IReadOnlyList<ContextUsageComponent> Attribute(JsonObject body, byte[] bytes, Dictionary<JsonNode, ModelMessage> attribution, ModelStreamRequest request, int framing, long retained, long total)
+    private static (IReadOnlyList<ContextUsageComponent> Components, int StablePrefixComponentCount) Attribute(
+        JsonObject body,
+        byte[] bytes,
+        Dictionary<JsonNode, ModelMessage> attribution,
+        ModelStreamRequest request,
+        int framing,
+        long retained,
+        long total)
     {
         using var document = JsonDocument.Parse(bytes);
         var components = new List<ContextUsageComponent>();
+        var systemComponents = new List<ContextUsageComponent>();
+        var messageComponents = new List<ContextUsageComponent>();
+        var toolComponents = new List<ContextUsageComponent>();
+        var outputComponents = new List<ContextUsageComponent>();
         var toolNames = ModelToolCanonicalizer.Canonicalize(request.Tools).Select(tool => tool.Name).ToArray();
-        foreach (var property in document.RootElement.EnumerateObject())
+        foreach (var (field, target) in new[]
         {
-            if (body[property.Name] is { } node)
+            ("system", systemComponents),
+            ("messages", messageComponents),
+            ("tools", toolComponents),
+            ("output_config", outputComponents),
+        })
+        {
+            if (document.RootElement.TryGetProperty(field, out var element)
+                && body[field] is { } node)
             {
-                Visit(node, property.Value, property.Name);
+                Visit(node, element, field, target);
             }
         }
+
+        var toolInsertionIndex = systemComponents.FindIndex(item => item.Category == "Phase instructions");
+        if (toolInsertionIndex < 0)
+        {
+            toolInsertionIndex = systemComponents.Count;
+        }
+
+        components.AddRange(systemComponents.Take(toolInsertionIndex));
+        components.AddRange(toolComponents);
+        components.AddRange(systemComponents.Skip(toolInsertionIndex));
+        components.AddRange(messageComponents);
+        components.AddRange(outputComponents);
+        var stableMessageCount = Math.Min(
+            request.Layout?.StablePrefixMessageCount
+                ?? request.Messages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).Count(),
+            systemComponents.Count);
+        var stablePrefixComponentCount = stableMessageCount + toolComponents.Count;
 
         var remainder = bytes.LongLength - components.Sum(item => item.Tokens);
         components.Add(new("wire-framing", "Provider overhead/replay", "Serialization / request settings", "Request framing", remainder));
@@ -140,16 +177,18 @@ internal static class AnthropicRequestPreparer
         components.Add(new("retained-allowance", "Provider overhead/replay", "Retained output allowance", "Capacity allowances", retained));
 
         // Saturated admission estimates cannot be honestly subdivided into an unsaturated inventory.
-        return components.Sum(item => item.Tokens) == total ? components.AsReadOnly() : [];
+        return components.Sum(item => item.Tokens) == total
+            ? (components.AsReadOnly(), stablePrefixComponentCount)
+            : ([], 0);
 
-        void Visit(JsonNode node, JsonElement element, string container)
+        void Visit(JsonNode node, JsonElement element, string container, List<ContextUsageComponent> target)
         {
             if (attribution.TryGetValue(node, out var message))
             {
                 var content = message.GetModelVisibleContent();
-                components.Add(ContextUsageAttribution.Message(
+                target.Add(ContextUsageAttribution.Message(
                     message,
-                    components.Count,
+                    target.Count,
                     container,
                     Encoding.UTF8.GetByteCount(element.GetRawText()),
                     length => JsonEncodedText.Encode(content.AsSpan(0, length)).EncodedUtf8Bytes.Length));
@@ -159,13 +198,13 @@ internal static class AnthropicRequestPreparer
                 var index = 0;
                 foreach (var tool in element.EnumerateArray())
                 {
-                    components.Add(new($"tools:{index}", "Tools", toolNames[index], container, Encoding.UTF8.GetByteCount(tool.GetRawText())));
+                    target.Add(new($"tools:{index}", "Tools", toolNames[index], container, Encoding.UTF8.GetByteCount(tool.GetRawText())));
                     index++;
                 }
             }
             else if (container == "output_config")
             {
-                components.Add(new("output-config", "Output contract", "Output format / reasoning settings", container, Encoding.UTF8.GetByteCount(element.GetRawText())));
+                target.Add(new("output-config", "Output contract", "Output format / reasoning settings", container, Encoding.UTF8.GetByteCount(element.GetRawText())));
             }
             else if (node is JsonArray array)
             {
@@ -174,7 +213,7 @@ internal static class AnthropicRequestPreparer
                 {
                     if (array[index++] is { } childNode)
                     {
-                        Visit(childNode, child, container);
+                        Visit(childNode, child, container, target);
                     }
                 }
             }
@@ -184,7 +223,7 @@ internal static class AnthropicRequestPreparer
                 {
                     if (obj[child.Name] is { } childNode)
                     {
-                        Visit(childNode, child.Value, container);
+                        Visit(childNode, child.Value, container, target);
                     }
                 }
             }

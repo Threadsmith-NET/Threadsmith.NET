@@ -12,7 +12,7 @@ using Xunit;
 
 public sealed partial class ModelExplorerAssignmentRunnerTests
 {
-    /// <summary>A child can read its parent's complete captured PR without a provider tool.</summary>
+    /// <summary>A child can read bounded portions of its parent's captured PR without a provider tool.</summary>
     [Fact]
     public async Task RunAsync_CapturedPrEvidence_ReachesChildWithoutRefetch()
     {
@@ -81,7 +81,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.DoesNotContain(provider.Requests[0].Tools, tool => tool.Name == "pr_fetch");
         var toolResult = Assert.Single(provider.Requests[1].Messages, message =>
             message.Role == ModelMessageRole.Tool && message.ToolName == ChildAgentEvidenceTool.ToolId);
-        Assert.Contains(diff, toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.Contains(diff[..100], toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.DoesNotContain(diff, toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
+        Assert.Contains("startColumn=", toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.DoesNotContain("fixture-pr-secret", toolResult.GetModelVisibleContent(), StringComparison.Ordinal);
         var reader = new ChildAgentEvidenceTool(
             evidence,
@@ -89,14 +91,24 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             assignment.ChildRunId,
             new HashSet<EvidenceId> { new(snapshotId) },
             TestPromptLoader.Instance,
-            new Dictionary<EvidenceId, PrFetchOutput> { [new(snapshotId)] = snapshot });
-        var childContext = parent with { RunId = assignment.ChildRunId };
+            new Dictionary<EvidenceId, PrFetchOutput> { [new(snapshotId)] = snapshot },
+            scope.GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry()),
+            plan.Provenance.ParentRunId);
+        var childContext = parent with
+        {
+            RunId = assignment.ChildRunId,
+            Invocation = parent.Invocation with { ModelEffectiveInputBudgetTokens = 64_000 },
+        };
         var full = await reader.ExecuteAsync(new ChildAgentEvidenceInput(snapshotId), childContext);
+        Assert.True(full.IsTruncated);
         var diffStart = Array.FindIndex(
             full.Value.Split('\n'),
             line => line.TrimEnd('\r').Equals("Diff:", StringComparison.Ordinal)) + 2;
         var range = await reader.ExecuteAsync(new ChildAgentEvidenceInput(snapshotId, diffStart, diffStart + 1), childContext);
         Assert.Equal("@@ -1 +1 @@\n-old", range.Value.Replace("\r\n", "\n", StringComparison.Ordinal));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => reader.ExecuteAsync(
+            new ChildAgentEvidenceInput(snapshotId),
+            childContext with { Invocation = childContext.Invocation with { ApprovedRoots = ["docs"] } }));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => reader.ExecuteAsync(
             new ChildAgentEvidenceInput(snapshotId),
             childContext with { RunId = RunId.New() }));

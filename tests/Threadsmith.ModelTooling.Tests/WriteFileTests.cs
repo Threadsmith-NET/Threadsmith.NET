@@ -1,6 +1,7 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -74,6 +75,270 @@ public static class WriteFileTests
         Assert.True(result.Succeeded, result.Error);
         Assert.Equal("{\"value\":42}", await File.ReadAllTextAsync(destination));
         Assert.False(new DefaultPolicyEngine().Evaluate(new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer()), new ReadFileInput { Path = destination }, fixture.Context.Invocation).IsAllowed);
+    }
+
+    /// <summary>An active scratchpad grants only its bounded destination at the lowest trust level.</summary>
+    [Fact]
+    public static async Task Scratchpad_WriteIsApprovalFreeAtUntrustedInspection()
+    {
+        using var fixture = new Fixture();
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Root, "scratchpad")).FullName;
+        var invocation = fixture.Context.Invocation with
+        {
+            TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = scratchpad,
+                ModelPath = scratchpad,
+            },
+        };
+        var context = fixture.Context with { Invocation = invocation };
+        await using var events = new DomainEventStream();
+
+        var allowed = await InvokeAsync(
+            CreatePipeline(events, fixture.Tool()),
+            context,
+            new WriteFileInput(Path.Combine(scratchpad, "result.log"), "iteration"));
+        var ordinary = await InvokeAsync(
+            CreatePipeline(events, fixture.Tool()),
+            context,
+            new WriteFileInput(".inbox/report.md", "denied"));
+
+        Assert.True(allowed.Succeeded, allowed.Error);
+        Assert.Equal("iteration", await File.ReadAllTextAsync(Path.Combine(scratchpad, "result.log")));
+        Assert.Equal(ToolErrorClassification.PolicyDenied, ordinary.ErrorClassification);
+    }
+
+    /// <summary>Scratchpad authority does not permit sibling paths with the same textual prefix.</summary>
+    [Fact]
+    public static async Task Scratchpad_PrefixSiblingIsDenied()
+    {
+        using var fixture = new Fixture();
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Root, "scratchpad")).FullName;
+        var sibling = Directory.CreateDirectory(Path.Combine(fixture.Root, "scratchpad-other")).FullName;
+        var context = fixture.Context with
+        {
+            Invocation = fixture.Context.Invocation with
+            {
+                TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+                Scratchpad = new ScratchpadSessionCapability
+                {
+                    IsActive = true,
+                    DisabledReason = ScratchpadDisabledReason.None,
+                    RootPath = scratchpad,
+                    ModelPath = scratchpad,
+                },
+            },
+        };
+        await using var events = new DomainEventStream();
+
+        var result = await InvokeAsync(
+            CreatePipeline(events, fixture.Tool()),
+            context,
+            new WriteFileInput(Path.Combine(sibling, "result.log"), "denied"));
+
+        Assert.Equal(ToolErrorClassification.PolicyDenied, result.ErrorClassification);
+        Assert.Empty(Directory.GetFiles(sibling));
+    }
+
+    /// <summary>The built-in readers share only the active scratchpad root outside the repository.</summary>
+    [Fact]
+    public static async Task Scratchpad_ReadAndSearchUseExternalRoot()
+    {
+        using var fixture = new Fixture();
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Root, "scratchpad")).FullName;
+        var file = Path.Combine(scratchpad, "iteration.log");
+        await File.WriteAllTextAsync(file, "needle in transient output");
+        var invocation = fixture.Context.Invocation with
+        {
+            TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = scratchpad,
+                ModelPath = scratchpad,
+            },
+        };
+        var execution = fixture.Context with { Invocation = invocation };
+        var read = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
+        var search = new SearchTextTool(TestPromptLoader.Instance);
+        var policy = new DefaultPolicyEngine();
+
+        Assert.True(policy.Evaluate(read, new ReadFileInput { Path = file }, invocation).IsAllowed);
+        Assert.True(policy.Evaluate(search, new SearchTextInput { Query = "needle", Path = scratchpad }, invocation).IsAllowed);
+        var readResult = await read.ExecuteAsync(new ReadFileInput { Path = file }, execution);
+        var searchResult = await search.ExecuteAsync(new SearchTextInput { Query = "needle", Path = scratchpad }, execution);
+
+        Assert.Contains("needle", readResult.Value.Lines.Single(), StringComparison.Ordinal);
+        Assert.Single(searchResult.Value.Matches);
+        Assert.Equal("iteration.log", searchResult.Value.Matches[0].Path);
+    }
+
+    /// <summary>Repository listing neither targets nor reveals an active in-repository scratchpad.</summary>
+    [Fact]
+    public static async Task Scratchpad_ListFilesCannotAccessOrRevealContents()
+    {
+        using var fixture = new Fixture();
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(scratchpad, "private.log"), "transient");
+        var invocation = fixture.Context.Invocation with
+        {
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = scratchpad,
+                ModelPath = ".scratch",
+            },
+        };
+        var execution = fixture.Context with { Invocation = invocation };
+        var list = new ListFilesTool(TestPromptLoader.Instance);
+        var policy = new DefaultPolicyEngine();
+
+        Assert.False(policy.Evaluate(list, new ListFilesInput { Path = ".scratch" }, invocation).IsAllowed);
+        var repositoryListing = await list.ExecuteAsync(new ListFilesInput { Path = "." }, execution);
+
+        Assert.DoesNotContain(
+            repositoryListing.Value.Files,
+            file => file.Path.StartsWith(".scratch/", StringComparison.Ordinal));
+    }
+
+    /// <summary>Replacing an active scratchpad root with a link revokes both built-in read paths.</summary>
+    [Fact]
+    public static async Task Scratchpad_ReplacedRootIsRejectedByReadAndSearch()
+    {
+        using var fixture = new Fixture();
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
+        var external = Directory.CreateDirectory(Path.Combine(fixture.Root, "external-read")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(external, "private.log"), "needle");
+        Directory.Delete(scratchpad);
+        try
+        {
+            Directory.CreateSymbolicLink(scratchpad, external);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            Assert.Skip($"Symbolic-link creation is unavailable: {exception.GetType().Name}.");
+            return;
+        }
+
+        var invocation = fixture.Context.Invocation with
+        {
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = scratchpad,
+                ModelPath = ".scratch",
+            },
+        };
+        var execution = fixture.Context with { Invocation = invocation };
+        var read = new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer());
+        var search = new SearchTextTool(TestPromptLoader.Instance);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            read.ExecuteAsync(new ReadFileInput { Path = Path.Combine(scratchpad, "private.log") }, execution));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            search.ExecuteAsync(new SearchTextInput { Query = "needle", Path = scratchpad }, execution));
+    }
+
+    /// <summary>Managed search ignores repository Git inventory for an ignored in-repository scratchpad.</summary>
+    [Fact]
+    public static async Task Scratchpad_ManagedSearchEnumeratesIgnoredInRepositoryFiles()
+    {
+        using var fixture = new Fixture();
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(scratchpad, "iteration.log"), "needle in ignored output");
+        var invocation = fixture.Context.Invocation with
+        {
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = scratchpad,
+                ModelPath = ".scratch",
+            },
+        };
+        var search = new SearchTextTool(
+            TestPromptLoader.Instance,
+            processManager: new MissingRipgrepEmptyGitProcessManager());
+
+        var result = await search.ExecuteAsync(
+            new SearchTextInput { Query = "needle", Path = ".scratch" },
+            fixture.Context with { Invocation = invocation });
+
+        Assert.Single(result.Value.Matches);
+        Assert.Equal("iteration.log", result.Value.Matches[0].Path);
+    }
+
+    /// <summary>Installed ripgrep searches an explicitly selected scratchpad despite repository ignore rules.</summary>
+    [Fact]
+    public static async Task Scratchpad_RipgrepSearchFindsIgnoredInRepositoryFiles()
+    {
+        try
+        {
+            using var probe = Process.Start(new ProcessStartInfo("rg", "--version")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+            });
+            if (probe is null)
+            {
+                Assert.Skip("ripgrep is not available on PATH.");
+                return;
+            }
+
+            await probe.WaitForExitAsync(TestContext.Current.CancellationToken);
+            if (probe.ExitCode != 0)
+            {
+                Assert.Skip("ripgrep is not available on PATH.");
+                return;
+            }
+        }
+        catch (Win32Exception)
+        {
+            Assert.Skip("ripgrep is not available on PATH.");
+            return;
+        }
+
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(Path.Combine(fixture.Repository, ".git"));
+        await File.WriteAllTextAsync(
+            Path.Combine(fixture.Repository, ".gitignore"),
+            ".scratch/\n",
+            TestContext.Current.CancellationToken);
+        var scratchpad = Directory.CreateDirectory(Path.Combine(fixture.Repository, ".scratch")).FullName;
+        await File.WriteAllTextAsync(
+            Path.Combine(scratchpad, "iteration.log"),
+            "needle in ignored output",
+            TestContext.Current.CancellationToken);
+        var invocation = fixture.Context.Invocation with
+        {
+            Scratchpad = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = scratchpad,
+                ModelPath = ".scratch",
+            },
+        };
+        var processManager = new ProcessManager(
+            new SecretOutputSanitizer(),
+            NullLogger<ProcessManager>.Instance);
+        var search = new SearchTextTool(TestPromptLoader.Instance, processManager: processManager);
+
+        var result = await search.ExecuteAsync(
+            new SearchTextInput { Query = "needle", Path = ".scratch" },
+            fixture.Context with { Invocation = invocation },
+            TestContext.Current.CancellationToken);
+
+        Assert.Null(result.Value.Warning);
+        var match = Assert.Single(result.Value.Matches);
+        Assert.Equal("iteration.log", match.Path);
     }
 
     /// <summary>Missing settings default to .inbox; each higher-priority array replaces the entire earlier list.</summary>
@@ -352,6 +617,32 @@ public static class WriteFileTests
             }
 
             return Path.TrimEndingDirectorySeparator(resolved);
+        }
+    }
+
+    private sealed class MissingRipgrepEmptyGitProcessManager : IProcessManager
+    {
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => [];
+
+        public Task<ProcessExecutionResult> RunAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.FileName.Equals("rg", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new FileNotFoundException("ripgrep unavailable");
+            }
+
+            return Task.FromResult(new ProcessExecutionResult(
+                1,
+                0,
+                string.Empty,
+                string.Empty,
+                false,
+                false,
+                false,
+                TimeSpan.Zero));
         }
     }
 

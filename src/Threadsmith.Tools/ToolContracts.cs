@@ -286,6 +286,11 @@ public sealed record ToolDefinition
 /// <summary>Repository and requester state evaluated for every tool invocation.</summary>
 public sealed record ToolInvocationContext
 {
+    /// <summary>Optional session-scoped scratchpad authority.</summary>
+    [JsonIgnore]
+    public ScratchpadSessionCapability Scratchpad { get; init; }
+        = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured);
+
     /// <summary>Transient state shared by one primary operation and its permitted descendants.</summary>
     [JsonIgnore]
     public ToolOperationScope? OperationScope { get; init; }
@@ -349,6 +354,9 @@ public sealed record ToolInvocationContext
 
     /// <summary>Effective selected-model input budget after output reserve, when model resolution has occurred.</summary>
     public int? ModelEffectiveInputBudgetTokens { get; init; }
+
+    /// <summary>Capacity remaining after the current request and output reserve, before tool results are appended.</summary>
+    public int? ModelRemainingInputBudgetTokens { get; init; }
 
     /// <summary>Host-derived source ranges already visible in the current canonical model request.</summary>
     public ModelVisibleSourceFrontier? VisibleSourceFrontier { get; init; }

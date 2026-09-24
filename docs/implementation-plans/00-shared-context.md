@@ -27,7 +27,7 @@ This file consolidates the durable architecture contract from the strategy docum
 |---|---|---|
 | Runtime | .NET 10 LTS | Current LTS baseline |
 | Language | C# | Native fit for Roslyn/MSBuild/DI/async/generators |
-| Interactive terminal | TUIKit 0.10.1 | Full-screen composer, bounded retained transcript, and fixed status footer; ADR-62 |
+| Interactive terminal | TUIKit 1.1.1 | Full-screen composer, bounded retained transcript, and fixed status footer; ADR-62 |
 | Compiler services | Roslyn | Syntax, semantic models, symbols, diagnostics, refactoring, workspace |
 | Project evaluation | MSBuild APIs | Evaluated project graph + build configuration |
 | Extension isolation | Collectible `AssemblyLoadContext` | Modern unload mechanism; **not** a security boundary; **not** `AppDomain` |

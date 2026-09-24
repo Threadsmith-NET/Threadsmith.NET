@@ -1,5 +1,6 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
+using System.Diagnostics;
 using System.Text.Json;
 using Threadsmith.Context;
 using Threadsmith.Core;
@@ -49,10 +50,12 @@ public static class ContextUsageTests
                 new("tool-a", "Tools", "tool-a", "Native tools", 20),
             ],
             WireInputTokens = 140,
+            StablePrefixComponentCount = 5,
         });
         var contributions = ContextUsageFormatter.OrderedContributions(snapshot).ToArray();
         Assert.Equal(["Host policy", "AGENTS.md", "first-append.md", "second-append.md", "tool-b", "tool-a"], contributions.Select(item => item.Label));
         Assert.Equal(snapshot.InputTokens, contributions.Sum(item => item.Tokens));
+        Assert.Equal(140, snapshot.StablePrefixTokens);
         Assert.Equal(40, ContextUsageFormatter.Categories(snapshot).Single(item => item.Category == "Appended prompts").Tokens);
         Assert.Equal(30, ContextUsageFormatter.Categories(snapshot).Single(item => item.Category == "Tools").Tokens);
 
@@ -61,10 +64,21 @@ public static class ContextUsageTests
         modal.Render(new BufferSurface(buffer));
         var rendered = Read(buffer);
         var formatted = ContextUsageFormatter.Format(snapshot);
+        var renderedLines = rendered.Split('\n');
+        var firstStableLabelRow = Array.FindIndex(renderedLines, line => line.Contains("[Messages] Host policy", StringComparison.Ordinal));
+        var finalStableLabelRow = Array.FindIndex(renderedLines, line => line.Contains("[Native tools] tool-a", StringComparison.Ordinal));
+        var stableMarkerColumn = renderedLines[firstStableLabelRow].IndexOf("[Messages] Host policy", StringComparison.Ordinal) - 1;
+        Assert.Equal('│', renderedLines[firstStableLabelRow][stableMarkerColumn]);
+        Assert.Equal('│', renderedLines[firstStableLabelRow + 1][stableMarkerColumn]);
+        Assert.Equal(stableMarkerColumn, renderedLines[finalStableLabelRow].IndexOf("[Native tools] tool-a", StringComparison.Ordinal) - 1);
+        Assert.Equal('└', renderedLines[finalStableLabelRow][stableMarkerColumn]);
+        Assert.Equal(stableMarkerColumn + 2, Array.FindIndex(renderedLines[firstStableLabelRow + 1].ToCharArray(), character => character is >= '\u2580' and <= '\u258f'));
         foreach (var text in new[] { rendered, formatted })
         {
             Assert.DoesNotContain("bundle", text, StringComparison.Ordinal);
             Assert.DoesNotContain("Empty", text, StringComparison.Ordinal);
+            Assert.Contains("cache eligible", text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains('└', text);
             var previous = -1;
             foreach (var item in contributions)
             {
@@ -119,8 +133,10 @@ public static class ContextUsageTests
         Assert.Equal(plain.WireInputTokens, estimate.WireInputTokens);
         Assert.Equal(JsonSerializer.Serialize(message with { Sources = [] }), JsonSerializer.Serialize(message));
         Assert.Equal(estimate.WireInputTokens, estimate.Components.Sum(item => item.Tokens));
-        Assert.NotEqual(estimate.Components[0].Id, estimate.Components[1].Id);
-        Assert.All(estimate.Components.Take(2), item => Assert.Equal(item.Tokens, item.Children.Sum(child => child.Tokens)));
+        var messageComponents = estimate.Components.Where(item => item.Container == "Messages").ToArray();
+        Assert.NotEqual(messageComponents[0].Id, messageComponents[1].Id);
+        Assert.All(messageComponents, item => Assert.Equal(item.Tokens, item.Children.Sum(child => child.Tokens)));
+        Assert.All(estimate.Components.TakeWhile(item => item.Container != "Messages"), item => Assert.Equal("Native tools", item.Container));
         Assert.True(estimate.Components.Single(item => item.Label == "large").Tokens > estimate.Components.Single(item => item.Label == "small").Tokens);
         var categories = ContextUsageFormatter.Categories(Snapshot(estimate));
         Assert.Equal(estimate.WireInputTokens, categories.Sum(item => item.Tokens));
@@ -185,6 +201,38 @@ public static class ContextUsageTests
         Assert.Contains(text, character => character is >= '\u2580' and <= '\u258f');
     }
 
+    /// <summary>Large conversations retain final-row navigation and bounded rendering after resize.</summary>
+    [Fact]
+    public static void NativeModalHandlesLargeInventoryWithoutFullListRendering()
+    {
+        var components = Enumerable.Range(0, 1000)
+            .Select(index => new ContextUsageComponent($"message:{index}", "Conversation", $"User {index} 中文 é\u001b[2J", "Messages", 10L + index))
+            .Concat(Enumerable.Range(0, 200)
+                .Select(index => new ContextUsageComponent($"tool:{index}", "Tools", $"tool:{index}", "Native tools", 20L + index)))
+            .ToArray();
+        var snapshot = Snapshot(new ModelWireEstimate
+        {
+            WireInputTokens = (int)components.Sum(item => item.Tokens),
+            Components = components,
+        });
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var start = Stopwatch.GetTimestamp();
+        var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { });
+        var buffer = new CellBuffer(80, 24);
+        modal.Render(new BufferSurface(buffer));
+        modal.HandleKey(new KeyEvent(KeyCode.End, 0, KeyModifiers.None));
+        modal.Render(new BufferSurface(buffer));
+        Assert.Contains("tool:199 · 219 tokens", Read(buffer), StringComparison.Ordinal);
+        buffer.Resize(160, 50);
+        modal.Render(new BufferSurface(buffer));
+        var rendered = Read(buffer);
+        Assert.Contains("tool:199 · 219 tokens", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u001b', rendered);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        TestContext.Current.TestOutputHelper?.WriteLine($"1,200 entries: {Stopwatch.GetElapsedTime(start).TotalMilliseconds:F1} ms, {allocated:N0} allocated bytes.");
+        Assert.True(allocated < 10_000_000, $"Unexpected full-inventory rendering allocation: {allocated:N0}");
+    }
+
     /// <summary>Native click synthesis reaches host input actions without consuming drafts or requesting steering.</summary>
     [Theory]
     [InlineData(false)]
@@ -236,6 +284,30 @@ public static class ContextUsageTests
             timeout.Token);
     }
 
+    /// <summary>F12 handoff and too-small/startup guards keep context scrolling with the terminal.</summary>
+    [Fact]
+    public static void ContextModalWheelRequiresApplicationMouseCapture()
+    {
+        var components = Enumerable.Range(0, 6)
+            .Select(index => new ContextUsageComponent($"message:{index}", "Conversation", $"User {index}", "Messages", 10L + index))
+            .ToArray();
+        var snapshot = Snapshot(new ModelWireEstimate { WireInputTokens = 75, Components = components });
+        var canHandleMouse = false;
+        var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { }, () => canHandleMouse);
+        var cells = new CellBuffer(120, 35);
+        var wheel = new MouseEvent(MouseEventKind.Wheel, MouseButton.WheelDown, 20, 10, KeyModifiers.None, 0);
+
+        Assert.True(modal.HandleMouse(wheel));
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("User 0 · 10 tokens", Read(cells), StringComparison.Ordinal);
+
+        canHandleMouse = true;
+        Assert.True(modal.HandleMouse(wheel));
+        cells.Clear(CellStyle.Default);
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("User 3 · 13 tokens", Read(cells), StringComparison.Ordinal);
+    }
+
     /// <summary>Non-activating mouse input leaves the composer submission path and its draft intact.</summary>
     [Theory]
     [InlineData("\u001b[<0;118;4M\u001b[<0;118;4m", true)]
@@ -273,6 +345,8 @@ public static class ContextUsageTests
     {
         RunId = RunId.New(), InvocationId = Guid.NewGuid(), Stage = "conversation", CapturedAt = DateTimeOffset.UtcNow,
         InputTokens = estimate.WireInputTokens, ContextWindow = 1_000_000, OutputReserve = 100,
+        StablePrefixTokens = estimate.Components.Take(estimate.StablePrefixComponentCount).Sum(item => item.Tokens),
+        StablePrefixComponentCount = estimate.StablePrefixComponentCount,
         Components = estimate.Components, EstimationBasis = estimate.EstimationBasis,
     };
 

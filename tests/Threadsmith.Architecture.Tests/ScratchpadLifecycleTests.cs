@@ -262,7 +262,7 @@ public sealed class ScratchpadLifecycleTests
             bool userConfigured = false)
         {
             var root = Directory.CreateDirectory(Path.Combine(
-                Path.GetTempPath(),
+                PhysicalTemporaryPath(),
                 "threadsmith-scratch-lifecycle-" + Guid.NewGuid().ToString("N"))).FullName;
             var repository = Directory.CreateDirectory(Path.Combine(root, "repo")).FullName;
             var threadsmith = Directory.CreateDirectory(Path.Combine(repository, ".threadsmith")).FullName;
@@ -326,6 +326,19 @@ public sealed class ScratchpadLifecycleTests
             {
                 Directory.Delete(Root, recursive: true);
             }
+        }
+
+        private static string PhysicalTemporaryPath()
+        {
+            var path = Path.GetFullPath(Path.GetTempPath());
+            var resolved = Path.GetPathRoot(path)!;
+            foreach (var segment in path[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var directory = new DirectoryInfo(Path.Combine(resolved, segment));
+                resolved = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+            }
+
+            return Path.TrimEndingDirectorySeparator(resolved);
         }
     }
 

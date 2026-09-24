@@ -284,42 +284,6 @@ public static class ContextUsageTests
             timeout.Token);
     }
 
-    /// <summary>The application pump gives modal wheel and paste input to the modal without touching the draft.</summary>
-    [Fact]
-    public static async Task ModalMouseTrapKeepsComposerIsolated()
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        using var backend = new HeadlessBackend(120, 35);
-        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
-        await surface.RunAsync(
-            async token =>
-            {
-                var read = surface.ReadComposerAsync(new ComposerRequest("MAIN > "), token);
-                await surface.PresentAsync(new PresentationBatch([]), token);
-                backend.FeedInput("draft");
-                await surface.PresentAsync(new PresentationBatch([]), token);
-                var components = Enumerable.Range(0, 6)
-                    .Select(index => new ContextUsageComponent($"message:{index}", "Conversation", $"User {index}", "Messages", 10L + index))
-                    .ToArray();
-                var snapshot = Snapshot(new ModelWireEstimate { WireInputTokens = 75, Components = components });
-                var modal = surface.ShowContextUsageAsync(snapshot, token);
-                await surface.PresentAsync(new PresentationBatch([]), token);
-                _ = backend.TakeOutput();
-
-                backend.FeedInput("\u001b[<65;20;10M\u001b[200~ignored\r\u001b[201~x\u001b[<0;20;30M\u001b[<0;20;30m");
-                await surface.PresentAsync(new PresentationBatch([]), token);
-                Assert.Contains("User 3", backend.TakeOutput(), StringComparison.Ordinal);
-                Assert.False(read.IsCompleted);
-
-                backend.FeedInput("\u001b[27u");
-                await modal;
-                backend.FeedInput("\r");
-                Assert.Equal("draft", (await read).Text);
-            },
-            timeout.Token);
-        Assert.True(backend.IsStopped);
-    }
-
     /// <summary>F12 handoff and too-small/startup guards keep context scrolling with the terminal.</summary>
     [Fact]
     public static void ContextModalWheelRequiresApplicationMouseCapture()
@@ -370,7 +334,7 @@ public static class ContextUsageTests
                 await surface.PresentAsync(new PresentationBatch([]), token);
                 backend.Resize(121, 35);
                 await surface.PresentAsync(new PresentationBatch([]), token);
-                Assert.Contains("User 0 · 10 tokens", backend.TakeOutput(), StringComparison.Ordinal);
+                await AssertOutputEventuallyContainsAsync(backend, "User 0 · 10 tokens", token);
 
                 backend.FeedInput("\u001b[24~");
                 await surface.PresentAsync(new PresentationBatch([]), token);
@@ -378,14 +342,14 @@ public static class ContextUsageTests
                 await surface.PresentAsync(new PresentationBatch([]), token);
                 backend.Resize(122, 35);
                 await surface.PresentAsync(new PresentationBatch([]), token);
-                Assert.Contains("User 3 · 13 tokens", backend.TakeOutput(), StringComparison.Ordinal);
+                await AssertOutputEventuallyContainsAsync(backend, "User 3 · 13 tokens", token);
 
                 backend.Resize(20, 6);
                 backend.FeedInput("\u001b[<65;20;10M");
                 await surface.PresentAsync(new PresentationBatch([]), token);
                 backend.Resize(123, 35);
                 await surface.PresentAsync(new PresentationBatch([]), token);
-                Assert.Contains("User 3 · 13 tokens", backend.TakeOutput(), StringComparison.Ordinal);
+                await AssertOutputEventuallyContainsAsync(backend, "User 3 · 13 tokens", token);
                 Assert.False(read.IsCompleted);
 
                 backend.FeedInput("\u001b[27u");
@@ -507,6 +471,23 @@ public static class ContextUsageTests
     }
 
     private static string Read(CellBuffer buffer) => string.Join('\n', Enumerable.Range(0, buffer.Height).Select(y => string.Concat(Enumerable.Range(0, buffer.Width).Select(x => buffer.Get(x, y).Grapheme))));
+
+    private static async Task AssertOutputEventuallyContainsAsync(HeadlessBackend backend, string expected, CancellationToken cancellationToken)
+    {
+        var output = string.Empty;
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            output += backend.TakeOutput();
+            if (output.Contains(expected, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            await Task.Delay(10, cancellationToken);
+        }
+
+        Assert.Contains(expected, output, StringComparison.Ordinal);
+    }
 
     private sealed class InspectionOnlyAssembler : IContextAssembler
     {

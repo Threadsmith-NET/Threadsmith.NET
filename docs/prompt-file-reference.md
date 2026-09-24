@@ -37,14 +37,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 28 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
+| System and phase prompts | 29 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 19 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 53 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
 | Tool prompts | 200 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **318** | Complete deployed catalog. |
+| **Total** | **319** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -114,6 +114,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 |---|---|---|
 | `System-SystemPrompt.md` | Main-agent host authority, planning, skill routing, and artifact guidance. | `None` |
 | `System-RepositoryInspection.md` | Shared parent/child inspection, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
+| `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
 #### `ToolInventory` family
 
@@ -924,6 +925,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-role"></a>`Role` | Host-assigned child-agent or message role. |
 | <a id="placeholder-schema"></a>`Schema` | Tool input or focused specialist output JSON schema shown to its assigned model; it may come from a built-in definition or an imported MCP server and is escaped before insertion. |
 | <a id="placeholder-scope"></a>`Scope` | Host-approved repository or task scope. |
+| <a id="placeholder-scratchpadpath"></a>`ScratchpadPath` | Host-resolved model-facing path for the active session-scoped transient scratchpad. |
 | <a id="placeholder-sequence"></a>`Sequence` | Monotonic sequence number used to order steering or context items. |
 | <a id="placeholder-servername"></a>`ServerName` | Configured MCP server display name. |
 | <a id="placeholder-shellexecutable"></a>`ShellExecutable` | Resolved shell program used by run_process. |

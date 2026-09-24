@@ -137,7 +137,7 @@ internal sealed class ChildAgentModelLoop
                     capturedPullRequests.Select(snapshot =>
                         $"Captured PR evidence: {snapshot.Metadata.Url}; snapshot {snapshot.SnapshotId:D}; {snapshot.Page.Files.Count} changed files. Read bounded captured metadata, inventory, and diff with read_agent_evidence(evidenceId: \"{snapshot.SnapshotId:D}\"). Follow the returned startLine/startColumn continuation position until complete. This reads the parent's captured snapshot without a provider request.")),
             };
-        var messages = prompt.CreateMessages(handoff, instructions);
+        var messages = prompt.CreateMessages(handoff, instructions, childToolContext, registrations);
         var history = new ChildAgentHistory(messages, _options.Compaction, _prompts, _compactionProfile);
         history.RecordInitialEvidence(deliveredEvidenceIds.ToArray());
         var evidenceProgress = new ChildAgentEvidenceProgressTracker(context.Evidence);

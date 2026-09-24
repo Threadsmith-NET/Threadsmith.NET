@@ -286,6 +286,11 @@ public sealed record ToolDefinition
 /// <summary>Repository and requester state evaluated for every tool invocation.</summary>
 public sealed record ToolInvocationContext
 {
+    /// <summary>Optional session-scoped scratchpad authority.</summary>
+    [JsonIgnore]
+    public ScratchpadSessionCapability Scratchpad { get; init; }
+        = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured);
+
     /// <summary>Transient state shared by one primary operation and its permitted descendants.</summary>
     [JsonIgnore]
     public ToolOperationScope? OperationScope { get; init; }

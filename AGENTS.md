@@ -7,8 +7,6 @@ This file defines repository-wide rules for AI coding agents.
 **Product name:** **Threadsmith.NET** — a .NET-native coding harness.
 **Code/namespace prefix:** `Threadsmith.*` (the product name and the code prefix coexist without ambiguity).
 
-The host owns control flow; the model is a pluggable reasoning engine, not an autonomous actor. The model proposes; the host validates, applies, builds, tests, and reports back. Nothing destructive happens without user approval.
-
 ## Baseline
 
 - **Runtime:** .NET 10 LTS, C# (`<LangVersion>latest</LangVersion>`). ADR-1.

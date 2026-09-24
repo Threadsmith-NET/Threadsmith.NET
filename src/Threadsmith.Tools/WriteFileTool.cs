@@ -123,8 +123,9 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
     {
         var repository = Path.GetFullPath(context.RepositoryPath);
         var destination = Path.GetFullPath(path, repository);
+        var scratchpadDestination = ToolPathRules.IsWithinScratchpad(destination, context);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var allowed = _configuration.GetAllowedFolders(repository).Any(folder =>
+        var allowed = scratchpadDestination || _configuration.GetAllowedFolders(repository).Any(folder =>
         {
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder, repository));
             var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
@@ -136,14 +137,15 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         }
 
         var relative = Path.GetRelativePath(repository, destination).Replace('\\', '/');
-        if (RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths))
+        if (!scratchpadDestination && RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths))
         {
             throw new UnauthorizedAccessException("write_file destination matches a prohibited path.");
         }
 
         var segments = destination.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
-        if (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase) || segment.Equals(".threadsmith", StringComparison.OrdinalIgnoreCase))
+        if (!scratchpadDestination && (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase) || segment.Equals(".threadsmith", StringComparison.OrdinalIgnoreCase))
             || Path.GetFileName(destination).Equals("AGENTS.md", StringComparison.OrdinalIgnoreCase))
+            )
         {
             throw new UnauthorizedAccessException("write_file cannot change Git metadata, Threadsmith settings, or AGENTS.md instructions.");
         }
@@ -177,7 +179,9 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             }
         }
 
-        return destination;
+        return scratchpadDestination
+            ? ToolPathRules.NormalizeScratchpadPath(destination, context)
+            : destination;
     }
 
     /// <inheritdoc />

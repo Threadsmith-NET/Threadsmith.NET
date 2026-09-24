@@ -190,6 +190,7 @@ internal static class ConfigurationBootstrap
             ["model:http:maxConnectionsPerServer"] = "16",
             ["mutation:approvalPolicy"] = "reviewAll",
             ["mutation:largeDiffThreshold"] = "500",
+            ["scratchpad:path"] = null,
             ["tui:showOperationDurations"] = "true",
             ["tools:listFiles:defaultEntries"] = "200",
             ["tools:listFiles:maxEntries"] = "2000",

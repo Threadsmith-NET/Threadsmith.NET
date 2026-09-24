@@ -19,6 +19,7 @@ public sealed class SessionLifecycleApplication :
     private readonly IDomainEventStream _events;
     private readonly ISessionLifecycleStore _lifecycleStore;
     private readonly JsonlModelExchangeLog? _modelExchangeLog;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<string>>>? _prepareNewSession;
     private readonly InMemoryProjectionStore _projections;
     private readonly ISessionRestorer _restorer;
     private readonly SemaphoreSlim _transitionGate = new(1, 1);
@@ -42,7 +43,8 @@ public sealed class SessionLifecycleApplication :
         SessionUsageProjection usage,
         ActiveModelSelectionService? activeModels = null,
         TimeProvider? timeProvider = null,
-        JsonlModelExchangeLog? modelExchangeLog = null)
+        JsonlModelExchangeLog? modelExchangeLog = null,
+        Func<CancellationToken, Task<IReadOnlyList<string>>>? prepareNewSession = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         ArgumentNullException.ThrowIfNull(lifecycleStore);
@@ -57,6 +59,7 @@ public sealed class SessionLifecycleApplication :
 
         _lifecycleStore = lifecycleStore;
         _modelExchangeLog = modelExchangeLog;
+        _prepareNewSession = prepareNewSession;
         _restorer = restorer;
         _sessions = sessions;
         _projections = projections;
@@ -353,6 +356,10 @@ public sealed class SessionLifecycleApplication :
         Func<CancellationToken, Task>? commitRepositoryBinding,
         CancellationToken cancellationToken)
     {
+        var preparationWarnings = _prepareNewSession is null
+            ? []
+            : await _prepareNewSession(cancellationToken);
+
         var now = _timeProvider.GetUtcNow();
         var sessionId = await _sessions.CreateRegisteredSessionAsync("Interactive", cancellationToken);
         var entry = new SessionCatalogEntry
@@ -406,7 +413,7 @@ public sealed class SessionLifecycleApplication :
             SessionTransitionKind.New,
             entry,
             source?.SessionId,
-            [],
+            preparationWarnings,
             new SessionDurableUsage(0, 0, false, false, false));
     }
 

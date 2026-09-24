@@ -339,6 +339,16 @@
   // pipeline. Repo config can narrow (but not widen) the host's defaults.
   // Per-tool operational limits below override the compiled defaults; see the
   // ── Execution limits section for the execution subsystem limits.
+  // Optional session-scoped transient storage. Null disables it (the default).
+  // Relative paths resolve from the repository root. Repository/session config
+  // must stay inside the repository; trusted user/machine, CLI, or environment
+  // configuration may name an existing absolute external directory. Threadsmith
+  // clears every child at startup, shutdown, and /new, but keeps the folder.
+  // In-repo folders should be covered by a repository .gitignore rule.
+  // ./.threadsmith/.scratchpad is
+  // supported; other paths under .threadsmith remain protected.
+  "scratchpad": { "path": null },
+
   "tools": {
     // Optional outer tool overrides. byTool entries carry toolId, including colon-qualified MCP IDs.
     // timeoutMilliseconds: positive, or -1 for no outer deadline.

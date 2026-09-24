@@ -41,7 +41,10 @@ internal static class ConversationToolAvailability
             return true;
         }
 
-        if (context.TrustLevel < definition.RequiredTrust
+        var scratchpadEligible = context.Scratchpad.IsActive
+            && definition.Id is "search" or "read_file" or "write_file"
+            && definition.Source.Equals("Built-in", StringComparison.OrdinalIgnoreCase);
+        if ((!scratchpadEligible && context.TrustLevel < definition.RequiredTrust)
             || context.DenyAllTools
             || context.DeniedToolIds.Contains(definition.Id, StringComparer.OrdinalIgnoreCase)
             || (context.AllowedToolIds.Count > 0

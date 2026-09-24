@@ -87,6 +87,11 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
         foreach (var path in Directory.EnumerateFiles(root, "*", options))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (ToolPathRules.IsWithinScratchpad(path, context.Invocation))
+            {
+                continue;
+            }
+
             var relative = Path.GetRelativePath(context.Invocation.RepositoryPath, path)
                 .Replace('\\', '/');
             if (relative.Split('/').Any(segment => segment is ".git" or "bin" or "obj")
@@ -256,7 +261,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         ToolExecutionContext context,
         CancellationToken cancellationToken = default)
     {
-        var path = ToolPathRules.NormalizeAndValidate(input.Path, context.Invocation);
+        var path = ToolPathRules.NormalizeAndValidateForTool(input.Path, context.Invocation, Definition.Id);
         var info = new FileInfo(path);
         if (!info.Exists)
         {
@@ -302,7 +307,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             }
 
             content = encoding.GetString(bytes, input.SnapshotOffset, end - input.SnapshotOffset);
-            var relativePath = Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/');
+            var relativePath = GetDisplayPath(path, context.Invocation);
             var snapshot = new ReadFileOutput(relativePath, 1, null, 0, [], false, null, null)
             {
                 Content = content,
@@ -341,7 +346,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
                 : ReadFileTruncationReason.LineLimit
             : null;
         int? nextStartLine = truncated ? input.StartLine + selected.Count : null;
-        var relative = Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/');
+        var relative = GetDisplayPath(path, context.Invocation);
         var sourceLocation = endLine is null
             ? $"L{input.StartLine}"
             : $"L{input.StartLine}-L{endLine.Value}";
@@ -385,6 +390,14 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         ToolInvocationContext context)
     {
         return [input.Path];
+    }
+
+    private static string GetDisplayPath(string path, ToolInvocationContext context)
+    {
+        var root = ToolPathRules.IsWithinScratchpad(path, context)
+            ? context.Scratchpad.RootPath!
+            : context.RepositoryPath;
+        return Path.GetRelativePath(root, path).Replace('\\', '/');
     }
 
     private int ResolveMaximumLines(ReadFileInput input)
@@ -499,8 +512,11 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 RegexOptions.CultureInvariant,
                 TimeSpan.FromMilliseconds(_limits.SearchRegexTimeoutMilliseconds))
             : null;
-        var repositoryPath = ToolPathRules.NormalizeAndValidate(".", context.Invocation);
-        var searchPath = ToolPathRules.NormalizeAndValidate(input.Path ?? ".", context.Invocation);
+        var searchPath = ToolPathRules.NormalizeAndValidateForTool(input.Path ?? ".", context.Invocation, Definition.Id);
+        var scratchpadSearch = ToolPathRules.IsWithinScratchpad(input.Path ?? ".", context.Invocation);
+        var repositoryPath = scratchpadSearch
+            ? context.Invocation.Scratchpad.RootPath!
+            : ToolPathRules.NormalizeAndValidate(".", context.Invocation);
         if (!File.Exists(searchPath) && !Directory.Exists(searchPath))
         {
             throw new FileNotFoundException("The search path does not exist.", searchPath);
@@ -513,6 +529,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             repositoryPath,
             searchPath,
             maximumMatches,
+            scratchpadSearch,
             cancellationToken);
         if (ripgrepAttempt.Execution is not null)
         {
@@ -523,12 +540,13 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             repositoryPath,
             searchPath,
             context,
+            scratchpadSearch,
             cancellationToken);
         truncated = fileSet.IsTruncated;
         foreach (var path in fileSet.Paths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var relative = Path.GetRelativePath(context.Invocation.RepositoryPath, path)
+            var relative = Path.GetRelativePath(repositoryPath, path)
                 .Replace('\\', '/');
             if (relative.Split('/').Any(IsManagedSearchExcludedDirectory)
                 || ToolPathRules.ContainsReservedWindowsDeviceName(relative)
@@ -645,7 +663,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         SearchTextInput input,
         ToolInvocationContext context)
     {
-        return [ToolPathRules.NormalizeAndValidate(input.Path ?? ".", context)];
+        return [ToolPathRules.NormalizeAndValidateForTool(input.Path ?? ".", context, Definition.Id)];
     }
 
     private int ResolveMaximumMatches(SearchTextInput input)
@@ -661,6 +679,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         string repositoryPath,
         string searchPath,
         int maximumMatches,
+        bool scratchpadSearch,
         CancellationToken cancellationToken)
     {
         if (_processManager is null)
@@ -688,12 +707,17 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
             "--iglob=!**/*.sqlite",
             "--iglob=!**/*.sqlite3",
         };
+        if (scratchpadSearch)
+        {
+            arguments.Add("--no-ignore");
+        }
+
         foreach (var excludedDirectory in _searchExcludedDirectories)
         {
             arguments.Add($"--iglob=!**/{excludedDirectory}/**");
         }
 
-        foreach (var prohibitedPath in context.Invocation.ProhibitedPaths)
+        foreach (var prohibitedPath in scratchpadSearch ? [] : context.Invocation.ProhibitedPaths)
         {
             if (TryCreateRipgrepExclusionGlob(prohibitedPath, out var exclusionGlob))
             {
@@ -809,7 +833,11 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 string matchedPath;
                 try
                 {
-                    matchedPath = ToolPathRules.NormalizeAndValidate(relative, context.Invocation);
+                    var candidate = Path.GetFullPath(relative, repositoryPath);
+                    matchedPath = ToolPathRules.NormalizeAndValidateForTool(
+                        candidate,
+                        context.Invocation,
+                        Definition.Id);
                 }
                 catch (Exception exception) when (
                     exception is ToolArgumentValidationException
@@ -825,7 +853,9 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 }
 
                 relative = Path.GetRelativePath(repositoryPath, matchedPath).Replace('\\', '/');
-                projectedRelative = NormalizeProjectedRipgrepPath(projectedRelative);
+                projectedRelative = scratchpadSearch
+                    ? Path.GetRelativePath(repositoryPath, matchedPath).Replace('\\', '/')
+                    : NormalizeProjectedRipgrepPath(projectedRelative);
                 if (matches.Count == maximumMatches)
                 {
                     truncated = true;
@@ -920,8 +950,16 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         string repositoryPath,
         string searchPath,
         ToolExecutionContext context,
+        bool scratchpadSearch,
         CancellationToken cancellationToken)
     {
+        if (scratchpadSearch)
+        {
+            return new SearchFileSet(
+                File.Exists(searchPath) ? [searchPath] : EnumerateSearchFiles(searchPath),
+                false);
+        }
+
         var gitFileSet = await TryEnumerateGitSearchFilesAsync(
             repositoryPath,
             context,

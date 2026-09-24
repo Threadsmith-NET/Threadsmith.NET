@@ -1377,6 +1377,7 @@ Important sections include:
 | `solution.path` | Remembered solution/project selection. |
 | `model` | Provider profiles and defaults. |
 | `tools` | Availability, invocation policy, allowlists, and per-tool scalar configuration. |
+| `scratchpad.path` | Optional session-scoped transient directory; `null` disables it. |
 | `mutation` | Approval policy and the `ReviewRisky` large-diff threshold. |
 | `context.conversation` | Default mode plus recent-turn, pressure, and artifact bounds. |
 | `tools.config.memories` | Repository-memory storage/context limits and semantic minimum: defaults 20/3/0.47; zero context disables retrieval. |
@@ -1386,6 +1387,10 @@ Important sections include:
 | prompt append files | Ordered repository-provided model context. |
 
 Threadsmith combines compiled, machine, user, repository, session, CLI, and ordinary environment layers using Microsoft.Extensions.Configuration semantics. Static secret stores and the normalized `THREADSMITH_secrets__...` environment subtree are deliberately excluded from that graph and are consulted only by `ISecretResolver` at an explicit privileged boundary. Malformed JSON stops startup with exit code `2` and a concise standard-error message identifying the affected file and parser location rather than an unhandled stack trace.
+
+Set `scratchpad.path` to a repository-relative or absolute directory when models need disposable working files or intermediate test results. The default is `null`, so no scratchpad path is sent to the model. Repository and session configuration may select only a directory strictly inside the active repository; machine, user, command-line, and environment configuration may select an existing external directory. `./.threadsmith/.scratchpad` is supported for keeping temporary files under Threadsmith's repository directory; other `.threadsmith` paths remain protected. Threadsmith creates a missing in-repository directory, warns when it is not covered by a repository `.gitignore`, and disables a missing external directory for that session without creating it.
+
+An active scratchpad is advertised as session-scoped transient storage and is available only to the built-in `search`, `read_file`, and `write_file` tools. Only `write_file` can modify it, and scratchpad writes need no approval at any repository trust level. Ordinary writer size, text-extension, overwrite, reserved-name, link, and atomic-write checks still apply. If `write_file` is unavailable, Threadsmith keeps the setting but disables all scratchpad access for that session. Every child entry is deleted at startup, graceful shutdown, and before `/new` activates the next session; the scratchpad directory itself remains. Do not store anything there that must survive a session boundary.
 
 Repository JSON reads accept comments and trailing commas. Solution, model/reasoning, tool, and mutation-policy preference updates serialize their complete read-modify-replace operations through one repository settings coordinator, preserving unrelated keys and concurrent changes.
 

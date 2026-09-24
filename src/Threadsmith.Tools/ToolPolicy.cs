@@ -54,7 +54,16 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 reason);
         }
 
-        if (context.TrustLevel < tool.Definition.RequiredTrust)
+        var scratchpadAccess = IsEligibleScratchpadAccess(tool, input, context);
+        if (!scratchpadAccess && ResourcesTargetScratchpad(tool, input, context))
+        {
+            return new ToolPolicyDecision(
+                false,
+                ApprovalLevel.None,
+                "Only the built-in search, read_file, and write_file tools may access the active scratchpad.");
+        }
+
+        if (context.TrustLevel < tool.Definition.RequiredTrust && !scratchpadAccess)
         {
             var reason = $"{tool.Definition.Id} requires {tool.Definition.RequiredTrust}; "
                 + $"current trust is {context.TrustLevel}.";
@@ -71,7 +80,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 // Only the compiled direct-write capability can use its separate folder grant.
                 _ = ConfiguredTool.Unwrap(tool) is WriteFileTool writeFile
                     ? writeFile.ValidatePath(resourcePath, context)
-                    : ToolPathRules.NormalizeAndValidate(resourcePath, context);
+                    : ToolPathRules.NormalizeAndValidateForTool(resourcePath, context, tool.Definition.Id);
             }
             catch (UnauthorizedAccessException exception)
             {
@@ -141,8 +150,42 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
         return new ToolPolicyDecision(
             true,
-            requiredApproval,
+            scratchpadAccess ? ApprovalLevel.None : requiredApproval,
             "Allowed by repository trust and tool policy.");
+    }
+
+    private static bool IsEligibleScratchpadAccess(ITool tool, object input, ToolInvocationContext context)
+    {
+        var implementation = ConfiguredTool.Unwrap(tool);
+        if (implementation is not (ReadFileTool or SearchTextTool or WriteFileTool)
+            || !context.Scratchpad.IsActive)
+        {
+            return false;
+        }
+
+        var path = implementation switch
+        {
+            ReadFileTool when input is ReadFileInput read => read.Path,
+            SearchTextTool when input is SearchTextInput search => search.Path ?? ".",
+            WriteFileTool when input is WriteFileInput write => write.Path,
+            _ => null,
+        };
+        return path is not null && ToolPathRules.IsWithinScratchpad(path, context);
+    }
+
+    private static bool ResourcesTargetScratchpad(ITool tool, object input, ToolInvocationContext context)
+    {
+        return tool.GetResourcePaths(input, context).Any(path =>
+        {
+            try
+            {
+                return ToolPathRules.IsWithinScratchpad(path, context);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException)
+            {
+                return false;
+            }
+        });
     }
 }
 
@@ -179,6 +222,62 @@ public sealed class AllowApprovalPolicy : IApprovalPolicy
 /// <summary>Shared repository-relative prohibited-path matching.</summary>
 internal static class ToolPathRules
 {
+    /// <summary>Normalizes a path under the exact built-in tool's repository or scratchpad authority.</summary>
+    internal static string NormalizeAndValidateForTool(
+        string candidatePath,
+        ToolInvocationContext context,
+        string toolId,
+        bool inspectFileSystem = true)
+    {
+        if ((toolId.Equals("search", StringComparison.Ordinal)
+                || toolId.Equals("read_file", StringComparison.Ordinal)
+                || toolId.Equals("write_file", StringComparison.Ordinal))
+            && IsWithinScratchpad(candidatePath, context))
+        {
+            return NormalizeScratchpadPath(candidatePath, context, inspectFileSystem);
+        }
+
+        return NormalizeAndValidate(candidatePath, context, inspectFileSystem);
+    }
+
+    /// <summary>Returns whether a candidate is within the active scratchpad.</summary>
+    internal static bool IsWithinScratchpad(string candidatePath, ToolInvocationContext context)
+    {
+        if (!context.Scratchpad.IsActive || context.Scratchpad.RootPath is not { } root)
+        {
+            return false;
+        }
+
+        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath, context.RepositoryPath));
+        return IsSameOrChild(normalized, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root)));
+    }
+
+    /// <summary>Normalizes and confines a candidate beneath the active scratchpad root.</summary>
+    internal static string NormalizeScratchpadPath(
+        string candidatePath,
+        ToolInvocationContext context,
+        bool inspectFileSystem = true)
+    {
+        if (!context.Scratchpad.IsActive || context.Scratchpad.RootPath is not { } root)
+        {
+            throw new UnauthorizedAccessException("The session scratchpad is unavailable.");
+        }
+
+        var normalizedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
+        var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath, context.RepositoryPath));
+        if (!IsSameOrChild(normalized, normalizedRoot))
+        {
+            throw new UnauthorizedAccessException("Tool path escapes the session scratchpad.");
+        }
+
+        if (inspectFileSystem)
+        {
+            RejectReparseTraversal(normalizedRoot, normalized);
+        }
+
+        return normalized;
+    }
+
     /// <summary>Normalizes and confines a tool path using host filesystem semantics.</summary>
     internal static string NormalizeAndValidate(
         string candidatePath,
@@ -187,13 +286,9 @@ internal static class ToolPathRules
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(candidatePath);
         ArgumentNullException.ThrowIfNull(context);
-        var comparison = OperatingSystem.IsWindows()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
         var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath));
         var normalized = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidatePath, repositoryRoot));
-        if (!normalized.Equals(repositoryRoot, comparison)
-            && !normalized.StartsWith(repositoryRoot + Path.DirectorySeparatorChar, comparison))
+        if (!IsSameOrChild(normalized, repositoryRoot))
         {
             throw new UnauthorizedAccessException("Tool path escapes the repository root.");
         }
@@ -201,8 +296,7 @@ internal static class ToolPathRules
         var approved = context.ApprovedRoots.Any(root =>
         {
             var approvedRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repositoryRoot));
-            return normalized.Equals(approvedRoot, comparison)
-                || normalized.StartsWith(approvedRoot + Path.DirectorySeparatorChar, comparison);
+            return IsSameOrChild(normalized, approvedRoot);
         });
         if (!approved)
         {
@@ -240,6 +334,39 @@ internal static class ToolPathRules
         }
 
         return normalized;
+    }
+
+    private static void RejectReparseTraversal(string root, string normalized)
+    {
+        if ((File.GetAttributes(root) & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new UnauthorizedAccessException("Tool paths cannot traverse symbolic links or junctions.");
+        }
+
+        var current = root;
+        foreach (var segment in Path.GetRelativePath(root, normalized).Split(
+            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+            StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            if (!File.Exists(current) && !Directory.Exists(current))
+            {
+                break;
+            }
+
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new UnauthorizedAccessException("Tool paths cannot traverse symbolic links or junctions.");
+            }
+        }
+    }
+
+    /// <summary>Returns whether a normalized candidate equals or descends from a normalized root.</summary>
+    internal static bool IsSameOrChild(string candidate, string root)
+    {
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return candidate.Equals(root, comparison)
+            || candidate.StartsWith(root + Path.DirectorySeparatorChar, comparison);
     }
 
     /// <summary>Returns whether a relative path contains a reserved Windows device-name segment.</summary>

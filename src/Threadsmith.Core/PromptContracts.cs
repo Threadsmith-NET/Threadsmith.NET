@@ -131,6 +131,9 @@ public static class PromptFileNames
     /// <summary>Gets the shared parent and child repository inspection guidance asset.</summary>
     public const string SystemRepositoryInspection = "System-RepositoryInspection.md";
 
+    /// <summary>Gets the conditional session scratchpad guidance asset.</summary>
+    public const string SystemScratchpad = "System-Scratchpad.md";
+
     /// <summary>Gets the stable filename for the SystemPhaseEvidenceCollection prompt asset.</summary>
     public const string SystemPhaseEvidenceCollection = "System-Phase-EvidenceCollection.md";
 
@@ -1084,6 +1087,7 @@ public static class PromptFileNames
     [
         SystemSystemPrompt,
         SystemRepositoryInspection,
+        SystemScratchpad,
         SystemPhaseEvidenceCollection,
         SystemPhaseChangePlanning,
         SystemPhaseMutationProposal,
@@ -1429,6 +1433,7 @@ public static class PromptAssetCatalog
         {
             PromptFileNames.SystemSystemPrompt,
             PromptFileNames.SystemRepositoryInspection,
+            PromptFileNames.SystemScratchpad,
             PromptFileNames.SystemPhaseEvidenceCollection,
             PromptFileNames.SystemPhaseChangePlanning,
             PromptFileNames.SystemPhaseMutationProposal,
@@ -1655,6 +1660,7 @@ public static class PromptAssetCatalog
             = new ReadOnlyDictionary<string, IReadOnlySet<string>>(
                 new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
                 {
+                    [PromptFileNames.SystemScratchpad] = Set("ScratchpadPath"),
                     [PromptFileNames.SystemGovernedRequestState] = Set(
                         "TaskState",
                         "GovernedState",

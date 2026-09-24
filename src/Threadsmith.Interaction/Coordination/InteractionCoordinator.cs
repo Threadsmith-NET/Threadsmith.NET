@@ -1047,6 +1047,14 @@ public sealed partial class InteractionCoordinator
                         $"Threadsmith: New session {sessionId.Value:D}.\n",
                         PresentationTextRole.Status,
                         lifetime.Token);
+                    foreach (var warning in result.Warnings)
+                    {
+                        await _surface.WriteAsync(
+                            $"Warning: {warning}\n",
+                            PresentationTextRole.Warning,
+                            lifetime.Token);
+                    }
+
                     continue;
                 }
 
@@ -4609,6 +4617,17 @@ public sealed partial class InteractionCoordinator
                 requestedTrust,
                 requestedSolutionPath,
                 cancellationToken);
+            if (result.Repository is { Warnings.Count: > 0 } repository)
+            {
+                foreach (var warning in repository.Warnings)
+                {
+                    await _surface.WriteAsync(
+                        $"Warning: {warning}{Environment.NewLine}",
+                        PresentationTextRole.Warning,
+                        cancellationToken);
+                }
+            }
+
             if (result.UsedRememberedSolution
                 && result.Repository is not null
                 && result.Solution is not null)

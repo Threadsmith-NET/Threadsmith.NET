@@ -202,22 +202,28 @@ internal static class ApplicationComposition
     /// <summary>Captures current repository tool authority for explicit host operations.</summary>
     internal static ToolInvocationContext CreateToolInvocationContext(
         HostCompositionInputs host,
-        SessionProjection? state)
+        SessionProjection? state,
+        IScratchpadSessionCapabilityProvider? scratchpad = null)
     {
+        var configuration = scratchpad is ScratchpadLifecycle lifecycle
+            ? lifecycle.CurrentConfiguration
+            : host.Configuration;
         return new ToolInvocationContext
         {
             WorkspaceId = state?.WorkspaceId,
             RepositoryPath = state?.RepositoryPath ?? host.Paths.RepositoryRoot,
+            Scratchpad = scratchpad?.Current
+                ?? ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured),
             TrustLevel = state?.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
             ApprovedRoots = ["."],
-            ProhibitedPaths = host.Configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [],
-            AllowedExecutables = HostFoundation.ResolveAllowedExecutables(host.Configuration),
+            ProhibitedPaths = configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [],
+            AllowedExecutables = HostFoundation.ResolveAllowedExecutables(configuration),
             AllowedNetworkHosts = host.TrustedConfiguration
                 .GetSection("tools:allowedNetworkHosts")
                 .Get<string[]>() ?? [],
-            AllowedToolIds = host.Configuration.GetSection("tools:allow").Get<string[]>() ?? [],
-            DeniedToolIds = host.Configuration.GetSection("tools:deny").Get<string[]>() ?? [],
-            RequireApprovalToolIds = host.Configuration
+            AllowedToolIds = configuration.GetSection("tools:allow").Get<string[]>() ?? [],
+            DeniedToolIds = configuration.GetSection("tools:deny").Get<string[]>() ?? [],
+            RequireApprovalToolIds = configuration
                 .GetSection("tools:requireApproval")
                 .Get<string[]>() ?? [],
             RequestedBy = "model",
@@ -282,6 +288,17 @@ internal static class ApplicationComposition
                 "context:repositoryMemory is retired and ignored. Configure tools:config:memories:MaxNumberOfRepoMemories (20) and MaxRepoMemoriesInContext (3), and SemanticMinimum (0.47) instead.");
         }
 
+        var scratchpad = new ScratchpadLifecycle(
+            host.ConfigurationArguments,
+            (IConfigurationRoot)host.Configuration,
+            host.Paths,
+            tools.ProcessManager,
+            tools.ToolStateManager,
+            tools.ToolRegistry,
+            host.LoggerFactory.CreateLogger<ScratchpadLifecycle>());
+        startupDisplayWarnings = startupDisplayWarnings.Concat(
+            await scratchpad.StartAsync()).ToArray();
+
         var contextAssembler = new ContextAssembler(
             persistence.EvidenceStore,
             new TokenEstimator(),
@@ -296,7 +313,8 @@ internal static class ApplicationComposition
             repositoryInstructionResolver,
             providerInstructionResolver: providerInstructionResolver,
             repositoryMemoryRetriever: memoryRetriever,
-            requestPreparationResolver: integration.Models.Provider as IModelRequestPreparationResolver);
+            requestPreparationResolver: integration.Models.Provider as IModelRequestPreparationResolver,
+            scratchpad: scratchpad);
 
         // Session preferences and usage are shared by headless and interactive surfaces so both project
         // the same effective profile, reasoning level, and provider-neutral accounting.
@@ -374,7 +392,7 @@ internal static class ApplicationComposition
                 var state = await host.Projections.GetAsync<SessionProjection>(
                     key,
                     cancellationToken);
-                return CreateToolInvocationContext(host, state);
+                return CreateToolInvocationContext(host, state, scratchpad);
             },
             contextAssembler,
             persistence.EvidenceStore,
@@ -442,7 +460,7 @@ internal static class ApplicationComposition
                 var state = await host.Projections.GetAsync<SessionProjection>(
                     key,
                     cancellationToken);
-                var invocationContext = CreateToolInvocationContext(host, state);
+                var invocationContext = CreateToolInvocationContext(host, state, scratchpad);
                 return tools.WebFetchAuthorization.IssueCurrentUserMessageUrls(
                     invocationContext.RepositoryPath,
                     sessionId,
@@ -470,7 +488,7 @@ internal static class ApplicationComposition
                     return null;
                 }
 
-                var invocationContext = CreateToolInvocationContext(host, state);
+                var invocationContext = CreateToolInvocationContext(host, state, scratchpad);
                 return CreatePlanSanityCheckRequest(plan, invocationContext, baseline);
             },
             activeTurnCompactor: activeTurnCompactor,
@@ -540,7 +558,7 @@ internal static class ApplicationComposition
                 {
                     var state = await host.Projections.GetAsync<SessionProjection>(
                         new ProjectionKey("session", sessionId.Value.ToString("D")), cancellationToken);
-                    var invocation = CreateToolInvocationContext(host, state);
+                    var invocation = CreateToolInvocationContext(host, state, scratchpad);
                     return tools.ToolRegistry.GetRegistrations(sessionId, runId).Any(registration =>
                         registration.Tool.Definition.Id == "memories"
                         && invocation.TrustLevel >= registration.Tool.Definition.RequiredTrust
@@ -551,6 +569,7 @@ internal static class ApplicationComposition
                 },
                 logger: host.LoggerFactory.CreateLogger<MutationProposalApplication>(),
                 workspaceLimits: host.OperationalLimits.Workspace);
+            repositoryBindings.AttachScratchpad(scratchpad);
             var repositoryLifecycle = new RepositoryLifecycle(
                 host.Events,
                 persistence.RepositoryFacts,
@@ -560,7 +579,8 @@ internal static class ApplicationComposition
                 mutationApprovalPolicy: null,
                 repositoryOpened: repositoryBindings.BindRepositoryAsync,
                 resourceLimits: host.OperationalLimits.Workspace,
-                maximumConfigurationBytes: host.TrustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024));
+                maximumConfigurationBytes: host.TrustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
+                repositoryOpenWarnings: () => repositoryBindings.LastWarnings);
 
             // Validation reuses the tracked process manager and publishes normalized host-owned evidence.
             var buildExecutor = new BuildExecutor(
@@ -812,7 +832,7 @@ internal static class ApplicationComposition
                         var state = await host.Projections.GetAsync<SessionProjection>(
                             key,
                             cancellationToken);
-                        return CreateToolInvocationContext(host, state);
+                        return CreateToolInvocationContext(host, state, scratchpad);
                     },
                     host.PromptLoader,
                     integration.Models.Catalog,
@@ -885,7 +905,8 @@ internal static class ApplicationComposition
                 contextAssembler,
                 usage,
                 integration.Models.ActiveModels,
-                modelExchangeLog: integration.Models.RawModelLog);
+                modelExchangeLog: integration.Models.RawModelLog,
+                prepareNewSession: scratchpad.BeginNewSessionAsync);
             repositoryBindings.AttachSessionLifecycle(sessionLifecycle);
             sessionCheckpointSubscription = host.Events.Subscribe(
                 async (domainEvent, _) =>
@@ -965,7 +986,8 @@ internal static class ApplicationComposition
                 memoryRetriever,
                 memoryOptions,
                 startupDisplayWarnings,
-                agentDisplay);
+                agentDisplay,
+                scratchpad);
         }
         catch
         {
@@ -981,6 +1003,7 @@ internal static class ApplicationComposition
 
             tools.ToolRegistry.Remove(memoriesTool.Definition.Id, memoriesTool);
             await mutationCoordinator.DisposeAsync();
+            await ((IAsyncDisposable)scratchpad).DisposeAsync();
             throw;
         }
     }
@@ -1223,6 +1246,11 @@ internal sealed class RepositoryScopedBindingCoordinator
     private string _currentRepositoryRoot;
     private SkillCatalog? _nativeSkills;
     private SessionLifecycleApplication? _sessionLifecycle;
+    private ScratchpadLifecycle? _scratchpad;
+    private IReadOnlyList<string> _lastWarnings = [];
+
+    /// <summary>Gets warnings from the latest successful repository binding.</summary>
+    internal IReadOnlyList<string> LastWarnings => _lastWarnings;
 
     /// <summary>Initializes a new instance of the <see cref="RepositoryScopedBindingCoordinator"/> class.</summary>
     internal RepositoryScopedBindingCoordinator(
@@ -1281,6 +1309,13 @@ internal sealed class RepositoryScopedBindingCoordinator
         _sessionLifecycle = sessionLifecycle;
     }
 
+    /// <summary>Attaches the repository-bound transient scratchpad lifecycle.</summary>
+    internal void AttachScratchpad(ScratchpadLifecycle scratchpad)
+    {
+        ArgumentNullException.ThrowIfNull(scratchpad);
+        _scratchpad = scratchpad;
+    }
+
     /// <summary>Rebinds every repository-scoped service as one recoverable repository-open boundary.</summary>
     internal async Task BindRepositoryAsync(
         string repositoryRoot,
@@ -1291,7 +1326,13 @@ internal sealed class RepositoryScopedBindingCoordinator
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            _lastWarnings = [];
             var previousRepositoryRoot = _currentRepositoryRoot;
+            var pathComparison = OperatingSystem.IsWindows()
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            var sameRepository = nextRepositoryRoot.Equals(previousRepositoryRoot, pathComparison);
+            var scratchpadRebindAttempted = false;
             try
             {
                 if (_activeModels is not null)
@@ -1304,6 +1345,12 @@ internal sealed class RepositoryScopedBindingCoordinator
                 await _planApprovalPolicy.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
                 _repositorySecretProvider.BindRepository(nextRepositoryRoot);
                 await _mcpManager.RebindRepositoryAsync(cancellationToken);
+                if (_scratchpad is not null && !sameRepository)
+                {
+                    scratchpadRebindAttempted = true;
+                    await _scratchpad.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
+                }
+
                 if (_nativeSkills is not null)
                 {
                     await _nativeSkills.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
@@ -1325,6 +1372,9 @@ internal sealed class RepositoryScopedBindingCoordinator
                         nextRepositoryRoot,
                         token => BindMemoryRepositoryAsync(nextRepositoryRoot, token),
                         cancellationToken);
+                    _lastWarnings = !sameRepository
+                        ? _scratchpad?.LastActivationWarnings ?? []
+                        : [];
                 }
                 else
                 {
@@ -1335,7 +1385,7 @@ internal sealed class RepositoryScopedBindingCoordinator
             }
             catch (Exception exception)
             {
-                var rollbackFailure = await RollBackAsync(previousRepositoryRoot);
+                var rollbackFailure = await RollBackAsync(previousRepositoryRoot, scratchpadRebindAttempted);
                 if (rollbackFailure is not null)
                 {
                     throw new AggregateException(
@@ -1368,7 +1418,7 @@ internal sealed class RepositoryScopedBindingCoordinator
         _memoryOptions.BindRepository(repositoryRoot, options);
     }
 
-    private async Task<Exception?> RollBackAsync(string repositoryRoot)
+    private async Task<Exception?> RollBackAsync(string repositoryRoot, bool restoreScratchpad)
     {
         var failures = new List<Exception>();
         async Task RestoreAsync(Func<Task> restoreAsync)
@@ -1401,6 +1451,11 @@ internal sealed class RepositoryScopedBindingCoordinator
         await RestoreAsync(() => _approvalPolicy.BindRepositoryAsync(repositoryRoot));
         await RestoreAsync(() => _planApprovalPolicy.BindRepositoryAsync(repositoryRoot));
         await RestoreAsync(() => _toolState.BindRepositoryAsync(repositoryRoot));
+        if (_scratchpad is not null && restoreScratchpad)
+        {
+            await RestoreAsync(() => _scratchpad.RestoreRepositoryAsync(repositoryRoot));
+        }
+
         _repositorySecretProvider.BindRepository(repositoryRoot);
         await RestoreAsync(() => _mcpManager.RebindRepositoryAsync());
         if (_activeModels is not null)
@@ -1432,6 +1487,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
     private readonly SkillWorkflowOrchestrator _skillWorkflow;
     private readonly ToolRegistry _toolRegistry;
     private readonly IDomainEventSubscription _sessionCheckpointSubscription;
+    private readonly ScratchpadLifecycle _scratchpad;
 
     /// <summary>Initializes a new instance of the <see cref="ApplicationServices"/> class.</summary>
     internal ApplicationServices(
@@ -1458,7 +1514,8 @@ internal sealed class ApplicationServices : IAsyncDisposable
         HybridRepositoryMemoryRetriever memoryRetriever,
         RepositoryMemoryConfiguration memoryOptions,
         IReadOnlyList<string> startupDisplayWarnings,
-        AgentDisplayStream agentDisplay)
+        AgentDisplayStream agentDisplay,
+        ScratchpadLifecycle scratchpad)
     {
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);
@@ -1488,6 +1545,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         _memoryRetriever = memoryRetriever;
         MemoryOptions = memoryOptions;
         StartupDisplayWarnings = startupDisplayWarnings;
+        _scratchpad = scratchpad;
     }
 
     /// <summary>Gets the dispatcher exposed to terminal command surfaces.</summary>
@@ -1529,20 +1587,51 @@ internal sealed class ApplicationServices : IAsyncDisposable
     /// <summary>Releases transactional staging resources after all command surfaces stop.</summary>
     public async ValueTask DisposeAsync()
     {
-        await _sessionCheckpointSubscription.DisposeAsync();
-        if (_delegateAgentsTool is not null)
+        var failures = new List<Exception>();
+        async Task DisposeStepAsync(Func<Task> disposeAsync)
         {
-            _toolRegistry.Remove(_delegateAgentsTool.Definition.Id, _delegateAgentsTool);
+            try
+            {
+                await disposeAsync();
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+            }
         }
 
-        _toolRegistry.Remove(_memoriesTool.Definition.Id, _memoriesTool);
-        _toolRegistry.Remove(_invokeSkillTool.Definition.Id, _invokeSkillTool);
-        _toolRegistry.Remove(_inspectSkillTool.Definition.Id, _inspectSkillTool);
-        await _skillWorkflow.DisposeAsync();
-        await _agentScheduler.DisposeAsync();
-        await _mutationCoordinator.DisposeAsync();
-        _memoryRetriever.Dispose();
-        await _reranker.DisposeAsync();
-        await _embeddings.DisposeAsync();
+        await DisposeStepAsync(async () => await _sessionCheckpointSubscription.DisposeAsync());
+        await DisposeStepAsync(() =>
+        {
+            if (_delegateAgentsTool is not null)
+            {
+                _toolRegistry.Remove(_delegateAgentsTool.Definition.Id, _delegateAgentsTool);
+            }
+
+            _toolRegistry.Remove(_memoriesTool.Definition.Id, _memoriesTool);
+            _toolRegistry.Remove(_invokeSkillTool.Definition.Id, _invokeSkillTool);
+            _toolRegistry.Remove(_inspectSkillTool.Definition.Id, _inspectSkillTool);
+            return Task.CompletedTask;
+        });
+        await DisposeStepAsync(async () => await _skillWorkflow.DisposeAsync());
+        await DisposeStepAsync(async () => await _agentScheduler.DisposeAsync());
+        await DisposeStepAsync(async () => await _mutationCoordinator.DisposeAsync());
+        await DisposeStepAsync(async () => await ((IAsyncDisposable)_scratchpad).DisposeAsync());
+        await DisposeStepAsync(() =>
+        {
+            _memoryRetriever.Dispose();
+            return Task.CompletedTask;
+        });
+        await DisposeStepAsync(async () => await _reranker.DisposeAsync());
+        await DisposeStepAsync(async () => await _embeddings.DisposeAsync());
+        if (failures.Count == 1)
+        {
+            throw failures[0];
+        }
+
+        if (failures.Count > 1)
+        {
+            throw new AggregateException("Application shutdown encountered multiple failures.", failures);
+        }
     }
 }

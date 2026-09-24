@@ -313,6 +313,80 @@ public sealed partial class Milestone19Tests
         }
     }
 
+    /// <summary>Active scratchpad guidance is conditional and rendered from the host capability.</summary>
+    [Fact]
+    public async Task ContextAssembler_AdvertisesOnlyActiveScratchpad()
+    {
+        var root = CreateTemporaryDirectory();
+        var sanitizer = new PassthroughSanitizer();
+        await using var events = new NullEventStream();
+        var capability = new ScratchpadProvider
+        {
+            Current = new ScratchpadSessionCapability
+            {
+                IsActive = true,
+                DisabledReason = ScratchpadDisabledReason.None,
+                RootPath = Path.Combine(root, ".scratch"),
+                ModelPath = ".scratch",
+            },
+        };
+        var assembler = new ContextAssembler(
+            new EmptyEvidenceStore(),
+            new TokenEstimator(),
+            new ContextPolicy(),
+            new PromptAppendLoader(sanitizer),
+            sanitizer,
+            events,
+            TestPromptLoader.Instance,
+            scratchpad: capability);
+
+        try
+        {
+            var result = await assembler.AssembleAsync(
+                new ContextAssemblyRequest
+                {
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    Phase = RunPhase.EvidenceCollection,
+                    Task = new TaskSpecification("use temporary output", []),
+                    RepositoryPath = root,
+                },
+                TestContext.Current.CancellationToken);
+
+            var messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
+            Assert.Contains("Scratchpad: `.scratch`", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Contains(
+                result.Inspection.PromptAssets,
+                asset => asset.Source == PromptFileNames.SystemScratchpad);
+            capability.Current = ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.WriteFileUnavailable);
+            result = await assembler.AssembleAsync(
+                new ContextAssemblyRequest
+                {
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    Phase = RunPhase.EvidenceCollection,
+                    Task = new TaskSpecification("no scratchpad", []),
+                    RepositoryPath = root,
+                },
+                TestContext.Current.CancellationToken);
+            messages = Assert.IsAssignableFrom<IReadOnlyList<ModelMessage>>(result.Messages);
+            Assert.DoesNotContain("Scratchpad:", messages[0].GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.DoesNotContain(
+                result.Inspection.PromptAssets,
+                asset => asset.Source == PromptFileNames.SystemScratchpad);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    private sealed class ScratchpadProvider : IScratchpadSessionCapabilityProvider
+    {
+        /// <inheritdoc />
+        public required ScratchpadSessionCapability Current { get; set; }
+    }
+
     /// <summary>Explicit cache plans honor capability bounds and include every stable boundary class.</summary>
     [Fact]
     public void CachePlanner_ExplicitControl_ProducesBoundedStableBreakpoints()

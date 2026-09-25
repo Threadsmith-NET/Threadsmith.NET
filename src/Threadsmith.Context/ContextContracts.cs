@@ -145,6 +145,12 @@ public interface IEvidenceStore
     /// <summary>Gets a detached session evidence snapshot.</summary>
     IReadOnlyList<Evidence> Snapshot(SessionId sessionId);
 
+    /// <summary>Gets one detached evidence item without enumerating the session.</summary>
+    Evidence? Find(SessionId sessionId, EvidenceId evidenceId)
+    {
+        return Snapshot(sessionId).FirstOrDefault(item => item.EvidenceId == evidenceId);
+    }
+
     /// <summary>Copies one session's detached governed evidence into another session.</summary>
     void CopySession(SessionId sourceSessionId, SessionId destinationSessionId);
 

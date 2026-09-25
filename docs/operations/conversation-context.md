@@ -107,13 +107,97 @@ The bundled CPU encoder works locally and independently of the conversational mo
 - lexical/semantic ranks, cosine/fusion scores, optional cross-encoder scores, query truncation, model space, cache reuse, rebuild/fallback rationale;
 - category token accounting and exact pressure reductions;
 - context-window pressure and the assembly pressure indication;
-- the latest active-turn pre-sampling estimate, context/budget pressure reason, main-profile output allowance, configured/effective retention, candidate profile identity, combined summary-and-continuation admission, exhausted dimensions, eligible/compacted/retained group counts and tokens, summary/pruned/history generation, cut range, backoff, and classified outcome.
+- the latest active-turn pre-sampling estimate, context/budget pressure reason, main-profile output allowance, configured/effective retention, candidate profile identity, combined summary-and-continuation admission, exhausted dimensions, eligible/compacted/retained group counts and tokens, summary/pruned/history generation, cut range, backoff, and classified outcome;
+- the before/after complete-request token estimates and active-turn outcome. The shared headless inspection projection additionally carries exact-source candidate, removed, retained, and opaque counts; source characters reclaimed before receipt overhead; and whether projection avoided a summary.
 
 Inspection contains metadata, bounded sanitized memory content only in the assembled prompt, and no secret/provider/tool payloads.
 
 ## Active-turn tool continuation compaction
 
-Every ordinary multi-round evidence/planning request is estimated with the canonical provider-wire estimator before sampling. Tool calls and matching results are retained as complete chronological groups. A newly completed group must reach the model exactly in a later completed request before it can enter an eligible oldest prefix. Current user input, host/repository instructions, output contracts, tool definitions, and the initially assembled prefix remain unchanged.
+Every tool round adds calls and results to the active conversation. Without compaction, each later model request carries those results again. Repeated source reads can therefore make requests grow even when they add little new information. Threadsmith manages that growth in two stages: it first removes source text that is provably duplicated by newer active context, then uses a model-written summary only when deterministic removal does not resolve the pressure.
+
+### Three representations with different purposes
+
+| Representation | Purpose | Changed by source projection? |
+|---|---|---:|
+| Stored evidence and tool results | Audit, recovery, and durable execution records | No |
+| Active chronological call/result groups | Dependency and lifecycle state for the current run | No |
+| Prepared model request | The exact messages and schemas serialized for the next provider call | Yes |
+
+Source projection is a request-time view. It does not delete or rewrite the original result. The model receives a smaller request, while the host retains the admitted sanitized evidence needed for bounded recovery.
+
+### Request lifecycle
+
+For every ordinary multi-round evidence or planning request, Threadsmith:
+
+1. Builds the complete provider request, including instructions, messages, tool schemas, and provider framing, while reserving the selected profile's required output capacity.
+2. Estimates that exact prepared input with the canonical provider-wire estimator and checks it against the remaining input capacity and execution budget.
+3. Sends it unchanged when neither the context-pressure threshold nor the remaining execution budget requires reduction.
+4. Under pressure, checks already delivered `read_file` and `code_explore` results for exact source ranges that a newer result fully covers.
+5. Replaces eligible older source bodies with compact receipts and rebuilds the complete request, including the conditional recovery-tool schema.
+6. Activates the projection only when the rebuilt request has positive net token savings and passes the pressure and capacity checks. If projection saves tokens but cannot resolve the pressure alone, the existing summary fallback evaluates a dependency-safe projected prefix.
+7. Validates the final request immediately before dispatch. A receipt cannot survive without its supporting newer source and authorized evidence.
+
+A newly completed tool group must first reach the model exactly in a later completed request before it can become eligible. Current user input, host and repository instructions, output contracts, canonical tool definitions, and the initially assembled prefix remain unchanged.
+
+### Concrete example
+
+Suppose one tool result contains `Parser.cs` lines 1–400 and a later result contains lines 1–500 from the same file snapshot. The ordinary history would resend both source bodies:
+
+```text
+read_file Parser.cs lines 1-400
+[400 lines of source]
+
+read_file Parser.cs lines 1-500
+[500 lines of source]
+```
+
+Under pressure, the prepared request can instead contain:
+
+```text
+read_file Parser.cs lines 1-400
+[receipt: exact source is covered by the later result; original evidence is recoverable]
+
+read_file Parser.cs lines 1-500
+[500 lines of source]
+```
+
+The model still sees the newer complete source range and the fact that the older call occurred. The repeated 400-line body is absent from the serialized request. With a chain such as A covered by B and B covered by C, older receipts point directly to the newest surviving result rather than forming a recovery chain.
+
+### Exact proof and fail-closed behavior
+
+Threadsmith removes an older range only when all applicable facts match:
+
+- the older and newer results came from the same supported producer: `read_file` with `read_file`, or `code_explore` with `code_explore`;
+- both identify the same normalized file path and raw-file SHA-256 snapshot;
+- the newer range is equal to or wholly contains the older range;
+- the exact sanitized lines previously delivered to the model match the recorded visible-range digest;
+- `code_explore` results also have the same workspace generation; and
+- the supporting newer source will remain model-visible in the final request.
+
+Partial overlap, cross-tool overlap, changed or missing digests, different workspace generations, hidden-only sidecars, malformed metadata, unsupported producers, never-delivered results, and candidates outside the bounded 256-item assessment remain unchanged. Whole source fragments are removed; Threadsmith does not split a result to remove only its overlapping subsection.
+
+### Recovery
+
+When the final request contains receipts, Threadsmith dynamically advertises `read_active_turn_evidence`. The tool returns bounded pages from the original sanitized evidence. Authorization is tied to the same session, run, repository identity, evidence record, and producing tool invocation. It uses the ordinary tool pipeline, so normal policy, events, cancellation, paging, and execution accounting apply.
+
+Recovery never rereads the current repository file. A current reread could return different content and would not prove what the model originally saw. Missing, stale, or unauthorized evidence produces an explicit result. Summarizing a receipt-bearing raw group revokes its recovery reference, and final validation rejects any projection that would leave a receipt without its supporting source. A model-initiated recovery can add a tool round; projection itself adds no provider call.
+
+### Token and transport efficiency
+
+| Layer | Effect |
+|---|---|
+| Model input | Repeated source tokens are removed from the complete prepared request. The before/after estimate includes receipt text, the recovery schema, and message framing; admission separately preserves the selected profile's output reserve. Reported savings are therefore net input-request savings rather than raw text estimates. |
+| Network transport | Removed source bodies are not serialized into the provider request. The request therefore carries fewer characters and normally fewer bytes as well as fewer tokens. This is omission at request construction, not compression applied after serialization. |
+| Provider calls | Projection requires no model call. It can avoid a summary-provider call when exact removal resolves pressure. Recovery adds a normal tool round only if the model requests the omitted body. |
+| Host storage | Original sanitized tool results and evidence remain stored under existing retention rules. The optimization reduces provider-bound context, not durable evidence size. |
+| Provider caching and billing | Threadsmith advances `HistoryRewriteGeneration` so providers cannot reuse an incompatible opaque conversation identity. The unchanged prefix can still qualify for provider prefix caching, but cache accounting, billed tokens, latency, and byte encoding remain provider-specific. |
+
+Small duplicate results can cost more to describe than they save because a receipt and recovery schema have fixed overhead. Threadsmith compares the complete before/after requests and keeps the raw result when net savings are zero or negative. Workloads dominated by unique reads, partial overlaps, or rapidly changing files should therefore show little or no source-projection benefit.
+
+The deterministic high-overlap evaluation replaced 36,615 repeated source characters. The third request fell from an estimated 22,161 input tokens to 13,098, a 40.9% reduction; cumulative estimated input across three requests fell from 37,930 to 28,867, a 23.9% reduction. Model-request count stayed at three and no summary call was needed. These figures include receipt and recovery-schema overhead and demonstrate the mechanism under deliberate overlap; they are not a general workload or billing forecast. See the [Plan 113.2 evaluation](../implementation-plans/evidence/plan-113.2-deduplication-evaluation.md) for the fixture, controls, and limits.
+
+### Summary fallback and execution budgets
 
 Execution budgets are scoped per run by production composition and by the default concrete `ExecutionBudget` path. This keeps concurrent runs from racing a shared admission snapshot. Callers that provide a custom budget factory own any intentional cross-run sharing. Within one run, ordinary and summary provider requests remain serial, and actual reported usage is accrued before the next admission check.
 
@@ -176,6 +260,8 @@ Compiled defaults:
 | `activeTurnCompaction.modelOutputBudgetPercent` | 80 trusted-only |
 
 Invalid enum values, non-positive budgets, pressure outside 1–100%, malformed/missing/repository-only explicit compaction-profile IDs, statically incompatible profiles, runtime sensitive-data incompatibility, and request-specific cost incompatibility fail before model invocation. Active-turn pressure defaults remain host-owned; the optional candidate profile ID and summary budget partition are configurable only through trusted machine/user/environment configuration.
+
+`context:conversation:compactionPressurePercent` controls the context assembler's recommendation for bounded cross-turn conversation history. It does not change the active-turn tool-continuation trigger described above. Active-turn source projection and summary assessment use the compiled host-owned 75% trigger; `context:activeTurnCompaction` configures only the optional summary profile, reasoning, summary budget, and output partition.
 
 ## Retention and restoration
 

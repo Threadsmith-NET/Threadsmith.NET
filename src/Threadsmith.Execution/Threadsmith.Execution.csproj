@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.ParallelAgents.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Planning.Tests" />
   </ItemGroup>
 
 </Project>

@@ -136,6 +136,17 @@ public sealed class EvidenceStore : IEvidenceStore
     }
 
     /// <inheritdoc />
+    public Evidence? Find(SessionId sessionId, EvidenceId evidenceId)
+    {
+        lock (_gate)
+        {
+            return _items.TryGetValue((sessionId, evidenceId), out var evidence)
+                ? evidence with { InvalidationKeys = evidence.InvalidationKeys.ToArray() }
+                : null;
+        }
+    }
+
+    /// <inheritdoc />
     public void CopySession(SessionId sourceSessionId, SessionId destinationSessionId)
     {
         if (sourceSessionId == default)

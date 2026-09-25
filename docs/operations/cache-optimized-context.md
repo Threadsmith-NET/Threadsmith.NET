@@ -39,6 +39,20 @@ The complete ordered bundle is content-addressed. Watcher notifications may inva
 
 Eligible tools are grouped and ordered deterministically. JSON schemas preserve supported model-visible semantics, including explicit `null` defaults. Native-tool providers receive the inventory only through their native protocol. Legacy adapters may receive one deterministic textual fallback. Invalid, duplicate, or unsupported schema shapes fail before network dispatch rather than being silently rewritten.
 
+## Request reduction versus provider caching
+
+Prefix caching and request reduction solve different problems:
+
+| Mechanism | Context-window use | Provider-bound payload | Provider work or billing |
+|---|---:|---:|---|
+| Exact-prefix caching | Unchanged | Unchanged | May improve when the provider reports a cache hit |
+| Exact-source projection | Reduced | Reduced | Usually reduces input processing; provider pricing and cache treatment still apply |
+| Model-written active-turn summary | Reduced | Reduced | Requires a separate admitted summary request before the smaller ordinary request can continue |
+
+Caching can make repeated input cheaper or faster, but cached tokens still occupy the model's context window and the canonical stateless request still carries that content. Under context or execution-budget pressure, exact-source projection can instead omit an older `read_file` or `code_explore` body when a newer visible result provably contains the same source. The provider-bound request carries a compact receipt plus a conditional recovery schema rather than both copies. Threadsmith activates the projection only when the fully rebuilt input is smaller after that overhead.
+
+The original sanitized evidence remains in host storage. `HistoryRewriteGeneration` advances so an incompatible opaque provider continuation cannot cross the rewrite, while the unchanged request prefix remains eligible for ordinary provider caching. See [active-turn tool continuation compaction](conversation-context.md#active-turn-tool-continuation-compaction) for the lifecycle, exact proof rules, recovery authorization, measured token reduction, and transport limits.
+
 ## `/context inspect`
 
 For an ordered graphical breakdown of the **latest actual MAIN request**, use `/context map` (or double-click MAIN's Context meter in TUIKit with mouse capture enabled). `/context inspect` retains its assembly/governance diagnostics. The map and measured header occupancy share the same request observation; auxiliary compaction-generation calls and child requests do not replace MAIN's map.

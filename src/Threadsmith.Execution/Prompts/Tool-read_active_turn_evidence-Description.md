@@ -1,0 +1,1 @@
+Read a bounded page of historical tool evidence referenced by an exact source receipt in the current request. Use only the evidenceId shown in that receipt. The result reports stale or missing evidence without reading the current repository.

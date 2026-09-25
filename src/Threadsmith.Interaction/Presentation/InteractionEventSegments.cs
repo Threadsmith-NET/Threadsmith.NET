@@ -33,7 +33,9 @@ internal static class InteractionEventSegments
             case ActiveTurnCompactionCompleted completed:
                 var compactionRole = completed.Status switch
                 {
-                    ActiveTurnCompactionInspectionStatus.Completed => PresentationTextRole.Success,
+                    ActiveTurnCompactionInspectionStatus.Completed
+                        or ActiveTurnCompactionInspectionStatus.DeterministicReduction =>
+                            PresentationTextRole.Success,
                     ActiveTurnCompactionInspectionStatus.ProviderFailure
                         or ActiveTurnCompactionInspectionStatus.Cancelled
                         or ActiveTurnCompactionInspectionStatus.CapacityExceeded

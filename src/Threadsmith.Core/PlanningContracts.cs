@@ -246,6 +246,9 @@ public enum ActiveTurnCompactionInspectionStatus
 
     /// <summary>The execution budget could not admit a summary-and-continuation path.</summary>
     BudgetAdmissionRejected,
+
+    /// <summary>Exact source coverage resolved pressure without a summarizer call.</summary>
+    DeterministicReduction,
 }
 
 /// <summary>Reason the host assessed active-turn compaction.</summary>
@@ -299,6 +302,24 @@ public sealed record ActiveTurnCompactionInspectionProjection
 
     /// <summary>Number of prepared candidate attempts checked in the latest assessment.</summary>
     public int CandidateAttemptCount { get; init; }
+
+    /// <summary>Exact source ranges considered by deterministic projection.</summary>
+    public int SourceCandidateRangeCount { get; init; }
+
+    /// <summary>Exact source ranges removed from the final request.</summary>
+    public int SourceRemovedRangeCount { get; init; }
+
+    /// <summary>Exact source ranges retained in the final request.</summary>
+    public int SourceRetainedRangeCount { get; init; }
+
+    /// <summary>Tool results that did not expose supported exact source metadata.</summary>
+    public int SourceOpaqueResultCount { get; init; }
+
+    /// <summary>Source characters replaced before receipt and recovery-schema overhead.</summary>
+    public int SourceReclaimedCharacters { get; init; }
+
+    /// <summary>Whether exact projection resolved pressure without invoking the summarizer.</summary>
+    public bool SummaryAvoidedBySourceProjection { get; init; }
 
     /// <summary>Provider-prepared input tokens for the latest summary attempt.</summary>
     public int? SummaryPreparedInputTokens { get; init; }

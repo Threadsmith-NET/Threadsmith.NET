@@ -224,6 +224,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ToolReadFileDescription prompt asset.</summary>
     public const string ToolReadFileDescription = "Tool-read_file-Description.md";
 
+    /// <summary>Gets the stable filename for request-authorized active-turn evidence recovery.</summary>
+    public const string ToolReadActiveTurnEvidenceDescription = "Tool-read_active_turn_evidence-Description.md";
+
     /// <summary>Gets the stable filename for the explicit repository-memory tool description.</summary>
     public const string ToolMemoriesDescription = "Tool-memories-Description.md";
 
@@ -1118,6 +1121,7 @@ public static class PromptFileNames
         ContextCurrentTurnHostAuthorizedUserUrl,
         ToolListFilesDescription,
         ToolReadFileDescription,
+        ToolReadActiveTurnEvidenceDescription,
         ToolWriteFileDescription,
         ToolMemoriesDescription,
         ToolSearchDescription,
@@ -1548,6 +1552,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolToolInvocationCompleted,
             PromptFileNames.ToolChildAgentToolInvocationCompleted,
             PromptFileNames.ToolReadAgentEvidenceDescription,
+            PromptFileNames.ToolReadActiveTurnEvidenceDescription,
         };
         var dotNetAssets = new HashSet<string>(
             PromptFileNames.All
@@ -1815,6 +1820,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.CorrectionSearchBounds] = Set("MaximumMatches", "MaximumQueryCharacters"),
                     [PromptFileNames.ToolSearchDescription] = Set("MaximumQueryCharacters"),
                     [PromptFileNames.ToolReadFileDescription] = Set("DefaultLines", "MaximumLines", "MaximumContentBytes", "MaximumFileBytes"),
+                    [PromptFileNames.ToolReadActiveTurnEvidenceDescription] = Set(),
                     [PromptFileNames.ToolWriteFileDescription] = Set("MaximumContentBytes"),
                     [PromptFileNames.ToolMemoriesDescription] = Set("MaximumTextCharacters"),
                     [PromptFileNames.ToolWebSearchDescription] = Set("MaximumQueryCharacters", "MaximumFreshnessDays"),

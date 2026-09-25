@@ -71,6 +71,13 @@ public static partial class ToolRuntimeTests
                 {
                     Assert.Equal(7, output.TotalLines);
                     Assert.Contains("after: readable", output.Lines);
+                    Assert.Equal(
+                        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(source))),
+                        output.FileSha256);
+                    Assert.Equal(
+                        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                            Encoding.UTF8.GetBytes(string.Join('\n', output.Lines)))),
+                        output.VisibleRangeSha256);
                     break;
                 }
 
@@ -84,6 +91,58 @@ public static partial class ToolRuntimeTests
             {
                 Assert.Contains("after: readable", collected.ToString(), StringComparison.Ordinal);
                 Assert.Equal(7, collected.ToString().Count(c => c == '\n'));
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>Line reads preserve the established BOM detection and replacement decoding behavior.</summary>
+    [Fact]
+    public static async Task ReadFile_LineModePreservesTextDecodingWhileHashingRawBytes()
+    {
+        var root = CreateTemporaryDirectory();
+        try
+        {
+            (string Name, byte[] Bytes, string[] Lines)[] cases =
+            [
+                (
+                    Name: "utf8-bom.txt",
+                    Bytes: [.. Encoding.UTF8.GetPreamble(), .. Encoding.UTF8.GetBytes("first\nsecond")],
+                    Lines: ["first", "second"]),
+                (
+                    Name: "utf16.txt",
+                    Bytes: [.. Encoding.Unicode.GetPreamble(), .. Encoding.Unicode.GetBytes("alpha\nbeta")],
+                    Lines: ["alpha", "beta"]),
+                (
+                    Name: "replacement.txt",
+                    Bytes: [(byte)'f', (byte)'o', 0x80, (byte)'o'],
+                    Lines: ["fo\uFFFDo"]),
+            ];
+            await using var events = new DomainEventStream();
+            var pipeline = CreatePipeline(
+                events,
+                [new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())]);
+            foreach (var item in cases)
+            {
+                await File.WriteAllBytesAsync(Path.Combine(root, item.Name), item.Bytes);
+                var arguments = JsonSerializer.Serialize(new { path = item.Name });
+                var result = await pipeline.InvokeAsync(CreateBatchRequest(
+                    0,
+                    "decoding-read",
+                    "read_file",
+                    CreateContext(root) with { TrustLevel = RepositoryTrustLevel.TrustedRead },
+                    arguments).Invocation);
+
+                Assert.True(result.Succeeded, result.Error);
+                var output = JsonSerializer.Deserialize<ReadFileOutput>(result.ResultJson!);
+                Assert.NotNull(output);
+                Assert.Equal(item.Lines, output.Lines);
+                Assert.Equal(
+                    Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(item.Bytes)),
+                    output.FileSha256);
             }
         }
         finally

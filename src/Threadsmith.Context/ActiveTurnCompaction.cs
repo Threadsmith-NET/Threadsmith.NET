@@ -255,6 +255,13 @@ public sealed record ActiveTurnSourceReference(
     string Id,
     long GroupSequence);
 
+/// <summary>Stable identities for one correlated result retained by an active-turn group.</summary>
+public sealed record ActiveTurnResultReference(
+    string ToolCallId,
+    string ToolName,
+    ToolInvocationId? ToolInvocationId,
+    EvidenceId? EvidenceId);
+
 /// <summary>One complete chronological assistant-call/result group.</summary>
 public sealed record ActiveTurnContinuationGroup
 {
@@ -266,6 +273,9 @@ public sealed record ActiveTurnContinuationGroup
 
     /// <summary>Complete provider-neutral messages in original order.</summary>
     public required IReadOnlyList<ModelMessage> Messages { get; init; }
+
+    /// <summary>Bounded host identities for the group's correlated tool results.</summary>
+    public IReadOnlyList<ActiveTurnResultReference> Results { get; init; } = [];
 
     /// <summary>Host-known source identities for candidate validation.</summary>
     public required IReadOnlyList<ActiveTurnSourceReference> Sources { get; init; }
@@ -580,6 +590,15 @@ public sealed record ActiveTurnCompactionRequest
 
     /// <summary>Oldest complete eligible raw prefix selected for replacement.</summary>
     public required IReadOnlyList<ActiveTurnContinuationGroup> EligiblePrefix { get; init; }
+
+    /// <summary>
+    /// Dependency-safe model-visible candidate inputs keyed by exact selected prefix length.
+    /// Missing entries use <see cref="EligiblePrefix"/> verbatim.
+    /// </summary>
+    public IReadOnlyDictionary<int, IReadOnlyList<ActiveTurnContinuationGroup>>
+        ProjectedEligiblePrefixes
+    { get; init; }
+        = new Dictionary<int, IReadOnlyList<ActiveTurnContinuationGroup>>();
 
     /// <summary>Selected-model sensitivity constraint, preserved for the candidate call.</summary>
     public required ModelSelectionConstraints SelectionConstraints { get; init; }
@@ -1063,34 +1082,9 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         var maximumCandidateInputTokens = _policy.MaximumInputTokens == 0
             ? profileInputCapacity
             : Math.Min(_policy.MaximumInputTokens, profileInputCapacity);
-        var maximumCandidateCharacters = (long)maximumCandidateInputTokens * 4;
-        var fixedCharacters = EstimateFixedInputCharacters(request, summaryPrompt);
-        var maximumRawGroupCount = 0;
-        var aggregateCharacters = fixedCharacters;
-        foreach (var group in request.EligiblePrefix)
-        {
-            var groupCharacters = EstimateGroupInputCharacters(group);
-            if (aggregateCharacters > maximumCandidateCharacters - groupCharacters)
-            {
-                break;
-            }
-
-            aggregateCharacters += groupCharacters;
-            maximumRawGroupCount++;
-        }
-
-        if (maximumRawGroupCount == 0)
-        {
-            throw new ModelProviderException(
-                "The previous summary and first complete source group cannot fit the bounded candidate request.");
-        }
-
         CandidateInputProjection? selectedInput = null;
-        var lowerBound = 1;
-        var upperBound = maximumRawGroupCount;
-        while (lowerBound <= upperBound)
+        for (var groupCount = 1; groupCount <= request.EligiblePrefix.Count; groupCount++)
         {
-            var groupCount = lowerBound + ((upperBound - lowerBound) / 2);
             var input = CreateInput(request, groupCount, modelOutputTokens);
             var estimate = ModelWireEstimator.Estimate(
                 CreateMessages(summaryPrompt, input.Json),
@@ -1119,59 +1113,11 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             if (estimate.WireInputTokens <= maximumCandidateInputTokens)
             {
                 selectedInput = input;
-                lowerBound = groupCount + 1;
-            }
-            else
-            {
-                upperBound = groupCount - 1;
             }
         }
 
         return selectedInput ?? throw new ModelProviderException(
             "The previous summary and first complete source group cannot fit the bounded candidate request.");
-    }
-
-    private long EstimateFixedInputCharacters(
-        ActiveTurnCompactionRequest request,
-        string summaryPrompt)
-    {
-        var characters = (long)_prompts.Get(PromptFileNames.ContextActiveTurnCompactionSystem).Length
-            + _prompts.Get(PromptFileNames.ContextActiveTurnCompactionOutputContract).Length
-            + summaryPrompt.Length
-            + request.TaskObjective.Length
-            + (request.TaskContext?.Length ?? 0)
-            + request.AcceptanceIntent.Sum(intent => (long)intent.Description.Length)
-            + (request.PriorSummary?.Content.Length ?? 0)
-            + (request.PriorSummary?.FilesRead.Sum(path => (long)path.Length) ?? 0)
-            + (request.PriorSummary?.FilesChanged.Sum(path => (long)path.Length) ?? 0)
-            + 1_024;
-        return characters;
-    }
-
-    private static long EstimateGroupInputCharacters(ActiveTurnContinuationGroup group)
-    {
-        return group.Messages.Sum(EstimateMessageInputCharacters)
-            + group.FilesRead.Sum(EstimatePathInputCharacters)
-            + group.FilesChanged.Sum(EstimatePathInputCharacters)
-            + 128;
-    }
-
-    private static long EstimateMessageInputCharacters(ModelMessage message)
-    {
-        return 64L
-            + (message.ToolCallId?.Length ?? 0)
-            + (message.ToolName?.Length ?? 0)
-            + message.Content.Sum(EstimateContentPartInputCharacters);
-    }
-
-    private static long EstimateContentPartInputCharacters(ModelContentPart part)
-    {
-        return part.IsModelVisible ? 32L + part.Content.Length : 0L;
-    }
-
-    private static long EstimatePathInputCharacters(string path)
-    {
-        return 16L + path.Length;
     }
 
     private IReadOnlyList<ModelMessage> CreateMessages(
@@ -1371,7 +1317,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(groupCount, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(groupCount, request.EligiblePrefix.Count);
-        var selectedGroups = request.EligiblePrefix.Take(groupCount).ToArray();
+        var selectedGroups = ResolveSelectedGroups(request, groupCount);
         var files = ActiveTurnFileListBuilder.Build(request.PriorSummary, selectedGroups);
         var source = new
         {
@@ -1423,7 +1369,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         var envelope = new CandidateEnvelope(
             request.PriorSummary?.Version ?? 0,
             selectedGroups[^1].Sequence,
-            selectedGroups.Length,
+            selectedGroups.Count,
             (request.PriorSummary?.CoveredGroupSequences ?? [])
                 .Concat(selectedGroups.Select(group => group.Sequence))
                 .ToArray(),
@@ -1431,6 +1377,26 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         return new CandidateInputProjection(
             JsonSerializer.Serialize(source, JsonOptions),
             envelope);
+    }
+
+    private static IReadOnlyList<ActiveTurnContinuationGroup> ResolveSelectedGroups(
+        ActiveTurnCompactionRequest request,
+        int groupCount)
+    {
+        if (!request.ProjectedEligiblePrefixes.TryGetValue(groupCount, out var projected))
+        {
+            return request.EligiblePrefix.Take(groupCount).ToArray();
+        }
+
+        var expectedSequences = request.EligiblePrefix.Take(groupCount).Select(group => group.Sequence);
+        if (projected.Count != groupCount
+            || !projected.Select(group => group.Sequence).SequenceEqual(expectedSequences))
+        {
+            throw new ModelProviderException(
+                "The projected active-turn candidate input does not match its eligible prefix.");
+        }
+
+        return projected;
     }
 
     private sealed record CandidateProfileSelection(

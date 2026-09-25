@@ -2787,6 +2787,7 @@ public static class Milestone3Tests
             new PassthroughSanitizer(),
             NullLogger<SessionApplication>.Instance,
             sessionUsage: usage,
+            budgetFactory: () => budget,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
@@ -2821,6 +2822,7 @@ public static class Milestone3Tests
             new PassthroughSanitizer(),
             NullLogger<SessionApplication>.Instance,
             sessionUsage: usage,
+            budgetFactory: () => budget,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);
@@ -2859,6 +2861,7 @@ public static class Milestone3Tests
             new PassthroughSanitizer(),
             NullLogger<SessionApplication>.Instance,
             sessionUsage: usage,
+            budgetFactory: () => budget,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance);
         var dispatcher = new CommandDispatcher([application]);

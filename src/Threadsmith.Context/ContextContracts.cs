@@ -410,6 +410,12 @@ public sealed record ModelResolution(
     /// <summary>Whether the resolved model permits reasoning off; null retains legacy behavior.</summary>
     public bool? SupportsReasoningOff { get; init; }
 
+    /// <summary>Reviewed pricing used for conservative execution-budget admission.</summary>
+    public ModelCostMetadata? Cost { get; init; }
+
+    /// <summary>Whether the provider enforces the request-specific output ceiling.</summary>
+    public bool EnforcesRequestOutputTokenLimit { get; init; } = true;
+
     /// <summary>Gets the effective per-request reserve, including compatibility for older callers.</summary>
     public int EffectiveRequestOutputTokenReserve => RequestOutputTokenReserve > 0
         ? RequestOutputTokenReserve

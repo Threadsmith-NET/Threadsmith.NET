@@ -86,6 +86,22 @@ public sealed record ModelStreamRequest
     [JsonIgnore]
     public ModelRequestPreparationResult? Preparation { get; init; }
 
+    /// <summary>Host-only reviewed pricing used for conservative pre-dispatch admission.</summary>
+    [JsonIgnore]
+    public ModelCostMetadata? AdmissionCost { get; init; }
+
+    /// <summary>Host-only output bound used for admission; may exceed the requested reserve.</summary>
+    [JsonIgnore]
+    public int? AdmissionOutputTokenCeiling { get; init; }
+
+    /// <summary>Host-only selected context window used to cap physically feasible output admission.</summary>
+    [JsonIgnore]
+    public int? AdmissionContextWindowTokens { get; init; }
+
+    /// <summary>Host-only reliable provider-operation timeout used for admission.</summary>
+    [JsonIgnore]
+    public TimeSpan? AdmissionWallClock { get; init; }
+
     /// <summary>Explicit final-response schema only for workflows requiring a JSON body.</summary>
     public ModelResponseFormat? ResponseFormat { get; init; }
 

@@ -110,6 +110,7 @@ public sealed class AnthropicCatalogTests
     {
         var hydrated = Hydrate(Model("claude-fable-5-1"));
         var profile = Assert.Single(new AnthropicProviderRegistration().CreateProfiles(hydrated));
+        Assert.True(profile.EnforcesRequestOutputTokenLimit);
         Assert.Equal(ReasoningControllability.Selectable, profile.ReasoningCapability?.Controllability);
         Assert.False(profile.ReasoningCapability?.SupportsReasoningOff);
         Assert.DoesNotContain(ReasoningLevel.None, profile.SupportedReasoningLevels);

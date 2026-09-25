@@ -354,10 +354,13 @@ public sealed partial class SessionApplication
         await AssessActiveTurnCompactionAsync(
             runId,
             registration,
+            phase,
             modelRound,
             modelTools,
+            modelPreference,
             context,
             loopState,
+            _sessionPreferences?.IncludeReasoningText ?? false,
             cancellationToken);
         var modelVisibleContinuation = loopState.CreateModelVisibleContinuation();
         var usageRequestId = new ModelRequestUsageId(
@@ -558,6 +561,7 @@ public sealed partial class SessionApplication
             round.ModelRequest.WorkloadClass,
             round.ModelRequest.ContainsSensitiveData,
             round.ModelRequest.Tools.Count);
+        ModelRequestBudgetUsage.CheckAdmission(round.Registration.Budget, round.ModelRequest);
         await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
         BudgetStatus? modelWallClockBudget = null;
         IReadOnlyList<RunSteeringMessage> preToolSteering = [];
@@ -1815,10 +1819,13 @@ public sealed partial class SessionApplication
     private async Task AssessActiveTurnCompactionAsync(
         RunId runId,
         RunRegistration registration,
+        RunPhase phase,
         int modelRound,
         IReadOnlyList<ModelToolDefinition> modelTools,
+        SessionModelPreferenceSnapshot? modelPreference,
         ContextAssemblyResult? context,
         ConversationLoopState loopState,
+        bool includeReasoningText,
         CancellationToken cancellationToken)
     {
         if (context?.Layout is not { } layout)
@@ -1847,14 +1854,75 @@ public sealed partial class SessionApplication
         var compactionActivityDuration = default(TimeSpan?);
         var compactionActivityProfileId = default(ModelProfileId?);
         var visible = loopState.CreateModelVisibleContinuation();
-        var beforeEstimate = EstimateCompleteRequest(
-            context,
-            modelTools,
-            layout,
-            visible.Messages,
-            outputReserve);
+        ModelStreamRequest PrepareRequest(
+            ModelVisibleContinuation continuation,
+            bool applyCapacityFallback = true)
+        {
+            var messages = continuation.Messages.ToList();
+            var envelope = applyCapacityFallback
+                ? CreateRequestEnvelope(
+                    context,
+                    modelTools,
+                    messages,
+                    continuation.FirstNeverDeliveredMessageIndex)
+                : new RequestEnvelope(
+                    [.. context.Messages ?? [], .. messages],
+                    EstimateCompleteRequest(
+                        context,
+                        modelTools,
+                        layout,
+                        messages,
+                        outputReserve),
+                    false);
+            var containsSensitiveData = loopState.CompactionSummary is not null
+                || loopState.Groups.Any(group => group.Sensitivity == ConversationSensitivity.Sensitive);
+            var request = CreateModelStreamRequest(
+                runId,
+                registration,
+                phase,
+                modelRound,
+                modelTools,
+                modelPreference,
+                context,
+                envelope,
+                messages,
+                loopState.HistoryRewriteGeneration,
+                containsSensitiveData,
+                includeReasoningText);
+            return ModelRequestPreparation.Prepare(_model, request);
+        }
+
+        var preparedOrdinaryRequest = PrepareRequest(visible, applyCapacityFallback: false);
+        var beforeEstimate = preparedOrdinaryRequest.WireEstimate
+            ?? EstimateCompleteRequest(context, modelTools, layout, visible.Messages, outputReserve);
+        var preparedOrdinaryAdmissionRequest = preparedOrdinaryRequest;
+        try
+        {
+            preparedOrdinaryAdmissionRequest = PrepareRequest(visible);
+        }
+        catch (BudgetExceededException)
+        {
+            // The actual request path reports irreducible context capacity. Preserve the raw
+            // admission estimate here so optional compaction can still be assessed first.
+        }
+
+        var ordinaryAdmission = ModelRequestAdmissionEstimator.Estimate(
+            preparedOrdinaryAdmissionRequest);
+        var ordinaryAdmissionStatus = registration.Budget.Check(
+            ModelRequestAdmissionEstimator.ToBudgetDimensions(ordinaryAdmission));
+        var hasContextPressure = beforeEstimate.WireInputTokens >= pressureTargetTokens;
+        var hasBudgetPressure = ordinaryAdmissionStatus.IsExhausted;
+        var pressureReason = (hasContextPressure, hasBudgetPressure) switch
+        {
+            (true, true) => ActiveTurnCompactionPressureReason.ContextAndExecutionBudget,
+            (true, false) => ActiveTurnCompactionPressureReason.Context,
+            (false, true) => ActiveTurnCompactionPressureReason.ExecutionBudget,
+            _ => ActiveTurnCompactionPressureReason.None,
+        };
         var eligibleGroupCount = loopState.GetEligibleGroupCount();
         var effectiveRetentionTargetTokens = _activeTurnCompactionPolicy.RetainedRecentTokens;
+        ActiveTurnCompactionAttemptObserver? attemptObserver = null;
+        BudgetStatus? finalAdmissionStatus = null;
 
         async Task CompleteActivityAsync(
             ActiveTurnCompactionInspectionStatus status,
@@ -1908,6 +1976,29 @@ public sealed partial class SessionApplication
                     {
                         AssessmentSequence = loopState.AssessmentSequence,
                         Status = status,
+                        PressureReason = pressureReason,
+                        BudgetPressureDimensions = ordinaryAdmissionStatus.ExhaustedDimensions,
+                        CombinedAdmissionTokens = attemptObserver?.LastCombinedAdmission is { } combined
+                            ? ModelRequestAdmissionEstimator.ToBudgetDimensions(combined).Tokens
+                            : null,
+                        CombinedAdmissionCalls = attemptObserver?.LastCombinedAdmission?.Calls,
+                        CombinedAdmissionCost = attemptObserver?.LastCombinedAdmission?.Cost,
+                        CombinedAdmissionCostIsComplete =
+                            attemptObserver?.LastCombinedAdmission?.CostIsComplete == true,
+                        CombinedAdmissionWallClock =
+                            attemptObserver?.LastCombinedAdmission?.WallClock,
+                        CombinedAdmissionWallClockIsComplete =
+                            attemptObserver?.LastCombinedAdmission?.WallClockIsComplete == true,
+                        CandidateAttemptCount = attemptObserver?.AttemptCount ?? 0,
+                        SummaryPreparedInputTokens =
+                            attemptObserver?.LastSummaryPreparedInputTokens,
+                        SummaryAdmissionOutputTokens =
+                            attemptObserver?.LastSummaryAdmission?.OutputTokens,
+                        AdmissionRejectedDimensions =
+                            finalAdmissionStatus?.ExhaustedDimensions
+                            ?? attemptObserver?.LastActualBudgetStatus?.ExhaustedDimensions
+                            ?? attemptObserver?.LastAdmissionStatus?.ExhaustedDimensions
+                            ?? BudgetExhaustionDimension.None,
                         BeforeInputTokens = beforeEstimate.WireInputTokens,
                         AfterInputTokens = afterInputTokens,
                         MaximumInputTokens = maximumInputTokens,
@@ -1946,15 +2037,15 @@ public sealed partial class SessionApplication
             return;
         }
 
-        if (beforeEstimate.WireInputTokens < pressureTargetTokens)
+        if (!hasContextPressure && !hasBudgetPressure)
         {
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.BelowPressure,
-                "The canonical complete request is below the active-turn pressure target.");
+                "The canonical complete request is below the context target and fits the remaining execution budget.");
             return;
         }
 
-        if (loopState.ConsumeBackoffRound())
+        if (!hasBudgetPressure && loopState.ConsumeBackoffRound())
         {
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.Backoff,
@@ -1968,13 +2059,33 @@ public sealed partial class SessionApplication
             effectiveRetentionTargetTokens);
         if (eligiblePrefix.Count == 0 || context.ModelResolution is not { } ordinaryProfile)
         {
+            var noEligiblePrefixRationale = hasBudgetPressure
+                ? "The ordinary request does not fit the remaining execution budget, but no complete previously delivered prefix is eligible."
+                : "Context pressure was reached, but no complete previously delivered prefix is eligible.";
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.NoEligiblePrefix,
-                "Pressure was reached, but no complete previously delivered prefix is eligible.");
+                noEligiblePrefixRationale);
             return;
         }
 
         var profileId = ordinaryProfile.ProfileId;
+        var continuationAdmissions = new Dictionary<int, ActiveTurnContinuationAdmission>();
+        ActiveTurnContinuationAdmission ResolveContinuationAdmission(int compactedGroupCount)
+        {
+            if (!continuationAdmissions.TryGetValue(compactedGroupCount, out var admission))
+            {
+                admission = EstimatePostSummaryAdmission(
+                    loopState,
+                    eligiblePrefix,
+                    compactedGroupCount,
+                    maximumInputTokens,
+                    continuation => PrepareRequest(continuation));
+                continuationAdmissions.Add(compactedGroupCount, admission);
+            }
+
+            return admission;
+        }
+
         var taskContext = ActiveTurnTaskContextProjector.Project(
             registration.Task,
             _activeTurnCompactionPolicy);
@@ -1984,6 +2095,10 @@ public sealed partial class SessionApplication
             ProfileId = profileId,
             CandidateProfile = _activeTurnCompactionProfile,
             ProviderInstructions = context.ProviderInstructions,
+            ProfileCost = ordinaryProfile.Cost,
+            ProfileMaximumOutputTokens = ordinaryProfile.MaximumOutputTokens,
+            ProfileEnforcesRequestOutputTokenLimit =
+                ordinaryProfile.EnforcesRequestOutputTokenLimit,
             ToolContinuationRound = modelRound - 1,
             FrozenContextIdentity = string.Join(
                 '|',
@@ -2004,11 +2119,13 @@ public sealed partial class SessionApplication
             BeforeInputTokens = beforeEstimate.WireInputTokens,
             PressureTargetTokens = pressureTargetTokens,
         };
-        var attemptObserver = new ActiveTurnCompactionAttemptObserver(
+
+        attemptObserver = new ActiveTurnCompactionAttemptObserver(
             this,
             registration,
             modelRound,
-            registration.RepositoryIdentity);
+            registration.RepositoryIdentity,
+            ResolveContinuationAdmission);
         compactionActivityProfileId = request.CandidateProfile?.ProfileId ?? request.ProfileId;
         await _events.PublishAsync(
             new ActiveTurnCompactionStarted(
@@ -2036,6 +2153,13 @@ public sealed partial class SessionApplication
                 afterInputTokens: null);
             throw;
         }
+        catch (BudgetExceededException)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected,
+                "Actual summary usage exhausted the execution budget; the original continuation remains active.");
+            throw;
+        }
         catch
         {
             await CompleteActivityAsync(
@@ -2059,15 +2183,55 @@ public sealed partial class SessionApplication
 
                 var compactedPrefix = eligiblePrefix.Take(compactedGroupCount).ToArray();
                 var preview = loopState.CreatePreviewContinuation(summary, compactedGroupCount);
-                var afterEstimate = EstimateCompleteRequest(
-                    context,
-                    modelTools,
-                    layout,
-                    preview.Messages,
-                    outputReserve);
-                var savings = beforeEstimate.WireInputTokens - afterEstimate.WireInputTokens;
+                var canonicalAfterRequest = PrepareRequest(
+                    preview,
+                    applyCapacityFallback: false);
+                var canonicalAfterEstimate = canonicalAfterRequest.WireEstimate
+                    ?? EstimateCompleteRequest(context, modelTools, layout, preview.Messages, outputReserve);
+                var savings = beforeEstimate.WireInputTokens - canonicalAfterEstimate.WireInputTokens;
                 if (savings >= _activeTurnCompactionPolicy.MinimumSavingsTokens)
                 {
+                    ModelStreamRequest preparedAfterRequest;
+                    try
+                    {
+                        preparedAfterRequest = PrepareRequest(preview);
+                    }
+                    catch (BudgetExceededException)
+                    {
+                        loopState.StartFailureBackoff(
+                            _activeTurnCompactionPolicy.FailureBackoffRounds);
+                        await RecordAsync(
+                            ActiveTurnCompactionInspectionStatus.CapacityExceeded,
+                            "The validated summary cannot produce a capacity-admissible rebuilt request.",
+                            afterInputTokens: canonicalAfterEstimate.WireInputTokens);
+                        if (hasBudgetPressure)
+                        {
+                            throw new BudgetExceededException(
+                                ordinaryAdmissionStatus.Reason
+                                    ?? "Execution budget cannot admit an ordinary or compacted request.");
+                        }
+
+                        return;
+                    }
+
+                    var afterEstimate = preparedAfterRequest.WireEstimate
+                        ?? throw new InvalidOperationException(
+                            "Prepared rebuilt admission requires a wire estimate.");
+                    var afterAdmission = ModelRequestAdmissionEstimator.Estimate(preparedAfterRequest);
+                    var afterAdmissionStatus = registration.Budget.Check(
+                        ModelRequestAdmissionEstimator.ToBudgetDimensions(afterAdmission));
+                    if (afterAdmissionStatus.IsExhausted)
+                    {
+                        finalAdmissionStatus = afterAdmissionStatus;
+                        await RecordAsync(
+                            ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected,
+                            "The summary completed, but its rebuilt ordinary request no longer fits the remaining execution budget.",
+                            afterInputTokens: afterEstimate.WireInputTokens);
+                        throw new BudgetExceededException(
+                            afterAdmissionStatus.Reason
+                                ?? "Execution budget cannot admit the rebuilt ordinary request after active-turn compaction.");
+                    }
+
                     var checkpoint = new ActiveTurnCompactionCheckpoint
                     {
                         RunId = runId,
@@ -2112,7 +2276,7 @@ public sealed partial class SessionApplication
                 await RecordAsync(
                     ActiveTurnCompactionInspectionStatus.InsufficientSavings,
                     "The validated candidate did not reduce the canonical request.",
-                    afterInputTokens: afterEstimate.WireInputTokens);
+                    afterInputTokens: canonicalAfterEstimate.WireInputTokens);
                 return;
             }
 
@@ -2122,6 +2286,11 @@ public sealed partial class SessionApplication
                 ActiveTurnCompactionOutcome.ValidationRejected =>
                     ActiveTurnCompactionInspectionStatus.ValidationRejected,
                 ActiveTurnCompactionOutcome.Cancelled => ActiveTurnCompactionInspectionStatus.Cancelled,
+                ActiveTurnCompactionOutcome.AdmissionRejected
+                    when attemptObserver.LastContinuationFitsContextCapacity == false =>
+                    ActiveTurnCompactionInspectionStatus.CapacityExceeded,
+                ActiveTurnCompactionOutcome.AdmissionRejected =>
+                    ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected,
                 _ => ActiveTurnCompactionInspectionStatus.ProviderFailure,
             };
             _logger.LogWarning(
@@ -2130,6 +2299,13 @@ public sealed partial class SessionApplication
                 result.Outcome,
                 result.ProviderCalls);
             await RecordAsync(status, result.Rationale);
+            if (result.Outcome == ActiveTurnCompactionOutcome.AdmissionRejected
+                && hasBudgetPressure)
+            {
+                throw new BudgetExceededException(
+                    ordinaryAdmissionStatus.Reason
+                        ?? "Execution budget cannot admit either the ordinary request or a summary-and-continuation path.");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2186,6 +2362,59 @@ public sealed partial class SessionApplication
             layout.StablePrefixMessageCount,
             outputReserveTokens,
             context.ProviderInstructions);
+    }
+
+    private ActiveTurnContinuationAdmission EstimatePostSummaryAdmission(
+        ConversationLoopState loopState,
+        IReadOnlyList<ActiveTurnContinuationGroup> eligiblePrefix,
+        int compactedGroupCount,
+        int maximumInputTokens,
+        Func<ModelVisibleContinuation, ModelStreamRequest> prepareRequest)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(compactedGroupCount, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(compactedGroupCount, eligiblePrefix.Count);
+        var maximumSummary = new string('x', _activeTurnCompactionPolicy.MaximumRenderedSummaryCharacters);
+        var preview = loopState.CreatePreviewContinuation(
+            new ActiveTurnCompactionSummary
+            {
+                Version = (loopState.CompactionSummary?.Version ?? 0) + 1,
+                ThroughGroupSequence = eligiblePrefix[compactedGroupCount - 1].Sequence,
+                CoveredGroupSequences = [],
+                Content = maximumSummary,
+                FilesRead = [],
+                FilesChanged = [],
+                ContentHash = "admission-bound",
+            },
+            compactedGroupCount);
+        ModelStreamRequest preparedRequest;
+        try
+        {
+            preparedRequest = prepareRequest(preview);
+        }
+        catch (BudgetExceededException)
+        {
+            return new ActiveTurnContinuationAdmission(
+                compactedGroupCount,
+                new ModelRequestAdmissionEstimate(long.MaxValue, 0, 1),
+                FitsContextCapacity: false);
+        }
+
+        var preparedEstimate = preparedRequest.WireEstimate
+            ?? throw new InvalidOperationException(
+                "Prepared continuation admission requires a wire estimate.");
+        return new ActiveTurnContinuationAdmission(
+            compactedGroupCount,
+            ModelRequestAdmissionEstimator.Estimate(preparedRequest),
+            preparedEstimate.WireInputTokens <= maximumInputTokens);
+    }
+
+    private static int ResolveAdmissionOutputCeiling(
+        ModelResolution? resolution,
+        int requestedOutputTokens)
+    {
+        return resolution is { EnforcesRequestOutputTokenLimit: false }
+            ? resolution.MaximumOutputTokens
+            : requestedOutputTokens;
     }
 
     private static RequestEnvelope CreateRequestEnvelope(
@@ -2322,6 +2551,14 @@ public sealed partial class SessionApplication
             ToolTransportMode = ToolTransportMode.Native,
             WireEstimate = requestEnvelope.WireEstimate,
             ProviderInstructions = context?.ProviderInstructions,
+            MaximumOutputTokens = context?.ModelResolution?.EffectiveRequestOutputTokenReserve,
+            AdmissionCost = context?.ModelResolution?.Cost,
+            AdmissionOutputTokenCeiling = context?.ModelResolution is { } resolution
+                ? ResolveAdmissionOutputCeiling(
+                    resolution,
+                    resolution.EffectiveRequestOutputTokenReserve)
+                : null,
+            AdmissionContextWindowTokens = context?.ModelResolution?.ContextWindow,
             IncludeReasoningText = includeReasoningText,
         };
     }
@@ -2581,17 +2818,34 @@ public sealed partial class SessionApplication
         private readonly RunRegistration _registration;
         private readonly int _modelRound;
         private readonly string? _repositoryIdentity;
+        private readonly Func<int, ActiveTurnContinuationAdmission> _continuationAdmissionProvider;
+
+        public ModelRequestAdmissionEstimate? LastCombinedAdmission { get; private set; }
+
+        public BudgetStatus? LastAdmissionStatus { get; private set; }
+
+        public BudgetStatus? LastActualBudgetStatus { get; private set; }
+
+        public bool? LastContinuationFitsContextCapacity { get; private set; }
+
+        public int AttemptCount { get; private set; }
+
+        public int? LastSummaryPreparedInputTokens { get; private set; }
+
+        public ModelRequestAdmissionEstimate? LastSummaryAdmission { get; private set; }
 
         public ActiveTurnCompactionAttemptObserver(
             SessionApplication owner,
             RunRegistration registration,
             int modelRound,
-            string? repositoryIdentity)
+            string? repositoryIdentity,
+            Func<int, ActiveTurnContinuationAdmission> continuationAdmissionProvider)
         {
             _owner = owner;
             _registration = registration;
             _modelRound = modelRound;
             _repositoryIdentity = repositoryIdentity;
+            _continuationAdmissionProvider = continuationAdmissionProvider;
         }
 
         public Task BeforeProviderCallAsync(
@@ -2603,6 +2857,65 @@ public sealed partial class SessionApplication
             return _owner.InvokeBeforeModelRequestHookAsync(
                 CreateBoundary(request, attempt, invocationId),
                 cancellationToken);
+        }
+
+        public Task<bool> TryBeforeProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            IActiveTurnCompactionCandidateAttempt candidateAttempt,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(candidateAttempt);
+            cancellationToken.ThrowIfCancellationRequested();
+            var admissionEstimate = candidateAttempt.AdmissionEstimate;
+            var continuationAdmission = _continuationAdmissionProvider(
+                candidateAttempt.SelectedGroupCount);
+            var continuation = continuationAdmission.Estimate;
+            var combined = ModelRequestAdmissionEstimator.Combine(
+                admissionEstimate,
+                continuation);
+            var status = _registration.Budget.Check(
+                ModelRequestAdmissionEstimator.ToBudgetDimensions(combined));
+            LastCombinedAdmission = combined;
+            LastAdmissionStatus = status;
+            LastContinuationFitsContextCapacity = continuationAdmission.FitsContextCapacity;
+            LastSummaryAdmission = admissionEstimate;
+            LastSummaryPreparedInputTokens = candidateAttempt.PreparedRequest?.WireEstimate?.WireInputTokens;
+            AttemptCount = attempt;
+            if (!continuationAdmission.FitsContextCapacity
+                || status.IsExhausted)
+            {
+                return Task.FromResult(false);
+            }
+
+            return InvokeAsync();
+
+            async Task<bool> InvokeAsync()
+            {
+                if (_owner._sessionUsage is { } sessionUsage
+                    && candidateAttempt.PreparedRequest is { } preparedRequest)
+                {
+                    var usageRequestId = new ModelRequestUsageId(
+                        request.RunId,
+                        "active-turn-compaction",
+                        _modelRound - 1,
+                        invocationId);
+                    var observedRequest = sessionUsage.ObservePreparedRequest(
+                        _registration.SessionId,
+                        usageRequestId,
+                        preparedRequest,
+                        ResolveCandidateContextWindow(request));
+                    candidateAttempt.SetSubmissionObserver(observedRequest.SubmissionObserver);
+                }
+
+                await BeforeProviderCallAsync(
+                    request,
+                    attempt,
+                    invocationId,
+                    cancellationToken);
+                return true;
+            }
         }
 
         public async Task AfterProviderCallAsync(
@@ -2643,18 +2956,28 @@ public sealed partial class SessionApplication
                 }
 
                 var budgetUsage = _registration.Budget.Accrue(new BudgetDimensions(
-                    (usage?.InputTokens ?? 0) + (usage?.OutputTokens ?? 0),
+                    ModelRequestAdmissionEstimator.SaturatingTokenTotal(
+                        usage?.InputTokens ?? 0,
+                        usage?.OutputTokens ?? 0),
                     1,
                     duration,
                     usage?.EstimatedCost ?? 0));
+                LastActualBudgetStatus = budgetUsage;
                 _registration.ModelRequestWallClockAccrued += duration;
-                if (budgetUsage.IsExhausted)
+                if (budgetUsage.IsExhausted
+                    && outcome != ActiveTurnCompactionAttemptOutcome.Cancelled)
                 {
                     throw new BudgetExceededException(
                         budgetUsage.Reason
                             ?? "Execution budget exhausted during active-turn compaction.");
                 }
             }
+        }
+
+        private static int ResolveCandidateContextWindow(ActiveTurnCompactionRequest request)
+        {
+            return request.CandidateProfile?.ContextWindowTokens
+                ?? request.ProfileContextWindowTokens;
         }
 
         private ModelRequestHookBoundary CreateBoundary(

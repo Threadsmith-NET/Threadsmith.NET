@@ -284,7 +284,11 @@ public sealed partial class SessionApplication :
 
         _events = events;
         _model = model;
-        _budgetFactory = budgetFactory ?? (() => budget);
+        _budgetFactory = budgetFactory ?? budget switch
+        {
+            ExecutionBudget executionBudget => executionBudget.CreateScope,
+            _ => () => budget,
+        };
         _sanitizer = sanitizer;
         _logger = logger;
         _toolPipeline = toolPipeline;

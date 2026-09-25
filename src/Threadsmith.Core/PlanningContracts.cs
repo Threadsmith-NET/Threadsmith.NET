@@ -243,6 +243,25 @@ public enum ActiveTurnCompactionInspectionStatus
 
     /// <summary>The unchanged request could not fit without reducing a never-delivered group.</summary>
     CapacityExceeded,
+
+    /// <summary>The execution budget could not admit a summary-and-continuation path.</summary>
+    BudgetAdmissionRejected,
+}
+
+/// <summary>Reason the host assessed active-turn compaction.</summary>
+public enum ActiveTurnCompactionPressureReason
+{
+    /// <summary>No pressure was present.</summary>
+    None,
+
+    /// <summary>The canonical request reached the configured context threshold.</summary>
+    Context,
+
+    /// <summary>The remaining execution budget could not admit the ordinary request.</summary>
+    ExecutionBudget,
+
+    /// <summary>Both context and execution-budget pressure were present.</summary>
+    ContextAndExecutionBudget,
 }
 
 /// <summary>Bounded active-turn pressure and compaction inspection metadata.</summary>
@@ -253,6 +272,42 @@ public sealed record ActiveTurnCompactionInspectionProjection
 
     /// <summary>Closed assessment outcome.</summary>
     public required ActiveTurnCompactionInspectionStatus Status { get; init; }
+
+    /// <summary>Objective reason that caused this assessment.</summary>
+    public ActiveTurnCompactionPressureReason PressureReason { get; init; }
+
+    /// <summary>Ordinary admission dimensions that caused execution-budget pressure.</summary>
+    public BudgetExhaustionDimension BudgetPressureDimensions { get; init; }
+
+    /// <summary>Combined summary-and-continuation tokens checked for the latest candidate attempt.</summary>
+    public long? CombinedAdmissionTokens { get; init; }
+
+    /// <summary>Combined summary-and-continuation calls checked for the latest candidate attempt.</summary>
+    public int? CombinedAdmissionCalls { get; init; }
+
+    /// <summary>Known combined admission-cost lower bound.</summary>
+    public decimal? CombinedAdmissionCost { get; init; }
+
+    /// <summary>Whether the combined cost includes reviewed pricing for every request.</summary>
+    public bool CombinedAdmissionCostIsComplete { get; init; }
+
+    /// <summary>Known combined wall-clock lower bound.</summary>
+    public TimeSpan? CombinedAdmissionWallClock { get; init; }
+
+    /// <summary>Whether the combined duration includes a reliable bound for every request.</summary>
+    public bool CombinedAdmissionWallClockIsComplete { get; init; }
+
+    /// <summary>Number of prepared candidate attempts checked in the latest assessment.</summary>
+    public int CandidateAttemptCount { get; init; }
+
+    /// <summary>Provider-prepared input tokens for the latest summary attempt.</summary>
+    public int? SummaryPreparedInputTokens { get; init; }
+
+    /// <summary>Reserved output tokens for the latest summary attempt.</summary>
+    public int? SummaryAdmissionOutputTokens { get; init; }
+
+    /// <summary>Combined admission dimensions that rejected the latest candidate attempt.</summary>
+    public BudgetExhaustionDimension AdmissionRejectedDimensions { get; init; }
 
     /// <summary>Canonical complete-request input estimate before replacement.</summary>
     public required int BeforeInputTokens { get; init; }

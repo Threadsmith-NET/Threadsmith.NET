@@ -203,6 +203,9 @@ public sealed record ModelProfile
     /// <summary>Gets the effective per-request output-token reserve.</summary>
     public int EffectiveRequestOutputTokenReserve => RequestOutputTokenReserve ?? MaximumOutputTokens;
 
+    /// <summary>Whether the provider enforces the request-specific output ceiling.</summary>
+    public bool EnforcesRequestOutputTokenLimit { get; init; } = true;
+
     /// <summary>Provider features available to the host.</summary>
     public ModelCapabilitySet Capabilities { get; init; } = new();
 

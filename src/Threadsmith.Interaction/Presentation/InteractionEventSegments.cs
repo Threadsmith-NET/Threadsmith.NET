@@ -36,7 +36,8 @@ internal static class InteractionEventSegments
                     ActiveTurnCompactionInspectionStatus.Completed => PresentationTextRole.Success,
                     ActiveTurnCompactionInspectionStatus.ProviderFailure
                         or ActiveTurnCompactionInspectionStatus.Cancelled
-                        or ActiveTurnCompactionInspectionStatus.CapacityExceeded => PresentationTextRole.Error,
+                        or ActiveTurnCompactionInspectionStatus.CapacityExceeded
+                        or ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected => PresentationTextRole.Error,
                     _ => PresentationTextRole.Warning,
                 };
                 Add(

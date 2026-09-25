@@ -591,6 +591,122 @@ public static partial class Milestone1Tests
             budget.Accrue(new BudgetDimensions(-1, 0, TimeSpan.Zero)));
     }
 
+    /// <summary>Budget arithmetic saturates and identifies every exhausted dimension at numeric limits.</summary>
+    [Fact]
+    public static void ExecutionBudget_Overflow_IsSaturatedAndDimensioned()
+    {
+        var maximum = new BudgetDimensions(
+            long.MaxValue,
+            int.MaxValue,
+            TimeSpan.MaxValue,
+            decimal.MaxValue);
+        var budget = new ExecutionBudget(maximum);
+
+        Assert.False(budget.Accrue(maximum).IsExhausted);
+        var status = budget.Check(new BudgetDimensions(1, 1, TimeSpan.FromTicks(1), 1));
+
+        Assert.True(status.IsExhausted);
+        Assert.Equal(
+            BudgetExhaustionDimension.Tokens
+                | BudgetExhaustionDimension.Calls
+                | BudgetExhaustionDimension.WallClock
+                | BudgetExhaustionDimension.Cost,
+            status.ExhaustedDimensions);
+        Assert.Equal(maximum, status.Used);
+    }
+
+    /// <summary>Prepared-request admission includes output, calls, known cost, and supplied duration.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_UsesConservativeKnownDimensions()
+    {
+        var request = new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "ignored because a prepared estimate is present",
+            WireEstimate = new ModelWireEstimate
+            {
+                WireInputTokens = 100,
+                OutputReserveTokens = 10,
+            },
+            MaximumOutputTokens = 10,
+            AdmissionOutputTokenCeiling = 50,
+            AdmissionCost = new ModelCostMetadata
+            {
+                InputPerMillionTokens = 1,
+                OutputPerMillionTokens = 2,
+            },
+            AdmissionWallClock = TimeSpan.FromSeconds(3),
+        };
+
+        var estimate = ModelRequestAdmissionEstimator.Estimate(request);
+        var dimensions = ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate);
+
+        Assert.Equal(100, estimate.InputTokens);
+        Assert.Equal(50, estimate.OutputTokens);
+        Assert.Equal(1, estimate.Calls);
+        Assert.Equal(0.0002m, estimate.Cost);
+        Assert.Equal(new BudgetDimensions(150, 1, TimeSpan.FromSeconds(3), 0.0002m), dimensions);
+    }
+
+    /// <summary>An unenforced provider maximum is capped by output that can physically fit beside prepared input.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_CapsUnenforcedOutputAtRemainingContext()
+    {
+        var estimate = ModelRequestAdmissionEstimator.Estimate(new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "prepared",
+            WireEstimate = new ModelWireEstimate
+            {
+                WireInputTokens = 400,
+                OutputReserveTokens = 50,
+            },
+            MaximumOutputTokens = 50,
+            AdmissionOutputTokenCeiling = 1_000,
+            AdmissionContextWindowTokens = 500,
+        });
+
+        Assert.Equal(400, estimate.InputTokens);
+        Assert.Equal(100, estimate.OutputTokens);
+        Assert.Equal(500, ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate).Tokens);
+    }
+
+    /// <summary>Unavailable pricing remains unknown and does not fabricate a zero-cost estimate.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_PreservesUnknownCost()
+    {
+        var estimate = ModelRequestAdmissionEstimator.Estimate(
+            new ModelWireEstimate { WireInputTokens = 100 },
+            50,
+            new ModelCostMetadata { PricesAvailable = false });
+
+        Assert.Null(estimate.Cost);
+        Assert.Equal(0, ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate).Cost);
+    }
+
+    /// <summary>Combining unknown pricing retains every known cost and duration as a lower bound.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_MixedUnknownsPreserveKnownLowerBounds()
+    {
+        var known = new ModelRequestAdmissionEstimate(
+            100,
+            50,
+            1,
+            Cost: 2.5m,
+            WallClock: TimeSpan.FromSeconds(3),
+            CostIsComplete: true,
+            WallClockIsComplete: true);
+        var unknown = new ModelRequestAdmissionEstimate(200, 25, 1);
+
+        var combined = ModelRequestAdmissionEstimator.Combine(known, unknown);
+        var dimensions = ModelRequestAdmissionEstimator.ToBudgetDimensions(combined);
+
+        Assert.Equal(2.5m, dimensions.Cost);
+        Assert.Equal(TimeSpan.FromSeconds(3), dimensions.WallClock);
+        Assert.False(combined.CostIsComplete);
+        Assert.False(combined.WallClockIsComplete);
+    }
+
     /// <summary>Fresh operation scopes retain configured limits without inheriting prior usage.</summary>
     [Fact]
     public static void ExecutionBudget_CreateScope_StartsUnused()
@@ -809,6 +925,46 @@ public static partial class Milestone1Tests
         var charged = budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
         Assert.Equal(1, charged.Calls);
         Assert.Equal(0, charged.Tokens);
+    }
+
+    /// <summary>The default concrete execution budget creates an independent scope for each concurrent run.</summary>
+    [Fact]
+    public static async Task SessionApplication_DefaultExecutionBudgetScopesConcurrentRuns()
+    {
+        await using var events = new DomainEventStream();
+        var template = new ExecutionBudget(
+            new BudgetDimensions(10_000, 1, TimeSpan.FromMinutes(1)));
+        var application = new SessionApplication(
+            events,
+            new FakeModelProvider(new ScriptedSession
+            {
+                Turns =
+                [
+                    new ScriptedTurn { Text = "first" },
+                    new ScriptedTurn { Text = "second" },
+                ],
+            }),
+            template,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var firstSession = await dispatcher.DispatchAsync(new CreateSessionCommand("first"));
+        var secondSession = await dispatcher.DispatchAsync(new CreateSessionCommand("second"));
+
+        var firstRun = await dispatcher.DispatchAsync(
+            new SubmitRequestCommand(firstSession, "first request"));
+        var secondRun = await dispatcher.DispatchAsync(
+            new SubmitRequestCommand(secondSession, "second request"));
+        var completions = await Task.WhenAll(
+            dispatcher.DispatchAsync(new WaitForRunCommand(firstRun)),
+            dispatcher.DispatchAsync(new WaitForRunCommand(secondRun)));
+
+        Assert.All(completions, Assert.True);
+        Assert.Equal(
+            0,
+            template.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used.Calls);
     }
 
     /// <summary>The TUI controller maps open, submit, wait, and cancel gestures to commands.</summary>
@@ -6960,7 +7116,8 @@ public static partial class Milestone1Tests
                 NullLogger<SessionApplication>.Instance,
                 sessionUsage: usage,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
+                prompts: TestPromptLoader.Instance,
+                budgetFactory: budget is null ? null : () => executionBudget);
             var handlers = new List<object> { application };
             if (additionalHandlers is not null)
             {

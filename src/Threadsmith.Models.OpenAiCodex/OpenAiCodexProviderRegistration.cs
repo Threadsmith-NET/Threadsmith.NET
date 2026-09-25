@@ -97,6 +97,7 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
                 ContextWindow = model.ContextWindow,
                 MaximumOutputTokens = model.MaximumOutputTokens,
                 RequestOutputTokenReserve = model.RequestOutputTokenReserve,
+                EnforcesRequestOutputTokenLimit = false,
                 Capabilities = model.Capabilities,
                 Cost = model.Cost,
                 SensitiveDataPolicy = model.SensitiveDataPolicy,

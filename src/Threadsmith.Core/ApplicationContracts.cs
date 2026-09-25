@@ -186,8 +186,42 @@ public sealed record MutationProjection(
 /// <summary>Budget dimensions accrued by the host.</summary>
 public sealed record BudgetDimensions(long Tokens, int Calls, TimeSpan WallClock, decimal Cost = 0);
 
+/// <summary>Conservative provider-request usage checked before transport begins.</summary>
+public sealed record ModelRequestAdmissionEstimate(
+    long InputTokens,
+    int OutputTokens,
+    int Calls,
+    decimal? Cost = null,
+    TimeSpan? WallClock = null,
+    bool CostIsComplete = false,
+    bool WallClockIsComplete = false);
+
 /// <summary>Budget outcome.</summary>
-public sealed record BudgetStatus(bool IsExhausted, BudgetDimensions Used, string? Reason);
+[Flags]
+public enum BudgetExhaustionDimension
+{
+    /// <summary>No configured dimension is exhausted.</summary>
+    None = 0,
+
+    /// <summary>The token limit is exhausted.</summary>
+    Tokens = 1,
+
+    /// <summary>The provider-call limit is exhausted.</summary>
+    Calls = 2,
+
+    /// <summary>The wall-clock limit is exhausted.</summary>
+    WallClock = 4,
+
+    /// <summary>The known-cost limit is exhausted.</summary>
+    Cost = 8,
+}
+
+/// <summary>Budget outcome.</summary>
+public sealed record BudgetStatus(bool IsExhausted, BudgetDimensions Used, string? Reason)
+{
+    /// <summary>Gets the configured dimensions whose limits would be exceeded.</summary>
+    public BudgetExhaustionDimension ExhaustedDimensions { get; init; }
+}
 
 /// <summary>Accrues bounded execution usage.</summary>
 public interface IBudget

@@ -332,6 +332,7 @@ public sealed class Plan50OpenAiCodexTests
             new ModelProviderCatalogConfiguration { Providers = [configuration] },
             new ModelProviderRegistry([registration]));
         var profile = Assert.Single(effectiveCatalog.ModelCatalog.Profiles);
+        Assert.False(profile.EnforcesRequestOutputTokenLimit);
         Assert.Equal(
             new ModelProviderInstructionAsset
             {

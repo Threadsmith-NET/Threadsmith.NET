@@ -656,7 +656,10 @@ public sealed partial class SkillSubsystemTests
 
     private sealed class SessionActivation(SessionId owner) : IProgressiveToolActivationPolicy
     {
-        public bool IsActive(string toolId, SessionId sessionId, RunId runId) => sessionId == owner;
+        public bool IsActive(string toolId, SessionId sessionId, RunId runId)
+        {
+            return sessionId == owner;
+        }
     }
 
     private sealed class NativeResponseProvider : IModelProvider

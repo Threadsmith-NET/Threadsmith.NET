@@ -228,17 +228,22 @@ internal static class MemoryTestData
 {
     internal const string Repository = "test:repository";
 
-    internal static RepositoryMemoryService CreateService(ConversationFixture fixture, ITextEmbeddingGenerator generator) =>
-        new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new SecretOutputSanitizer());
-
-    internal static RepositoryMemoryOperationRequest Operation(string action, string? text = null, RepositoryMemoryId? id = null) => new()
+    internal static RepositoryMemoryService CreateService(ConversationFixture fixture, ITextEmbeddingGenerator generator)
     {
-        RepositoryIdentity = Repository,
-        Action = action,
-        Id = id,
-        Text = text,
-        Origin = RepositoryMemoryOrigin.Manual,
-    };
+        return new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new SecretOutputSanitizer());
+    }
+
+    internal static RepositoryMemoryOperationRequest Operation(string action, string? text = null, RepositoryMemoryId? id = null)
+    {
+        return new()
+        {
+            RepositoryIdentity = Repository,
+            Action = action,
+            Id = id,
+            Text = text,
+            Origin = RepositoryMemoryOrigin.Manual,
+        };
+    }
 }
 
 internal sealed class TestMemoryEmbeddingGenerator : ITextEmbeddingGenerator

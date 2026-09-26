@@ -382,12 +382,16 @@ public static class SkillsTreeTests
             timeout.Token);
     }
 
-    private static InteractionToggleRequest Request() => new(
+    private static InteractionToggleRequest Request()
+    {
+        return new(
         "Skills - checked means enabled",
         [
             new("review", "Review", "Native / Maintained", false) { GroupPath = ["Native", "Maintained"], Actions = [new("verify", "Verify")] },
             new("other", "Other skill", "Native / Maintained", false) { GroupPath = ["Native", "Maintained"], Actions = [new("verify", "Verify")] },
             new("repository", "Review repository", "Native / Repository", false) { GroupPath = ["Native", "Repository"], Actions = [new("verify", "Verify")] },
             new("claude", "Review compatible", "Claude / Repository", false) { GroupPath = ["Claude", "Repository"], Actions = [new("verify", "Verify")] },
-        ]) { AllowGroupActions = true };
+        ])
+        { AllowGroupActions = true };
+    }
 }

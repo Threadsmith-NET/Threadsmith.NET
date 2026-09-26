@@ -217,11 +217,13 @@ public sealed partial class InteractionCoordinator
         };
     }
 
-    private static string SkillFormat(SkillCatalogCandidate candidate) =>
-        candidate.Provenance.Source.StartsWith("claude:", StringComparison.Ordinal)
+    private static string SkillFormat(SkillCatalogCandidate candidate)
+    {
+        return candidate.Provenance.Source.StartsWith("claude:", StringComparison.Ordinal)
             && candidate.Metadata.SkillId.Value.StartsWith("claude.", StringComparison.Ordinal)
             ? "Claude"
             : "Native";
+    }
 
     private static string SkillActionSelector(SkillCatalogCandidate candidate)
     {

@@ -46,7 +46,10 @@ internal sealed class StartupModal : Modal
     }
 
     /// <inheritdoc />
-    public override bool HandlePaste(string text) => true;
+    public override bool HandlePaste(string text)
+    {
+        return true;
+    }
 
     /// <inheritdoc />
     public override void Render(ISurface surface)
@@ -84,5 +87,8 @@ internal sealed class StartupModal : Modal
     }
 
     /// <summary>Marks a successful phase for its final rendered frame.</summary>
-    internal void Complete() => _isComplete = true;
+    internal void Complete()
+    {
+        _isComplete = true;
+    }
 }

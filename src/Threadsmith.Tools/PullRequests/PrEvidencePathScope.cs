@@ -6,9 +6,11 @@ using Threadsmith.Tools;
 internal static class PrEvidencePathScope
 {
     /// <summary>Checks both current and previous paths of a changed file.</summary>
-    internal static bool IsAllowed(PullRequestFile file, ToolInvocationContext context) =>
-        IsAllowed(file.Path, context)
+    internal static bool IsAllowed(PullRequestFile file, ToolInvocationContext context)
+    {
+        return IsAllowed(file.Path, context)
         && (file.PreviousPath is null || IsAllowed(file.PreviousPath, context));
+    }
 
     /// <summary>Checks whether the caller's roots or prohibited paths narrow the repository.</summary>
     internal static bool IsRestricted(ToolInvocationContext context)

@@ -152,9 +152,12 @@ internal sealed class AnthropicModelProvider : IModelProvider
         }
     }
 
-    private static bool IsProviderFailure(Exception exception) => exception is AnthropicException or AnthropicHttpFailureException
+    private static bool IsProviderFailure(Exception exception)
+    {
+        return exception is AnthropicException or AnthropicHttpFailureException
         or HttpRequestException or IOException or OperationCanceledException or JsonException or ModelProviderException
         or MalformedModelOutputException or InvalidOperationException or ArgumentException or OverflowException or KeyNotFoundException;
+    }
 
     private static Failure Classify(Exception exception, CancellationTokenSource deadline, CancellationToken caller)
     {

@@ -58,7 +58,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             snapshot = SelectSituationalSnapshot(snapshot);
             if (request.Options.EffectiveContextMaximum == 0 || string.IsNullOrWhiteSpace(query) || snapshot.Entries.Count == 0)
             {
-                IReadOnlyList<string> earlyDiagnostics = request.Options.EffectiveContextMaximum == 0
+                var earlyDiagnostics = request.Options.EffectiveContextMaximum == 0
                     ? [.. snapshot.Warnings, "Automatic situational-memory retrieval is disabled by the context limit."]
                     : string.IsNullOrWhiteSpace(query)
                         ? [.. snapshot.Warnings, "The current situational-memory query is empty."]
@@ -215,10 +215,15 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
     }
 
     /// <inheritdoc />
-    public void Dispose() => _gate.Dispose();
+    public void Dispose()
+    {
+        _gate.Dispose();
+    }
 
     private static IReadOnlyList<RepositoryMemoryEntry> SelectStandingPreferences(RepositoryMemoryReadSnapshot snapshot)
-        => [.. snapshot.Entries.Where(entry => entry.MemoryType == RepositoryMemoryType.StandingPreference).OrderBy(entry => entry.Id.Value)];
+    {
+        return [.. snapshot.Entries.Where(entry => entry.MemoryType == RepositoryMemoryType.StandingPreference).OrderBy(entry => entry.Id.Value)];
+    }
 
     private static RepositoryMemoryReadSnapshot SelectSituationalSnapshot(RepositoryMemoryReadSnapshot snapshot)
     {

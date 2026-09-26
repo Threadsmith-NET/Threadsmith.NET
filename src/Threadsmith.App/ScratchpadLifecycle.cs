@@ -601,7 +601,9 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
     }
 
     private static bool IsStrictChild(string candidate, string root)
-        => !PathEquals(candidate, root) && IsSameOrChild(Path.GetFullPath(candidate), Path.GetFullPath(root));
+    {
+        return !PathEquals(candidate, root) && IsSameOrChild(Path.GetFullPath(candidate), Path.GetFullPath(root));
+    }
 
     private static bool IsSameOrChild(string candidate, string root)
     {
@@ -617,9 +619,11 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
     }
 
     private static bool PathEquals(string left, string right)
-        => Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)).Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
-            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    {
+        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)).Equals(
+                Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
+    }
 
     private sealed record ResolvedValue(bool IsPresent, string? Value, bool RepositoryOwned);
 }

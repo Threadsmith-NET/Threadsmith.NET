@@ -1,7 +1,6 @@
 namespace Threadsmith.Tui.TuiKit;
 
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
@@ -17,8 +16,9 @@ internal sealed partial class TuiKitSurface
     private string? _mouseOwner;
 
     /// <inheritdoc />
-    public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default) =>
-        EnqueueAsync(
+    public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+    {
+        return EnqueueAsync(
             () =>
         {
             _agents.Attach(sessionId);
@@ -27,10 +27,12 @@ internal sealed partial class TuiKitSurface
             RefreshDiscovery();
         },
             cancellationToken);
+    }
 
     /// <inheritdoc />
-    public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default) =>
-        EnqueueAsync(
+    public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        return EnqueueAsync(
             () =>
         {
             if (_agents.Update(snapshot))
@@ -39,6 +41,7 @@ internal sealed partial class TuiKitSurface
             }
         },
             cancellationToken);
+    }
 
     private static Rect ComposerScreenRect(Rect region)
     {
@@ -75,7 +78,10 @@ internal sealed partial class TuiKitSurface
         RefreshDiscovery();
     }
 
-    private CellStyle ResolveOutputStyle(PresentationTextRole role) => ResolvePaneStyle(role, PresentationTextRole.OutputStreamPaneRole);
+    private CellStyle ResolveOutputStyle(PresentationTextRole role)
+    {
+        return ResolvePaneStyle(role, PresentationTextRole.OutputStreamPaneRole);
+    }
 
     private CellStyle ResolvePaneStyle(PresentationTextRole role, PresentationTextRole pane)
     {
@@ -163,9 +169,15 @@ internal sealed partial class TuiKitSurface
             _owner = owner;
         }
 
-        public Size Measure(Size available) => available;
+        public Size Measure(Size available)
+        {
+            return available;
+        }
 
-        public bool HandleKey(KeyEvent key) => _owner.SelectedTranscript.HandleKey(key);
+        public bool HandleKey(KeyEvent key)
+        {
+            return _owner.SelectedTranscript.HandleKey(key);
+        }
 
         public bool HandleMouse(MouseEvent mouse)
         {

@@ -172,7 +172,11 @@ public static class McpAdapterLifecycleTests
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
-            ToolId = tool.Definition.Id, ArgumentsJson = "{}", SessionId = SessionId.New(), RunId = RunId.New(), Phase = RunPhase.EvidenceCollection,
+            ToolId = tool.Definition.Id,
+            ArgumentsJson = "{}",
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            Phase = RunPhase.EvidenceCollection,
             Context = new ToolInvocationContext { RepositoryPath = Environment.CurrentDirectory, TrustLevel = RepositoryTrustLevel.TrustedBuild, RequestedBy = "model" },
         });
 
@@ -199,11 +203,20 @@ public static class McpAdapterLifecycleTests
             return Task.CompletedTask;
         }
 
-        public IDomainEventSubscription Subscribe(Func<IDomainEvent, CancellationToken, Task> handler, int capacity = 256) => throw new NotSupportedException();
+        public IDomainEventSubscription Subscribe(Func<IDomainEvent, CancellationToken, Task> handler, int capacity = 256)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task PublishCommittedBatchAsync(IReadOnlyList<IDomainEvent> domainEvents, Func<bool> tryCommit, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task PublishCommittedBatchAsync(IReadOnlyList<IDomainEvent> domainEvents, Func<bool> tryCommit, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            return ValueTask.CompletedTask;
+        }
     }
 
     private static McpConnectionProfile CreateProfile()

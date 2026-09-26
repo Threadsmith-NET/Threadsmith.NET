@@ -58,7 +58,9 @@ internal static class InteractionPresentationFormatter
         string identity,
         string detail,
         TimeProvider timeProvider,
-        bool showOperationDurations) => new(
+        bool showOperationDurations)
+    {
+        return new(
             $"{category}: {TruncateForDisplay(identity)} - running",
             timeProvider.GetTimestamp(),
             showOperationDurations,
@@ -66,13 +68,16 @@ internal static class InteractionPresentationFormatter
         {
             ToolDetail = detail,
         };
+    }
 
     /// <summary>Formats a simple lifecycle outcome through the same block renderer as tool completions.</summary>
-    internal static string FormatOperationCompletion(string category, string identity, string detail, string outcome, string? elapsed) =>
-        FormatBlock(new TuiBlockPresentation(
+    internal static string FormatOperationCompletion(string category, string identity, string detail, string outcome, string? elapsed)
+    {
+        return FormatBlock(new TuiBlockPresentation(
             new TuiBlockHeader(category, identity, outcome, elapsed, PresentationTextRole.Status, PresentationTextRole.Status),
             [new TuiBlockLine(TuiBlockLineKind.Item, detail, PresentationTextRole.Muted)],
             ChildIndent: "  "));
+    }
 
     /// <summary>Formats one completed tool invocation as the compact interactive tools block.</summary>
     /// <param name="started">The matching invocation start event.</param>

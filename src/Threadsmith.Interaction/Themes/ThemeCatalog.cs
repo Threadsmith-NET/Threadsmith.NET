@@ -136,7 +136,10 @@ internal static class BuiltInThemes
     }
 
     /// <summary>Creates the default built-in theme.</summary>
-    internal static ConfiguredTheme CreateDefault() => CreateMarkdownFriendlyDark();
+    internal static ConfiguredTheme CreateDefault()
+    {
+        return CreateMarkdownFriendlyDark();
+    }
 
     private static ConfiguredTheme CreateMarkdownFriendlyDark()
     {

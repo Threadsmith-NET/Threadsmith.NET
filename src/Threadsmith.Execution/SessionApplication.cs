@@ -811,9 +811,14 @@ public sealed partial class SessionApplication :
     }
 
     /// <summary>Revokes admission for a newly created session whose repository binding failed.</summary>
-    internal void UnregisterPreparedSession(SessionId sessionId) => _sessions.TryRemove(sessionId, out _);
+    internal void UnregisterPreparedSession(SessionId sessionId)
+    {
+        _sessions.TryRemove(sessionId, out _);
+    }
 
-    private static string CreateProposePlanArgumentsSchema(PlanResourceLimits limits) => $$"""
+    private static string CreateProposePlanArgumentsSchema(PlanResourceLimits limits)
+    {
+        return $$"""
         {
           "type": "object",
           "additionalProperties": false,
@@ -861,6 +866,7 @@ public sealed partial class SessionApplication :
           }
         }
         """;
+    }
 
     private CorrectiveMessageFactory RequireCorrectiveMessages()
     {

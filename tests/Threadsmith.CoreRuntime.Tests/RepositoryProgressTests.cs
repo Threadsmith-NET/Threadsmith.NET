@@ -110,10 +110,14 @@ public static class RepositoryProgressTests
         internal TaskCompletionSource SolutionGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task<SessionId> HandleAsync(CreateSessionCommand command, CancellationToken cancellationToken = default)
-            => Task.FromResult(SessionId.New());
+        {
+            return Task.FromResult(SessionId.New());
+        }
 
         public Task<RepositoryTrustState?> HandleAsync(GetRepositoryTrustCommand command, CancellationToken cancellationToken = default)
-            => Task.FromResult<RepositoryTrustState?>(null);
+        {
+            return Task.FromResult<RepositoryTrustState?>(null);
+        }
 
         public async Task<RepositoryOpenResult> HandleAsync(OpenRepositoryCommand command, CancellationToken cancellationToken = default)
         {
@@ -134,6 +138,8 @@ public static class RepositoryProgressTests
         }
 
         public Task<WorkspaceBaseline> HandleAsync(RecordBaselineCommand command, CancellationToken cancellationToken = default)
-            => Task.FromResult(new WorkspaceBaseline(_workspace, "repo", DateTimeOffset.UtcNow, []));
+        {
+            return Task.FromResult(new WorkspaceBaseline(_workspace, "repo", DateTimeOffset.UtcNow, []));
+        }
     }
 }

@@ -174,6 +174,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(stream.ToString(), Encoding.UTF8, "text/event-stream") };
         }
 
-        private static string NativeEvent(string type, object body) => "event: " + type + "\ndata: " + JsonSerializer.Serialize(body) + "\n\n";
+        private static string NativeEvent(string type, object body)
+        {
+            return "event: " + type + "\ndata: " + JsonSerializer.Serialize(body) + "\n\n";
+        }
     }
 }

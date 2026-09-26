@@ -295,18 +295,30 @@ internal sealed class AnthropicStreamAdapter
     }
 
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
-    internal ModelUsage? PartialUsage() => _usage.HasReportedUsage ? _usage.Snapshot(EstimatedOutput()) : null;
+    internal ModelUsage? PartialUsage()
+    {
+        return _usage.HasReportedUsage ? _usage.Snapshot(EstimatedOutput()) : null;
+    }
 
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
-    internal static string String(JsonElement element, string property) => RequiredProperty(element, property, JsonValueKind.String).GetString()
+    internal static string String(JsonElement element, string property)
+    {
+        return RequiredProperty(element, property, JsonValueKind.String).GetString()
         ?? throw new MalformedModelOutputException("Anthropic emitted null stream data.");
+    }
 
-    private static JsonElement RequiredProperty(JsonElement element, string property, JsonValueKind kind) => element.ValueKind == JsonValueKind.Object
+    private static JsonElement RequiredProperty(JsonElement element, string property, JsonValueKind kind)
+    {
+        return element.ValueKind == JsonValueKind.Object
         && element.TryGetProperty(property, out var value) && value.ValueKind == kind
             ? value : throw new MalformedModelOutputException("Anthropic emitted missing or invalid required stream data.");
+    }
 
-    private static int Index(JsonElement element) => RequiredProperty(element, "index", JsonValueKind.Number).TryGetInt32(out var index) && index >= 0
+    private static int Index(JsonElement element)
+    {
+        return RequiredProperty(element, "index", JsonValueKind.Number).TryGetInt32(out var index) && index >= 0
         ? index : throw new MalformedModelOutputException("Anthropic emitted an invalid stream index.");
+    }
 
     private AnthropicResponseBlock OpenBlock(JsonElement root)
     {
@@ -323,7 +335,10 @@ internal sealed class AnthropicStreamAdapter
         }
     }
 
-    private long EstimatedOutput() => _request.ReasoningLevel != ReasoningLevel.None
+    private long EstimatedOutput()
+    {
+        return _request.ReasoningLevel != ReasoningLevel.None
         ? _request.MaximumOutputTokens ?? _profile.EffectiveRequestOutputTokenReserve
         : _blocks.Sum(block => block.EstimatedOutputTokens);
+    }
 }

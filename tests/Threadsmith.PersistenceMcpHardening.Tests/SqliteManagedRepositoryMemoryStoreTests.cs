@@ -633,12 +633,15 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Equal(0L, await receiptSchema.ExecuteScalarAsync());
     }
 
-    private static RepositoryMemoryWrite Write(string text, RepositoryMemoryType memoryType = RepositoryMemoryType.Situational) => new()
+    private static RepositoryMemoryWrite Write(string text, RepositoryMemoryType memoryType = RepositoryMemoryType.Situational)
     {
-        Text = text,
-        Origin = RepositoryMemoryOrigin.Manual,
-        MemoryType = memoryType,
-    };
+        return new()
+        {
+            Text = text,
+            Origin = RepositoryMemoryOrigin.Manual,
+            MemoryType = memoryType,
+        };
+    }
 
     private static async Task<IReadOnlyList<(string Text, double Bm25)>> ReadLexicalRanksAsync(SqliteManagedRepositoryMemoryStore store)
     {
@@ -715,9 +718,15 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
     {
         private DateTimeOffset _now = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
-        public override DateTimeOffset GetUtcNow() => _now;
+        public override DateTimeOffset GetUtcNow()
+        {
+            return _now;
+        }
 
-        internal void Advance(TimeSpan elapsed) => _now += elapsed;
+        internal void Advance(TimeSpan elapsed)
+        {
+            _now += elapsed;
+        }
     }
 
     private sealed class FailingMemoryTypeMigration : IDatabaseMigration

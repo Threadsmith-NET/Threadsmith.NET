@@ -1,6 +1,5 @@
 namespace Threadsmith.AnthropicProvider.Tests;
 
-using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Models.Anthropic;
 

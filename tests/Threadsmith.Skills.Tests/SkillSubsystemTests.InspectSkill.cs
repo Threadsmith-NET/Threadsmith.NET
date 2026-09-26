@@ -53,11 +53,15 @@ public sealed partial class SkillSubsystemTests
         {
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
-                SessionId = SessionId.New(), RunId = RunId.New(), ToolId = "inspect_skill",
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "inspect_skill",
                 ArgumentsJson = query is null ? "{}" : JsonSerializer.Serialize(new { query }),
                 Context = new ToolInvocationContext
                 {
-                    RepositoryPath = package.Root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model",
+                    RepositoryPath = package.Root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
                 },
             });
             Assert.True(result.Succeeded, result.ResultJson);
@@ -256,11 +260,15 @@ public sealed partial class SkillSubsystemTests
             Assert.All(catalog.Snapshot.Candidates, candidate => Assert.Equal(SkillVerificationState.Unverified, candidate.Verification));
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
-                SessionId = SessionId.New(), RunId = RunId.New(), ToolId = "inspect_skill",
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "inspect_skill",
                 ArgumentsJson = query is null ? "{}" : JsonSerializer.Serialize(new { query }),
                 Context = new ToolInvocationContext
                 {
-                    RepositoryPath = package.Root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model",
+                    RepositoryPath = package.Root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
                 },
             });
             Assert.True(result.Succeeded, result.ResultJson);
@@ -326,11 +334,15 @@ public sealed partial class SkillSubsystemTests
 
         var result = await pipeline.InvokeAsync(new ToolInvocationRequest
         {
-            SessionId = SessionId.New(), RunId = RunId.New(), ToolId = "inspect_skill",
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = "inspect_skill",
             ArgumentsJson = JsonSerializer.Serialize(new { selector }),
             Context = new ToolInvocationContext
             {
-                RepositoryPath = package.Root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model",
+                RepositoryPath = package.Root,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
             },
         });
 

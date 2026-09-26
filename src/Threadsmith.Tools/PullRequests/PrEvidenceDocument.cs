@@ -60,5 +60,7 @@ internal sealed class PrEvidenceDocument
         int? endLine = null,
         int startColumn = 1,
         int maximumCharacters = TextEvidenceDocument.MaximumReadCharacters)
-        => _document.Read(startLine, endLine, startColumn, maximumCharacters);
+    {
+        return _document.Read(startLine, endLine, startColumn, maximumCharacters);
+    }
 }

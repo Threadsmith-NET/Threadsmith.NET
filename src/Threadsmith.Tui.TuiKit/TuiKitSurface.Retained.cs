@@ -16,8 +16,9 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     private long _startupDwellStart;
 
     /// <inheritdoc />
-    public Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default) =>
-        ShowReadOnlyModalAsync(
+    public Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default)
+    {
+        return ShowReadOnlyModalAsync(
             new ContextUsageModal(
                 snapshot,
                 ResolveStyle,
@@ -25,6 +26,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                 () => _app.ToggleMouseCapture(),
                 () => _app.MouseCaptureEnabled && !_startupBlocked && ModalFrame.Fits(_backend.Size)),
             cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task ShowCommandHelpAsync(IReadOnlyList<InteractiveCommandDescriptor> commands, CancellationToken cancellationToken = default)
@@ -117,7 +119,9 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
 
     /// <inheritdoc />
     public Task SelectTogglesAsync(InteractionToggleRequest request, Func<string, bool, CancellationToken, Task<InteractionToggleResult>> change, CancellationToken cancellationToken = default)
-        => SelectTogglesCoreAsync(request, change, null, cancellationToken);
+    {
+        return SelectTogglesCoreAsync(request, change, null, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task SelectActionTogglesAsync(

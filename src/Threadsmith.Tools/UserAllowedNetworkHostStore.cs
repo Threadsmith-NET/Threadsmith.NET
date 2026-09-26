@@ -71,7 +71,7 @@ public sealed class UserAllowedNetworkHostStore
                     throw new InvalidOperationException("User allowed network hosts must be an array.");
                 }
 
-                var hosts = tools["allowedNetworkHosts"] as JsonArray ?? new JsonArray();
+                var hosts = tools["allowedNetworkHosts"] as JsonArray ?? [];
                 if (tools["allowedNetworkHosts"] is null)
                 {
                     tools["allowedNetworkHosts"] = hosts;

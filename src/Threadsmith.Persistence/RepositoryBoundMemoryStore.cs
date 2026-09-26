@@ -34,7 +34,9 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
 
     /// <summary>Initializes the host-selected repository database, then atomically publishes the new binding.</summary>
     public Task BindRepositoryAsync(string repositoryRoot, CancellationToken cancellationToken = default)
-        => BindRepositoryAsync(repositoryRoot, 20, cancellationToken);
+    {
+        return BindRepositoryAsync(repositoryRoot, 20, cancellationToken);
+    }
 
     /// <summary>Uses the repository effective capacity during any pending manual-memory migration.</summary>
     public async Task BindRepositoryAsync(string repositoryRoot, int maximumMemoryCount, CancellationToken cancellationToken = default)
@@ -91,7 +93,9 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
 
     /// <inheritdoc />
     public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, IReadOnlyList<string> lexicalTerms, CancellationToken cancellationToken = default)
-        => GetStore(repositoryIdentity).GetSnapshotAsync(repositoryIdentity, lexicalTerms, cancellationToken);
+    {
+        return GetStore(repositoryIdentity).GetSnapshotAsync(repositoryIdentity, lexicalTerms, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task<RepositoryMemoryWriteResult> AddAsync(
@@ -101,7 +105,9 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
         TextEmbeddingResult embedding,
         RepositoryMemoryOptions options,
         CancellationToken cancellationToken = default)
-        => GetStore(repositoryIdentity).AddAsync(repositoryIdentity, write, model, embedding, options, cancellationToken);
+    {
+        return GetStore(repositoryIdentity).AddAsync(repositoryIdentity, write, model, embedding, options, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task<RepositoryMemoryWriteResult> UpdateAsync(
@@ -113,15 +119,21 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
         TextEmbeddingResult? embedding,
         RepositoryMemoryOptions options,
         CancellationToken cancellationToken = default)
-        => GetStore(repositoryIdentity).UpdateAsync(repositoryIdentity, id, expectedRevision, write, model, embedding, options, cancellationToken);
+    {
+        return GetStore(repositoryIdentity).UpdateAsync(repositoryIdentity, id, expectedRevision, write, model, embedding, options, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry?> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
-        => GetStore(repositoryIdentity).RemoveAsync(repositoryIdentity, id, cancellationToken);
+    {
+        return GetStore(repositoryIdentity).RemoveAsync(repositoryIdentity, id, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task<IReadOnlyList<RepositoryMemoryId>> EnforceCapacityAsync(string repositoryIdentity, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
-        => GetStore(repositoryIdentity).EnforceCapacityAsync(repositoryIdentity, options, cancellationToken);
+    {
+        return GetStore(repositoryIdentity).EnforceCapacityAsync(repositoryIdentity, options, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task<bool> AttachEmbeddingAsync(
@@ -132,7 +144,9 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
         TextEmbeddingModelDescriptor model,
         TextEmbeddingResult embedding,
         CancellationToken cancellationToken = default)
-        => GetStore(repositoryIdentity).AttachEmbeddingAsync(repositoryIdentity, id, expectedRevision, expectedContentHash, model, embedding, cancellationToken);
+    {
+        return GetStore(repositoryIdentity).AttachEmbeddingAsync(repositoryIdentity, id, expectedRevision, expectedContentHash, model, embedding, cancellationToken);
+    }
 
     /// <inheritdoc />
     public async Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default)
@@ -149,12 +163,20 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
 
     /// <inheritdoc />
     public Task PruneInclusionsAsync(string repositoryIdentity, RunId runId, CancellationToken cancellationToken = default)
-        => GetStore(repositoryIdentity).PruneInclusionsAsync(repositoryIdentity, runId, cancellationToken);
+    {
+        return GetStore(repositoryIdentity).PruneInclusionsAsync(repositoryIdentity, runId, cancellationToken);
+    }
 
     /// <inheritdoc />
-    public void Dispose() => _bindGate.Dispose();
+    public void Dispose()
+    {
+        _bindGate.Dispose();
+    }
 
-    private SqliteManagedRepositoryMemoryStore GetStore(string repositoryIdentity) => GetBinding(repositoryIdentity).Store;
+    private SqliteManagedRepositoryMemoryStore GetStore(string repositoryIdentity)
+    {
+        return GetBinding(repositoryIdentity).Store;
+    }
 
     private Binding GetBinding(string repositoryIdentity)
     {

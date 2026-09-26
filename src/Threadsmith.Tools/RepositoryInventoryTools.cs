@@ -507,7 +507,10 @@ public sealed class GitBranchComparisonTool : Tool<GitBranchComparisonRequest, G
     }
 
     /// <inheritdoc />
-    protected override string DescribeActivity(GitBranchComparisonRequest input) => $"{input.BaseRevision} -> {input.TargetRevision}";
+    protected override string DescribeActivity(GitBranchComparisonRequest input)
+    {
+        return $"{input.BaseRevision} -> {input.TargetRevision}";
+    }
 
     /// <inheritdoc />
     protected override void ValidateInput(GitBranchComparisonRequest input)

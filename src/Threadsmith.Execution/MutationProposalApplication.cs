@@ -1872,8 +1872,10 @@ public sealed class MutationProposalApplication :
         return null;
     }
 
-    private static string NormalizeLineEndings(string text, string lineEnding) =>
-        text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Replace("\n", lineEnding, StringComparison.Ordinal);
+    private static string NormalizeLineEndings(string text, string lineEnding)
+    {
+        return text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n').Replace("\n", lineEnding, StringComparison.Ordinal);
+    }
 
     private static string NormalizeProposalPath(string path)
     {

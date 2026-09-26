@@ -40,7 +40,10 @@ public sealed class AgentNameCatalog
     }
 
     /// <summary>Gets the immutable effective list for a public role.</summary>
-    public IReadOnlyList<string> GetNames(AgentRole role) => _names[role];
+    public IReadOnlyList<string> GetNames(AgentRole role)
+    {
+        return _names[role];
+    }
 
     /// <summary>Normalizes printable names and rejects unusable entries without making configuration fatal.</summary>
     public static IReadOnlyList<string> Validate(IReadOnlyList<string>? names, TuiResourceLimits? limits = null)

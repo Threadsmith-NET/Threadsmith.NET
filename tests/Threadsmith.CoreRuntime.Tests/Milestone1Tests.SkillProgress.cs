@@ -206,8 +206,10 @@ public static partial class Milestone1Tests
         {
         }
 
-        public new Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default) =>
-            operation.WaitAsync(cancellationToken);
+        public new Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
+        {
+            return operation.WaitAsync(cancellationToken);
+        }
     }
 
     private sealed class SkillProgressSurface : RecordingInteractionSurface, IInteractionSurface, IInteractionToolActivitySurface
@@ -295,8 +297,10 @@ public static partial class Milestone1Tests
             _disposed.Dispose();
         }
 
-        internal void RequestCancellation() =>
+        internal void RequestCancellation()
+        {
             _signals.Writer.TryWrite(ActiveRunInputSignal.CancellationRequested);
+        }
     }
 
     private sealed class PendingSkillHandler :
@@ -332,14 +336,20 @@ public static partial class Milestone1Tests
 
         internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task<SkillInvocationResult> HandleAsync(InvokeSkillCommand command, CancellationToken cancellationToken = default) =>
-            CompleteAsync(command.Request.InvocationId, cancellationToken);
+        public Task<SkillInvocationResult> HandleAsync(InvokeSkillCommand command, CancellationToken cancellationToken = default)
+        {
+            return CompleteAsync(command.Request.InvocationId, cancellationToken);
+        }
 
-        public Task<SkillInvocationResult> HandleAsync(ContinueSkillCommand command, CancellationToken cancellationToken = default) =>
-            CompleteAsync(command.InvocationId, cancellationToken);
+        public Task<SkillInvocationResult> HandleAsync(ContinueSkillCommand command, CancellationToken cancellationToken = default)
+        {
+            return CompleteAsync(command.InvocationId, cancellationToken);
+        }
 
-        public Task<SkillInvocationResult> HandleAsync(ResumeSkillCommand command, CancellationToken cancellationToken = default) =>
-            CompleteAsync(command.InvocationId, cancellationToken);
+        public Task<SkillInvocationResult> HandleAsync(ResumeSkillCommand command, CancellationToken cancellationToken = default)
+        {
+            return CompleteAsync(command.InvocationId, cancellationToken);
+        }
 
         private async Task<SkillInvocationResult> CompleteAsync(SkillInvocationId id, CancellationToken cancellationToken)
         {
@@ -380,10 +390,10 @@ public static partial class Milestone1Tests
 
             await Events.PublishAsync(
                 started with
-            {
-                OccurredAt = DateTimeOffset.UtcNow,
-                Status = Fail || Failure is not null ? SkillInvocationStatus.Failed : SkillInvocationStatus.Completed,
-            },
+                {
+                    OccurredAt = DateTimeOffset.UtcNow,
+                    Status = Fail || Failure is not null ? SkillInvocationStatus.Failed : SkillInvocationStatus.Completed,
+                },
                 cancellationToken);
             if (Failure is not null)
             {
@@ -404,9 +414,16 @@ public static partial class Milestone1Tests
                 Reason = "Finished",
                 Checkpoint = new SkillWorkflowCheckpoint
                 {
-                    WorkflowId = SkillWorkflowId.New(), InvocationId = id, SessionId = SessionId.New(), RunId = RunId.New(),
-                    Package = package, InputJson = "{}", EffectiveBudget = new SkillBudget(),
-                    Status = SkillInvocationStatus.Completed, NextAction = "None", RecordedAt = DateTimeOffset.UtcNow,
+                    WorkflowId = SkillWorkflowId.New(),
+                    InvocationId = id,
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    Package = package,
+                    InputJson = "{}",
+                    EffectiveBudget = new SkillBudget(),
+                    Status = SkillInvocationStatus.Completed,
+                    NextAction = "None",
+                    RecordedAt = DateTimeOffset.UtcNow,
                 },
             };
         }

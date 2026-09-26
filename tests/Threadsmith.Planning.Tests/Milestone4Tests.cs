@@ -5267,9 +5267,14 @@ public static class Milestone4Tests
         public override ToolDefinition Definition { get; }
 
         public override Task<ToolExecution<ListFilesOutput>> ExecuteAsync(ListFilesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
-            => _inner.ExecuteAsync(input, context, cancellationToken);
+        {
+            return _inner.ExecuteAsync(input, context, cancellationToken);
+        }
 
-        protected override void ValidateInput(ListFilesInput input) => ArgumentNullException.ThrowIfNull(input);
+        protected override void ValidateInput(ListFilesInput input)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+        }
     }
 
     private sealed class DuplicateToolThenPlanModelProvider : IModelProvider

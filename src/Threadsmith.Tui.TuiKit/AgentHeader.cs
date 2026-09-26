@@ -1,7 +1,6 @@
 namespace Threadsmith.Tui.TuiKit;
 
 using System.Globalization;
-using Threadsmith.Execution;
 using Threadsmith.Models;
 using TUIKit;
 using TUIKit.Widgets;
@@ -71,8 +70,10 @@ internal sealed class AgentHeader
     }
 
     /// <summary>Uses the rendered context geometry for hit testing, including the compact summary.</summary>
-    internal static bool HitContext(int width, AgentHeaderState state, int x, int y) =>
-        width > 0 && y == 0 && x >= MeasureContext(width, state).Left && x < width;
+    internal static bool HitContext(int width, AgentHeaderState state, int x, int y)
+    {
+        return width > 0 && y == 0 && x >= MeasureContext(width, state).Left && x < width;
+    }
 
     private static ContextLayout MeasureContext(int width, AgentHeaderState state)
     {
@@ -169,17 +170,23 @@ internal sealed class AgentHeader
         return tokens + $"; cache read {reads}, write {writes}; hit {(percentage is null ? "unavailable" : percentage + "%")}";
     }
 
-    private static string CompactCount(long? value) => value switch
+    private static string CompactCount(long? value)
     {
-        null => "?",
-        >= 1_000_000 => (value.Value / 1_000_000d).ToString("0.#", CultureInfo.InvariantCulture) + "M",
-        >= 1_000 => (value.Value / 1_000d).ToString("0.#", CultureInfo.InvariantCulture) + "K",
-        _ => value.Value.ToString(CultureInfo.InvariantCulture),
-    };
+        return value switch
+        {
+            null => "?",
+            >= 1_000_000 => (value.Value / 1_000_000d).ToString("0.#", CultureInfo.InvariantCulture) + "M",
+            >= 1_000 => (value.Value / 1_000d).ToString("0.#", CultureInfo.InvariantCulture) + "K",
+            _ => value.Value.ToString(CultureInfo.InvariantCulture),
+        };
+    }
 
-    private static string Clip(string text, int width) => UnicodeWidth.GetWidth(text) <= width
+    private static string Clip(string text, int width)
+    {
+        return UnicodeWidth.GetWidth(text) <= width
         ? text
         : text[..UnicodeWidth.GetLengthThatFits(text, Math.Max(0, width - 1))] + "…";
+    }
 }
 
 /// <summary>Detached display metadata for either MAIN or the selected child.</summary>

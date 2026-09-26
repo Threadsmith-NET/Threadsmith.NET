@@ -11,94 +11,130 @@ using Threadsmith.Models.Anthropic;
 internal static class TestAnthropic
 {
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static ModelProfile Profile(bool thinking = false) => new()
+    internal static ModelProfile Profile(bool thinking = false)
     {
-        Id = new ModelProfileId(Guid.Parse("11111111-1111-1111-1111-111111111111")),
-        Name = "native fixture",
-        Provider = "anthropic",
-        ModelId = "claude-test",
-        Endpoint = AnthropicProviderRegistration.MessagesEndpoint,
-        ContextWindow = 200000,
-        MaximumOutputTokens = 8192,
-        RequestOutputTokenReserve = 4096,
-        Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, StructuredOutput = true },
-        SupportedReasoningLevels = thinking ? [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.High] : [ReasoningLevel.None],
-        RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
-    };
-
-    /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static AnthropicModelCompatibility Compatibility(bool thinking = false) => new()
-    {
-        ModelId = "claude-test",
-        SupportsStrictSchemas = true,
-        ThinkingMode = thinking ? AnthropicThinkingMode.Adaptive : AnthropicThinkingMode.Disabled,
-        SupportsReasoningOff = true,
-        Prices = new AnthropicModelPrices
+        return new()
         {
-            InputPerMillionTokens = 2,
-            CacheWritePerMillionTokens = 2.5m,
-            CacheReadPerMillionTokens = 0.2m,
-            OutputPerMillionTokens = 10,
-        },
-    };
+            Id = new ModelProfileId(Guid.Parse("11111111-1111-1111-1111-111111111111")),
+            Name = "native fixture",
+            Provider = "anthropic",
+            ModelId = "claude-test",
+            Endpoint = AnthropicProviderRegistration.MessagesEndpoint,
+            ContextWindow = 200000,
+            MaximumOutputTokens = 8192,
+            RequestOutputTokenReserve = 4096,
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true, StructuredOutput = true },
+            SupportedReasoningLevels = thinking ? [ReasoningLevel.None, ReasoningLevel.Low, ReasoningLevel.High] : [ReasoningLevel.None],
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        };
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static ModelStreamRequest Request(bool thinking = false) => new()
+    internal static AnthropicModelCompatibility Compatibility(bool thinking = false)
     {
-        RunId = new RunId(Guid.Parse("22222222-2222-2222-2222-222222222222")),
-        ResolvedProfileId = Profile().Id,
-        Input = "legacy must not duplicate",
-        Messages = [Message(ModelMessageRole.User, "current-user", "hello")],
-        ReasoningLevel = thinking ? ReasoningLevel.Low : ReasoningLevel.None,
-    };
+        return new()
+        {
+            ModelId = "claude-test",
+            SupportsStrictSchemas = true,
+            ThinkingMode = thinking ? AnthropicThinkingMode.Adaptive : AnthropicThinkingMode.Disabled,
+            SupportsReasoningOff = true,
+            Prices = new AnthropicModelPrices
+            {
+                InputPerMillionTokens = 2,
+                CacheWritePerMillionTokens = 2.5m,
+                CacheReadPerMillionTokens = 0.2m,
+                OutputPerMillionTokens = 10,
+            },
+        };
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static ModelToolDefinition Tool(string name = "lookup", string schema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}") => new()
+    internal static ModelStreamRequest Request(bool thinking = false)
     {
-        Name = name,
-        Description = "Fixture lookup.",
-        ArgumentsJsonSchema = schema,
-    };
+        return new()
+        {
+            RunId = new RunId(Guid.Parse("22222222-2222-2222-2222-222222222222")),
+            ResolvedProfileId = Profile().Id,
+            Input = "legacy must not duplicate",
+            Messages = [Message(ModelMessageRole.User, "current-user", "hello")],
+            ReasoningLevel = thinking ? ReasoningLevel.Low : ReasoningLevel.None,
+        };
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static ModelMessage Message(ModelMessageRole role, string section, string text, string? id = null, string? tool = null, int? round = null, bool? error = null) => new()
+    internal static ModelToolDefinition Tool(string name = "lookup", string schema = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}")
     {
-        Role = role,
-        SectionId = section,
-        Content = [new ModelContentPart { Content = text }],
-        ToolCallId = id,
-        ToolName = tool,
-        ModelRound = round,
-        IsError = error,
-    };
+        return new()
+        {
+            Name = name,
+            Description = "Fixture lookup.",
+            ArgumentsJsonSchema = schema,
+        };
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static string Event(string type, object body) => "event: " + type + "\ndata: " + JsonSerializer.Serialize(body) + "\n\n";
-
-    /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static string Start(object? usage = null) => Event("message_start", new
+    internal static ModelMessage Message(ModelMessageRole role, string section, string text, string? id = null, string? tool = null, int? round = null, bool? error = null)
     {
-        type = "message_start",
-        message = new { id = "message_fixture", type = "message", role = "assistant", model = "claude-test", content = Array.Empty<object>(), usage = usage ?? new { input_tokens = 100, output_tokens = 0 } },
-    });
+        return new()
+        {
+            Role = role,
+            SectionId = section,
+            Content = [new ModelContentPart { Content = text }],
+            ToolCallId = id,
+            ToolName = tool,
+            ModelRound = round,
+            IsError = error,
+        };
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static string Block(int index, object block) => Event("content_block_start", new { type = "content_block_start", index, content_block = block });
+    internal static string Event(string type, object body)
+    {
+        return "event: " + type + "\ndata: " + JsonSerializer.Serialize(body) + "\n\n";
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static string Delta(int index, object delta) => Event("content_block_delta", new { type = "content_block_delta", index, delta });
+    internal static string Start(object? usage = null)
+    {
+        return Event("message_start", new
+        {
+            type = "message_start",
+            message = new { id = "message_fixture", type = "message", role = "assistant", model = "claude-test", content = Array.Empty<object>(), usage = usage ?? new { input_tokens = 100, output_tokens = 0 } },
+        });
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static string Close(int index) => Event("content_block_stop", new { type = "content_block_stop", index });
+    internal static string Block(int index, object block)
+    {
+        return Event("content_block_start", new { type = "content_block_start", index, content_block = block });
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static string End(string reason = "end_turn", object? usage = null, bool stop = true) => Event("message_delta", new { type = "message_delta", delta = new { stop_reason = reason, stop_sequence = (string?)null }, usage = usage ?? new { output_tokens = 25 } })
+    internal static string Delta(int index, object delta)
+    {
+        return Event("content_block_delta", new { type = "content_block_delta", index, delta });
+    }
+
+    /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
+    internal static string Close(int index)
+    {
+        return Event("content_block_stop", new { type = "content_block_stop", index });
+    }
+
+    /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
+    internal static string End(string reason = "end_turn", object? usage = null, bool stop = true)
+    {
+        return Event("message_delta", new { type = "message_delta", delta = new { stop_reason = reason, stop_sequence = (string?)null }, usage = usage ?? new { output_tokens = 25 } })
         + (stop ? Event("message_stop", new { type = "message_stop" }) : string.Empty);
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
-    internal static string TextStream(string text = "hello", object? startUsage = null, object? finalUsage = null) => Start(startUsage)
+    internal static string TextStream(string text = "hello", object? startUsage = null, object? finalUsage = null)
+    {
+        return Start(startUsage)
         + Block(0, new { type = "text", text = string.Empty })
         + Delta(0, new { type = "text_delta", text }) + Close(0) + End(usage: finalUsage);
+    }
 
     /// <summary>Creates or captures a deterministic native protocol fixture.</summary>
     internal static string ToolStream(string arguments = "{}", bool thinking = false, bool secondTool = false, string stopReason = "tool_use", bool messageStop = true)

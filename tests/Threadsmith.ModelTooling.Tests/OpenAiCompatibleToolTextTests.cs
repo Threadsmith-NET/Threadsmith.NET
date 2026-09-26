@@ -217,25 +217,31 @@ public static class OpenAiCompatibleToolTextTests
             + "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40801,\"completion_tokens\":161,\"completion_tokens_details\":{\"reasoning_tokens\":88}}}\n\ndata: [DONE]\n\n";
     }
 
-    private static ModelStreamRequest Request() => new()
+    private static ModelStreamRequest Request()
     {
-        RunId = RunId.New(),
-        Input = "Synthetic provider protocol check.",
-        Tools = [new ModelToolDefinition { Name = "search", Description = "Search synthetic data.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{}}" }],
-    };
+        return new()
+        {
+            RunId = RunId.New(),
+            Input = "Synthetic provider protocol check.",
+            Tools = [new ModelToolDefinition { Name = "search", Description = "Search synthetic data.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{}}" }],
+        };
+    }
 
-    private static OpenAiCompatibleModelProvider Provider(HttpClient client) => new(client, new ModelProfile
+    private static OpenAiCompatibleModelProvider Provider(HttpClient client)
     {
-        Id = ModelProfileId.New(),
-        Name = "synthetic",
-        Provider = "openai-compatible",
-        ModelId = "synthetic",
-        Endpoint = new Uri("https://models.example/v1/chat/completions"),
-        ContextWindow = 64000,
-        MaximumOutputTokens = 4000,
-        Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-        RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
-    });
+        return new(client, new ModelProfile
+        {
+            Id = ModelProfileId.New(),
+            Name = "synthetic",
+            Provider = "openai-compatible",
+            ModelId = "synthetic",
+            Endpoint = new Uri("https://models.example/v1/chat/completions"),
+            ContextWindow = 64000,
+            MaximumOutputTokens = 4000,
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        });
+    }
 
     private sealed class StreamHandler : HttpMessageHandler
     {

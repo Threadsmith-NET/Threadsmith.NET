@@ -26,10 +26,13 @@ public enum ScratchpadDisabledReason
 public sealed record ScratchpadSessionCapability
 {
     /// <summary>Disabled capability used when no scratchpad is available.</summary>
-    public static ScratchpadSessionCapability Disabled(ScratchpadDisabledReason reason) => new()
+    public static ScratchpadSessionCapability Disabled(ScratchpadDisabledReason reason)
     {
-        DisabledReason = reason,
-    };
+        return new()
+        {
+            DisabledReason = reason,
+        };
+    }
 
     /// <summary>Whether eligible built-in tools may access the root.</summary>
     public bool IsActive { get; init; }

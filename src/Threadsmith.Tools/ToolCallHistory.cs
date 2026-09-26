@@ -46,8 +46,13 @@ public sealed class ToolCallHistory
     }
 
     /// <summary>Reports whether a tool has an accepted call in this execution's history.</summary>
-    public bool ContainsTool(string toolName) => _calls.Any(call => string.Equals(call.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
+    public bool ContainsTool(string toolName)
+    {
+        return _calls.Any(call => string.Equals(call.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
+    }
 
     private bool TrackCurrentBatch((string ToolName, string ArgumentsJson) call)
-        => _currentBatchCalls?.Add(call) ?? true;
+    {
+        return _currentBatchCalls?.Add(call) ?? true;
+    }
 }

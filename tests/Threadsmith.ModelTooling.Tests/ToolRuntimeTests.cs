@@ -3856,7 +3856,9 @@ public static partial class ToolRuntimeTests
     }
 
     private static bool IsExecutableAvailable(string fileName)
-        => FindExecutablePath(fileName) is not null;
+    {
+        return FindExecutablePath(fileName) is not null;
+    }
 
     private static string? FindExecutablePath(string fileName)
     {

@@ -108,7 +108,10 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Equal(
                 new SemanticTraversalLimits
                 {
-                    MaximumDepth = 1, MaximumNodes = 10, MaximumEdges = 15, TimeoutMilliseconds = 100,
+                    MaximumDepth = 1,
+                    MaximumNodes = 10,
+                    MaximumEdges = 15,
+                    TimeoutMilliseconds = 100,
                 },
                 service.CapturedCallHierarchyRequest.Limits);
             Assert.NotNull(execution.ModelResultContent);
@@ -352,7 +355,10 @@ public sealed class Plan43AdvancedSemanticToolTests
             Assert.Equal(
                 new SemanticTraversalLimits
                 {
-                    MaximumDepth = 1, MaximumNodes = 10, MaximumEdges = 15, TimeoutMilliseconds = 100,
+                    MaximumDepth = 1,
+                    MaximumNodes = 10,
+                    MaximumEdges = 15,
+                    TimeoutMilliseconds = 100,
                 },
                 service.CapturedSymbolImpactRequest.Limits);
             Assert.NotNull(execution.ModelResultContent);

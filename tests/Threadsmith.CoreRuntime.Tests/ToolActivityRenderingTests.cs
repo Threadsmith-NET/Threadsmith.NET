@@ -237,8 +237,14 @@ public static class ToolActivityRenderingTests
 
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
-        public override long GetTimestamp() => Interlocked.Read(ref _ticks);
+        public override long GetTimestamp()
+        {
+            return Interlocked.Read(ref _ticks);
+        }
 
-        internal void Advance(TimeSpan elapsed) => Interlocked.Add(ref _ticks, elapsed.Ticks);
+        internal void Advance(TimeSpan elapsed)
+        {
+            Interlocked.Add(ref _ticks, elapsed.Ticks);
+        }
     }
 }

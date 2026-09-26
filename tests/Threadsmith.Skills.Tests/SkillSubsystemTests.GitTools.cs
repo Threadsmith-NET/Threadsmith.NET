@@ -1,12 +1,9 @@
 namespace Threadsmith.Skills.Tests;
 
-using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
-using Threadsmith.Models;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
@@ -132,8 +129,12 @@ public sealed partial class SkillSubsystemTests
         var request = PermissionPlan().Request;
         var result = await fixture.Pipeline.InvokeAsync(new ToolInvocationRequest
         {
-            SessionId = request.SessionId, RunId = request.RunId, Phase = request.Phase, ToolId = tool,
-            ArgumentsJson = JsonSerializer.SerializeToElement(input).GetRawText(), Context = fixture.Authority,
+            SessionId = request.SessionId,
+            RunId = request.RunId,
+            Phase = request.Phase,
+            ToolId = tool,
+            ArgumentsJson = JsonSerializer.SerializeToElement(input).GetRawText(),
+            Context = fixture.Authority,
             ExpectedRegistration = fixture.Tools.GetRegistrations(request.SessionId, request.RunId).Single(item => item.Tool.Definition.Id == tool),
         });
         Assert.True(result.Succeeded, result.ErrorClassification.ToString());

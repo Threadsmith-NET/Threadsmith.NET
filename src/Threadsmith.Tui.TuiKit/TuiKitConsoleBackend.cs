@@ -28,7 +28,9 @@ internal sealed class TuiKitConsoleBackend : ITerminalBackend
     }
 
     /// <summary>Changes only color depth while preserving capabilities detected by TUIKit.</summary>
-    internal static TerminalCapabilities ApplyRgbOverride(TerminalCapabilities detected, bool useRgb) => useRgb
+    internal static TerminalCapabilities ApplyRgbOverride(TerminalCapabilities detected, bool useRgb)
+    {
+        return useRgb
         ? new TerminalCapabilities(
                 TerminalColorDepth.TrueColor,
                 detected.EnhancedKeyboard,
@@ -40,6 +42,7 @@ internal sealed class TuiKitConsoleBackend : ITerminalBackend
                 detected.FocusReporting,
                 detected.SynchronizedOutput)
         : detected;
+    }
 
     /// <inheritdoc />
     public TerminalCapabilities Capabilities { get; }
@@ -51,20 +54,38 @@ internal sealed class TuiKitConsoleBackend : ITerminalBackend
     public bool IsInteractive => _console.IsInteractive;
 
     /// <inheritdoc />
-    public void Start() => _console.Start();
+    public void Start()
+    {
+        _console.Start();
+    }
 
     /// <inheritdoc />
-    public void Write(string data) => _console.Write(data);
+    public void Write(string data)
+    {
+        _console.Write(data);
+    }
 
     /// <inheritdoc />
-    public void Flush() => _console.Flush();
+    public void Flush()
+    {
+        _console.Flush();
+    }
 
     /// <inheritdoc />
-    public int ReadInput(byte[] buffer, int offset, int count) => _console.ReadInput(buffer, offset, count);
+    public int ReadInput(byte[] buffer, int offset, int count)
+    {
+        return _console.ReadInput(buffer, offset, count);
+    }
 
     /// <inheritdoc />
-    public void Stop() => _console.Stop();
+    public void Stop()
+    {
+        _console.Stop();
+    }
 
     /// <inheritdoc />
-    public void Dispose() => _console.Dispose();
+    public void Dispose()
+    {
+        _console.Dispose();
+    }
 }

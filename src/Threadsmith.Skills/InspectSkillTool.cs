@@ -195,9 +195,11 @@ public sealed class InspectSkillTool : Tool<InspectSkillInput, InspectSkillOutpu
     }
 
     private static bool IsEnabledAndVerified(SkillCatalogCandidate candidate)
-        => candidate.Enabled && candidate.Verification is (SkillVerificationState.Maintained
-            or SkillVerificationState.SignedTrusted
-            or SkillVerificationState.DigestAllowlisted);
+    {
+        return candidate.Enabled && candidate.Verification is (SkillVerificationState.Maintained
+                or SkillVerificationState.SignedTrusted
+                or SkillVerificationState.DigestAllowlisted);
+    }
 
     private static InspectSkillEntry ProjectEntry(SkillCatalogCandidate candidate, string selector)
     {

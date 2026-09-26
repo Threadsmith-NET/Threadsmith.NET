@@ -94,6 +94,10 @@ public sealed class SkillOperationActivityTests
         Assert.DoesNotContain(segments, segment => segment.Role == PresentationTextRole.Success);
     }
 
-    private static SkillWorkflowCheckpointWritten Start() => new(
-        SessionId.New(), DateTimeOffset.UtcNow, SkillInvocationId.New(), SkillWorkflowId.New(), new SkillId("review"), "1.0.0", new string('a', 64), SkillInvocationStatus.Running, 0, "Execute") { RunId = RunId.New() };
+    private static SkillWorkflowCheckpointWritten Start()
+    {
+        return new(
+        SessionId.New(), DateTimeOffset.UtcNow, SkillInvocationId.New(), SkillWorkflowId.New(), new SkillId("review"), "1.0.0", new string('a', 64), SkillInvocationStatus.Running, 0, "Execute")
+        { RunId = RunId.New() };
+    }
 }

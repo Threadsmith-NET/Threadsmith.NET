@@ -151,6 +151,9 @@ public static class AgentDisplayStreamTests
 
     private sealed class TestSanitizer : IOutputSanitizer
     {
-        public string Sanitize(string value) => value.Replace("secret-canary", "[redacted]", StringComparison.Ordinal);
+        public string Sanitize(string value)
+        {
+            return value.Replace("secret-canary", "[redacted]", StringComparison.Ordinal);
+        }
     }
 }

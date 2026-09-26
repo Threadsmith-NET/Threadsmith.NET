@@ -65,7 +65,10 @@ internal sealed class CommandHelpModal : Modal
     }
 
     /// <inheritdoc />
-    public override bool HandlePaste(string text) => true;
+    public override bool HandlePaste(string text)
+    {
+        return true;
+    }
 
     /// <inheritdoc />
     public override void Render(ISurface surface)
@@ -110,7 +113,10 @@ internal sealed class CommandHelpModal : Modal
         _runs = [.. _lines.Select(_ => new CachedTextRun())];
     }
 
-    private static string[] Wrap(string text, int width) => [..
+    private static string[] Wrap(string text, int width)
+    {
+        return [..
         TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(text).ReplaceLineEndings(" ")), width)
             .Select(line => line.ToPlainString())];
+    }
 }

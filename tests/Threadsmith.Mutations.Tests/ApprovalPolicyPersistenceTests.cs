@@ -192,7 +192,10 @@ public sealed class ApprovalPolicyPersistenceTests
 
         public string ConfigPath { get; }
 
-        public IConfigurationRoot Load() => new ConfigurationBuilder().AddJsonFile(_machinePath).AddJsonFile(_userPath).AddJsonFile(ConfigPath, optional: true).Build();
+        public IConfigurationRoot Load()
+        {
+            return new ConfigurationBuilder().AddJsonFile(_machinePath).AddJsonFile(_userPath).AddJsonFile(ConfigPath, optional: true).Build();
+        }
 
         public void AssertOnlyRepositorySettingsWritten(bool repositoryConfigExists = true)
         {

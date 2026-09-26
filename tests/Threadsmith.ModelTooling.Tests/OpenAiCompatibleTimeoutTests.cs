@@ -52,7 +52,8 @@ public static class OpenAiCompatibleTimeoutTests
             attempts++;
             Assert.False(token.IsCancellationRequested);
             throw original;
-        })) { Timeout = Timeout.InfiniteTimeSpan };
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds));
 
         var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
@@ -75,7 +76,8 @@ public static class OpenAiCompatibleTimeoutTests
         {
             attempts++;
             throw new TaskCanceledException("Handler timeout.");
-        })) { Timeout = Timeout.InfiniteTimeSpan };
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var profile = Profile(600) with
         {
             Timeout = TimeSpan.FromMilliseconds(50),
@@ -104,7 +106,8 @@ public static class OpenAiCompatibleTimeoutTests
             entered.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, token);
             return Response(CompletedResponse);
-        })) { Timeout = Timeout.InfiniteTimeSpan };
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
         var pending = provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token).AsTask();
         await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
@@ -130,7 +133,8 @@ public static class OpenAiCompatibleTimeoutTests
         {
             attempts++;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) });
-        })) { Timeout = Timeout.InfiniteTimeSpan };
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new OpenAiCompatibleModelProvider(client, Profile(timeoutSeconds));
         await using var chunks = provider.StreamAsync(Request(), TestContext.Current.CancellationToken).GetAsyncEnumerator();
         Assert.True(await chunks.MoveNextAsync());
@@ -171,7 +175,8 @@ public static class OpenAiCompatibleTimeoutTests
             headersEntered.TrySetResult();
             await releaseHeaders.Task.WaitAsync(token);
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) };
-        })) { Timeout = Timeout.InfiniteTimeSpan };
+        }))
+        { Timeout = Timeout.InfiniteTimeSpan };
         var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
         var pending = provider.StreamAsync(Request(), TestContext.Current.CancellationToken)
             .ToListAsync(TestContext.Current.CancellationToken).AsTask();
@@ -195,26 +200,35 @@ public static class OpenAiCompatibleTimeoutTests
         }
     }
 
-    private static ModelStreamRequest Request() => new() { RunId = RunId.New(), Input = "Explain the design." };
-
-    private static ModelProfile Profile(int timeoutSeconds) => new()
+    private static ModelStreamRequest Request()
     {
-        Id = ModelProfileId.New(),
-        Name = "slow-model",
-        Provider = "openai-compatible",
-        ModelId = "test-model",
-        Endpoint = new Uri("https://models.example/v1/chat/completions"),
-        ContextWindow = 32000,
-        MaximumOutputTokens = 4000,
-        Capabilities = new ModelCapabilitySet { Streaming = true },
-        Timeout = TimeSpan.FromSeconds(timeoutSeconds),
-        RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
-    };
+        return new() { RunId = RunId.New(), Input = "Explain the design." };
+    }
 
-    private static HttpResponseMessage Response(string text) => new(HttpStatusCode.OK)
+    private static ModelProfile Profile(int timeoutSeconds)
     {
-        Content = new StringContent(text, Encoding.UTF8, "text/event-stream"),
-    };
+        return new()
+        {
+            Id = ModelProfileId.New(),
+            Name = "slow-model",
+            Provider = "openai-compatible",
+            ModelId = "test-model",
+            Endpoint = new Uri("https://models.example/v1/chat/completions"),
+            ContextWindow = 32000,
+            MaximumOutputTokens = 4000,
+            Capabilities = new ModelCapabilitySet { Streaming = true },
+            Timeout = TimeSpan.FromSeconds(timeoutSeconds),
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        };
+    }
+
+    private static HttpResponseMessage Response(string text)
+    {
+        return new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(text, Encoding.UTF8, "text/event-stream"),
+        };
+    }
 
     private sealed class RecordingHandler : HttpMessageHandler
     {
@@ -226,7 +240,9 @@ public static class OpenAiCompatibleTimeoutTests
         }
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            => _send(request, cancellationToken);
+        {
+            return _send(request, cancellationToken);
+        }
     }
 
     private sealed class ControlledStream : Stream
@@ -257,9 +273,15 @@ public static class OpenAiCompatibleTimeoutTests
             set => throw new NotSupportedException();
         }
 
-        public override void Flush() => throw new NotSupportedException();
+        public override void Flush()
+        {
+            throw new NotSupportedException();
+        }
 
-        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
 
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
@@ -273,11 +295,20 @@ public static class OpenAiCompatibleTimeoutTests
             return new ValueTask<int>(_read(buffer, cancellationToken));
         }
 
-        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            throw new NotSupportedException();
+        }
 
-        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void SetLength(long value)
+        {
+            throw new NotSupportedException();
+        }
 
-        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            throw new NotSupportedException();
+        }
 
         protected override void Dispose(bool disposing)
         {

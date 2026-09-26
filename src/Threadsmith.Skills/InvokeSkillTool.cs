@@ -165,7 +165,10 @@ public sealed class InvokeSkillTool : Tool<InvokeSkillInput, InvokeSkillOutput>
     }
 
     /// <inheritdoc />
-    protected override string? DescribeActivity(InvokeSkillInput input) => $"invoke {input.Selector}";
+    protected override string? DescribeActivity(InvokeSkillInput input)
+    {
+        return $"invoke {input.Selector}";
+    }
 
     private async Task<string> ResolveSelectorKeyAsync(string selector, CancellationToken cancellationToken)
     {

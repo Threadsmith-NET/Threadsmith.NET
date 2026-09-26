@@ -1290,35 +1290,45 @@ public static class Plan80ActiveTurnContinuationTests
             string repositoryPath,
             RunId runId,
             NuGetDependencyHealthRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromException<NuGetDependencyHealthResult>(new NotSupportedException());
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<NuGetDependencyHealthResult>(new NotSupportedException());
+        }
 
         public Task<ValidationToolResult> AnalyzeAsync(
             string repositoryPath,
             RunId runId,
             AnalyzerToolRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromException<ValidationToolResult>(new NotSupportedException());
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<ValidationToolResult>(new NotSupportedException());
+        }
 
         public Task<ValidationToolResult> CheckFormatAsync(
             string repositoryPath,
             RunId runId,
             FormatCheckRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromException<ValidationToolResult>(new NotSupportedException());
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<ValidationToolResult>(new NotSupportedException());
+        }
 
         public Task<DiagnosticQueryResult> QueryDiagnosticsAsync(
             string repositoryPath,
             DiagnosticQuery query,
-            CancellationToken cancellationToken = default) =>
-            Task.FromException<DiagnosticQueryResult>(new NotSupportedException());
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<DiagnosticQueryResult>(new NotSupportedException());
+        }
 
         public Task<TestDiscoveryResult> DiscoverTestsAsync(
             string repositoryPath,
             RunId runId,
             TestDiscoveryRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromException<TestDiscoveryResult>(new NotSupportedException());
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<TestDiscoveryResult>(new NotSupportedException());
+        }
 
         public string ResolveTestProjectPath(string repositoryPath, DiscoveredTestId testId)
         {
@@ -1329,8 +1339,10 @@ public static class Plan80ActiveTurnContinuationTests
             string repositoryPath,
             RunId runId,
             TargetedTestRequest request,
-            CancellationToken cancellationToken = default) =>
-            Task.FromException<TargetedTestResult>(new NotSupportedException());
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<TargetedTestResult>(new NotSupportedException());
+        }
     }
 
     private sealed class ConversationAvailableTool(ITool inner) : ITool
@@ -1340,34 +1352,57 @@ public static class Plan80ActiveTurnContinuationTests
             ConversationAvailable = true,
         };
 
-        public object DeserializeInput(string argumentsJson) => inner.DeserializeInput(argumentsJson);
+        public object DeserializeInput(string argumentsJson)
+        {
+            return inner.DeserializeInput(argumentsJson);
+        }
 
-        public string? GetActivityDetail(object input) => inner.GetActivityDetail(input);
+        public string? GetActivityDetail(object input)
+        {
+            return inner.GetActivityDetail(input);
+        }
 
         public IReadOnlyList<string> GetResourcePaths(
             object input,
-            ToolInvocationContext context) => inner.GetResourcePaths(input, context);
+            ToolInvocationContext context)
+        {
+            return inner.GetResourcePaths(input, context);
+        }
 
-        public IReadOnlyList<string> GetSecretReferences(object input) =>
-            inner.GetSecretReferences(input);
+        public IReadOnlyList<string> GetSecretReferences(object input)
+        {
+            return inner.GetSecretReferences(input);
+        }
 
-        public string? GetExecutable(object input) => inner.GetExecutable(input);
+        public string? GetExecutable(object input)
+        {
+            return inner.GetExecutable(input);
+        }
 
-        public string? GetExecutable(object input, ToolInvocationContext context) =>
-            inner.GetExecutable(input, context);
+        public string? GetExecutable(object input, ToolInvocationContext context)
+        {
+            return inner.GetExecutable(input, context);
+        }
 
-        public IReadOnlyList<string> GetNetworkHosts(object input) =>
-            inner.GetNetworkHosts(input);
+        public IReadOnlyList<string> GetNetworkHosts(object input)
+        {
+            return inner.GetNetworkHosts(input);
+        }
 
         public IReadOnlyList<ToolResourceClaim> GetSchedulingClaims(
             object input,
-            ToolInvocationContext context) => inner.GetSchedulingClaims(input, context);
+            ToolInvocationContext context)
+        {
+            return inner.GetSchedulingClaims(input, context);
+        }
 
         public Task<ToolExecutionEnvelope> ExecuteAsync(
             object input,
             ToolExecutionContext context,
-            CancellationToken cancellationToken = default) =>
-            inner.ExecuteAsync(input, context, cancellationToken);
+            CancellationToken cancellationToken = default)
+        {
+            return inner.ExecuteAsync(input, context, cancellationToken);
+        }
     }
 
     private sealed class BaselineProcessManager(string output) : IProcessManager

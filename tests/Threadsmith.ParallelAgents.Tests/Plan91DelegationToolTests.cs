@@ -1081,7 +1081,9 @@ public sealed class Plan91DelegationToolTests
         }
 
         protected override IReadOnlyList<string> GetNetworkHosts(MetadataToolInput input)
-            => _networkHost is null ? [] : [_networkHost];
+        {
+            return _networkHost is null ? [] : [_networkHost];
+        }
 
         protected override void ValidateInput(MetadataToolInput input)
         {

@@ -109,15 +109,35 @@ public static class ComposerCommandCompletionTests
         var name = "/reasoning";
         switch (change)
         {
-            case "edit": buffer.Insert("x"); break;
-            case "caret": buffer.MoveTo(2); break;
-            case "selection": buffer.SelectAll(); break;
-            case "undo": buffer.Insert("x"); buffer.Undo(); break;
-            case "buffer": buffer = new ComposerBuffer(); buffer.Insert("/rea"); break;
-            case "epoch": epoch++; break;
-            case "purpose": purpose = ComposerPurpose.Steering; break;
-            case "unknown": name = "/not-a-command"; break;
-            case "forged": target = target with { End = 0 }; break;
+            case "edit":
+                buffer.Insert("x");
+                break;
+            case "caret":
+                buffer.MoveTo(2);
+                break;
+            case "selection":
+                buffer.SelectAll();
+                break;
+            case "undo":
+                buffer.Insert("x");
+                buffer.Undo();
+                break;
+            case "buffer":
+                buffer = new ComposerBuffer();
+                buffer.Insert("/rea");
+                break;
+            case "epoch":
+                epoch++;
+                break;
+            case "purpose":
+                purpose = ComposerPurpose.Steering;
+                break;
+            case "unknown":
+                name = "/not-a-command";
+                break;
+            case "forged":
+                target = target with { End = 0 };
+                break;
         }
 
         var before = (buffer.Text, buffer.Caret, buffer.Anchor, buffer.Revision);

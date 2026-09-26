@@ -214,10 +214,12 @@ public static partial class Milestone5Tests
         Assert.Single(scenario.Events<MutationSetProposed>());
     }
 
-    private static ImplementationPlan IncrementalTestPlan() => new()
+    private static ImplementationPlan IncrementalTestPlan()
     {
-        Summary = "Update example.",
-        Steps =
+        return new()
+        {
+            Summary = "Update example.",
+            Steps =
         [
             new ImplementationPlanStep
             {
@@ -228,5 +230,6 @@ public static partial class Milestone5Tests
                 ExpectedOutcome = "Example updated.",
             },
         ],
-    };
+        };
+    }
 }

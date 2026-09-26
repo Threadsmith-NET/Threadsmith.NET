@@ -1015,53 +1015,69 @@ public sealed class JiraTests
     }
 
     private static JiraTool CreateTool(HttpClient http, ISecretResolver secrets, JiraOptions options)
-        => new(new JiraCloudClient(http, secrets, options), options, TestPromptLoader.Instance);
-
-    private static JiraOptions Options(string endpointMode) => new()
     {
-        Providers = new Dictionary<string, JiraProviderOptions>
+        return new(new JiraCloudClient(http, secrets, options), options, TestPromptLoader.Instance);
+    }
+
+    private static JiraOptions Options(string endpointMode)
+    {
+        return new()
         {
-            ["work-jira"] = new()
+            Providers = new Dictionary<string, JiraProviderOptions>
             {
-                Enabled = true,
-                SiteUrl = "https://example.atlassian.net",
-                BrowseHostAliases = ["issues.example.org"],
-                EndpointMode = endpointMode,
-                CloudId = endpointMode == "scopedGateway" ? "11111111-2222-4333-8444-555555555555" : null,
-                Authentication = new()
+                ["work-jira"] = new()
                 {
-                    Username = "developer@example.org",
-                    SecretReference = "secrets:jira:test-token",
+                    Enabled = true,
+                    SiteUrl = "https://example.atlassian.net",
+                    BrowseHostAliases = ["issues.example.org"],
+                    EndpointMode = endpointMode,
+                    CloudId = endpointMode == "scopedGateway" ? "11111111-2222-4333-8444-555555555555" : null,
+                    Authentication = new()
+                    {
+                        Username = "developer@example.org",
+                        SecretReference = "secrets:jira:test-token",
+                    },
                 },
             },
-        },
-    };
+        };
+    }
 
     private static IConfigurationRoot Configuration(IReadOnlyDictionary<string, string?> values)
-        => new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+    {
+        return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+    }
 
-    private static ToolExecutionContext Context(int? maximumOutputBytes = null) => new(
+    private static ToolExecutionContext Context(int? maximumOutputBytes = null)
+    {
+        return new(
         ToolInvocationId.New(),
         SessionId.New(),
         RunId.New(),
         InvocationContext())
-    {
-        MaximumOutputBytes = maximumOutputBytes,
-    };
+        {
+            MaximumOutputBytes = maximumOutputBytes,
+        };
+    }
 
-    private static ToolInvocationContext InvocationContext() => new()
+    private static ToolInvocationContext InvocationContext()
     {
-        RepositoryPath = Path.GetFullPath("."),
-        TrustLevel = RepositoryTrustLevel.TrustedRead,
-        AllowedNetworkHosts = ["example.atlassian.net", "api.atlassian.com"],
-        RequestedBy = "jira-test",
-    };
+        return new()
+        {
+            RepositoryPath = Path.GetFullPath("."),
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
+            AllowedNetworkHosts = ["example.atlassian.net", "api.atlassian.com"],
+            RequestedBy = "jira-test",
+        };
+    }
 
     private sealed class RotatingSecrets : ISecretResolver
     {
         private readonly Queue<string> _values;
 
-        internal RotatingSecrets(params string[] values) => _values = new Queue<string>(values);
+        internal RotatingSecrets(params string[] values)
+        {
+            _values = new Queue<string>(values);
+        }
 
         internal int Calls { get; private set; }
 
@@ -1084,7 +1100,9 @@ public sealed class JiraTests
         private static readonly string _replacement = $"[REDACTED:{new string('x', 96)}]";
 
         public string Sanitize(string value)
-            => value.Replace("MASK", _replacement, StringComparison.Ordinal);
+        {
+            return value.Replace("MASK", _replacement, StringComparison.Ordinal);
+        }
     }
 
     private sealed class JiraConversationProbe(string canary) : IModelProvider

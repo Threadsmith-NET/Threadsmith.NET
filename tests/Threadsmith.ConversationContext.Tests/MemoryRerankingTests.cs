@@ -304,16 +304,21 @@ public static class MemoryRerankingTests
         return generator;
     }
 
-    private static RepositoryMemoryRetrievalRequest Query(bool enabled = true) => new()
+    private static RepositoryMemoryRetrievalRequest Query(bool enabled = true)
     {
-        RepositoryIdentity = MemoryTestData.Repository,
-        CurrentInstruction = "current request",
-        Options = new RepositoryMemoryOptions { RerankerEnabled = enabled },
-    };
+        return new()
+        {
+            RepositoryIdentity = MemoryTestData.Repository,
+            CurrentInstruction = "current request",
+            Options = new RepositoryMemoryOptions { RerankerEnabled = enabled },
+        };
+    }
 
     private static HybridRepositoryMemoryRetriever CreateRetriever(
-        ConversationFixture fixture, ITextEmbeddingGenerator generator, ITextCrossEncoder? encoder) =>
-        new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, encoder);
+        ConversationFixture fixture, ITextEmbeddingGenerator generator, ITextCrossEncoder? encoder)
+    {
+        return new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, encoder);
+    }
 
     private sealed class UnavailableDescriptorCrossEncoder : ITextCrossEncoder
     {
@@ -329,8 +334,10 @@ public static class MemoryRerankingTests
         }
 
         public Task<IReadOnlyList<TextCrossEncoderScore>> ScoreAsync(
-            string query, IReadOnlyList<string> documents, CancellationToken cancellationToken = default) =>
+            string query, IReadOnlyList<string> documents, CancellationToken cancellationToken = default)
+        {
             throw new InvalidOperationException("Inference must not run without a descriptor.");
+        }
     }
 
     private sealed class TestCrossEncoder : ITextCrossEncoder

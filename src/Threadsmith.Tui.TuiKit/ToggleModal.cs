@@ -235,11 +235,13 @@ internal sealed class ToggleModal : Modal
     internal bool SupportsActions { get; set; }
 
     /// <summary>Gets the current eligible action targets without expanding group scope beyond the filter.</summary>
-    internal IReadOnlyList<InteractionToggleOption> ActionMembers(string id) =>
-        _options.TryGetValue(id, out var option) ? [option]
+    internal IReadOnlyList<InteractionToggleOption> ActionMembers(string id)
+    {
+        return _options.TryGetValue(id, out var option) ? [option]
             : _request.AllowGroupActions && _groups.TryGetValue(id, out var members)
                 ? members.Select(key => _options[key]).Where(Matches).ToArray()
                 : [];
+    }
 
     /// <summary>Offers only actions available on every target of the current leaf or group.</summary>
     internal IReadOnlyList<InteractionSelectionOption> ActionChoices(string id)
@@ -251,9 +253,12 @@ internal sealed class ToggleModal : Modal
     }
 
     /// <summary>Gets a safe display label without treating catalog text as a tree identity.</summary>
-    internal string Label(string id) => TranscriptView.Safe(_options.TryGetValue(id, out var option)
+    internal string Label(string id)
+    {
+        return TranscriptView.Safe(_options.TryGetValue(id, out var option)
         ? (option.Locked ? "[locked] " : string.Empty) + option.Label
         : _groupLabels.GetValueOrDefault(id) ?? "No matching settings");
+    }
 
     /// <summary>Shows progress while the host owns a cancellable action.</summary>
     internal void BeginAction(string label, Action cancel)
@@ -275,9 +280,11 @@ internal sealed class ToggleModal : Modal
     internal ChannelReader<(string Id, bool Enabled, bool Actions)> Changes => _changes.Reader;
 
     /// <summary>Gets the exact eligible members for the current immutable group or leaf.</summary>
-    internal IReadOnlyList<InteractionToggleOption> Members(string id) =>
-        (_groups.TryGetValue(id, out var children) ? children : [id])
+    internal IReadOnlyList<InteractionToggleOption> Members(string id)
+    {
+        return (_groups.TryGetValue(id, out var children) ? children : [id])
             .Where(_options.ContainsKey).Select(key => _options[key]).Where(option => !option.Locked && Matches(option)).ToArray();
+    }
 
     /// <summary>Reconciles one acknowledged host state without rebuilding selection or expansion.</summary>
     internal void Reconcile(string id, InteractionToggleResult result)
@@ -333,8 +340,10 @@ internal sealed class ToggleModal : Modal
         }
     }
 
-    private bool Matches(InteractionToggleOption option) =>
-        option.Label.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase) || option.Group.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase);
+    private bool Matches(InteractionToggleOption option)
+    {
+        return option.Label.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase) || option.Group.Contains(_filter.Text, StringComparison.OrdinalIgnoreCase);
+    }
 
     private void Filter()
     {
@@ -380,7 +389,10 @@ internal sealed class ToggleModal : Modal
             StringComparer.Ordinal);
     }
 
-    private bool GroupMatches(string id) => _groups[id].Any(child => Matches(_options[child]));
+    private bool GroupMatches(string id)
+    {
+        return _groups[id].Any(child => Matches(_options[child]));
+    }
 
     private void ReconcileTree()
     {

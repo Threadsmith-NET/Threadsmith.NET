@@ -825,7 +825,9 @@ public sealed class Plan50OpenAiCodexTests
         var provider = await CreateProviderAsync(handler, "token");
         static ModelMessage Message(ModelMessageRole role, string section, string text) => new()
         {
-            Role = role, SectionId = section, Content = [new ModelContentPart { Content = text }],
+            Role = role,
+            SectionId = section,
+            Content = [new ModelContentPart { Content = text }],
         };
         var request = WithCapacity(CreateStreamRequest() with
         {

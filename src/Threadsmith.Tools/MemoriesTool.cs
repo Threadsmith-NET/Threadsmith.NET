@@ -162,34 +162,52 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     }
 
     /// <inheritdoc />
-    protected override string? DescribeActivity(MemoriesInput input) => input.Id is null ? input.Action : $"{input.Action} {input.Id}";
+    protected override string? DescribeActivity(MemoriesInput input)
+    {
+        return input.Id is null ? input.Action : $"{input.Action} {input.Id}";
+    }
 
-    private string RenderDescription(int maximumCharacters) => _prompts.Render(
+    private string RenderDescription(int maximumCharacters)
+    {
+        return _prompts.Render(
         PromptFileNames.ToolMemoriesDescription,
         new Dictionary<string, string>
         {
             ["MaximumTextCharacters"] = maximumCharacters.ToString(System.Globalization.CultureInfo.InvariantCulture),
         });
+    }
 
-    private static bool IsId(string? id) => Guid.TryParse(id, out var value) && value != Guid.Empty;
+    private static bool IsId(string? id)
+    {
+        return Guid.TryParse(id, out var value) && value != Guid.Empty;
+    }
 
-    private static bool IsMemoryType(string? value) => value is null
+    private static bool IsMemoryType(string? value)
+    {
+        return value is null
         || string.Equals(value, "standingPreference", StringComparison.Ordinal)
         || string.Equals(value, "situational", StringComparison.Ordinal);
+    }
 
-    private static RepositoryMemoryType? ParseMemoryType(string? value) => value switch
+    private static RepositoryMemoryType? ParseMemoryType(string? value)
     {
-        null => null,
-        "standingPreference" => RepositoryMemoryType.StandingPreference,
-        "situational" => RepositoryMemoryType.Situational,
-        _ => throw new ToolArgumentValidationException("memoryType is standingPreference or situational."),
-    };
+        return value switch
+        {
+            null => null,
+            "standingPreference" => RepositoryMemoryType.StandingPreference,
+            "situational" => RepositoryMemoryType.Situational,
+            _ => throw new ToolArgumentValidationException("memoryType is standingPreference or situational."),
+        };
+    }
 
-    private static string FormatMemoryType(RepositoryMemoryType memoryType) => memoryType switch
+    private static string FormatMemoryType(RepositoryMemoryType memoryType)
     {
-        RepositoryMemoryType.StandingPreference => "standingPreference",
-        _ => "situational",
-    };
+        return memoryType switch
+        {
+            RepositoryMemoryType.StandingPreference => "standingPreference",
+            _ => "situational",
+        };
+    }
 
     private static string? CreateStandingPreferenceWarning(int? count, RepositoryMemoryOptions options)
     {

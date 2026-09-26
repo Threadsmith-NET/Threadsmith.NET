@@ -338,7 +338,7 @@ public static class ModelRequestAdmissionEstimator
 
     private static ModelWireEstimate EstimateWire(ModelStreamRequest request)
     {
-        IReadOnlyList<ModelMessage> messages = request.Messages.Count > 0
+        var messages = request.Messages.Count > 0
             ? request.Messages
             :
             [
@@ -574,7 +574,10 @@ public static class ModelToolCanonicalizer
     /// <summary>Renders a single deterministic textual fallback inventory.</summary>
     public static string RenderText(
         IReadOnlyList<ModelToolDefinition> definitions,
-        IPromptLoader prompts) => RenderText(definitions, prompts, out _);
+        IPromptLoader prompts)
+    {
+        return RenderText(definitions, prompts, out _);
+    }
 
     /// <summary>Renders the same inventory while retaining source ranges for already-admitted tools.</summary>
     public static string RenderText(IReadOnlyList<ModelToolDefinition> definitions, IPromptLoader prompts, out IReadOnlyList<ModelContextSource> sources)

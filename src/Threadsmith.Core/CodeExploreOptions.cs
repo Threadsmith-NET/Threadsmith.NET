@@ -433,15 +433,18 @@ public sealed record CodeExploreOptions
     }
 
     /// <summary>Resolves the source/display defaults for a known scale; unknown scale retains configured settings.</summary>
-    public CodeExploreAdaptiveOptions? GetTier(CodeExploreRepositoryScaleTier tier) => tier switch
+    public CodeExploreAdaptiveOptions? GetTier(CodeExploreRepositoryScaleTier tier)
     {
-        CodeExploreRepositoryScaleTier.Tiny => Tiny,
-        CodeExploreRepositoryScaleTier.Small => Small,
-        CodeExploreRepositoryScaleTier.Medium => Medium,
-        CodeExploreRepositoryScaleTier.Large => Large,
-        CodeExploreRepositoryScaleTier.VeryLarge => VeryLarge,
-        _ => null,
-    };
+        return tier switch
+        {
+            CodeExploreRepositoryScaleTier.Tiny => Tiny,
+            CodeExploreRepositoryScaleTier.Small => Small,
+            CodeExploreRepositoryScaleTier.Medium => Medium,
+            CodeExploreRepositoryScaleTier.Large => Large,
+            CodeExploreRepositoryScaleTier.VeryLarge => VeryLarge,
+            _ => null,
+        };
+    }
 
     private static int Intersect(int requested, int configured)
     {
@@ -455,7 +458,10 @@ public sealed record CodeExploreOptions
         return requested == 0 ? configured : configured == 0 ? requested : Math.Min(requested, configured);
     }
 
-    private static int Cap(int value, bool enabled) => enabled && value > 0 ? value : int.MaxValue;
+    private static int Cap(int value, bool enabled)
+    {
+        return enabled && value > 0 ? value : int.MaxValue;
+    }
 }
 
 /// <summary>Per-scale defaults; zero leaves an individual source or display allowance unrestricted.</summary>

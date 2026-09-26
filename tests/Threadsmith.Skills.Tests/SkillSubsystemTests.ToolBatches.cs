@@ -80,7 +80,8 @@ public sealed partial class SkillSubsystemTests
         {
             var result = await workflow.InvokeAsync(PermissionPlan().Request with
             {
-                Selector = selector, HostBudget = new SkillBudget(),
+                Selector = selector,
+                HostBudget = new SkillBudget(),
             });
             Assert.Equal(SkillInvocationStatus.Completed, result.Status);
         }
@@ -88,8 +89,12 @@ public sealed partial class SkillSubsystemTests
         {
             var result = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
-                SessionId = SessionId.New(), RunId = RunId.New(), ToolId = "invoke_skill", Phase = RunPhase.EvidenceCollection,
-                ArgumentsJson = System.Text.Json.JsonSerializer.Serialize(new { selector, input = new { } }), Context = context,
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = "invoke_skill",
+                Phase = RunPhase.EvidenceCollection,
+                ArgumentsJson = System.Text.Json.JsonSerializer.Serialize(new { selector, input = new { } }),
+                Context = context,
             });
             Assert.True(result.Succeeded, result.Error ?? result.ResultJson);
         }
@@ -349,11 +354,14 @@ public sealed partial class SkillSubsystemTests
         Assert.False(later.Started.Task.IsCompleted);
     }
 
-    private static SkillInvocationPlan BatchPlan() => PermissionPlan() with
+    private static SkillInvocationPlan BatchPlan()
     {
-        AvailableToolIds = ["batch_first", "batch_second"],
-        EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 2 },
-    };
+        return PermissionPlan() with
+        {
+            AvailableToolIds = ["batch_first", "batch_second"],
+            EffectiveBudget = new SkillBudget { ModelTurns = 2, ToolCalls = 2 },
+        };
+    }
 
     private static ModelSkillProcedureRunner CreateBatchRunner(SkillBatchModelProvider model, IEnumerable<ITool> tools, IDomainEventStream events)
     {
@@ -409,10 +417,16 @@ public sealed partial class SkillSubsystemTests
                         ResponseEnvelope = new ModelResponseReplayEnvelope(
                             new ModelReplayBinding
                             {
-                                ProviderId = "fixture", ModelId = "fixture", ProfileId = request.ResolvedProfileId!.Value,
-                                RunId = request.RunId, ModelRound = request.ToolContinuationRound,
+                                ProviderId = "fixture",
+                                ModelId = "fixture",
+                                ProfileId = request.ResolvedProfileId!.Value,
+                                RunId = request.RunId,
+                                ModelRound = request.ToolContinuationRound,
                                 HistoryRewriteGeneration = request.HistoryRewriteGeneration,
-                                CredentialGeneration = "fixture", ToolInventoryDigest = "tools", InstructionDigest = "policy", NormalizedRoundDigest = "round",
+                                CredentialGeneration = "fixture",
+                                ToolInventoryDigest = "tools",
+                                InstructionDigest = "policy",
+                                NormalizedRoundDigest = "round",
                             },
                             "private response"u8,
                             calls.Select((_, ordinal) => $"wire-{ordinal}").ToArray(),
@@ -450,10 +464,14 @@ public sealed partial class SkillSubsystemTests
         {
             Definition = new ToolDefinition
             {
-                Id = id, DisplayName = id, Description = "Batch fixture", Version = "1",
+                Id = id,
+                DisplayName = id,
+                Description = "Batch fixture",
+                Version = "1",
                 InputSchema = new ToolSchema(nameof(PermissionProbeInput), 1, "{\"type\":\"object\",\"additionalProperties\":false}"),
                 OutputSchema = new ToolSchema(nameof(PermissionProbeOutput), 1, "{\"type\":\"object\"}"),
-                Timeout = TimeSpan.FromSeconds(20), MaximumOutputBytes = 1024,
+                Timeout = TimeSpan.FromSeconds(20),
+                MaximumOutputBytes = 1024,
                 Scheduling = new ToolSchedulingDescriptor
                 {
                     ConcurrencyMode = concurrencyMode,
@@ -484,7 +502,10 @@ public sealed partial class SkillSubsystemTests
             }
         }
 
-        protected override void ValidateInput(PermissionProbeInput input) => ArgumentNullException.ThrowIfNull(input);
+        protected override void ValidateInput(PermissionProbeInput input)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+        }
     }
 
     private sealed class SkillBatchCancelTool : Tool<PermissionProbeInput, PermissionProbeOutput>
@@ -496,10 +517,14 @@ public sealed partial class SkillSubsystemTests
             _cancellation = cancellation;
             Definition = new ToolDefinition
             {
-                Id = "batch_cancel", DisplayName = "batch_cancel", Description = "Batch cancellation fixture", Version = "1",
+                Id = "batch_cancel",
+                DisplayName = "batch_cancel",
+                Description = "Batch cancellation fixture",
+                Version = "1",
                 InputSchema = new ToolSchema(nameof(PermissionProbeInput), 1, "{\"type\":\"object\",\"additionalProperties\":false}"),
                 OutputSchema = new ToolSchema(nameof(PermissionProbeOutput), 1, "{\"type\":\"object\"}"),
-                Timeout = TimeSpan.FromSeconds(20), MaximumOutputBytes = 1024,
+                Timeout = TimeSpan.FromSeconds(20),
+                MaximumOutputBytes = 1024,
                 Scheduling = new ToolSchedulingDescriptor { ConcurrencyMode = ToolConcurrencyMode.ParallelSafe, MaximumSourceConcurrency = int.MaxValue },
             };
         }
@@ -517,7 +542,10 @@ public sealed partial class SkillSubsystemTests
             return new ToolExecution<PermissionProbeOutput>(new PermissionProbeOutput(), [], ModelResultContent: Definition.Id);
         }
 
-        protected override void ValidateInput(PermissionProbeInput input) => ArgumentNullException.ThrowIfNull(input);
+        protected override void ValidateInput(PermissionProbeInput input)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+        }
     }
 
     private sealed record SkillBatchWriteFileInput(string Path, string Content);
@@ -530,10 +558,14 @@ public sealed partial class SkillSubsystemTests
         {
             Definition = new ToolDefinition
             {
-                Id = "write_file", DisplayName = "write_file", Description = "Batch write fixture", Version = "1",
+                Id = "write_file",
+                DisplayName = "write_file",
+                Description = "Batch write fixture",
+                Version = "1",
                 InputSchema = new ToolSchema(nameof(SkillBatchWriteFileInput), 1, "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"path\",\"content\"],\"properties\":{\"path\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"}}}"),
                 OutputSchema = new ToolSchema(nameof(WriteFileOutput), 1, "{\"type\":\"object\"}"),
-                Timeout = TimeSpan.FromSeconds(20), MaximumOutputBytes = 1024,
+                Timeout = TimeSpan.FromSeconds(20),
+                MaximumOutputBytes = 1024,
                 Scheduling = new ToolSchedulingDescriptor
                 {
                     ConcurrencyMode = concurrencyMode,

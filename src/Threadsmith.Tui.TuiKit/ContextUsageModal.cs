@@ -73,15 +73,15 @@ internal sealed class ContextUsageModal : Modal
         {
             _selected = Math.Clamp(
                 key.Code switch
-            {
-                KeyCode.Up => _selected - 1,
-                KeyCode.Down => _selected + 1,
-                KeyCode.PageUp => _selected - _page,
-                KeyCode.PageDown => _selected + _page,
-                KeyCode.Home => 0,
-                KeyCode.End => _rows.Count - 1,
-                _ => _selected,
-            },
+                {
+                    KeyCode.Up => _selected - 1,
+                    KeyCode.Down => _selected + 1,
+                    KeyCode.PageUp => _selected - _page,
+                    KeyCode.PageDown => _selected + _page,
+                    KeyCode.Home => 0,
+                    KeyCode.End => _rows.Count - 1,
+                    _ => _selected,
+                },
                 0,
                 Math.Max(0, _rows.Count - 1));
         }
@@ -90,7 +90,10 @@ internal sealed class ContextUsageModal : Modal
     }
 
     /// <inheritdoc />
-    public override bool HandlePaste(string text) => true;
+    public override bool HandlePaste(string text)
+    {
+        return true;
+    }
 
     /// <inheritdoc />
     public override bool HandleMouse(MouseEvent mouse)

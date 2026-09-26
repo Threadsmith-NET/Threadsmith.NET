@@ -26,7 +26,7 @@ internal sealed class InteractionOperationActivities
     /// <summary>Gets the live activity affected by an event for sequential frontends.</summary>
     internal InteractionActivity? ActivityFor(IDomainEvent domainEvent)
     {
-        object? key = domainEvent switch
+        var key = domainEvent switch
         {
             ToolInvocationStarted started => started.ToolInvocationId,
             SkillWorkflowCheckpointWritten skill => Owner(skill),
@@ -114,11 +114,16 @@ internal sealed class InteractionOperationActivities
     }
 
     /// <summary>Recognizes an invocation's terminal or suspended boundary.</summary>
-    internal static bool EndsSkillActivity(SkillInvocationStatus status) => status is
+    internal static bool EndsSkillActivity(SkillInvocationStatus status)
+    {
+        return status is
         SkillInvocationStatus.Completed or SkillInvocationStatus.Failed or SkillInvocationStatus.Cancelled or SkillInvocationStatus.AwaitingHost;
+    }
 
-    private static object Owner(SkillWorkflowCheckpointWritten skill) =>
-        skill.InvokingToolInvocationId is { } tool ? tool : skill.InvocationId;
+    private static object Owner(SkillWorkflowCheckpointWritten skill)
+    {
+        return skill.InvokingToolInvocationId is { } tool ? tool : skill.InvocationId;
+    }
 
     private sealed class Entry
     {
@@ -136,6 +141,9 @@ internal sealed class InteractionOperationActivities
 
         internal IReadOnlyList<PresentationTextSegment> AgentProgress { get; set; } = [];
 
-        internal void Refresh() => Activity = Activity with { ToolProgress = [.. HostProgress, .. AgentProgress] };
+        internal void Refresh()
+        {
+            Activity = Activity with { ToolProgress = [.. HostProgress, .. AgentProgress] };
+        }
     }
 }

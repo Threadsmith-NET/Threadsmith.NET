@@ -872,7 +872,9 @@ internal static class JiraDescriptionReader
     }
 
     private static string PrefixLinesBounded(string value, string prefix, ProjectionState state)
-        => PrefixLinesBounded(value, prefix, prefix, state.MaximumBodyBytes, state);
+    {
+        return PrefixLinesBounded(value, prefix, prefix, state.MaximumBodyBytes, state);
+    }
 
     private static string PrefixLinesBounded(
         string value,
@@ -954,7 +956,9 @@ internal static class JiraDescriptionReader
         string value,
         ref int bytesUsed,
         ProjectionState state)
-        => TryAppendBounded(builder, value, ref bytesUsed, state.MaximumBodyBytes, state);
+    {
+        return TryAppendBounded(builder, value, ref bytesUsed, state.MaximumBodyBytes, state);
+    }
 
     private static bool TryAppendBounded(
         StringBuilder builder,
@@ -976,9 +980,11 @@ internal static class JiraDescriptionReader
     }
 
     private static string NormalizeAuthoredLineEndings(string value)
-        => value.Contains('\r')
-            ? value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n')
-            : value;
+    {
+        return value.Contains('\r')
+                ? value.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n')
+                : value;
+    }
 
     private static void AppendBounded(
         StringBuilder builder,
@@ -1043,7 +1049,10 @@ internal static class JiraDescriptionReader
             }
         }
 
-        internal void CheckCancellation() => _cancellationToken.ThrowIfCancellationRequested();
+        internal void CheckCancellation()
+        {
+            _cancellationToken.ThrowIfCancellationRequested();
+        }
 
         internal void AddCoverageLimitation(string limitation)
         {
@@ -1051,7 +1060,10 @@ internal static class JiraDescriptionReader
             AddLimitation(limitation);
         }
 
-        internal void AddLimitation(string limitation) => _limitations.Add(limitation);
+        internal void AddLimitation(string limitation)
+        {
+            _limitations.Add(limitation);
+        }
 
         internal string Fit(string value)
         {

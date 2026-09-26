@@ -288,7 +288,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
     }
 
     /// <summary>Hashes complete normalized text for content and vector revision fencing.</summary>
-    internal static string ComputeHash(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    internal static string ComputeHash(string text)
+    {
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    }
 
     private static void ValidateWrite(
         string repositoryIdentity,
@@ -334,7 +337,9 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
     }
 
     private static RepositoryMemoryEntry CreateEntry(
-        string repositoryIdentity, RepositoryMemoryId id, RepositoryMemoryWrite write, string hash, DateTimeOffset createdAt, DateTimeOffset updatedAt, long revision, TextEmbeddingModelDescriptor model, TextEmbeddingResult embedding) => new()
+        string repositoryIdentity, RepositoryMemoryId id, RepositoryMemoryWrite write, string hash, DateTimeOffset createdAt, DateTimeOffset updatedAt, long revision, TextEmbeddingModelDescriptor model, TextEmbeddingResult embedding)
+    {
+        return new()
         {
             Id = id,
             RepositoryIdentity = repositoryIdentity,
@@ -355,6 +360,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
             EmbeddingContentHash = hash,
             EmbeddingRevision = revision,
         };
+    }
 
     private static RepositoryMemoryEntry CreateTypeUpdatedEntry(
         RepositoryMemoryEntry existing, RepositoryMemoryWrite write, DateTimeOffset updatedAt)

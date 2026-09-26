@@ -36,12 +36,18 @@ public static class ContextUsageFormatter
     }
 
     /// <summary>Formats an overflow-safe share with honest tiny and unknown values.</summary>
-    public static string Percent(long amount, long? total) => total is not > 0 ? "?%"
+    public static string Percent(long amount, long? total)
+    {
+        return total is not > 0 ? "?%"
         : amount > 0 && (double)amount / total.Value < 0.001 ? "<0.1%"
         : (100d * amount / total.Value).ToString("0.0", CultureInfo.InvariantCulture) + "%";
+    }
 
     /// <summary>Bounds and neutralizes external display labels.</summary>
-    public static string Label(string value) => TerminalControlEncoder.Encode(value.Length > 512 ? value[..512] + "…" : value).ReplaceLineEndings(" ").Replace('\t', ' ');
+    public static string Label(string value)
+    {
+        return TerminalControlEncoder.Encode(value.Length > 512 ? value[..512] + "…" : value).ReplaceLineEndings(" ").Replace('\t', ' ');
+    }
 
     /// <summary>Formats the identical frozen snapshot for interactive presentation.</summary>
     public static string Format(ContextUsageSnapshot? snapshot)
@@ -77,6 +83,8 @@ public static class ContextUsageFormatter
         return text.ToString();
     }
 
-    private static IEnumerable<ContextUsageComponent> Leaves(IEnumerable<ContextUsageComponent> components) =>
-        components.SelectMany(item => item.Children.Count == 0 ? [item] : Leaves(item.Children));
+    private static IEnumerable<ContextUsageComponent> Leaves(IEnumerable<ContextUsageComponent> components)
+    {
+        return components.SelectMany(item => item.Children.Count == 0 ? [item] : Leaves(item.Children));
+    }
 }

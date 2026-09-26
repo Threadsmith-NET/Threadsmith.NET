@@ -601,12 +601,15 @@ public sealed class AnthropicRequestMapperTests
         return request with { ToolContinuationRound = round + 1, Messages = messages };
     }
 
-    private static int CountCacheControls(JsonNode? node) => node switch
+    private static int CountCacheControls(JsonNode? node)
     {
-        JsonObject item => (item.ContainsKey("cache_control") ? 1 : 0) + item.Sum(property => CountCacheControls(property.Value)),
-        JsonArray items => items.Sum(CountCacheControls),
-        _ => 0,
-    };
+        return node switch
+        {
+            JsonObject item => (item.ContainsKey("cache_control") ? 1 : 0) + item.Sum(property => CountCacheControls(property.Value)),
+            JsonArray items => items.Sum(CountCacheControls),
+            _ => 0,
+        };
+    }
 
     private static void RemoveCacheControls(JsonNode? node)
     {

@@ -2,7 +2,6 @@ namespace Threadsmith.Tui.TuiKit;
 
 using System.Globalization;
 using Threadsmith.Core;
-using TUIKit;
 
 /// <summary>Fits repository context and every Git counter into one measured row.</summary>
 internal static class RepositoryFooter
@@ -26,7 +25,10 @@ internal static class RepositoryFooter
         return Clip(safeFolder + gap + branch + gap + counts, width);
     }
 
-    private static string Count(int value) => value > 999 ? "999+" : value.ToString(CultureInfo.InvariantCulture);
+    private static string Count(int value)
+    {
+        return value > 999 ? "999+" : value.ToString(CultureInfo.InvariantCulture);
+    }
 
     private static string Clip(string value, int width)
     {

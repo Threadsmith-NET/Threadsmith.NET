@@ -115,8 +115,11 @@ public sealed record ModelCostMetadata
         }
 
         if (!PricesAvailable || !prices.PricesAvailable
-            || usage.Cache is not { CacheReadTokens: { } reads, CacheWriteTokens: { } writes,
-                ReadInputSemantics: CacheReadInputSemantics.IncludedInInput })
+            || usage.Cache is not
+            {
+                CacheReadTokens: { } reads, CacheWriteTokens: { } writes,
+                ReadInputSemantics: CacheReadInputSemantics.IncludedInInput
+            })
         {
             return CalculateAdmission(usage.InputTokens, usage.OutputTokens);
         }

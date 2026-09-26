@@ -26,11 +26,15 @@ public sealed class RepositoryMemoryApplication :
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(RememberRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
-        => WriteAsync(command.SessionId, command.RepositoryIdentity, "add", null, command.Text, command.MemoryType, cancellationToken);
+    {
+        return WriteAsync(command.SessionId, command.RepositoryIdentity, "add", null, command.Text, command.MemoryType, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task<RepositoryMemoryReadSnapshot> HandleAsync(ListRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
-        => _memories.GetSnapshotAsync(command.RepositoryIdentity, cancellationToken);
+    {
+        return _memories.GetSnapshotAsync(command.RepositoryIdentity, cancellationToken);
+    }
 
     /// <inheritdoc />
     public async Task<RepositoryMemoryEntry?> HandleAsync(InspectRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
@@ -41,11 +45,15 @@ public sealed class RepositoryMemoryApplication :
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(UpdateRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
-        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
+    {
+        return WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
+    }
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(SupersedeRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
-        => WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
+    {
+        return WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
+    }
 
     /// <inheritdoc />
     public async Task<bool> HandleAsync(ForgetRepositoryMemoryCommand command, CancellationToken cancellationToken = default)

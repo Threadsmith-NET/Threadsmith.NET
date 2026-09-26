@@ -690,7 +690,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     ModelResultContent: modelResultContent,
                     TransientActivityDetail: NormalizeActivityDetail(
                         execution.TransientActivityDetail,
-                        _presentationLimits.MaximumTransientActivityDetailCharacters)) { RunId = request.RunId },
+                        _presentationLimits.MaximumTransientActivityDetailCharacters))
+                { RunId = request.RunId },
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded, failure?.Classification.ToString(), suppressLifecycleHooks);
             return new ToolInvocationResult
@@ -943,13 +944,16 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             CancellationToken.None);
     }
 
-    private static OperationActivityOutcome GetOutcome(ToolErrorClassification classification) => classification switch
+    private static OperationActivityOutcome GetOutcome(ToolErrorClassification classification)
     {
-        ToolErrorClassification.None => OperationActivityOutcome.Completed,
-        ToolErrorClassification.Cancelled => OperationActivityOutcome.Cancelled,
-        ToolErrorClassification.Timeout => OperationActivityOutcome.TimedOut,
-        _ => OperationActivityOutcome.Failed,
-    };
+        return classification switch
+        {
+            ToolErrorClassification.None => OperationActivityOutcome.Completed,
+            ToolErrorClassification.Cancelled => OperationActivityOutcome.Cancelled,
+            ToolErrorClassification.Timeout => OperationActivityOutcome.TimedOut,
+            _ => OperationActivityOutcome.Failed,
+        };
+    }
 
     private async Task<ToolInvocationResult> CompleteFailureAsync(
         ToolInvocationRequest request,
@@ -996,7 +1000,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 IsTruncated: isTruncated,
                 Source: source,
                 ElapsedMilliseconds: elapsedMilliseconds,
-                Outcome: outcome) { RunId = request.RunId },
+                Outcome: outcome)
+            { RunId = request.RunId },
             CancellationToken.None);
         await InvokeAfterHookAsync(
             request,

@@ -24,7 +24,9 @@ public sealed class AnthropicCompositionTests
         var id = AnthropicProfileIdentifiers.Create("primary", "claude-opus-5");
         await fixture.WriteUserAsync(new ModelProviderCatalogConfiguration
         {
-            Providers = [Provider("primary")], DefaultProviderId = "primary", DefaultModelId = id,
+            Providers = [Provider("primary")],
+            DefaultProviderId = "primary",
+            DefaultModelId = id,
         });
         await File.WriteAllTextAsync(
             fixture.Paths.RepositoryProviderCatalog,
@@ -81,7 +83,9 @@ public sealed class AnthropicCompositionTests
         fixture.Handler.Status = HttpStatusCode.ServiceUnavailable;
         var other = new OpenAiCompatibleProviderConfiguration
         {
-            Id = "other", Name = "Existing", BaseUri = new Uri("https://other.example.test/v1/"),
+            Id = "other",
+            Name = "Existing",
+            BaseUri = new Uri("https://other.example.test/v1/"),
             Models = [new OpenAiCompatibleModelConfiguration
             {
                 Id = new ModelProfileId(Guid.Parse("6052b50b-57c6-426d-b91d-9ff48c27f80e")), Name = "Existing model", ModelId = "existing",

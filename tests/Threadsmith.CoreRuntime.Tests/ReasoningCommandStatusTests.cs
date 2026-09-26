@@ -5,10 +5,8 @@ using Threadsmith.Execution;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
-using Threadsmith.Interaction.Runs;
 using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
-using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Checks immediate selection status independently of historical request accounting.</summary>
@@ -105,7 +103,9 @@ public static class ReasoningCommandStatusTests
         }
 
         public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("No selection is expected.");
+        {
+            throw new InvalidOperationException("No selection is expected.");
+        }
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
         {
@@ -121,6 +121,8 @@ public static class ReasoningCommandStatusTests
         }
 
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
-            => operation.WaitAsync(cancellationToken);
+        {
+            return operation.WaitAsync(cancellationToken);
+        }
     }
 }

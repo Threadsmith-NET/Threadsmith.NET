@@ -420,7 +420,10 @@ public static class MemoriesToolTests
         Assert.DoesNotContain("MemorySubmission", handler.Body, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static ToolInvocationContext Invocation(string repository) => new() { RepositoryPath = repository, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
+    private static ToolInvocationContext Invocation(string repository)
+    {
+        return new() { RepositoryPath = repository, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
+    }
 
     private sealed class RequestHandler : HttpMessageHandler
     {
@@ -437,12 +440,18 @@ public static class MemoriesToolTests
     {
         public int StandingPreferenceWarningThreshold { get; init; } = 3;
 
-        public RepositoryMemoryOptions CaptureCurrent() => Capture(string.Empty);
-
-        public RepositoryMemoryOptions Capture(string repositoryIdentity) => new()
+        public RepositoryMemoryOptions CaptureCurrent()
         {
-            StandingPreferenceWarningThreshold = StandingPreferenceWarningThreshold,
-        };
+            return Capture(string.Empty);
+        }
+
+        public RepositoryMemoryOptions Capture(string repositoryIdentity)
+        {
+            return new()
+            {
+                StandingPreferenceWarningThreshold = StandingPreferenceWarningThreshold,
+            };
+        }
     }
 
     private sealed class MemoryService : IManagedRepositoryMemoryService
@@ -451,8 +460,14 @@ public static class MemoriesToolTests
 
         public RepositoryMemoryEntry Entry { get; } = new()
         {
-            Id = RepositoryMemoryId.New(), RepositoryIdentity = "test", Text = "Use release branches for deployment", ContentHash = "test", Origin = RepositoryMemoryOrigin.Manual,
-            CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow, Sensitivity = ConversationSensitivity.Sensitive,
+            Id = RepositoryMemoryId.New(),
+            RepositoryIdentity = "test",
+            Text = "Use release branches for deployment",
+            ContentHash = "test",
+            Origin = RepositoryMemoryOrigin.Manual,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Sensitivity = ConversationSensitivity.Sensitive,
         };
 
         public bool Removed { get; private set; }
@@ -485,10 +500,14 @@ public static class MemoriesToolTests
         }
 
         public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RepositoryMemoryReadSnapshot(repositoryIdentity, Removed ? 2 : 1, Removed ? [] : [Entry], [], []));
+        {
+            return Task.FromResult(new RepositoryMemoryReadSnapshot(repositoryIdentity, Removed ? 2 : 1, Removed ? [] : [Entry], [], []));
+        }
 
         public Task<IReadOnlyList<RepositoryMemoryId>> EnforceCapacityAsync(string repositoryIdentity, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<RepositoryMemoryId>>([]);
+        {
+            return Task.FromResult<IReadOnlyList<RepositoryMemoryId>>([]);
+        }
 
         public Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default)
         {
@@ -501,10 +520,15 @@ public static class MemoriesToolTests
     {
         private readonly MemoryService _memory;
 
-        public Retriever(MemoryService memory) => _memory = memory;
+        public Retriever(MemoryService memory)
+        {
+            _memory = memory;
+        }
 
         public Task<RepositoryMemoryRetrievalResult> RetrieveAsync(RepositoryMemoryRetrievalRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RepositoryMemoryRetrievalResult(_memory.Removed || _memory.SuppressRetrieval ? [] : [new RepositoryMemoryRetrievalCandidate(_memory.Entry, 1, 1, null, null)], []));
+        {
+            return Task.FromResult(new RepositoryMemoryRetrievalResult(_memory.Removed || _memory.SuppressRetrieval ? [] : [new RepositoryMemoryRetrievalCandidate(_memory.Entry, 1, 1, null, null)], []));
+        }
     }
 
     private sealed class RecordingProvider : IModelProvider

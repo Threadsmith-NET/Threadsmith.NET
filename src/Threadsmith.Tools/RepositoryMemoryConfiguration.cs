@@ -23,7 +23,10 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
     }
 
     /// <inheritdoc />
-    public RepositoryMemoryOptions CaptureCurrent() => Volatile.Read(ref _current).Options;
+    public RepositoryMemoryOptions CaptureCurrent()
+    {
+        return Volatile.Read(ref _current).Options;
+    }
 
     /// <inheritdoc />
     public RepositoryMemoryOptions Capture(string repositoryIdentity)

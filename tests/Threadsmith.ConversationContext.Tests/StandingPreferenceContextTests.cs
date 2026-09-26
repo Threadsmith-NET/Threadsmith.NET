@@ -244,29 +244,38 @@ public static class StandingPreferenceContextTests
         Assert.Equal(calls, generator.Calls);
     }
 
-    private static RepositoryMemoryRetrievalRequest Query(string query) => new() { RepositoryIdentity = MemoryTestData.Repository, CurrentInstruction = query };
-
-    private static RepositoryMemoryEntry Entry(string text) => new()
+    private static RepositoryMemoryRetrievalRequest Query(string query)
     {
-        Id = RepositoryMemoryId.New(),
-        RepositoryIdentity = MemoryTestData.Repository,
-        Text = text,
-        ContentHash = "fixture",
-        MemoryType = RepositoryMemoryType.StandingPreference,
-        Origin = RepositoryMemoryOrigin.Manual,
-        CreatedAt = DateTimeOffset.UnixEpoch,
-        UpdatedAt = DateTimeOffset.UnixEpoch,
-    };
+        return new() { RepositoryIdentity = MemoryTestData.Repository, CurrentInstruction = query };
+    }
 
-    private static ContextAssemblyRequest Request(ConversationFixture fixture) => new()
+    private static RepositoryMemoryEntry Entry(string text)
     {
-        SessionId = SessionId.New(),
-        RunId = RunId.New(),
-        Phase = RunPhase.EvidenceCollection,
-        RepositoryPath = fixture.DirectoryPath,
-        RepositoryIdentity = MemoryTestData.Repository,
-        Task = new TaskSpecification("Explain a compiler error", []),
-    };
+        return new()
+        {
+            Id = RepositoryMemoryId.New(),
+            RepositoryIdentity = MemoryTestData.Repository,
+            Text = text,
+            ContentHash = "fixture",
+            MemoryType = RepositoryMemoryType.StandingPreference,
+            Origin = RepositoryMemoryOrigin.Manual,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+        };
+    }
+
+    private static ContextAssemblyRequest Request(ConversationFixture fixture)
+    {
+        return new()
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            Phase = RunPhase.EvidenceCollection,
+            RepositoryPath = fixture.DirectoryPath,
+            RepositoryIdentity = MemoryTestData.Repository,
+            Task = new TaskSpecification("Explain a compiler error", []),
+        };
+    }
 
     private static ContextAssembler CreateAssembler(IDomainEventStream events, IHybridRepositoryMemoryRetriever retriever, IModelResolver resolver)
     {
@@ -309,7 +318,10 @@ public static class StandingPreferenceContextTests
     {
         private readonly int _budget;
 
-        public FixedModelResolver(int budget) => _budget = budget;
+        public FixedModelResolver(int budget)
+        {
+            _budget = budget;
+        }
 
         public int MaximumInputTokenBudget => _budget;
 

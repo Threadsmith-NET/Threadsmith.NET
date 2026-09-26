@@ -25,7 +25,10 @@ public sealed class GitHubPullRequestProvider : PullRequestProvider
     public override string ApiHost => "api.github.com";
 
     /// <inheritdoc />
-    public override PullRequestTarget ParseUrl(string url) => ParseUrl(url, "pull", "/repos/", "pulls");
+    public override PullRequestTarget ParseUrl(string url)
+    {
+        return ParseUrl(url, "pull", "/repos/", "pulls");
+    }
 
     /// <inheritdoc />
     public override async Task<PullRequestMetadata> GetMetadataAsync(PullRequestTarget target, PullRequestProviderOptions options, CancellationToken cancellationToken = default)

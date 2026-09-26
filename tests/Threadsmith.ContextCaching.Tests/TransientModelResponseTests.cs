@@ -123,12 +123,15 @@ public static class TransientModelResponseTests
         Assert.False(ModelCapabilityNegotiator.Negotiate(profile with { Cost = cost with { PricesAvailable = false } }, selection).IsCompatible);
     }
 
-    private static ModelStreamRequest CreateRequest() => new()
+    private static ModelStreamRequest CreateRequest()
     {
-        RunId = new RunId(Guid.NewGuid()),
-        ResolvedProfileId = new ModelProfileId(Guid.NewGuid()),
-        Input = "hello",
-    };
+        return new()
+        {
+            RunId = new RunId(Guid.NewGuid()),
+            ResolvedProfileId = new ModelProfileId(Guid.NewGuid()),
+            Input = "hello",
+        };
+    }
 
     private static ModelResponseReplayEnvelope CreateEnvelope(ModelStreamRequest request, IReadOnlyList<string> calls)
     {
@@ -151,8 +154,9 @@ public static class TransientModelResponseTests
             20);
     }
 
-    private static ModelMessage[] CreateMessages(string first, string second) =>
-    [
+    private static ModelMessage[] CreateMessages(string first, string second)
+    {
+        return [
         new()
         {
             Role = ModelMessageRole.Assistant,
@@ -172,4 +176,5 @@ public static class TransientModelResponseTests
             Content = [new ModelContentPart { Content = "{}" }],
         },
     ];
+    }
 }

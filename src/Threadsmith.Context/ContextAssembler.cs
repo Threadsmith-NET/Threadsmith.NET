@@ -1617,20 +1617,29 @@ public sealed class ContextAssembler : IContextAssembler
             }
         }
 
-        public IReadOnlyList<RepositoryMemoryInclusion> CreateInclusions() =>
-            [.. _standingPreferences.Concat(_included).Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
+        public IReadOnlyList<RepositoryMemoryInclusion> CreateInclusions()
+        {
+            return [.. _standingPreferences.Concat(_included).Select(item => new RepositoryMemoryInclusion(item.Candidate.Entry.Id, item.Candidate.Entry.Revision))];
+        }
 
-        public IReadOnlyList<ModelContextSource> CreateSources(string content) => ContextAssembler.CreateSources(
+        public IReadOnlyList<ModelContextSource> CreateSources(string content)
+        {
+            return ContextAssembler.CreateSources(
             content,
             _standingPreferences.Concat(_included).Select(item => ("Memories", $"{item.Candidate.Entry.MemoryType}: {item.Candidate.Entry.Id.Value:D}",
                 $"<memory id=\"{item.Candidate.Entry.Id.Value:D}\">{Escape(item.Candidate.Entry.Text)}</memory>")));
+        }
 
-        public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections() =>
-            [.. _standingPreferences.Select(item => CreateProjection(item.Candidate, true, "Standing preference included independently of the current query.", item.Tokens)),
+        public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections()
+        {
+            return [.. _standingPreferences.Select(item => CreateProjection(item.Candidate, true, "Standing preference included independently of the current query.", item.Tokens)),
                 .. _included.Select(item => CreateProjection(item.Candidate, true, "Included by qualified hybrid retrieval and context budget.", item.Tokens)), .. _excluded];
+        }
 
-        public int EstimateAddition(RepositoryMemoryRetrievalCandidate candidate) =>
-            TokenEstimator.Estimate(Render(_included.Select(item => item.Candidate).Append(candidate))) - _includedTokens;
+        public int EstimateAddition(RepositoryMemoryRetrievalCandidate candidate)
+        {
+            return TokenEstimator.Estimate(Render(_included.Select(item => item.Candidate).Append(candidate))) - _includedTokens;
+        }
 
         public bool TryAdd(RepositoryMemoryRetrievalCandidate candidate, int tokens)
         {
@@ -1660,20 +1669,26 @@ public sealed class ContextAssembler : IContextAssembler
             return true;
         }
 
-        private string Render(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates) =>
-            _guidance + "\n<repository_memory untrusted=\"true\">\n"
+        private string Render(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates)
+        {
+            return _guidance + "\n<repository_memory untrusted=\"true\">\n"
             + string.Join('\n', candidates.Select(candidate =>
                 $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
             + "\n</repository_memory>";
+        }
 
-        private string RenderStanding(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates) =>
-            _standingGuidance + "\n<standing_preferences untrusted=\"true\">\n"
+        private string RenderStanding(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates)
+        {
+            return _standingGuidance + "\n<standing_preferences untrusted=\"true\">\n"
             + string.Join('\n', candidates.Select(candidate =>
                 $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
             + "\n</standing_preferences>";
+        }
 
         private static RepositoryMemoryContextItemProjection CreateProjection(
-            RepositoryMemoryRetrievalCandidate candidate, bool included, string reason, int tokens) => new()
+            RepositoryMemoryRetrievalCandidate candidate, bool included, string reason, int tokens)
+        {
+            return new()
             {
                 Id = candidate.Entry.Id,
                 Origin = candidate.Entry.Origin,
@@ -1688,6 +1703,7 @@ public sealed class ContextAssembler : IContextAssembler
                 CosineSimilarity = candidate.CosineSimilarity,
                 CrossEncoderScore = candidate.CrossEncoderScore,
             };
+        }
     }
 
     private string? GetScratchpadPrompt()
@@ -1749,17 +1765,24 @@ public sealed class ContextAssembler : IContextAssembler
             }
         }
 
-        public void AddRecentTurn(IReadOnlyList<ConversationMessage> turn) => _recentTurns.Add(turn);
+        public void AddRecentTurn(IReadOnlyList<ConversationMessage> turn)
+        {
+            _recentTurns.Add(turn);
+        }
 
-        public IReadOnlyList<ModelMessage> CreateRecentMessages() =>
-            [.. _recentTurns.SelectMany(turn => turn).Select(message => CreateTextMessage(
+        public IReadOnlyList<ModelMessage> CreateRecentMessages()
+        {
+            return [.. _recentTurns.SelectMany(turn => turn).Select(message => CreateTextMessage(
                 message.Role == ConversationRole.User ? ModelMessageRole.User : ModelMessageRole.Assistant,
                 message.Role == ConversationRole.User ? "recent-user" : "recent-assistant",
                 message.Content ?? string.Empty))];
+        }
 
-        public IReadOnlyList<ConversationContextItemProjection> CreateProjections() =>
-            [.. _recentTurns.SelectMany(turn => turn).Select(message => CreateMessageProjection(
+        public IReadOnlyList<ConversationContextItemProjection> CreateProjections()
+        {
+            return [.. _recentTurns.SelectMany(turn => turn).Select(message => CreateMessageProjection(
                 message, true, "Included as a bounded complete recent turn.")), .. _excluded];
+        }
 
         public bool RemoveOldestRecentTurn(string reason)
         {
@@ -1779,12 +1802,17 @@ public sealed class ContextAssembler : IContextAssembler
             return true;
         }
 
-        public bool TryReduce() => RemoveOldestRecentTurn("Omitted oldest complete turn during final context-pressure reduction.");
+        public bool TryReduce()
+        {
+            return RemoveOldestRecentTurn("Omitted oldest complete turn during final context-pressure reduction.");
+        }
 
         private bool CurrentTurnIsSensitive { get; }
 
         private static ConversationContextItemProjection CreateMessageProjection(
-            ConversationMessage message, bool included, string rationale) => new()
+            ConversationMessage message, bool included, string rationale)
+        {
+            return new()
             {
                 Id = message.Id.Value.ToString("D"),
                 Kind = message.Role.ToString(),
@@ -1794,5 +1822,6 @@ public sealed class ContextAssembler : IContextAssembler
                 SourceMessageIds = [message.Id],
                 SourceRunIds = [message.RunId],
             };
+        }
     }
 }

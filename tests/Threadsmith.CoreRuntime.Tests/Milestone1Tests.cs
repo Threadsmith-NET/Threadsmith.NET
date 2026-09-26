@@ -1769,7 +1769,7 @@ public static partial class Milestone1Tests
                 var retried = await action("first", "authenticate", token);
                 Assert.True(retried.Enabled);
             }
-            },
+        },
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -5178,9 +5178,15 @@ public static partial class Milestone1Tests
 
         public Task AnswerEmitted => _answerEmitted.Task;
 
-        public void ReleaseAnswer() => _releaseAnswer.TrySetResult();
+        public void ReleaseAnswer()
+        {
+            _releaseAnswer.TrySetResult();
+        }
 
-        public void ReleaseCompletion() => _releaseCompletion.TrySetResult();
+        public void ReleaseCompletion()
+        {
+            _releaseCompletion.TrySetResult();
+        }
 
         public IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
@@ -5338,9 +5344,15 @@ public static partial class Milestone1Tests
 
     private sealed class AgentToolConsoleSurface : ConcurrentToolConsoleSurface, IAgentWorkspaceSurface
     {
-        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
     }
 
     private class ConcurrentToolConsoleSurface : FakeConsoleSurface, IInteractionToolActivitySurface
@@ -5613,14 +5625,20 @@ public static partial class Milestone1Tests
         }
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
-            => WriteOutputAsync(batch.Items, cancellationToken);
+        {
+            return WriteOutputAsync(batch.Items, cancellationToken);
+        }
 
         public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
-            => ShowSessionStatusAsync(status, " | ", cancellationToken);
+        {
+            return ShowSessionStatusAsync(status, " | ", cancellationToken);
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation represented by this test surface.")]
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
-            => ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+        {
+            return ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+        }
 
         public IReadOnlyList<string> Writes
         {
@@ -5826,9 +5844,11 @@ public static partial class Milestone1Tests
         private static IReadOnlyList<PresentationTextSegment> PrefixAnswer(
             bool startsAnswerBlock,
             IReadOnlyList<PresentationTextSegment> segments)
-            => startsAnswerBlock
-                ? [new PresentationTextSegment("\n", PresentationTextRole.Default), .. segments]
-                : segments;
+        {
+            return startsAnswerBlock
+                        ? [new PresentationTextSegment("\n", PresentationTextRole.Default), .. segments]
+                        : segments;
+        }
     }
 
     private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution, IStartupProgressSurface, IInteractionHelpSurface
@@ -5874,7 +5894,9 @@ public static partial class Milestone1Tests
         }
 
         public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
-            => _surface.SelectAsync(request, cancellationToken);
+        {
+            return _surface.SelectAsync(request, cancellationToken);
+        }
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
         {
@@ -5883,18 +5905,26 @@ public static partial class Milestone1Tests
         }
 
         public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
-            => _surface.PresentSessionStatusAsync(status, cancellationToken);
+        {
+            return _surface.PresentSessionStatusAsync(status, cancellationToken);
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned operation to the actual surface without a synchronization context.")]
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
-            => _surface.PresentActivityUntilAsync(activity, operation, cancellationToken);
+        {
+            return _surface.PresentActivityUntilAsync(activity, operation, cancellationToken);
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned startup operation to the actual surface.")]
         public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
-            => _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+        {
+            return _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+        }
 
         public Task SetStartupDetailsAsync(IReadOnlyList<string> details, CancellationToken cancellationToken = default)
-            => _surface.SetStartupDetailsAsync(details, cancellationToken);
+        {
+            return _surface.SetStartupDetailsAsync(details, cancellationToken);
+        }
 
         public Task<FrontendCommandOutcome> HandleAsync(InteractiveCommandInvocation invocation, IInteractionSurface surface, CancellationToken cancellationToken = default)
         {
@@ -6357,8 +6387,14 @@ public static partial class Milestone1Tests
     {
         private readonly Dictionary<string, McpProfileSummary> _profiles = new[] { "first", "second" }.ToDictionary(id => id, id => new McpProfileSummary
         {
-            ProfileId = id, DisplayName = id, ConfigurationSource = "User", Transport = "http", Trust = "TrustedRead",
-            EndpointIdentity = "https://example.com", State = "Disconnected", Eligible = true,
+            ProfileId = id,
+            DisplayName = id,
+            ConfigurationSource = "User",
+            Transport = "http",
+            Trust = "TrustedRead",
+            EndpointIdentity = "https://example.com",
+            State = "Disconnected",
+            Eligible = true,
         });
 
         internal List<McpManagementAction> Changes { get; } = [];
@@ -6399,24 +6435,35 @@ public static partial class Milestone1Tests
 
             return Task.FromResult(new McpManagementResult
             {
-                Succeeded = !failed, Message = failed ? "Authentication required" : "Updated",
+                Succeeded = !failed,
+                Message = failed ? "Authentication required" : "Updated",
                 Profile = new McpProfileDetail { Summary = _profiles[id] },
             });
         }
 
-        internal void EnableOAuth() => _profiles["first"] = _profiles["first"] with { AuthenticationState = McpAuthenticationState.SignedOut };
+        internal void EnableOAuth()
+        {
+            _profiles["first"] = _profiles["first"] with { AuthenticationState = McpAuthenticationState.SignedOut };
+        }
     }
 
     private sealed class ToggleExtensionManager : IExtensionManager
     {
         private readonly Dictionary<string, ExtensionSummary> _extensions = new[] { "first", "second" }.ToDictionary(id => id, id => new ExtensionSummary
         {
-            ExtensionId = id, Name = id, Version = "1", Directory = id, State = "Discovered",
+            ExtensionId = id,
+            Name = id,
+            Version = "1",
+            Directory = id,
+            State = "Discovered",
         });
 
         public IReadOnlyList<ExtensionSummary> Summaries => [.. _extensions.Values];
 
-        public Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default) => Task.FromResult(Summaries);
+        public Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Summaries);
+        }
 
         public Task<ExtensionSummary?> LoadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default)
         {

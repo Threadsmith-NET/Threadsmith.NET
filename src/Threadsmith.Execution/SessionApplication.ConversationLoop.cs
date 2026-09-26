@@ -2006,8 +2006,8 @@ public sealed partial class SessionApplication
         var effectiveRetentionTargetTokens = _activeTurnCompactionPolicy.RetainedRecentTokens;
         ActiveTurnCompactionAttemptObserver? attemptObserver = null;
         ActiveTurnSourceProjection? deterministicProjection = null;
-        ActiveTurnSourceProjection? sourceProjectionForSummary = loopState.SourceProjection;
-        IReadOnlyList<ModelToolDefinition>? sourceProjectionTools =
+        var sourceProjectionForSummary = loopState.SourceProjection;
+        var sourceProjectionTools =
             sourceProjectionForSummary is null ? null : modelTools;
         BudgetStatus? finalAdmissionStatus = null;
 

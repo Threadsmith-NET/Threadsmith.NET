@@ -150,18 +150,21 @@ public sealed partial class SkillSubsystemTests
         });
     }
 
-    private static ModelProfile RoutingProfile(ModelProfileId id, string provider, int contextWindow, int outputTokens, bool toolCalls) => new()
+    private static ModelProfile RoutingProfile(ModelProfileId id, string provider, int contextWindow, int outputTokens, bool toolCalls)
     {
-        Id = id,
-        Name = provider,
-        Provider = provider,
-        Endpoint = new Uri("https://example.test/" + provider),
-        ModelId = provider,
-        ContextWindow = contextWindow,
-        MaximumOutputTokens = outputTokens,
-        SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
-        Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = toolCalls, StructuredOutput = true },
-    };
+        return new()
+        {
+            Id = id,
+            Name = provider,
+            Provider = provider,
+            Endpoint = new Uri("https://example.test/" + provider),
+            ModelId = provider,
+            ContextWindow = contextWindow,
+            MaximumOutputTokens = outputTokens,
+            SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed,
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = toolCalls, StructuredOutput = true },
+        };
+    }
 
     private sealed class RoutingModelProvider(string route) : IModelProvider, IModelRequestPreparationResolver, IModelProviderInstructionResolver
     {
@@ -171,7 +174,10 @@ public sealed partial class SkillSubsystemTests
 
         public int Preparations { get; private set; }
 
-        public ModelProviderInstructions Resolve(ModelProfileId profileId) => new() { SectionId = route, Content = route };
+        public ModelProviderInstructions Resolve(ModelProfileId profileId)
+        {
+            return new() { SectionId = route, Content = route };
+        }
 
         public ModelStreamRequest Prepare(ModelStreamRequest request)
         {

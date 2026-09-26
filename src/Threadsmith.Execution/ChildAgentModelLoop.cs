@@ -947,7 +947,8 @@ internal sealed class ChildAgentModelLoop
                 attemptNumber,
                 correctiveTurns.MaximumTurns,
                 summary,
-                diagnostic.ToolOrdinal is null || diagnostic.ToolOrdinal == ordinal) with { ModelRound = round });
+                diagnostic.ToolOrdinal is null || diagnostic.ToolOrdinal == ordinal) with
+            { ModelRound = round });
             resultsAdded = true;
         }
 

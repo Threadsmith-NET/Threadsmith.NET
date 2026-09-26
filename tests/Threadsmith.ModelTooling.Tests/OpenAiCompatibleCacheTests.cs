@@ -21,7 +21,9 @@ public static class OpenAiCompatibleCacheTests
         var cacheAffinityId = Guid.NewGuid();
         var request = new ModelStreamRequest
         {
-            RunId = RunId.New(), CacheAffinityId = cacheAffinityId, Input = "legacy must not leak",
+            RunId = RunId.New(),
+            CacheAffinityId = cacheAffinityId,
+            Input = "legacy must not leak",
             Messages =
             [
                 Message(ModelMessageRole.System, "host-policy", "stable host"),
@@ -139,27 +141,43 @@ public static class OpenAiCompatibleCacheTests
                 .ToListAsync(TestContext.Current.CancellationToken));
     }
 
-    private static ModelMessage Message(ModelMessageRole role, string section, string text) => new()
+    private static ModelMessage Message(ModelMessageRole role, string section, string text)
     {
-        Role = role, SectionId = section, Content = [new ModelContentPart { Content = text }],
-    };
+        return new()
+        {
+            Role = role,
+            SectionId = section,
+            Content = [new ModelContentPart { Content = text }],
+        };
+    }
 
-    private static OpenAiCompatibleModelProvider Provider(HttpClient client, bool promptCacheKeyEnabled = false) => new(
+    private static OpenAiCompatibleModelProvider Provider(HttpClient client, bool promptCacheKeyEnabled = false)
+    {
+        return new(
         client,
         new ModelProfile
         {
-            Id = ModelProfileId.New(), Name = "synthetic", Provider = "openai-compatible", ModelId = "synthetic",
-            Endpoint = new Uri("https://models.example/v1/chat/completions"), ContextWindow = 32000, MaximumOutputTokens = 4000,
+            Id = ModelProfileId.New(),
+            Name = "synthetic",
+            Provider = "openai-compatible",
+            ModelId = "synthetic",
+            Endpoint = new Uri("https://models.example/v1/chat/completions"),
+            ContextWindow = 32000,
+            MaximumOutputTokens = 4000,
             Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 1 },
         },
         promptCacheKeyEnabled: promptCacheKeyEnabled);
+    }
 
     private sealed class CaptureHandler : HttpMessageHandler
     {
         private readonly string _fields;
 
-        public CaptureHandler(string fields) => _fields = fields;
+        public CaptureHandler(string fields)
+        {
+            _fields = fields;
+        }
 
         public List<JsonElement> Requests { get; } = [];
 

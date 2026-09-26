@@ -150,7 +150,9 @@ public sealed class SessionLifecycleApplication :
 
     /// <summary>Rebinds lifecycle creation and selection to a newly opened repository.</summary>
     public Task BindRepositoryAsync(string repositoryPath, CancellationToken cancellationToken = default)
-        => BindRepositoryCoreAsync(repositoryPath, null, cancellationToken);
+    {
+        return BindRepositoryCoreAsync(repositoryPath, null, cancellationToken);
+    }
 
     /// <summary>Commits prepared repository services after lifecycle preparation and before activating the new session.</summary>
     /// <param name="repositoryPath">The host-selected repository root.</param>
@@ -349,7 +351,9 @@ public sealed class SessionLifecycleApplication :
     }
 
     private Task<SessionTransitionResult> CreateNewAsync(SessionCatalogEntry? source, CancellationToken cancellationToken)
-        => CreateNewAsync(source, null, cancellationToken);
+    {
+        return CreateNewAsync(source, null, cancellationToken);
+    }
 
     private async Task<SessionTransitionResult> CreateNewAsync(
         SessionCatalogEntry? source,

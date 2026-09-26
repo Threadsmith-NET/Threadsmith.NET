@@ -1648,7 +1648,8 @@ public static partial class Milestone5Tests
         const string secondSource = "// header\r\nleft\r\nright\r\n";
         await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
         {
-            ["first.txt"] = firstSource, ["second.txt"] = secondSource,
+            ["first.txt"] = firstSource,
+            ["second.txt"] = secondSource,
         });
         var arguments = JsonSerializer.Serialize(new
         {
@@ -1692,7 +1693,8 @@ public static partial class Milestone5Tests
     {
         await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
         {
-            ["changed.txt"] = "before", ["untouched.txt"] = "original",
+            ["changed.txt"] = "before",
+            ["untouched.txt"] = "original",
         });
         await using var events = new DomainEventStream();
         await using var coordinator = new TransactionalWorkspaceCoordinator(events);
@@ -1715,10 +1717,15 @@ public static partial class Milestone5Tests
         await File.WriteAllTextAsync(untouchedPath, "external edit");
         var mutationSet = new MutationSet
         {
-            MutationSetId = MutationSetId.New(), SessionId = repository.SessionId, RunId = RunId.New(), WorkspaceId = promoted.WorkspaceId,
-            BaselineCapturedAt = promoted.CapturedAt, BaselineRevision = promoted.GitRevision,
+            MutationSetId = MutationSetId.New(),
+            SessionId = repository.SessionId,
+            RunId = RunId.New(),
+            WorkspaceId = promoted.WorkspaceId,
+            BaselineCapturedAt = promoted.CapturedAt,
+            BaselineRevision = promoted.GitRevision,
             Mutations = [new Mutation { MutationId = MutationId.New(), Type = MutationType.ReplaceText, RelativePath = "untouched.txt", BaselineSha256 = originalHash.Sha256, StartOffset = 0, Length = 8, ExpectedText = "original", ReplacementText = "requested" }],
-            Rationale = "Replace untouched text.", Risk = MutationRisk.Low,
+            Rationale = "Replace untouched text.",
+            Risk = MutationRisk.Low,
         };
 
         var staged = await coordinator.HandleAsync(new StageMutationSetCommand(mutationSet));
@@ -1735,7 +1742,8 @@ public static partial class Milestone5Tests
     {
         await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
         {
-            ["deleted.txt"] = "1234", ["old.txt"] = "5678",
+            ["deleted.txt"] = "1234",
+            ["old.txt"] = "5678",
         });
         await using var events = new DomainEventStream();
         await using var coordinator = new TransactionalWorkspaceCoordinator(events, maximumBaselineContentBytes: 8);

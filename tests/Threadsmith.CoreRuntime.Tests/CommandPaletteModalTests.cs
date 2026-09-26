@@ -2,7 +2,6 @@ namespace Threadsmith.CoreRuntime.Tests;
 
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
-using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
 using TUIKit.Input;

@@ -270,6 +270,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(request);
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
+        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
@@ -279,8 +280,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var edges = new List<CallHierarchyEdge>();
         var pending = new Queue<(ISymbol Symbol, int Depth)>();
         var expanded = new HashSet<string>(StringComparer.Ordinal);
+
         AddNode(nodes, root, 0, snapshot, projection);
         pending.Enqueue((root, 0));
+
         var depthReached = false;
         var nodeReached = false;
         var edgeReached = false;
@@ -292,7 +295,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             {
                 timeout.Token.ThrowIfCancellationRequested();
                 (var symbol, var depth) = pending.Dequeue();
+
                 var symbolId = CreateIdentity(symbol).Id;
+
                 if (!expanded.Add(symbolId))
                 {
                     continue;
@@ -305,6 +310,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 }
 
                 var discovered = new List<(ISymbol Caller, ISymbol Callee, Location? Site)>();
+
                 if (request.Direction is CallHierarchyDirection.Incoming or CallHierarchyDirection.Both)
                 {
                     var callers = await SymbolFinder.FindCallersAsync(
@@ -410,6 +416,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(request);
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
+        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
@@ -787,6 +794,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(sourceReader);
         request = _options.ResolveRequest(request);
         ValidateCodeExploreRequest(request);
+        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
         timeout.Token.ThrowIfCancellationRequested();
         var engine = _registry.GetEngine(workspaceId);

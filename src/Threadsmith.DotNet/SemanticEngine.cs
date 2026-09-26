@@ -444,6 +444,7 @@ public sealed class SemanticEngine : ISemanticEngine
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
+        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         (var solution, var compiledProjects, var confidence, var _) = CaptureSemanticState();
         var symbols = await RunNonCooperativeAsync(
             async operationToken =>
@@ -627,6 +628,7 @@ public sealed class SemanticEngine : ISemanticEngine
             return fallback;
         }
 
+        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         (var solution, var _, var currentConfidence, var _) = CaptureSemanticState();
         var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
         var referencedSymbols = await RunNonCooperativeAsync(
@@ -653,6 +655,7 @@ public sealed class SemanticEngine : ISemanticEngine
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
+        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         (var solution, var _, var confidence, var _) = CaptureSemanticState();
         var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
         var implementations = await RunNonCooperativeAsync(

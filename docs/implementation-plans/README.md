@@ -154,6 +154,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 113.3 | `plan-113.3-measured-active-context-expansion.md` | Measured active context expansion |
 | 115 | [plan-115-tuikit-stable-release-upgrade.md](plan-115-tuikit-stable-release-upgrade.md) | TUIKit stable release upgrade, frontend compatibility, and release evidence |
 | 116 | [plan-116-session-scratchpad.md](plan-116-session-scratchpad.md) | Configurable session-scoped scratchpad with bounded tool authority and lifecycle cleanup |
+| 117 | [plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md](plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md) | Roslyn 5.9 and .NET 10 semantic toolchain upgrade with compatibility, load measurement, and release gates |
+| 118 | [plan-118-staged-semantic-readiness-and-compilation-warming.md](plan-118-staged-semantic-readiness-and-compilation-warming.md) | Staged semantic readiness with demand-driven project preparation and bounded background warming |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 | Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
 | Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |

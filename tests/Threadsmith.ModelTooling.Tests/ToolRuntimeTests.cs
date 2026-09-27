@@ -1616,15 +1616,26 @@ public static partial class ToolRuntimeTests
                 ArgumentsJson = "{\"query\":\"needle\",\"glob\":\"*.txt\"}",
                 Context = context,
             });
-            var sourceRepository = Path.GetFullPath(
-                Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+            var initialized = await manager.RunAsync(
+                new ProcessExecutionRequest
+                {
+                    ToolInvocationId = ToolInvocationId.New(),
+                    RunId = RunId.New(),
+                    FileName = "git",
+                    Arguments = ["init", "--quiet"],
+                    WorkingDirectory = repository,
+                    Timeout = TimeSpan.FromSeconds(30),
+                    Origin = ProcessRequestOrigin.Host,
+                },
+                TestContext.Current.CancellationToken);
+            Assert.Equal(0, initialized.ExitCode);
             var git = await pipeline.InvokeAsync(new ToolInvocationRequest
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = "git_status",
                 ArgumentsJson = "{}",
-                Context = CreateContext(sourceRepository) with
+                Context = CreateContext(repository) with
                 {
                     TrustLevel = RepositoryTrustLevel.TrustedRead,
                     AllowedExecutables = ["git"],

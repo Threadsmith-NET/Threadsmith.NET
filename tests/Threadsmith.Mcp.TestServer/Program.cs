@@ -1,6 +1,7 @@
 namespace Threadsmith.Mcp.TestServer;
 
 using System.ComponentModel;
+using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -18,8 +19,19 @@ internal static class Program
             await File.WriteAllTextAsync(args[pidFileIndex + 1], Environment.ProcessId.ToString());
         }
 
-        if (args.Contains("--skip-handshake", StringComparer.Ordinal))
+        if (args.Contains("--invalid-handshake", StringComparer.Ordinal))
         {
+            // Fail only after the process has started and published its PID. A very short
+            // client timeout can kill a slow-starting process before the fixture runs at all.
+            var requestLine = await Console.In.ReadLineAsync();
+            using var request = JsonDocument.Parse(requestLine ?? throw new InvalidOperationException("Missing initialize request."));
+            await Console.Out.WriteLineAsync(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0",
+                id = request.RootElement.GetProperty("id"),
+                error = new { code = -32603, message = "Fixture rejects initialization." },
+            }));
+            await Console.Out.FlushAsync();
             await Task.Delay(Timeout.InfiniteTimeSpan, CancellationToken.None);
             return;
         }

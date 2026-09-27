@@ -351,7 +351,7 @@ Run the built test executables or repository Microsoft.Testing.Platform commands
 
 The compatibility suite must exercise real `MSBuildWorkspace` and real worker processes where those boundaries are the behavior under test. Unit fakes remain appropriate for isolated confidence, measurement, cancellation, and failure-classification logic.
 
-Run concurrent independent-workspace symbol and `code_explore` queries on Linux and macOS. Roslyn 5.6 attaches each workspace to the same non-Windows `file::memory:?cache=shared` SQLite write cache while synchronizing per workspace, so retain `RoslynPersistentStorageGate` unless the target Roslyn implementation and repeated cross-platform evidence prove that the process-wide collision is gone. Do not replace this gate with test-runner serialization or retries.
+Run concurrent independent-workspace symbol and `code_explore` queries on Linux and macOS. Roslyn 5.6 attaches each workspace to the same non-Windows `file::memory:?cache=shared` SQLite write cache while synchronizing per workspace. `RoslynWorkspaceHost` omits the optional SQLite service on non-Windows platforms so Roslyn selects its built-in nonpersistent fallback; query serialization cannot cover background flushes. Retain this composition unless the target Roslyn implementation and repeated cross-platform evidence prove that the process-wide collision is gone. Verify the pinned service-export identity and fallback contract on every platform. Do not substitute test-runner serialization or retries.
 
 ### 10.3 Full regression gate
 
@@ -456,7 +456,7 @@ Repositories targeting older .NET versions remain supported to the extent the se
 20. Exact package graph, license evidence, notices, SBOM, and supported publish artifacts match the upgraded bytes.
 21. ADR-1, ADR-4, and contributor guidance describe the validated current stack; historical spike/plan evidence remains unchanged.
 22. Final adversarial review finds no mixed assembly families, duplicate execution paths, silent generated-source loss, confidence inflation, or runtime MSBuild conflict.
-23. Independent semantic workspaces pass repeated concurrent symbol-index queries on Linux and macOS; `RoslynPersistentStorageGate` is retained or removed according to verified target behavior rather than package-version inference.
+23. Independent semantic workspaces pass repeated concurrent symbol-index queries on Linux and macOS; `RoslynWorkspaceHost` retains or removes its nonpersistent composition according to verified target behavior rather than package-version inference.
 
 ## 15. Risks
 
@@ -473,7 +473,7 @@ Repositories targeting older .NET versions remain supported to the extent the se
 | Performance work broadens the compatibility change | Explicitly prohibit staged/lazy/parallel readiness here and route measured follow-up separately. |
 | SDK pin breaks contributors or CI | Update setup documentation/workflows together and validate all hosted OSes. |
 | Scripting worker closure diverges from the host | Inspect/publish the real worker and exercise process-boundary integration tests. |
-| Non-Windows Roslyn workspaces contend on the process-shared SQLite write cache | Exercise independent workspaces concurrently on Linux/macOS; retain the adapter-owned query gate until the target implementation proves isolation. |
+| Non-Windows Roslyn workspaces contend on the process-shared SQLite write cache | Exercise independent workspaces concurrently on Linux/macOS; retain the nonpersistent workspace composition until the target implementation proves isolation. |
 | Legal/package evidence drifts from actual artifacts | Regenerate from restored/published bytes and run existing fail-closed release gates. |
 
 ## 16. Documentation

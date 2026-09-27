@@ -176,14 +176,12 @@ public sealed class SdkStdioTransportTests
             new SecretOutputSanitizer(),
             NullLoggerFactory.Instance);
         var profile = CreateProfile(
-            [serverAssembly, "--skip-handshake", "--pid-file", pidFile],
-            TimeSpan.FromMilliseconds(250)) with
-        {
-            StartupTimeout = TimeSpan.FromMilliseconds(250),
-        };
+            [serverAssembly, "--invalid-handshake", "--pid-file", pidFile],
+            TimeSpan.FromMilliseconds(250));
         try
         {
-            await Assert.ThrowsAnyAsync<Exception>(() => transport.StartAsync(profile, new Dictionary<string, string>()));
+            var failure = await Assert.ThrowsAnyAsync<Exception>(() => transport.StartAsync(profile, new Dictionary<string, string>()));
+            Assert.Contains("Fixture rejects initialization.", failure.Message, StringComparison.Ordinal);
             await WaitForFileAsync(pidFile, TimeSpan.FromSeconds(5));
             var processId = int.Parse(await File.ReadAllTextAsync(pidFile));
 
@@ -229,7 +227,8 @@ public sealed class SdkStdioTransportTests
             Arguments = arguments,
             WorkingDirectory = FindRepositoryRoot(),
             Trust = McpTrustLevel.TrustedRead,
-            StartupTimeout = TimeSpan.FromSeconds(10),
+            // Process startup and SDK initialization are not the shutdown deadline under test.
+            StartupTimeout = TimeSpan.FromSeconds(60),
             RequestTimeout = TimeSpan.FromSeconds(10),
             DrainKillTimeout = drainKillTimeout ?? TimeSpan.FromSeconds(2),
             AllowedCapabilities = [McpCapabilityKind.Tool],

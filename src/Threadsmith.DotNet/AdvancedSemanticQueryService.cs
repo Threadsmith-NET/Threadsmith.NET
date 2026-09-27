@@ -270,7 +270,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(request);
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
-        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
@@ -416,7 +415,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(request);
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
-        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
@@ -794,7 +792,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ArgumentNullException.ThrowIfNull(sourceReader);
         request = _options.ResolveRequest(request);
         ValidateCodeExploreRequest(request);
-        using var persistentStorageLease = await RoslynPersistentStorageGate.EnterAsync(cancellationToken);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
         timeout.Token.ThrowIfCancellationRequested();
         var engine = _registry.GetEngine(workspaceId);

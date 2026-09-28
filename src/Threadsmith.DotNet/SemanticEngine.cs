@@ -213,7 +213,7 @@ public sealed class SemanticEngine : ISemanticEngine
                         }
                     }
 
-                    var workspace = MSBuildWorkspace.Create();
+                    var workspace = MSBuildWorkspace.Create(RoslynWorkspaceHost.Services);
                     workspace.LoadMetadataForReferencedProjects = true;
                     workspace.RegisterWorkspaceFailedHandler(eventArgs =>
                     {

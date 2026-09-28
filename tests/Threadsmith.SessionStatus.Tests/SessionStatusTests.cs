@@ -1,7 +1,6 @@
 namespace Threadsmith.SessionStatus.Tests;
 
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
 using Threadsmith.Tui.TuiKit;

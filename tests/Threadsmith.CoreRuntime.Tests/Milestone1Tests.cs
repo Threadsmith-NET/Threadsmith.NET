@@ -591,6 +591,122 @@ public static partial class Milestone1Tests
             budget.Accrue(new BudgetDimensions(-1, 0, TimeSpan.Zero)));
     }
 
+    /// <summary>Budget arithmetic saturates and identifies every exhausted dimension at numeric limits.</summary>
+    [Fact]
+    public static void ExecutionBudget_Overflow_IsSaturatedAndDimensioned()
+    {
+        var maximum = new BudgetDimensions(
+            long.MaxValue,
+            int.MaxValue,
+            TimeSpan.MaxValue,
+            decimal.MaxValue);
+        var budget = new ExecutionBudget(maximum);
+
+        Assert.False(budget.Accrue(maximum).IsExhausted);
+        var status = budget.Check(new BudgetDimensions(1, 1, TimeSpan.FromTicks(1), 1));
+
+        Assert.True(status.IsExhausted);
+        Assert.Equal(
+            BudgetExhaustionDimension.Tokens
+                | BudgetExhaustionDimension.Calls
+                | BudgetExhaustionDimension.WallClock
+                | BudgetExhaustionDimension.Cost,
+            status.ExhaustedDimensions);
+        Assert.Equal(maximum, status.Used);
+    }
+
+    /// <summary>Prepared-request admission includes output, calls, known cost, and supplied duration.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_UsesConservativeKnownDimensions()
+    {
+        var request = new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "ignored because a prepared estimate is present",
+            WireEstimate = new ModelWireEstimate
+            {
+                WireInputTokens = 100,
+                OutputReserveTokens = 10,
+            },
+            MaximumOutputTokens = 10,
+            AdmissionOutputTokenCeiling = 50,
+            AdmissionCost = new ModelCostMetadata
+            {
+                InputPerMillionTokens = 1,
+                OutputPerMillionTokens = 2,
+            },
+            AdmissionWallClock = TimeSpan.FromSeconds(3),
+        };
+
+        var estimate = ModelRequestAdmissionEstimator.Estimate(request);
+        var dimensions = ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate);
+
+        Assert.Equal(100, estimate.InputTokens);
+        Assert.Equal(50, estimate.OutputTokens);
+        Assert.Equal(1, estimate.Calls);
+        Assert.Equal(0.0002m, estimate.Cost);
+        Assert.Equal(new BudgetDimensions(150, 1, TimeSpan.FromSeconds(3), 0.0002m), dimensions);
+    }
+
+    /// <summary>An unenforced provider maximum is capped by output that can physically fit beside prepared input.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_CapsUnenforcedOutputAtRemainingContext()
+    {
+        var estimate = ModelRequestAdmissionEstimator.Estimate(new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            Input = "prepared",
+            WireEstimate = new ModelWireEstimate
+            {
+                WireInputTokens = 400,
+                OutputReserveTokens = 50,
+            },
+            MaximumOutputTokens = 50,
+            AdmissionOutputTokenCeiling = 1_000,
+            AdmissionContextWindowTokens = 500,
+        });
+
+        Assert.Equal(400, estimate.InputTokens);
+        Assert.Equal(100, estimate.OutputTokens);
+        Assert.Equal(500, ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate).Tokens);
+    }
+
+    /// <summary>Unavailable pricing remains unknown and does not fabricate a zero-cost estimate.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_PreservesUnknownCost()
+    {
+        var estimate = ModelRequestAdmissionEstimator.Estimate(
+            new ModelWireEstimate { WireInputTokens = 100 },
+            50,
+            new ModelCostMetadata { PricesAvailable = false });
+
+        Assert.Null(estimate.Cost);
+        Assert.Equal(0, ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate).Cost);
+    }
+
+    /// <summary>Combining unknown pricing retains every known cost and duration as a lower bound.</summary>
+    [Fact]
+    public static void ModelRequestAdmissionEstimator_MixedUnknownsPreserveKnownLowerBounds()
+    {
+        var known = new ModelRequestAdmissionEstimate(
+            100,
+            50,
+            1,
+            Cost: 2.5m,
+            WallClock: TimeSpan.FromSeconds(3),
+            CostIsComplete: true,
+            WallClockIsComplete: true);
+        var unknown = new ModelRequestAdmissionEstimate(200, 25, 1);
+
+        var combined = ModelRequestAdmissionEstimator.Combine(known, unknown);
+        var dimensions = ModelRequestAdmissionEstimator.ToBudgetDimensions(combined);
+
+        Assert.Equal(2.5m, dimensions.Cost);
+        Assert.Equal(TimeSpan.FromSeconds(3), dimensions.WallClock);
+        Assert.False(combined.CostIsComplete);
+        Assert.False(combined.WallClockIsComplete);
+    }
+
     /// <summary>Fresh operation scopes retain configured limits without inheriting prior usage.</summary>
     [Fact]
     public static void ExecutionBudget_CreateScope_StartsUnused()
@@ -809,6 +925,46 @@ public static partial class Milestone1Tests
         var charged = budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
         Assert.Equal(1, charged.Calls);
         Assert.Equal(0, charged.Tokens);
+    }
+
+    /// <summary>The default concrete execution budget creates an independent scope for each concurrent run.</summary>
+    [Fact]
+    public static async Task SessionApplication_DefaultExecutionBudgetScopesConcurrentRuns()
+    {
+        await using var events = new DomainEventStream();
+        var template = new ExecutionBudget(
+            new BudgetDimensions(10_000, 1, TimeSpan.FromMinutes(1)));
+        var application = new SessionApplication(
+            events,
+            new FakeModelProvider(new ScriptedSession
+            {
+                Turns =
+                [
+                    new ScriptedTurn { Text = "first" },
+                    new ScriptedTurn { Text = "second" },
+                ],
+            }),
+            template,
+            new SecretOutputSanitizer(),
+            NullLogger<SessionApplication>.Instance,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var firstSession = await dispatcher.DispatchAsync(new CreateSessionCommand("first"));
+        var secondSession = await dispatcher.DispatchAsync(new CreateSessionCommand("second"));
+
+        var firstRun = await dispatcher.DispatchAsync(
+            new SubmitRequestCommand(firstSession, "first request"));
+        var secondRun = await dispatcher.DispatchAsync(
+            new SubmitRequestCommand(secondSession, "second request"));
+        var completions = await Task.WhenAll(
+            dispatcher.DispatchAsync(new WaitForRunCommand(firstRun)),
+            dispatcher.DispatchAsync(new WaitForRunCommand(secondRun)));
+
+        Assert.All(completions, Assert.True);
+        Assert.Equal(
+            0,
+            template.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used.Calls);
     }
 
     /// <summary>The TUI controller maps open, submit, wait, and cancel gestures to commands.</summary>
@@ -1613,7 +1769,7 @@ public static partial class Milestone1Tests
                 var retried = await action("first", "authenticate", token);
                 Assert.True(retried.Enabled);
             }
-            },
+        },
         };
         var coordinator = new InteractionCoordinator(new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
         await coordinator.RunAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -5022,9 +5178,15 @@ public static partial class Milestone1Tests
 
         public Task AnswerEmitted => _answerEmitted.Task;
 
-        public void ReleaseAnswer() => _releaseAnswer.TrySetResult();
+        public void ReleaseAnswer()
+        {
+            _releaseAnswer.TrySetResult();
+        }
 
-        public void ReleaseCompletion() => _releaseCompletion.TrySetResult();
+        public void ReleaseCompletion()
+        {
+            _releaseCompletion.TrySetResult();
+        }
 
         public IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
@@ -5182,9 +5344,15 @@ public static partial class Milestone1Tests
 
     private sealed class AgentToolConsoleSurface : ConcurrentToolConsoleSurface, IAgentWorkspaceSurface
     {
-        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task AttachAgentSessionAsync(SessionId sessionId, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task PresentAgentAsync(AgentPresentationSnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
     }
 
     private class ConcurrentToolConsoleSurface : FakeConsoleSurface, IInteractionToolActivitySurface
@@ -5457,14 +5625,20 @@ public static partial class Milestone1Tests
         }
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
-            => WriteOutputAsync(batch.Items, cancellationToken);
+        {
+            return WriteOutputAsync(batch.Items, cancellationToken);
+        }
 
         public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
-            => ShowSessionStatusAsync(status, " | ", cancellationToken);
+        {
+            return ShowSessionStatusAsync(status, " | ", cancellationToken);
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation represented by this test surface.")]
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
-            => ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+        {
+            return ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+        }
 
         public IReadOnlyList<string> Writes
         {
@@ -5670,9 +5844,11 @@ public static partial class Milestone1Tests
         private static IReadOnlyList<PresentationTextSegment> PrefixAnswer(
             bool startsAnswerBlock,
             IReadOnlyList<PresentationTextSegment> segments)
-            => startsAnswerBlock
-                ? [new PresentationTextSegment("\n", PresentationTextRole.Default), .. segments]
-                : segments;
+        {
+            return startsAnswerBlock
+                        ? [new PresentationTextSegment("\n", PresentationTextRole.Default), .. segments]
+                        : segments;
+        }
     }
 
     private sealed class TuiKitCommandSurface : IInteractionSurface, IFrontendCommandContribution, IStartupProgressSurface, IInteractionHelpSurface
@@ -5718,7 +5894,9 @@ public static partial class Milestone1Tests
         }
 
         public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
-            => _surface.SelectAsync(request, cancellationToken);
+        {
+            return _surface.SelectAsync(request, cancellationToken);
+        }
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
         {
@@ -5727,18 +5905,26 @@ public static partial class Milestone1Tests
         }
 
         public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
-            => _surface.PresentSessionStatusAsync(status, cancellationToken);
+        {
+            return _surface.PresentSessionStatusAsync(status, cancellationToken);
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned operation to the actual surface without a synchronization context.")]
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
-            => _surface.PresentActivityUntilAsync(activity, operation, cancellationToken);
+        {
+            return _surface.PresentActivityUntilAsync(activity, operation, cancellationToken);
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "Forwards the coordinator-owned startup operation to the actual surface.")]
         public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
-            => _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+        {
+            return _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+        }
 
         public Task SetStartupDetailsAsync(IReadOnlyList<string> details, CancellationToken cancellationToken = default)
-            => _surface.SetStartupDetailsAsync(details, cancellationToken);
+        {
+            return _surface.SetStartupDetailsAsync(details, cancellationToken);
+        }
 
         public Task<FrontendCommandOutcome> HandleAsync(InteractiveCommandInvocation invocation, IInteractionSurface surface, CancellationToken cancellationToken = default)
         {
@@ -6201,8 +6387,14 @@ public static partial class Milestone1Tests
     {
         private readonly Dictionary<string, McpProfileSummary> _profiles = new[] { "first", "second" }.ToDictionary(id => id, id => new McpProfileSummary
         {
-            ProfileId = id, DisplayName = id, ConfigurationSource = "User", Transport = "http", Trust = "TrustedRead",
-            EndpointIdentity = "https://example.com", State = "Disconnected", Eligible = true,
+            ProfileId = id,
+            DisplayName = id,
+            ConfigurationSource = "User",
+            Transport = "http",
+            Trust = "TrustedRead",
+            EndpointIdentity = "https://example.com",
+            State = "Disconnected",
+            Eligible = true,
         });
 
         internal List<McpManagementAction> Changes { get; } = [];
@@ -6243,24 +6435,35 @@ public static partial class Milestone1Tests
 
             return Task.FromResult(new McpManagementResult
             {
-                Succeeded = !failed, Message = failed ? "Authentication required" : "Updated",
+                Succeeded = !failed,
+                Message = failed ? "Authentication required" : "Updated",
                 Profile = new McpProfileDetail { Summary = _profiles[id] },
             });
         }
 
-        internal void EnableOAuth() => _profiles["first"] = _profiles["first"] with { AuthenticationState = McpAuthenticationState.SignedOut };
+        internal void EnableOAuth()
+        {
+            _profiles["first"] = _profiles["first"] with { AuthenticationState = McpAuthenticationState.SignedOut };
+        }
     }
 
     private sealed class ToggleExtensionManager : IExtensionManager
     {
         private readonly Dictionary<string, ExtensionSummary> _extensions = new[] { "first", "second" }.ToDictionary(id => id, id => new ExtensionSummary
         {
-            ExtensionId = id, Name = id, Version = "1", Directory = id, State = "Discovered",
+            ExtensionId = id,
+            Name = id,
+            Version = "1",
+            Directory = id,
+            State = "Discovered",
         });
 
         public IReadOnlyList<ExtensionSummary> Summaries => [.. _extensions.Values];
 
-        public Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default) => Task.FromResult(Summaries);
+        public Task<IReadOnlyList<ExtensionSummary>> DiscoverAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Summaries);
+        }
 
         public Task<ExtensionSummary?> LoadAsync(string extensionId, SessionId sessionId, CancellationToken cancellationToken = default)
         {
@@ -6960,7 +7163,8 @@ public static partial class Milestone1Tests
                 NullLogger<SessionApplication>.Instance,
                 sessionUsage: usage,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
+                prompts: TestPromptLoader.Instance,
+                budgetFactory: budget is null ? null : () => executionBudget);
             var handlers = new List<object> { application };
             if (additionalHandlers is not null)
             {

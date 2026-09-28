@@ -50,7 +50,10 @@ public static class AgentNameConfigurationTests
 
     /// <summary>Constructs malformed UTF-16 at runtime so attribute metadata does not replace it.</summary>
     [Fact]
-    public static void MalformedUnicodeFallsBack() => InvalidRoleListFallsBackToSharedWithoutEchoingValues(new string((char)0xd800, 1));
+    public static void MalformedUnicodeFallsBack()
+    {
+        InvalidRoleListFallsBackToSharedWithoutEchoingValues(new string((char)0xd800, 1));
+    }
 
     /// <summary>The shipped commented JSON contains exactly the compiled defaults for every public role.</summary>
     [Fact]

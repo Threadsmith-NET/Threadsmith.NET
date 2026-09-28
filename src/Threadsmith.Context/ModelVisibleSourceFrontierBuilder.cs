@@ -59,6 +59,46 @@ public static class ModelVisibleSourceFrontierBuilder
             entries.Sum(entry => entry.EmittedCharacters));
     }
 
+    /// <summary>
+    /// Returns every code-explore section whose exact rendered source was visible, independently
+    /// of whether that section has sufficient metadata to prove a later coverage decision.
+    /// </summary>
+    public static IReadOnlySet<int> GetVisibleCodeExploreSectionIndexes(ModelMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        foreach (var content in message.Content.Where(part => part.Kind == ModelContentPartKind.Json))
+        {
+            if (!TryDeserializeCodeExploreResult(content.Content, out var result)
+                || result.FileSections is not { } fileSections)
+            {
+                continue;
+            }
+
+            var visibleIndexes = new HashSet<int>();
+            for (var index = 0; index < fileSections.Count; index++)
+            {
+                var section = fileSections[index];
+                if (section is null
+                    || string.IsNullOrWhiteSpace(section.FilePath)
+                    || section.Source?.NumberedLines is not { Count: > 0 })
+                {
+                    continue;
+                }
+
+                if (content.IsModelVisible
+                    || message.Content.Any(part => part.IsModelVisible
+                        && ContainsVisibleSection(part.Content, section, fileSections)))
+                {
+                    visibleIndexes.Add(index);
+                }
+            }
+
+            return visibleIndexes;
+        }
+
+        return new HashSet<int>();
+    }
+
     private static void AddJsonCodeExploreEntries(
         string content,
         bool isModelVisible,
@@ -99,7 +139,6 @@ public static class ModelVisibleSourceFrontierBuilder
 
             // Markdown may have dropped a section that remains in the structured sidecar.
             if (!isModelVisible
-                && section.Source.Completeness == CodeExploreSourceCompleteness.Partial
                 && !message.Content.Any(part => part.IsModelVisible
                     && ContainsVisibleSection(part.Content, section, fileSections)))
             {

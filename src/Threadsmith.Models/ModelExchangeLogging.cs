@@ -354,7 +354,10 @@ public sealed class LoggingModelProvider : IModelProvider, IModelRequestPreparat
     }
 
     /// <inheritdoc />
-    public ModelStreamRequest Prepare(ModelStreamRequest request) => ModelRequestPreparation.Prepare(_inner, request);
+    public ModelStreamRequest Prepare(ModelStreamRequest request)
+    {
+        return ModelRequestPreparation.Prepare(_inner, request);
+    }
 
     /// <inheritdoc />
     public IAsyncEnumerable<ModelChunk> StreamAsync(

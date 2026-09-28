@@ -203,6 +203,165 @@ public sealed record ModelWireEstimate
     public long TotalCapacityTokens => (long)WireInputTokens + OutputReserveTokens;
 }
 
+/// <summary>Builds conservative host admission estimates from prepared model requests.</summary>
+public static class ModelRequestAdmissionEstimator
+{
+    /// <summary>Combines nonnegative input and output usage without numeric wraparound.</summary>
+    public static long SaturatingTokenTotal(long inputTokens, long outputTokens)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(inputTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(outputTokens);
+        return SaturatingAdd(inputTokens, outputTokens);
+    }
+
+    /// <summary>Estimates one prepared request using its enforced output ceiling.</summary>
+    public static ModelRequestAdmissionEstimate Estimate(ModelStreamRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var wireEstimate = request.WireEstimate ?? EstimateWire(request);
+        var outputTokens = request.AdmissionOutputTokenCeiling
+            ?? request.MaximumOutputTokens
+            ?? wireEstimate.OutputReserveTokens;
+        if (request.AdmissionContextWindowTokens is { } contextWindowTokens)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(contextWindowTokens);
+            outputTokens = Math.Min(
+                outputTokens,
+                Math.Max(0, contextWindowTokens - wireEstimate.WireInputTokens));
+        }
+
+        return Estimate(
+            wireEstimate,
+            outputTokens,
+            request.AdmissionCost,
+            request.AdmissionWallClock);
+    }
+
+    /// <summary>Estimates one request from its complete wire input, output ceiling, and reviewed pricing.</summary>
+    public static ModelRequestAdmissionEstimate Estimate(
+        ModelWireEstimate wireEstimate,
+        int outputTokens,
+        ModelCostMetadata? pricing,
+        TimeSpan? wallClock = null)
+    {
+        ArgumentNullException.ThrowIfNull(wireEstimate);
+        ArgumentOutOfRangeException.ThrowIfNegative(outputTokens);
+        decimal? cost = null;
+        if (pricing is { PricesAvailable: true })
+        {
+            try
+            {
+                cost = pricing.CalculateAdmission(wireEstimate.WireInputTokens, outputTokens);
+            }
+            catch (ModelProviderException)
+            {
+                cost = null;
+            }
+            catch (OverflowException)
+            {
+                cost = decimal.MaxValue;
+            }
+        }
+
+        return new ModelRequestAdmissionEstimate(
+            wireEstimate.WireInputTokens,
+            outputTokens,
+            1,
+            cost,
+            wallClock,
+            CostIsComplete: cost is not null,
+            WallClockIsComplete: wallClock is not null);
+    }
+
+    /// <summary>Combines two sequential requests without inventing unknown dimensions.</summary>
+    public static ModelRequestAdmissionEstimate Combine(
+        ModelRequestAdmissionEstimate first,
+        ModelRequestAdmissionEstimate second)
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        var inputTokens = SaturatingAdd(first.InputTokens, second.InputTokens);
+        var outputTokens = SaturatingAdd(first.OutputTokens, second.OutputTokens);
+        var calls = SaturatingAdd(first.Calls, second.Calls);
+        decimal? cost = first.Cost is not null || second.Cost is not null
+            ? SaturatingAdd(first.Cost ?? 0, second.Cost ?? 0)
+            : null;
+        TimeSpan? wallClock = first.WallClock is not null || second.WallClock is not null
+            ? TimeSpan.FromTicks(SaturatingAdd(
+                first.WallClock?.Ticks ?? 0,
+                second.WallClock?.Ticks ?? 0))
+            : null;
+        return new ModelRequestAdmissionEstimate(
+            inputTokens,
+            outputTokens,
+            calls,
+            cost,
+            wallClock,
+            first.CostIsComplete && second.CostIsComplete,
+            first.WallClockIsComplete && second.WallClockIsComplete);
+    }
+
+    /// <summary>Maps known dimensions to the existing execution-budget contract.</summary>
+    public static BudgetDimensions ToBudgetDimensions(ModelRequestAdmissionEstimate estimate)
+    {
+        ArgumentNullException.ThrowIfNull(estimate);
+        ArgumentOutOfRangeException.ThrowIfNegative(estimate.InputTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(estimate.OutputTokens);
+        ArgumentOutOfRangeException.ThrowIfNegative(estimate.Calls);
+        ArgumentOutOfRangeException.ThrowIfNegative(estimate.Cost ?? 0);
+        if (estimate.WallClock is { } wallClock && wallClock < TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(estimate), "Wall-clock admission cannot be negative.");
+        }
+
+        return new BudgetDimensions(
+            SaturatingTokenTotal(estimate.InputTokens, estimate.OutputTokens),
+            estimate.Calls,
+            estimate.WallClock ?? TimeSpan.Zero,
+            estimate.Cost ?? 0);
+    }
+
+    private static long SaturatingAdd(long first, long second)
+    {
+        return first > long.MaxValue - second ? long.MaxValue : first + second;
+    }
+
+    private static int SaturatingAdd(int first, int second)
+    {
+        return first > int.MaxValue - second ? int.MaxValue : first + second;
+    }
+
+    private static decimal SaturatingAdd(decimal first, decimal second)
+    {
+        return first > decimal.MaxValue - second ? decimal.MaxValue : first + second;
+    }
+
+    private static ModelWireEstimate EstimateWire(ModelStreamRequest request)
+    {
+        var messages = request.Messages.Count > 0
+            ? request.Messages
+            :
+            [
+                new ModelMessage
+                {
+                    Role = ModelMessageRole.User,
+                    SectionId = "current-user",
+                    Content = [new ModelContentPart { Content = request.Input }],
+                },
+            ];
+        var stablePrefixMessageCount = Math.Min(
+            request.Layout?.StablePrefixMessageCount ?? 0,
+            messages.Count);
+        return ModelWireEstimator.Estimate(
+            messages,
+            request.Tools,
+            request.ToolTransportMode,
+            stablePrefixMessageCount,
+            request.MaximumOutputTokens ?? 0,
+            request.ProviderInstructions);
+    }
+}
+
 /// <summary>Immutable wire-token estimate for one canonical tool inventory.</summary>
 public readonly record struct ModelWireToolEstimate
 {
@@ -415,7 +574,10 @@ public static class ModelToolCanonicalizer
     /// <summary>Renders a single deterministic textual fallback inventory.</summary>
     public static string RenderText(
         IReadOnlyList<ModelToolDefinition> definitions,
-        IPromptLoader prompts) => RenderText(definitions, prompts, out _);
+        IPromptLoader prompts)
+    {
+        return RenderText(definitions, prompts, out _);
+    }
 
     /// <summary>Renders the same inventory while retaining source ranges for already-admitted tools.</summary>
     public static string RenderText(IReadOnlyList<ModelToolDefinition> definitions, IPromptLoader prompts, out IReadOnlyList<ModelContextSource> sources)

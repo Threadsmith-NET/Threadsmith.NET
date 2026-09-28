@@ -120,9 +120,12 @@ internal sealed class TextEvidenceDocument
             : string.Concat(_prefix.AsSpan(position, prefixLength), _content.AsSpan(0, length - prefixLength));
     }
 
-    private char CharacterAt(int position) => position < _prefix.Length
+    private char CharacterAt(int position)
+    {
+        return position < _prefix.Length
         ? _prefix[position]
         : _content[position - _prefix.Length];
+    }
 }
 
 /// <summary>A bounded text-evidence segment and its exact continuation position.</summary>

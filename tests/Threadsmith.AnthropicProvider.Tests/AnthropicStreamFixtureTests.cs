@@ -1,7 +1,6 @@
 namespace Threadsmith.AnthropicProvider.Tests;
 
 using System.Net;
-using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Models;
@@ -334,5 +333,8 @@ public sealed class AnthropicStreamFixtureTests
         Assert.Equal(0, unclaimed.ByteCount);
     }
 
-    private static AnthropicModelProvider Provider(HttpClient client) => new(client, TestAnthropic.Profile(), "test-key", TestAnthropic.Compatibility());
+    private static AnthropicModelProvider Provider(HttpClient client)
+    {
+        return new(client, TestAnthropic.Profile(), "test-key", TestAnthropic.Compatibility());
+    }
 }

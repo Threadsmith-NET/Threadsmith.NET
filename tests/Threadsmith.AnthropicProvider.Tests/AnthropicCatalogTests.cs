@@ -110,6 +110,7 @@ public sealed class AnthropicCatalogTests
     {
         var hydrated = Hydrate(Model("claude-fable-5-1"));
         var profile = Assert.Single(new AnthropicProviderRegistration().CreateProfiles(hydrated));
+        Assert.True(profile.EnforcesRequestOutputTokenLimit);
         Assert.Equal(ReasoningControllability.Selectable, profile.ReasoningCapability?.Controllability);
         Assert.False(profile.ReasoningCapability?.SupportsReasoningOff);
         Assert.DoesNotContain(ReasoningLevel.None, profile.SupportedReasoningLevels);
@@ -421,22 +422,36 @@ public sealed class AnthropicCatalogTests
         return AnthropicCatalogHydrator.Hydrate(Provider(), models, AnthropicReviewedModels.All);
     }
 
-    private static ModelProviderRegistry Registry() => new([new AnthropicProviderRegistration()]);
+    private static ModelProviderRegistry Registry()
+    {
+        return new([new AnthropicProviderRegistration()]);
+    }
 
-    private static Task<string?> SecretAsync(string reference, CancellationToken cancellationToken) => Task.FromResult<string?>("fixture-key");
+    private static Task<string?> SecretAsync(string reference, CancellationToken cancellationToken)
+    {
+        return Task.FromResult<string?>("fixture-key");
+    }
 
-    private static AnthropicModelDiscoveryService Discovery(HttpClient http) => new(AnthropicModelDiscoveryClient.Create(http, "fixture-key", TimeSpan.FromSeconds(15)));
+    private static AnthropicModelDiscoveryService Discovery(HttpClient http)
+    {
+        return new(AnthropicModelDiscoveryClient.Create(http, "fixture-key", TimeSpan.FromSeconds(15)));
+    }
 
     private static Task<AnthropicProviderConfiguration> StartupAsync(string directory, HttpClient http)
-        => AnthropicCatalogMaintenance.HydrateStartupAsync(Provider(), SecretAsync, http, directory, CancellationToken.None);
-
-    private static AnthropicModelCatalogCacheEntry Entry() => new()
     {
-        ProviderId = "primary",
-        SecretReferenceIdentity = AnthropicModelCatalogCache.CreateSecretReferenceIdentity("secrets:models:anthropic"),
-        FetchedAt = DateTimeOffset.UtcNow.AddHours(-1),
-        Models = [Model()],
-    };
+        return AnthropicCatalogMaintenance.HydrateStartupAsync(Provider(), SecretAsync, http, directory, CancellationToken.None);
+    }
+
+    private static AnthropicModelCatalogCacheEntry Entry()
+    {
+        return new()
+        {
+            ProviderId = "primary",
+            SecretReferenceIdentity = AnthropicModelCatalogCache.CreateSecretReferenceIdentity("secrets:models:anthropic"),
+            FetchedAt = DateTimeOffset.UtcNow.AddHours(-1),
+            Models = [Model()],
+        };
+    }
 
     private static async Task<AnthropicModelCatalogCache> SeedCacheAsync(string directory, TimeSpan age)
     {
@@ -477,13 +492,18 @@ public sealed class AnthropicCatalogTests
     }
 
     private static HttpResponseMessage Response(string body, HttpStatusCode status = HttpStatusCode.OK)
-        => new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+    {
+        return new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+    }
 
     private sealed class QueueHandler : HttpMessageHandler
     {
         private readonly Queue<HttpResponseMessage> _responses;
 
-        internal QueueHandler(params HttpResponseMessage[] responses) => _responses = new Queue<HttpResponseMessage>(responses);
+        internal QueueHandler(params HttpResponseMessage[] responses)
+        {
+            _responses = new Queue<HttpResponseMessage>(responses);
+        }
 
         internal List<string> Requests { get; } = [];
 
@@ -502,7 +522,10 @@ public sealed class AnthropicCatalogTests
     {
         private readonly Queue<AnthropicModelDiscoveryPage> _pages;
 
-        internal StubPages(params AnthropicModelDiscoveryPage[] pages) => _pages = new Queue<AnthropicModelDiscoveryPage>(pages);
+        internal StubPages(params AnthropicModelDiscoveryPage[] pages)
+        {
+            _pages = new Queue<AnthropicModelDiscoveryPage>(pages);
+        }
 
         internal int Calls { get; private set; }
 
@@ -533,6 +556,9 @@ public sealed class AnthropicCatalogTests
 
         internal string Path { get; }
 
-        public void Dispose() => Directory.Delete(Path, recursive: true);
+        public void Dispose()
+        {
+            Directory.Delete(Path, recursive: true);
+        }
     }
 }

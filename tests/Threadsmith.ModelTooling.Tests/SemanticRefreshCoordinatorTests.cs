@@ -703,8 +703,19 @@ public static class SemanticRefreshCoordinatorTests
     {
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
+        var completed = new TaskCompletionSource<SemanticRefreshCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = events.Subscribe((domainEvent, _) =>
+        {
+            if (domainEvent is SemanticRefreshCompleted refresh)
+            {
+                completed.TrySetResult(refresh);
+            }
+
+            return Task.CompletedTask;
+        });
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        await using var coordinator = CreateCoordinator(backend, events);
+        var reader = new TestSemanticFileSnapshotReader();
+        await using var coordinator = CreateCoordinator(backend, events, reader);
         await coordinator.BindAsync(repository.CreateRequest());
         const string replacement = "public class HostOwned { }";
         var registration = await coordinator.RegisterExpectedWritesAsync(
@@ -715,15 +726,35 @@ public static class SemanticRefreshCoordinatorTests
 
         await File.WriteAllTextAsync(repository.SourcePath, replacement);
         await coordinator.ObserveChangeAsync(repository.CreateChange());
-        await coordinator.CompleteExpectedWritesAsync(
+        var reading = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        reader.BeforeRead = async token =>
+        {
+            reading.TrySetResult();
+            await release.Task.WaitAsync(token);
+        };
+        var completion = coordinator.CompleteExpectedWritesAsync(
             Assert.IsType<SemanticHostMutationRegistration>(registration),
             ["Source.cs"]);
-        var result = await coordinator.EnsureCurrentAsync(
+        try
+        {
+            await reading.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, coordinator.GetActiveHostMutationCount(repository.SessionId));
+            Assert.Equal(0, backend.RefreshCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await completion;
+        }
+
+        _ = await coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
 
-        Assert.Equal(SemanticRefreshReason.HostMutation, result.Reason);
+        Assert.Equal(SemanticRefreshReason.HostMutation, (await completed.Task.WaitAsync(TimeSpan.FromSeconds(10))).Reason);
         Assert.Equal(1, backend.RefreshCount);
+        Assert.Equal(0, coordinator.GetActiveHostMutationCount(repository.SessionId));
     }
 
     /// <summary>A mismatched expected write identity remains externally attributed.</summary>
@@ -2470,6 +2501,8 @@ public static class SemanticRefreshCoordinatorTests
 
         public bool ReturnUnstable { get; set; }
 
+        public Func<CancellationToken, Task>? BeforeRead { get; set; }
+
         public async Task<SemanticFileSnapshot> ReadAsync(
             string path,
             bool readAsBinary,
@@ -2477,6 +2510,11 @@ public static class SemanticRefreshCoordinatorTests
         {
             Interlocked.Increment(ref _readCount);
             _readPaths.Enqueue(Path.GetFullPath(path));
+            if (BeforeRead is { } beforeRead)
+            {
+                await beforeRead(cancellationToken);
+            }
+
             if (ReturnUnstable)
             {
                 return new SemanticFileSnapshot(

@@ -5,10 +5,10 @@ Use the [user guide](../user-guide.md) for the complete product walkthrough. The
 - [Opening a repository](opening-a-repository.md)
 - [Interactive commands and keys](keyboard-shortcuts.md)
 - [Full-screen agent workspace](agent-workspace.md)
-- [Cache reuse and per-request reporting](cache-optimized-context.md)
+- [Cache reuse, request reduction, and per-request reporting](cache-optimized-context.md)
 - [Semantic refresh](semantic-refresh.md)
 
-- [Conversation context](conversation-context.md)
+- [Conversation context, exact-source projection, and active-turn compaction](conversation-context.md)
 - [Conversation and execution loop](conversation-loop.md)
 - [Session lifecycle](session-lifecycle.md)
 - [Model providers](model-providers.md)

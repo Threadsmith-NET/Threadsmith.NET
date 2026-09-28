@@ -24,8 +24,15 @@ public static class Plan103ContextAssemblyTests
         {
             await fixture.Store.ArchiveMessageAsync(new ConversationMessage
             {
-                Id = ConversationMessageId.New(), SessionId = request.SessionId, RunId = priorRun, Sequence = 0,
-                Role = role, Content = content, ContentHash = "pending", EstimatedTokens = 4, OccurredAt = DateTimeOffset.UtcNow,
+                Id = ConversationMessageId.New(),
+                SessionId = request.SessionId,
+                RunId = priorRun,
+                Sequence = 0,
+                Role = role,
+                Content = content,
+                ContentHash = "pending",
+                EstimatedTokens = 4,
+                OccurredAt = DateTimeOffset.UtcNow,
             });
         }
 
@@ -172,28 +179,34 @@ public static class Plan103ContextAssemblyTests
         Assert.Equal(assembled.ModelInput, (await assembler.AssembleAsync(request)).ModelInput);
     }
 
-    private static RepositoryMemoryEntry CreateEntry(string text) => new()
+    private static RepositoryMemoryEntry CreateEntry(string text)
     {
-        Id = RepositoryMemoryId.New(),
-        RepositoryIdentity = MemoryTestData.Repository,
-        Text = text,
-        ContentHash = "test-content-hash",
-        Origin = RepositoryMemoryOrigin.Manual,
-        Revision = 3,
-        CreatedAt = DateTimeOffset.UtcNow,
-        UpdatedAt = DateTimeOffset.UtcNow,
-        Sensitivity = ConversationSensitivity.Sensitive,
-    };
+        return new()
+        {
+            Id = RepositoryMemoryId.New(),
+            RepositoryIdentity = MemoryTestData.Repository,
+            Text = text,
+            ContentHash = "test-content-hash",
+            Origin = RepositoryMemoryOrigin.Manual,
+            Revision = 3,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Sensitivity = ConversationSensitivity.Sensitive,
+        };
+    }
 
-    private static ContextAssemblyRequest CreateRequest(ConversationFixture fixture) => new()
+    private static ContextAssemblyRequest CreateRequest(ConversationFixture fixture)
     {
-        SessionId = SessionId.New(),
-        RunId = RunId.New(),
-        Phase = RunPhase.EvidenceCollection,
-        RepositoryPath = fixture.DirectoryPath,
-        RepositoryIdentity = MemoryTestData.Repository,
-        Task = new TaskSpecification("current task intent", []),
-    };
+        return new()
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            Phase = RunPhase.EvidenceCollection,
+            RepositoryPath = fixture.DirectoryPath,
+            RepositoryIdentity = MemoryTestData.Repository,
+            Task = new TaskSpecification("current task intent", []),
+        };
+    }
 
     private static ContextAssembler CreateAssembler(IDomainEventStream events, IHybridRepositoryMemoryRetriever retriever, IModelResolver? resolver = null, IConversationStore? conversationStore = null)
     {
@@ -213,7 +226,10 @@ public static class Plan103ContextAssemblyTests
 
     private sealed class TestRetriever : IHybridRepositoryMemoryRetriever
     {
-        public TestRetriever(RepositoryMemoryEntry entry) => Entry = entry;
+        public TestRetriever(RepositoryMemoryEntry entry)
+        {
+            Entry = entry;
+        }
 
         public RepositoryMemoryEntry Entry { get; set; }
 

@@ -5,10 +5,8 @@ using Threadsmith.Execution;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
-using Threadsmith.Interaction.Runs;
 using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
-using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Provider-maintenance errors stay local to interactive commands.</summary>

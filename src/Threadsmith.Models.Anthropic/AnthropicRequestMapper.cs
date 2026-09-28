@@ -108,10 +108,16 @@ internal static class AnthropicRequestMapper
     }
 
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
-    internal static string Digest(JsonObject body) => Hash(JsonSerializer.SerializeToUtf8Bytes(body));
+    internal static string Digest(JsonObject body)
+    {
+        return Hash(JsonSerializer.SerializeToUtf8Bytes(body));
+    }
 
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
-    internal static string Hash(ReadOnlySpan<byte> bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
+    internal static string Hash(ReadOnlySpan<byte> bytes)
+    {
+        return Convert.ToHexStringLower(SHA256.HashData(bytes));
+    }
 
     private static JsonArray CreateMessages(ModelStreamRequest request, ModelToolWireNameMap names, Dictionary<int, JsonObject> messageBlocks, Dictionary<JsonNode, ModelMessage>? attribution)
     {
@@ -339,7 +345,10 @@ internal static class AnthropicRequestMapper
         }
     }
 
-    private static JsonObject Text(string text) => new() { ["type"] = "text", ["text"] = text };
+    private static JsonObject Text(string text)
+    {
+        return new() { ["type"] = "text", ["text"] = text };
+    }
 
     private static void AddThinking(JsonObject body, JsonObject output, ModelStreamRequest request, ModelProfile profile, AnthropicModelCompatibility compatibility)
     {

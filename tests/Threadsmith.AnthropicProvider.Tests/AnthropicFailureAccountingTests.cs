@@ -127,6 +127,9 @@ public sealed class AnthropicFailureAccountingTests
         Assert.Equal(0.00045m, usage.EstimatedCost);
     }
 
-    private static AnthropicModelProvider Provider(HttpClient client) => new(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility());
+    private static AnthropicModelProvider Provider(HttpClient client)
+    {
+        return new(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility());
+    }
 }
 

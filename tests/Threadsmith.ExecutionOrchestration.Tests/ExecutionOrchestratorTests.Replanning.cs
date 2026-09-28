@@ -406,17 +406,23 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Empty(fixture.CommitHandler.Commands);
     }
 
-    private static MutationProposalResult Replan() => new()
+    private static MutationProposalResult Replan()
     {
-        ReplanRequested = true,
-        Rationale = "Inspect the missing dependency and replace unfinished work.",
-    };
+        return new()
+        {
+            ReplanRequested = true,
+            Rationale = "Inspect the missing dependency and replace unfinished work.",
+        };
+    }
 
-    private static MutationValidationResult PassingValidation() => new(
+    private static MutationValidationResult PassingValidation()
+    {
+        return new(
         new BuildValidationResult(true, [], [], TimeSpan.Zero),
         [],
         new TestValidationResult { Completed = true, Selection = new TestSelection() },
         new AcceptanceGateResult(AcceptanceGateStatus.Passed, []));
+    }
 
     private static ExecutionStartRequest ReplacementRequest(ExecutionFixture fixture, ExecutionStartRequest previous)
     {

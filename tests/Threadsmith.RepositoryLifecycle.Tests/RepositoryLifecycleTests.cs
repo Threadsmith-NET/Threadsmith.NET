@@ -868,11 +868,13 @@ public static class RepositoryLifecycleTests
             harness.Events,
             surface);
 
+        using var startup = CreateStartupCancellation();
         await shell.RunAsync(
             repository.RootPath,
             RepositoryTrustLevel.TrustedRead,
             repository.SolutionPath,
-            "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(10));
+            "Test profile (test-model)",
+            cancellationToken: startup.Token);
 
         Assert.Equal($"{Path.GetFileName(repository.RootPath)[..40]} > ", surface.Prompt);
         Assert.Contains(
@@ -908,10 +910,12 @@ public static class RepositoryLifecycleTests
             harness.Events,
             surface);
 
+        using var startup = CreateStartupCancellation();
         await shell.RunAsync(
             repository.RootPath,
             RepositoryTrustLevel.TrustedRead,
-            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(10));
+            modelStatus: "Test profile (test-model)",
+            cancellationToken: startup.Token);
 
         Assert.Contains(
             "Remembered: Sample.sln",
@@ -932,8 +936,8 @@ public static class RepositoryLifecycleTests
         var coordinator = new InteractionCoordinator(
             new InteractionPresenter(dispatcher, harness.Projections), harness.Events, surface);
 
-        await coordinator.RunAsync(repository.RootPath, RepositoryTrustLevel.TrustedRead)
-            .WaitAsync(TimeSpan.FromSeconds(15));
+        using var startup = CreateStartupCancellation();
+        await coordinator.RunAsync(repository.RootPath, RepositoryTrustLevel.TrustedRead, cancellationToken: startup.Token);
 
         Assert.Equal(["Remembered: Sample.sln"], surface.StartupDetails);
         Assert.True(surface.DetailsShownDuringSemanticLoading);
@@ -960,12 +964,13 @@ public static class RepositoryLifecycleTests
                 harness.Events,
                 surface);
 
+            using var startup = CreateStartupCancellation();
             await shell.RunAsync(
                 repositoryPath,
                 RepositoryTrustLevel.UntrustedInspection,
                 modelStatus: "Test profile (test-model)",
-                repositoryConfigurationDirectoryExistedAtStartup: configurationDirectoryExistedAtStartup)
-                .WaitAsync(TimeSpan.FromSeconds(10));
+                repositoryConfigurationDirectoryExistedAtStartup: configurationDirectoryExistedAtStartup,
+                cancellationToken: startup.Token);
 
             Assert.Contains("Initialized Threadsmith repository:", surface.Output, StringComparison.Ordinal);
             Assert.True(File.Exists(Path.Combine(repositoryPath, ".threadsmith", "config.json")));
@@ -996,10 +1001,12 @@ public static class RepositoryLifecycleTests
             new InteractionPresenter(dispatcher, harness.Projections),
             harness.Events,
             surface);
+        using var startup = CreateStartupCancellation();
         await shell.RunAsync(
             repository.RootPath,
             RepositoryTrustLevel.TrustedRead,
-            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(15));
+            modelStatus: "Test profile (test-model)",
+            cancellationToken: startup.Token);
         const string granted = "Repository trust is now FullyTrustedAutomation.";
         if (expectedAutomation)
         {
@@ -1028,14 +1035,25 @@ public static class RepositoryLifecycleTests
             harness.Events,
             surface);
 
+        using var startup = CreateStartupCancellation();
         await shell.RunAsync(
             repository.RootPath,
-            modelStatus: "Test profile (test-model)").WaitAsync(TimeSpan.FromSeconds(10));
+            modelStatus: "Test profile (test-model)",
+            cancellationToken: startup.Token);
 
         Assert.Contains("Startup cancelled.", surface.Output, StringComparison.Ordinal);
         Assert.Equal(string.Empty, surface.Prompt);
         Assert.DoesNotContain(harness.ObservedEvents, item => item is SolutionLoaded);
         Assert.DoesNotContain(harness.ObservedEvents, item => item is TaskIntentRecorded);
+    }
+
+    private static CancellationTokenSource CreateStartupCancellation()
+    {
+        // These exercise real dotnet processes and SQLite I/O, not a startup performance SLA.
+        // Cancel the operation itself so timeout cleanup cannot race a still-running shell.
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        cancellation.CancelAfter(TimeSpan.FromSeconds(60));
+        return cancellation;
     }
 
     private sealed class StartupRepositorySurface : IInteractionSurface, IStartupProgressSurface
@@ -1051,10 +1069,14 @@ public static class RepositoryLifecycleTests
         public string Output => _output.ToString();
 
         public Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
-            => Task.FromResult(new InteractionInput(true, "/quit", cancellationToken));
+        {
+            return Task.FromResult(new InteractionInput(true, "/quit", cancellationToken));
+        }
 
         public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
-            => throw new InvalidOperationException("Remembered-solution startup should not require selection.");
+        {
+            throw new InvalidOperationException("Remembered-solution startup should not require selection.");
+        }
 
         public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
         {
@@ -1067,11 +1089,15 @@ public static class RepositoryLifecycleTests
         }
 
         public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        {
+            return Task.CompletedTask;
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation awaited by this test surface.")]
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
-            => operation.WaitAsync(cancellationToken);
+        {
+            return operation.WaitAsync(cancellationToken);
+        }
 
         public Task SetStartupDetailsAsync(IReadOnlyList<string> details, CancellationToken cancellationToken = default)
         {
@@ -1161,11 +1187,15 @@ public static class RepositoryLifecycleTests
         }
 
         public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        {
+            return Task.CompletedTask;
+        }
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "VSTHRD003", Justification = "The coordinator owns the operation represented by this test surface.")]
         public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
-            => ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+        {
+            return ShowStatusUntilAsync(activity.Format(), operation, cancellationToken);
+        }
 
         public Task SetPromptAsync(
             string prompt,

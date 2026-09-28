@@ -1,7 +1,6 @@
 namespace Threadsmith.Interaction.Agents;
 
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Models;
 
@@ -37,15 +36,18 @@ public sealed record AgentPresentationSnapshot(
     public bool IsTerminal => State is AgentRunStatus.Completed or AgentRunStatus.Failed or AgentRunStatus.Cancelled or AgentRunStatus.Discarded;
 
     /// <summary>Formats each public role for display.</summary>
-    public static string RoleLabel(AgentRole role) => role switch
+    public static string RoleLabel(AgentRole role)
     {
-        AgentRole.SecurityReviewer => "Security Reviewer",
-        AgentRole.TestReviewer => "Test Reviewer",
-        AgentRole.PerformanceReviewer => "Performance Reviewer",
-        AgentRole.ArchitectureReviewer => "Architecture Reviewer",
-        AgentRole.BugReviewer => "Bug Reviewer",
-        _ => role.ToString(),
-    };
+        return role switch
+        {
+            AgentRole.SecurityReviewer => "Security Reviewer",
+            AgentRole.TestReviewer => "Test Reviewer",
+            AgentRole.PerformanceReviewer => "Performance Reviewer",
+            AgentRole.ArchitectureReviewer => "Architecture Reviewer",
+            AgentRole.BugReviewer => "Bug Reviewer",
+            _ => role.ToString(),
+        };
+    }
 }
 
 /// <summary>Optional retained-agent capability; other frontends retain their ordinary presentation.</summary>

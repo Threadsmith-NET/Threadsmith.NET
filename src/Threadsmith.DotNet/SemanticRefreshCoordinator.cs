@@ -692,7 +692,8 @@ public sealed class SemanticRefreshCoordinator :
                 item => item.Path,
                 item => item.ExistedBefore,
                 PathComparer);
-            if (!binding.ActiveHostMutations.TryAdd(mutationSetId, pathShapes))
+            if (binding.CompletingHostMutations.Contains(mutationSetId)
+                || !binding.ActiveHostMutations.TryAdd(mutationSetId, pathShapes))
             {
                 throw new InvalidOperationException(
                     "The semantic host-write registration is already active.");
@@ -746,45 +747,59 @@ public sealed class SemanticRefreshCoordinator :
                 {
                     return;
                 }
+
+                binding.CompletingHostMutations.Add(registration.MutationSetId);
             }
 
-            foreach (var path in paths)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var content = await ReadStableFileAsync(binding, path, cancellationToken);
-                if (!content.IsStable)
+                foreach (var path in paths)
                 {
-                    QueueRecovery(binding);
-                    continue;
-                }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var content = await ReadStableFileAsync(binding, path, cancellationToken);
+                    if (!content.IsStable)
+                    {
+                        QueueRecovery(binding);
+                        continue;
+                    }
 
-                SemanticRefreshReason source;
+                    SemanticRefreshReason source;
+                    lock (binding.Gate)
+                    {
+                        var matches = binding.HostIdentities.TryGetValue(path, out var identities)
+                            && identities.Contains(content.Identity);
+                        source = matches
+                            ? SemanticRefreshReason.HostMutation
+                            : SemanticRefreshReason.ExternalChange;
+                        if (!matches)
+                        {
+                            binding.HostMismatchPaths.Add(path);
+                        }
+                    }
+
+                    var existedBefore = pathShapes?.TryGetValue(path, out var existed) == true && existed;
+                    var kind = content.Exists
+                        ? existedBefore
+                            ? SemanticFileChangeKind.Changed
+                            : SemanticFileChangeKind.Created
+                        : SemanticFileChangeKind.Deleted;
+                    QueueChange(
+                        binding,
+                        new SemanticFileChange(
+                            registration.SessionId,
+                            path,
+                            kind,
+                            source));
+                }
+            }
+            finally
+            {
                 lock (binding.Gate)
                 {
-                    var matches = binding.HostIdentities.TryGetValue(path, out var identities)
-                        && identities.Contains(content.Identity);
-                    source = matches
-                        ? SemanticRefreshReason.HostMutation
-                        : SemanticRefreshReason.ExternalChange;
-                    if (!matches)
-                    {
-                        binding.HostMismatchPaths.Add(path);
-                    }
+                    // Keep the worker fenced until every completion snapshot has been
+                    // classified; refreshing earlier consumes the expected identities.
+                    binding.CompletingHostMutations.Remove(registration.MutationSetId);
                 }
-
-                var existedBefore = pathShapes?.TryGetValue(path, out var existed) == true && existed;
-                var kind = content.Exists
-                    ? existedBefore
-                        ? SemanticFileChangeKind.Changed
-                        : SemanticFileChangeKind.Created
-                    : SemanticFileChangeKind.Deleted;
-                QueueChange(
-                    binding,
-                    new SemanticFileChange(
-                        registration.SessionId,
-                        path,
-                        kind,
-                        source));
             }
         }
     }
@@ -866,7 +881,7 @@ public sealed class SemanticRefreshCoordinator :
 
         lock (binding.Gate)
         {
-            return binding.ActiveHostMutations.Count;
+            return binding.ActiveHostMutations.Count + binding.CompletingHostMutations.Count;
         }
     }
 
@@ -2785,6 +2800,8 @@ public sealed class SemanticRefreshCoordinator :
 
         public Dictionary<MutationSetId, IReadOnlyDictionary<string, bool>> ActiveHostMutations { get; } = [];
 
+        public HashSet<MutationSetId> CompletingHostMutations { get; } = [];
+
         public long AppliedVersion { get; set; }
 
         public Exception? BindingFailure { get; set; }
@@ -2810,7 +2827,7 @@ public sealed class SemanticRefreshCoordinator :
 
         public HashSet<string> HostMismatchPaths { get; }
 
-        public bool HostMutationInProgress => ActiveHostMutations.Count > 0;
+        public bool HostMutationInProgress => ActiveHostMutations.Count > 0 || CompletingHostMutations.Count > 0;
 
         public AuthoritativeInputSnapshot? InitialInputSnapshot { get; set; }
 

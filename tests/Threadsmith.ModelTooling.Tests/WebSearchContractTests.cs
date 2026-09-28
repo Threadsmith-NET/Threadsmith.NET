@@ -5,7 +5,6 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;

@@ -210,10 +210,12 @@ public static class AnthropicConversationLoopTests
         Assert.Equal("private native reasoning", assistant.GetProperty("content")[0].GetProperty("thinking").GetString());
     }
 
-    private static string PlanJson(string summary, string path = "src/example.cs") => JsonSerializer.Serialize(new
+    private static string PlanJson(string summary, string path = "src/example.cs")
     {
-        summary,
-        steps = new[]
+        return JsonSerializer.Serialize(new
+        {
+            summary,
+            steps = new[]
         {
             new
             {
@@ -224,26 +226,39 @@ public static class AnthropicConversationLoopTests
                 validation = new[] { "Build succeeds." },
             },
         },
-        risks = Array.Empty<string>(),
-        outstandingQuestions = Array.Empty<string>(),
-    });
+            risks = Array.Empty<string>(),
+            outstandingQuestions = Array.Empty<string>(),
+        });
+    }
 
-    private static string Event(string type, object body) => "event: " + type + "\ndata: " + JsonSerializer.Serialize(body) + "\n\n";
-
-    private static string Start() => Event("message_start", new
+    private static string Event(string type, object body)
     {
-        type = "message_start",
-        message = new { id = "message_native_loop", type = "message", role = "assistant", model = "claude-opus-5", content = Array.Empty<object>(), usage = new { input_tokens = 100, output_tokens = 0 } },
-    });
+        return "event: " + type + "\ndata: " + JsonSerializer.Serialize(body) + "\n\n";
+    }
 
-    private static string End(string reason) => Event("message_delta", new { type = "message_delta", delta = new { stop_reason = reason, stop_sequence = (string?)null }, usage = new { output_tokens = 50 } })
+    private static string Start()
+    {
+        return Event("message_start", new
+        {
+            type = "message_start",
+            message = new { id = "message_native_loop", type = "message", role = "assistant", model = "claude-opus-5", content = Array.Empty<object>(), usage = new { input_tokens = 100, output_tokens = 0 } },
+        });
+    }
+
+    private static string End(string reason)
+    {
+        return Event("message_delta", new { type = "message_delta", delta = new { stop_reason = reason, stop_sequence = (string?)null }, usage = new { output_tokens = 50 } })
         + Event("message_stop", new { type = "message_stop" });
+    }
 
-    private static string TextStream(string text) => Start()
+    private static string TextStream(string text)
+    {
+        return Start()
         + Event("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "text", text = string.Empty } })
         + Event("content_block_delta", new { type = "content_block_delta", index = 0, delta = new { type = "text_delta", text } })
         + Event("content_block_stop", new { type = "content_block_stop", index = 0 })
         + End("end_turn");
+    }
 
     private static string ToolStream((string Id, string Name, string Arguments)[] calls)
     {
@@ -396,13 +411,19 @@ public static class AnthropicConversationLoopTests
     {
         private readonly ConfiguredModelProvider _inner;
 
-        internal CapturingProvider(ConfiguredModelProvider inner) => _inner = inner;
+        internal CapturingProvider(ConfiguredModelProvider inner)
+        {
+            _inner = inner;
+        }
 
         internal List<ModelStreamRequest> Requests { get; } = [];
 
         internal List<bool> HadReplay { get; } = [];
 
-        public ModelStreamRequest Prepare(ModelStreamRequest request) => _inner.Prepare(request);
+        public ModelStreamRequest Prepare(ModelStreamRequest request)
+        {
+            return _inner.Prepare(request);
+        }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
@@ -419,7 +440,10 @@ public static class AnthropicConversationLoopTests
     {
         private readonly string[] _responses;
 
-        internal NativeHandler(string[] responses) => _responses = responses;
+        internal NativeHandler(string[] responses)
+        {
+            _responses = responses;
+        }
 
         internal List<JsonElement> Requests { get; } = [];
 

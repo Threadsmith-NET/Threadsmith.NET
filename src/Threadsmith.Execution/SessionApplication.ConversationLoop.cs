@@ -309,11 +309,15 @@ public sealed partial class SessionApplication
         var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
         await RefreshMemoryContextAsync(registration, invocationContext, memoriesEnabled, loopState, cancellationToken);
 
+        var allowObjectiveCompletion = registration.IncrementalPlanExecution
+            && registration.LastPlanBoundaryOrdinal > 0
+            && registration.ReplanningPlan is null;
         var modelTools = CreateModelTools(
             conversationDefinitions,
             workspaceAvailable,
             phase,
-            registration.IncrementalPlanExecution && registration.LastPlanBoundaryOrdinal > 0 && registration.ReplanningPlan is null);
+            allowObjectiveCompletion,
+            loopState.ActiveTurnEvidenceReferences.Count > 0);
         var modelPreference = _sessionPreferences?.Capture();
         var context = loopState.FrozenContext;
 
@@ -354,11 +358,26 @@ public sealed partial class SessionApplication
         await AssessActiveTurnCompactionAsync(
             runId,
             registration,
+            phase,
             modelRound,
             modelTools,
+            modelPreference,
             context,
             loopState,
+            invocationContext,
+            conversationDefinitions.FirstOrDefault(definition => string.Equals(
+                definition.Id,
+                ActiveTurnSourceProjector.RecoveryToolId,
+                StringComparison.Ordinal)),
+            _sessionPreferences?.IncludeReasoningText ?? false,
             cancellationToken);
+        modelTools = CreateModelTools(
+            conversationDefinitions,
+            workspaceAvailable,
+            phase,
+            allowObjectiveCompletion,
+            activeTurnRecoveryAvailable: loopState.ActiveTurnEvidenceReferences.Count > 0);
+
         var modelVisibleContinuation = loopState.CreateModelVisibleContinuation();
         var usageRequestId = new ModelRequestUsageId(
             runId,
@@ -397,10 +416,31 @@ public sealed partial class SessionApplication
                 cancellationToken);
         }
 
+        if (loopState.ActiveTurnEvidenceReferences.Count > 0
+            && (invocationContext is null
+                || !ActiveTurnSourceProjector.ValidateFinalRequest(
+                    requestEnvelope.Messages,
+                    invocationContext.RepositoryPath,
+                    invocationContext.WorkspaceId,
+                    loopState.HistoryRewriteGeneration,
+                    loopState.ActiveTurnEvidenceReferences)))
+        {
+            throw new BudgetExceededException(
+                "The final request could not retain exact source supporting every active-turn receipt.");
+        }
+
         invocationContext = AttachVisibleSourceFrontierToInvocationContext(
             invocationContext,
             requestEnvelope.Messages,
             loopState.HistoryRewriteGeneration);
+        if (invocationContext is not null)
+        {
+            invocationContext = invocationContext with
+            {
+                ActiveTurnEvidenceReferences = loopState.ActiveTurnEvidenceReferences,
+            };
+        }
+
         if (_contextAssembler is not null && invocationContext?.VisibleSourceFrontier is { } frontier)
         {
             await _contextAssembler.UpdateVisibleSourceFrontierInspectionAsync(
@@ -558,6 +598,7 @@ public sealed partial class SessionApplication
             round.ModelRequest.WorkloadClass,
             round.ModelRequest.ContainsSensitiveData,
             round.ModelRequest.Tools.Count);
+        ModelRequestBudgetUsage.CheckAdmission(round.Registration.Budget, round.ModelRequest);
         await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
         BudgetStatus? modelWallClockBudget = null;
         IReadOnlyList<RunSteeringMessage> preToolSteering = [];
@@ -1089,7 +1130,8 @@ public sealed partial class SessionApplication
         loopState.AddCurrentToolCall(CreateToolCallMessage(
             toolCallId,
             tool.ToolName,
-            tool.ArgumentsJson) with { ModelRound = round.ModelRequest.ToolContinuationRound });
+            tool.ArgumentsJson) with
+        { ModelRound = round.ModelRequest.ToolContinuationRound });
         streamState.PendingToolCalls.Add(new PendingModelToolCall(
             ordinal,
             toolCallId,
@@ -1384,7 +1426,8 @@ public sealed partial class SessionApplication
                 attemptNumber,
                 correctiveTurns.MaximumTurns,
                 failureSummary,
-                isFailingCall) with { ModelRound = round.ModelRequest.ToolContinuationRound });
+                isFailingCall) with
+            { ModelRound = round.ModelRequest.ToolContinuationRound });
         }
 
         var category = streamState.PendingToolCalls.Count == 1
@@ -1488,14 +1531,16 @@ public sealed partial class SessionApplication
         loopState.AddCurrentToolCall(CreateToolCallMessage(
             toolCallId,
             tool.ToolName,
-            tool.ArgumentsJson) with { ModelRound = round.ModelRequest.ToolContinuationRound });
+            tool.ArgumentsJson) with
+        { ModelRound = round.ModelRequest.ToolContinuationRound });
         loopState.AddCurrentToolResult(RequireCorrectiveMessages().CreateRejectedToolResultMessage(
             toolCallId,
             tool.ToolName,
             attemptNumber,
             correctiveTurns.MaximumTurns,
             failureSummary,
-            isFailingCall: true) with { ModelRound = round.ModelRequest.ToolContinuationRound });
+            isFailingCall: true) with
+        { ModelRound = round.ModelRequest.ToolContinuationRound });
         streamState.MarkCorrectiveTurnRequested();
         return true;
     }
@@ -1722,11 +1767,18 @@ public sealed partial class SessionApplication
         IReadOnlyList<ToolDefinition> conversationDefinitions,
         bool workspaceAvailable,
         RunPhase phase,
-        bool allowObjectiveCompletion)
+        bool allowObjectiveCompletion,
+        bool activeTurnRecoveryAvailable)
     {
         var availableDefinitions = workspaceAvailable
             ? conversationDefinitions
             : conversationDefinitions.Where(definition => !definition.RequiresWorkspace);
+        availableDefinitions = availableDefinitions.Where(definition =>
+            !string.Equals(
+                definition.Id,
+                ActiveTurnSourceProjector.RecoveryToolId,
+                StringComparison.Ordinal)
+            || activeTurnRecoveryAvailable);
         List<ModelToolDefinition> modelTools = [.. availableDefinitions.Select(definition => new ModelToolDefinition
         {
             Name = definition.Id,
@@ -1815,10 +1867,15 @@ public sealed partial class SessionApplication
     private async Task AssessActiveTurnCompactionAsync(
         RunId runId,
         RunRegistration registration,
+        RunPhase phase,
         int modelRound,
         IReadOnlyList<ModelToolDefinition> modelTools,
+        SessionModelPreferenceSnapshot? modelPreference,
         ContextAssemblyResult? context,
         ConversationLoopState loopState,
+        ToolInvocationContext? invocationContext,
+        ToolDefinition? activeTurnRecoveryDefinition,
+        bool includeReasoningText,
         CancellationToken cancellationToken)
     {
         if (context?.Layout is not { } layout)
@@ -1847,14 +1904,112 @@ public sealed partial class SessionApplication
         var compactionActivityDuration = default(TimeSpan?);
         var compactionActivityProfileId = default(ModelProfileId?);
         var visible = loopState.CreateModelVisibleContinuation();
-        var beforeEstimate = EstimateCompleteRequest(
-            context,
-            modelTools,
-            layout,
-            visible.Messages,
-            outputReserve);
+        ModelStreamRequest PrepareRequest(
+            ModelVisibleContinuation continuation,
+            bool applyCapacityFallback = true,
+            IReadOnlyList<ModelToolDefinition>? requestTools = null)
+        {
+            var effectiveTools = ResolveRecoveryToolAvailability(
+                requestTools ?? modelTools,
+                continuation.EvidenceReferences.Count > 0);
+            var messages = continuation.Messages.ToList();
+            var envelope = applyCapacityFallback
+                ? CreateRequestEnvelope(
+                    context,
+                    effectiveTools,
+                    messages,
+                    continuation.FirstNeverDeliveredMessageIndex)
+                : new RequestEnvelope(
+                    [.. context.Messages ?? [], .. messages],
+                    EstimateCompleteRequest(
+                        context,
+                        effectiveTools,
+                        layout,
+                        messages,
+                        outputReserve),
+                    false);
+            var containsSensitiveData = loopState.CompactionSummary is not null
+                || loopState.Groups.Any(group => group.Sensitivity == ConversationSensitivity.Sensitive);
+            var request = CreateModelStreamRequest(
+                runId,
+                registration,
+                phase,
+                modelRound,
+                effectiveTools,
+                modelPreference,
+                context,
+                envelope,
+                messages,
+                loopState.HistoryRewriteGeneration,
+                containsSensitiveData,
+                includeReasoningText);
+            return ModelRequestPreparation.Prepare(_model, request);
+        }
+
+        IReadOnlyList<ModelToolDefinition> ResolveRecoveryToolAvailability(
+            IReadOnlyList<ModelToolDefinition> requestTools,
+            bool recoveryRequired)
+        {
+            var withoutRecovery = requestTools.Where(tool => !string.Equals(
+                tool.Name,
+                ActiveTurnSourceProjector.RecoveryToolId,
+                StringComparison.Ordinal));
+            if (!recoveryRequired)
+            {
+                return [.. ModelToolCanonicalizer.Canonicalize(withoutRecovery)];
+            }
+
+            if (activeTurnRecoveryDefinition is null)
+            {
+                throw new InvalidOperationException(
+                    "Active-turn receipts require the historical evidence recovery tool.");
+            }
+
+            var recoveryModelTool = new ModelToolDefinition
+            {
+                Name = activeTurnRecoveryDefinition.Id,
+                Description = activeTurnRecoveryDefinition.Description,
+                ArgumentsJsonSchema = activeTurnRecoveryDefinition.InputSchema.JsonSchema,
+                PreferStrictArguments = activeTurnRecoveryDefinition.PreferStrictArguments,
+            };
+            return [.. ModelToolCanonicalizer.Canonicalize([.. withoutRecovery, recoveryModelTool])];
+        }
+
+        var preparedOrdinaryRequest = PrepareRequest(visible, applyCapacityFallback: false);
+        var beforeEstimate = preparedOrdinaryRequest.WireEstimate
+            ?? EstimateCompleteRequest(context, modelTools, layout, visible.Messages, outputReserve);
+        var preparedOrdinaryAdmissionRequest = preparedOrdinaryRequest;
+        try
+        {
+            preparedOrdinaryAdmissionRequest = PrepareRequest(visible);
+        }
+        catch (BudgetExceededException)
+        {
+            // The actual request path reports irreducible context capacity. Preserve the raw
+            // admission estimate here so optional compaction can still be assessed first.
+        }
+
+        var ordinaryAdmission = ModelRequestAdmissionEstimator.Estimate(
+            preparedOrdinaryAdmissionRequest);
+        var ordinaryAdmissionStatus = registration.Budget.Check(
+            ModelRequestAdmissionEstimator.ToBudgetDimensions(ordinaryAdmission));
+        var hasContextPressure = beforeEstimate.WireInputTokens >= pressureTargetTokens;
+        var hasBudgetPressure = ordinaryAdmissionStatus.IsExhausted;
+        var pressureReason = (hasContextPressure, hasBudgetPressure) switch
+        {
+            (true, true) => ActiveTurnCompactionPressureReason.ContextAndExecutionBudget,
+            (true, false) => ActiveTurnCompactionPressureReason.Context,
+            (false, true) => ActiveTurnCompactionPressureReason.ExecutionBudget,
+            _ => ActiveTurnCompactionPressureReason.None,
+        };
         var eligibleGroupCount = loopState.GetEligibleGroupCount();
         var effectiveRetentionTargetTokens = _activeTurnCompactionPolicy.RetainedRecentTokens;
+        ActiveTurnCompactionAttemptObserver? attemptObserver = null;
+        ActiveTurnSourceProjection? deterministicProjection = null;
+        var sourceProjectionForSummary = loopState.SourceProjection;
+        var sourceProjectionTools =
+            sourceProjectionForSummary is null ? null : modelTools;
+        BudgetStatus? finalAdmissionStatus = null;
 
         async Task CompleteActivityAsync(
             ActiveTurnCompactionInspectionStatus status,
@@ -1870,7 +2025,8 @@ public sealed partial class SessionApplication
                 && duration >= TimeSpan.Zero
                     ? duration.Ticks / TimeSpan.TicksPerMillisecond
                     : null;
-            var visibleAfterInputTokens = status == ActiveTurnCompactionInspectionStatus.Completed
+            var visibleAfterInputTokens = status is ActiveTurnCompactionInspectionStatus.Completed
+                or ActiveTurnCompactionInspectionStatus.DeterministicReduction
                 ? afterInputTokens ?? beforeEstimate.WireInputTokens
                 : beforeEstimate.WireInputTokens;
             await _events.PublishAsync(
@@ -1884,6 +2040,65 @@ public sealed partial class SessionApplication
                     visibleAfterInputTokens,
                     durationMilliseconds),
                 CancellationToken.None);
+        }
+
+        async Task StartActivityAsync(ModelProfileId activityProfileId)
+        {
+            if (compactionActivityActive)
+            {
+                return;
+            }
+
+            compactionActivityProfileId = activityProfileId;
+            compactionActivityActive = true;
+            try
+            {
+                await _events.PublishAsync(
+                    new ActiveTurnCompactionStarted(
+                        registration.SessionId,
+                        DateTimeOffset.UtcNow,
+                        runId,
+                        activityProfileId,
+                        beforeEstimate.WireInputTokens,
+                        pressureTargetTokens),
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                try
+                {
+                    await CompleteActivityAsync(
+                        ActiveTurnCompactionInspectionStatus.Cancelled,
+                        afterInputTokens: null);
+                }
+                catch (Exception completionException)
+                {
+                    _logger.LogWarning(
+                        completionException,
+                        "Active-turn compaction activity cleanup failed for cancelled run {RunId}.",
+                        runId.Value);
+                }
+
+                throw;
+            }
+            catch
+            {
+                try
+                {
+                    await CompleteActivityAsync(
+                        ActiveTurnCompactionInspectionStatus.ProviderFailure,
+                        afterInputTokens: null);
+                }
+                catch (Exception completionException)
+                {
+                    _logger.LogWarning(
+                        completionException,
+                        "Active-turn compaction activity cleanup failed for run {RunId} after start publication failed.",
+                        runId.Value);
+                }
+
+                throw;
+            }
         }
 
         async Task RecordAsync(
@@ -1908,6 +2123,36 @@ public sealed partial class SessionApplication
                     {
                         AssessmentSequence = loopState.AssessmentSequence,
                         Status = status,
+                        PressureReason = pressureReason,
+                        BudgetPressureDimensions = ordinaryAdmissionStatus.ExhaustedDimensions,
+                        CombinedAdmissionTokens = attemptObserver?.LastCombinedAdmission is { } combined
+                            ? ModelRequestAdmissionEstimator.ToBudgetDimensions(combined).Tokens
+                            : null,
+                        CombinedAdmissionCalls = attemptObserver?.LastCombinedAdmission?.Calls,
+                        CombinedAdmissionCost = attemptObserver?.LastCombinedAdmission?.Cost,
+                        CombinedAdmissionCostIsComplete =
+                            attemptObserver?.LastCombinedAdmission?.CostIsComplete == true,
+                        CombinedAdmissionWallClock =
+                            attemptObserver?.LastCombinedAdmission?.WallClock,
+                        CombinedAdmissionWallClockIsComplete =
+                            attemptObserver?.LastCombinedAdmission?.WallClockIsComplete == true,
+                        CandidateAttemptCount = attemptObserver?.AttemptCount ?? 0,
+                        SourceCandidateRangeCount = deterministicProjection?.CandidateRangeCount ?? 0,
+                        SourceRemovedRangeCount = deterministicProjection?.RemovedRangeCount ?? 0,
+                        SourceRetainedRangeCount = deterministicProjection?.RetainedRangeCount ?? 0,
+                        SourceOpaqueResultCount = deterministicProjection?.OpaqueResultCount ?? 0,
+                        SourceReclaimedCharacters = deterministicProjection?.ReclaimedCharacters ?? 0,
+                        SummaryAvoidedBySourceProjection =
+                            status == ActiveTurnCompactionInspectionStatus.DeterministicReduction,
+                        SummaryPreparedInputTokens =
+                            attemptObserver?.LastSummaryPreparedInputTokens,
+                        SummaryAdmissionOutputTokens =
+                            attemptObserver?.LastSummaryAdmission?.OutputTokens,
+                        AdmissionRejectedDimensions =
+                            finalAdmissionStatus?.ExhaustedDimensions
+                            ?? attemptObserver?.LastActualBudgetStatus?.ExhaustedDimensions
+                            ?? attemptObserver?.LastAdmissionStatus?.ExhaustedDimensions
+                            ?? BudgetExhaustionDimension.None,
                         BeforeInputTokens = beforeEstimate.WireInputTokens,
                         AfterInputTokens = afterInputTokens,
                         MaximumInputTokens = maximumInputTokens,
@@ -1924,7 +2169,9 @@ public sealed partial class SessionApplication
                         PrunedPriorItemCount = 0,
                         HistoryRewriteGeneration = loopState.HistoryRewriteGeneration,
                         SummaryContentHash = loopState.LastCheckpoint?.SummaryContentHash,
-                        CandidateProfileId = candidateProfileId?.Value,
+                        CandidateProfileId = status == ActiveTurnCompactionInspectionStatus.DeterministicReduction
+                            ? ordinaryProfileId?.Value
+                            : candidateProfileId?.Value,
                         CompactedFromGroupSequence = compactedFrom,
                         CompactedThroughGroupSequence = compactedThrough,
                         BackoffRoundsRemaining = loopState.BackoffRoundsRemaining,
@@ -1938,7 +2185,7 @@ public sealed partial class SessionApplication
             }
         }
 
-        if (!_activeTurnCompactionPolicy.Enabled || _activeTurnCompactor is null)
+        if (!_activeTurnCompactionPolicy.Enabled)
         {
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.Disabled,
@@ -1946,15 +2193,118 @@ public sealed partial class SessionApplication
             return;
         }
 
-        if (beforeEstimate.WireInputTokens < pressureTargetTokens)
+        if (!hasContextPressure && !hasBudgetPressure)
         {
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.BelowPressure,
-                "The canonical complete request is below the active-turn pressure target.");
+                "The canonical complete request is below the context target and fits the remaining execution budget.");
             return;
         }
 
-        if (loopState.ConsumeBackoffRound())
+        var sourceProjectionAttemptIdentity = string.Join(
+            ':',
+            loopState.LastGroupSequence,
+            loopState.HistoryRewriteGeneration,
+            beforeEstimate.WireInputTokens,
+            pressureTargetTokens,
+            ordinaryAdmissionStatus.ExhaustedDimensions,
+            activeTurnRecoveryDefinition?.Version ?? "none",
+            invocationContext?.WorkspaceId?.Value.ToString("N") ?? "none",
+            ordinaryProfileId?.Value.ToString("N") ?? "none",
+            context.Layout.StablePrefixDigest,
+            context.InstructionBundleDigest ?? "none",
+            context.ToolInventoryDigest ?? "none",
+            loopState.SourceProjectionInputIdentity,
+            loopState.SourceProjectionIdentity ?? "none",
+            _activeTurnCompactionPolicy.MinimumSavingsTokens,
+            _activeTurnCompactionPolicy.MaximumSourceGroups,
+            _activeTurnCompactionPolicy.MaximumInputTokens);
+        if (activeTurnRecoveryDefinition is not null
+            && invocationContext is not null
+            && loopState.BeginSourceProjectionAttempt(sourceProjectionAttemptIdentity))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            deterministicProjection = new ActiveTurnSourceProjector(RequirePrompts()).Propose(
+                loopState.Groups,
+                invocationContext.RepositoryPath,
+                invocationContext.WorkspaceId,
+                loopState.HistoryRewriteGeneration,
+                cancellationToken);
+            if (deterministicProjection is not null
+                && !string.Equals(
+                    deterministicProjection.Identity,
+                    loopState.SourceProjectionIdentity,
+                    StringComparison.Ordinal))
+            {
+                var recoveryModelTool = new ModelToolDefinition
+                {
+                    Name = activeTurnRecoveryDefinition.Id,
+                    Description = activeTurnRecoveryDefinition.Description,
+                    ArgumentsJsonSchema = activeTurnRecoveryDefinition.InputSchema.JsonSchema,
+                    PreferStrictArguments = activeTurnRecoveryDefinition.PreferStrictArguments,
+                };
+                IReadOnlyList<ModelToolDefinition> projectedTools =
+                    [.. ModelToolCanonicalizer.Canonicalize(
+                        [.. modelTools.Where(tool => !string.Equals(
+                            tool.Name,
+                            ActiveTurnSourceProjector.RecoveryToolId,
+                            StringComparison.Ordinal)), recoveryModelTool])];
+                var preview = loopState.CreateProjectionPreview(deterministicProjection);
+                var preparedProjectedRequest = PrepareRequest(
+                    preview,
+                    applyCapacityFallback: false,
+                    projectedTools);
+                var projectedEstimate = preparedProjectedRequest.WireEstimate
+                    ?? EstimateCompleteRequest(
+                        context,
+                        projectedTools,
+                        layout,
+                        preview.Messages,
+                        outputReserve);
+                var projectedAdmission = ModelRequestAdmissionEstimator.Estimate(preparedProjectedRequest);
+                var projectedAdmissionStatus = registration.Budget.Check(
+                    ModelRequestAdmissionEstimator.ToBudgetDimensions(projectedAdmission));
+                var savings = beforeEstimate.WireInputTokens - projectedEstimate.WireInputTokens;
+                var resolvesContextPressure = !hasContextPressure
+                    || projectedEstimate.WireInputTokens < pressureTargetTokens;
+                if (savings > 0)
+                {
+                    sourceProjectionForSummary = deterministicProjection;
+                    sourceProjectionTools = projectedTools;
+                }
+
+                if (savings > 0 && resolvesContextPressure && !projectedAdmissionStatus.IsExhausted)
+                {
+                    if (ordinaryProfileId is { } activityProfileId)
+                    {
+                        await StartActivityAsync(activityProfileId);
+                    }
+
+                    _ = loopState.ActivateSourceProjection(deterministicProjection);
+                    _logger.LogInformation(
+                        "Exact active-turn source projection removed {RemovedRanges} ranges for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens including recovery schema overhead.",
+                        deterministicProjection.RemovedRangeCount,
+                        runId.Value,
+                        beforeEstimate.WireInputTokens,
+                        projectedEstimate.WireInputTokens);
+                    await RecordAsync(
+                        ActiveTurnCompactionInspectionStatus.DeterministicReduction,
+                        "Exact equal-or-contained source coverage resolved request pressure without a summarizer call.",
+                        afterInputTokens: projectedEstimate.WireInputTokens);
+                    return;
+                }
+            }
+        }
+
+        if (_activeTurnCompactor is null)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.Disabled,
+                "Exact source projection did not resolve pressure and no active-turn summarizer is composed.");
+            return;
+        }
+
+        if (!hasBudgetPressure && loopState.ConsumeBackoffRound())
         {
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.Backoff,
@@ -1968,22 +2318,80 @@ public sealed partial class SessionApplication
             effectiveRetentionTargetTokens);
         if (eligiblePrefix.Count == 0 || context.ModelResolution is not { } ordinaryProfile)
         {
+            var noEligiblePrefixRationale = hasBudgetPressure
+                ? "The ordinary request does not fit the remaining execution budget, but no complete previously delivered prefix is eligible."
+                : "Context pressure was reached, but no complete previously delivered prefix is eligible.";
             await RecordAsync(
                 ActiveTurnCompactionInspectionStatus.NoEligiblePrefix,
-                "Pressure was reached, but no complete previously delivered prefix is eligible.");
+                noEligiblePrefixRationale);
             return;
         }
 
         var profileId = ordinaryProfile.ProfileId;
+        var continuationAdmissions = new Dictionary<int, ActiveTurnContinuationAdmission>();
+        ActiveTurnContinuationAdmission ResolveContinuationAdmission(int compactedGroupCount)
+        {
+            if (!continuationAdmissions.TryGetValue(compactedGroupCount, out var admission))
+            {
+                admission = EstimatePostSummaryAdmission(
+                    loopState,
+                    eligiblePrefix,
+                    compactedGroupCount,
+                    maximumInputTokens,
+                    sourceProjectionForSummary,
+                    continuation => PrepareRequest(
+                        continuation,
+                        requestTools: sourceProjectionTools));
+                continuationAdmissions.Add(compactedGroupCount, admission);
+            }
+
+            return admission;
+        }
+
         var taskContext = ActiveTurnTaskContextProjector.Project(
             registration.Task,
             _activeTurnCompactionPolicy);
+        var projectedEligiblePrefixes = new Dictionary<
+            int,
+            IReadOnlyList<ActiveTurnContinuationGroup>>();
+        if (sourceProjectionForSummary is not null && invocationContext is not null)
+        {
+            var summaryProjector = new ActiveTurnSourceProjector(RequirePrompts());
+            for (var groupCount = 1; groupCount <= eligiblePrefix.Count; groupCount++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var rawPrefix = eligiblePrefix.Take(groupCount).ToArray();
+                var prefixProjection = summaryProjector.Propose(
+                    rawPrefix,
+                    invocationContext.RepositoryPath,
+                    invocationContext.WorkspaceId,
+                    loopState.HistoryRewriteGeneration,
+                    cancellationToken);
+                if (prefixProjection is null)
+                {
+                    continue;
+                }
+
+                projectedEligiblePrefixes.Add(
+                    groupCount,
+                    rawPrefix.Select(group => prefixProjection.GroupMessages.TryGetValue(
+                        group.Sequence,
+                        out var projectedMessages)
+                            ? group with { Messages = projectedMessages }
+                            : group).ToArray());
+            }
+        }
+
         var request = new ActiveTurnCompactionRequest
         {
             RunId = runId,
             ProfileId = profileId,
             CandidateProfile = _activeTurnCompactionProfile,
             ProviderInstructions = context.ProviderInstructions,
+            ProfileCost = ordinaryProfile.Cost,
+            ProfileMaximumOutputTokens = ordinaryProfile.MaximumOutputTokens,
+            ProfileEnforcesRequestOutputTokenLimit =
+                ordinaryProfile.EnforcesRequestOutputTokenLimit,
             ToolContinuationRound = modelRound - 1,
             FrozenContextIdentity = string.Join(
                 '|',
@@ -1996,6 +2404,7 @@ public sealed partial class SessionApplication
             OmittedAcceptanceIntentCount = taskContext.OmittedAcceptanceIntentCount,
             PriorSummary = loopState.CompactionSummary,
             EligiblePrefix = eligiblePrefix,
+            ProjectedEligiblePrefixes = projectedEligiblePrefixes,
             SelectionConstraints = context.ModelConstraints,
             ContainsSensitiveData = context.ModelConstraints.ContainsSensitiveData
                 || eligiblePrefix.Any(group => group.Sensitivity == ConversationSensitivity.Sensitive),
@@ -2004,22 +2413,14 @@ public sealed partial class SessionApplication
             BeforeInputTokens = beforeEstimate.WireInputTokens,
             PressureTargetTokens = pressureTargetTokens,
         };
-        var attemptObserver = new ActiveTurnCompactionAttemptObserver(
+
+        attemptObserver = new ActiveTurnCompactionAttemptObserver(
             this,
             registration,
             modelRound,
-            registration.RepositoryIdentity);
-        compactionActivityProfileId = request.CandidateProfile?.ProfileId ?? request.ProfileId;
-        await _events.PublishAsync(
-            new ActiveTurnCompactionStarted(
-                registration.SessionId,
-                DateTimeOffset.UtcNow,
-                runId,
-                compactionActivityProfileId.Value,
-                beforeEstimate.WireInputTokens,
-                pressureTargetTokens),
-            cancellationToken);
-        compactionActivityActive = true;
+            registration.RepositoryIdentity,
+            ResolveContinuationAdmission);
+        await StartActivityAsync(request.CandidateProfile?.ProfileId ?? request.ProfileId);
         ActiveTurnCompactionResult result;
         try
         {
@@ -2034,6 +2435,13 @@ public sealed partial class SessionApplication
             await CompleteActivityAsync(
                 ActiveTurnCompactionInspectionStatus.Cancelled,
                 afterInputTokens: null);
+            throw;
+        }
+        catch (BudgetExceededException)
+        {
+            await RecordAsync(
+                ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected,
+                "Actual summary usage exhausted the execution budget; the original continuation remains active.");
             throw;
         }
         catch
@@ -2058,16 +2466,67 @@ public sealed partial class SessionApplication
                 }
 
                 var compactedPrefix = eligiblePrefix.Take(compactedGroupCount).ToArray();
-                var preview = loopState.CreatePreviewContinuation(summary, compactedGroupCount);
-                var afterEstimate = EstimateCompleteRequest(
-                    context,
-                    modelTools,
-                    layout,
-                    preview.Messages,
-                    outputReserve);
-                var savings = beforeEstimate.WireInputTokens - afterEstimate.WireInputTokens;
+                var preview = loopState.CreatePreviewContinuation(
+                    summary,
+                    compactedGroupCount,
+                    sourceProjectionForSummary);
+                var canonicalAfterRequest = PrepareRequest(
+                    preview,
+                    applyCapacityFallback: false,
+                    requestTools: sourceProjectionTools);
+                var canonicalAfterEstimate = canonicalAfterRequest.WireEstimate
+                    ?? EstimateCompleteRequest(
+                        context,
+                        sourceProjectionTools ?? modelTools,
+                        layout,
+                        preview.Messages,
+                        outputReserve);
+                var savings = beforeEstimate.WireInputTokens - canonicalAfterEstimate.WireInputTokens;
                 if (savings >= _activeTurnCompactionPolicy.MinimumSavingsTokens)
                 {
+                    ModelStreamRequest preparedAfterRequest;
+                    try
+                    {
+                        preparedAfterRequest = PrepareRequest(
+                            preview,
+                            requestTools: sourceProjectionTools);
+                    }
+                    catch (BudgetExceededException)
+                    {
+                        loopState.StartFailureBackoff(
+                            _activeTurnCompactionPolicy.FailureBackoffRounds);
+                        await RecordAsync(
+                            ActiveTurnCompactionInspectionStatus.CapacityExceeded,
+                            "The validated summary cannot produce a capacity-admissible rebuilt request.",
+                            afterInputTokens: canonicalAfterEstimate.WireInputTokens);
+                        if (hasBudgetPressure)
+                        {
+                            throw new BudgetExceededException(
+                                ordinaryAdmissionStatus.Reason
+                                    ?? "Execution budget cannot admit an ordinary or compacted request.");
+                        }
+
+                        return;
+                    }
+
+                    var afterEstimate = preparedAfterRequest.WireEstimate
+                        ?? throw new InvalidOperationException(
+                            "Prepared rebuilt admission requires a wire estimate.");
+                    var afterAdmission = ModelRequestAdmissionEstimator.Estimate(preparedAfterRequest);
+                    var afterAdmissionStatus = registration.Budget.Check(
+                        ModelRequestAdmissionEstimator.ToBudgetDimensions(afterAdmission));
+                    if (afterAdmissionStatus.IsExhausted)
+                    {
+                        finalAdmissionStatus = afterAdmissionStatus;
+                        await RecordAsync(
+                            ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected,
+                            "The summary completed, but its rebuilt ordinary request no longer fits the remaining execution budget.",
+                            afterInputTokens: afterEstimate.WireInputTokens);
+                        throw new BudgetExceededException(
+                            afterAdmissionStatus.Reason
+                                ?? "Execution budget cannot admit the rebuilt ordinary request after active-turn compaction.");
+                    }
+
                     var checkpoint = new ActiveTurnCompactionCheckpoint
                     {
                         RunId = runId,
@@ -2090,7 +2549,11 @@ public sealed partial class SessionApplication
                         HistoryRewriteGeneration = loopState.HistoryRewriteGeneration + 1,
                         Duration = result.Duration,
                     };
-                    loopState.ActivateSummary(summary, compactedPrefix, checkpoint);
+                    loopState.ActivateSummary(
+                        summary,
+                        compactedPrefix,
+                        checkpoint,
+                        sourceProjectionForSummary);
                     _logger.LogInformation(
                         "Active-turn continuation compacted {CompactedGroups} groups for run {RunId}; input estimate changed from {BeforeTokens} to {AfterTokens} tokens at summary version {SummaryVersion}.",
                         compactedGroupCount,
@@ -2112,7 +2575,7 @@ public sealed partial class SessionApplication
                 await RecordAsync(
                     ActiveTurnCompactionInspectionStatus.InsufficientSavings,
                     "The validated candidate did not reduce the canonical request.",
-                    afterInputTokens: afterEstimate.WireInputTokens);
+                    afterInputTokens: canonicalAfterEstimate.WireInputTokens);
                 return;
             }
 
@@ -2122,6 +2585,11 @@ public sealed partial class SessionApplication
                 ActiveTurnCompactionOutcome.ValidationRejected =>
                     ActiveTurnCompactionInspectionStatus.ValidationRejected,
                 ActiveTurnCompactionOutcome.Cancelled => ActiveTurnCompactionInspectionStatus.Cancelled,
+                ActiveTurnCompactionOutcome.AdmissionRejected
+                    when attemptObserver.LastContinuationFitsContextCapacity == false =>
+                    ActiveTurnCompactionInspectionStatus.CapacityExceeded,
+                ActiveTurnCompactionOutcome.AdmissionRejected =>
+                    ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected,
                 _ => ActiveTurnCompactionInspectionStatus.ProviderFailure,
             };
             _logger.LogWarning(
@@ -2130,6 +2598,13 @@ public sealed partial class SessionApplication
                 result.Outcome,
                 result.ProviderCalls);
             await RecordAsync(status, result.Rationale);
+            if (result.Outcome == ActiveTurnCompactionOutcome.AdmissionRejected
+                && hasBudgetPressure)
+            {
+                throw new BudgetExceededException(
+                    ordinaryAdmissionStatus.Reason
+                        ?? "Execution budget cannot admit either the ordinary request or a summary-and-continuation path.");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2186,6 +2661,61 @@ public sealed partial class SessionApplication
             layout.StablePrefixMessageCount,
             outputReserveTokens,
             context.ProviderInstructions);
+    }
+
+    private ActiveTurnContinuationAdmission EstimatePostSummaryAdmission(
+        ConversationLoopState loopState,
+        IReadOnlyList<ActiveTurnContinuationGroup> eligiblePrefix,
+        int compactedGroupCount,
+        int maximumInputTokens,
+        ActiveTurnSourceProjection? sourceProjection,
+        Func<ModelVisibleContinuation, ModelStreamRequest> prepareRequest)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(compactedGroupCount, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(compactedGroupCount, eligiblePrefix.Count);
+        var maximumSummary = new string('x', _activeTurnCompactionPolicy.MaximumRenderedSummaryCharacters);
+        var preview = loopState.CreatePreviewContinuation(
+            new ActiveTurnCompactionSummary
+            {
+                Version = (loopState.CompactionSummary?.Version ?? 0) + 1,
+                ThroughGroupSequence = eligiblePrefix[compactedGroupCount - 1].Sequence,
+                CoveredGroupSequences = [],
+                Content = maximumSummary,
+                FilesRead = [],
+                FilesChanged = [],
+                ContentHash = "admission-bound",
+            },
+            compactedGroupCount,
+            sourceProjection);
+        ModelStreamRequest preparedRequest;
+        try
+        {
+            preparedRequest = prepareRequest(preview);
+        }
+        catch (BudgetExceededException)
+        {
+            return new ActiveTurnContinuationAdmission(
+                compactedGroupCount,
+                new ModelRequestAdmissionEstimate(long.MaxValue, 0, 1),
+                FitsContextCapacity: false);
+        }
+
+        var preparedEstimate = preparedRequest.WireEstimate
+            ?? throw new InvalidOperationException(
+                "Prepared continuation admission requires a wire estimate.");
+        return new ActiveTurnContinuationAdmission(
+            compactedGroupCount,
+            ModelRequestAdmissionEstimator.Estimate(preparedRequest),
+            preparedEstimate.WireInputTokens <= maximumInputTokens);
+    }
+
+    private static int ResolveAdmissionOutputCeiling(
+        ModelResolution? resolution,
+        int requestedOutputTokens)
+    {
+        return resolution is { EnforcesRequestOutputTokenLimit: false }
+            ? resolution.MaximumOutputTokens
+            : requestedOutputTokens;
     }
 
     private static RequestEnvelope CreateRequestEnvelope(
@@ -2322,6 +2852,14 @@ public sealed partial class SessionApplication
             ToolTransportMode = ToolTransportMode.Native,
             WireEstimate = requestEnvelope.WireEstimate,
             ProviderInstructions = context?.ProviderInstructions,
+            MaximumOutputTokens = context?.ModelResolution?.EffectiveRequestOutputTokenReserve,
+            AdmissionCost = context?.ModelResolution?.Cost,
+            AdmissionOutputTokenCeiling = context?.ModelResolution is { } resolution
+                ? ResolveAdmissionOutputCeiling(
+                    resolution,
+                    resolution.EffectiveRequestOutputTokenReserve)
+                : null,
+            AdmissionContextWindowTokens = context?.ModelResolution?.ContextWindow,
             IncludeReasoningText = includeReasoningText,
         };
     }
@@ -2551,7 +3089,8 @@ public sealed partial class SessionApplication
 
     private sealed record ModelVisibleContinuation(
         List<ModelMessage> Messages,
-        int? FirstNeverDeliveredMessageIndex);
+        int? FirstNeverDeliveredMessageIndex,
+        IReadOnlyList<ActiveTurnEvidenceReference> EvidenceReferences);
 
     private sealed record ModelRequestHookBoundary(
         SessionId SessionId,
@@ -2581,17 +3120,34 @@ public sealed partial class SessionApplication
         private readonly RunRegistration _registration;
         private readonly int _modelRound;
         private readonly string? _repositoryIdentity;
+        private readonly Func<int, ActiveTurnContinuationAdmission> _continuationAdmissionProvider;
+
+        public ModelRequestAdmissionEstimate? LastCombinedAdmission { get; private set; }
+
+        public BudgetStatus? LastAdmissionStatus { get; private set; }
+
+        public BudgetStatus? LastActualBudgetStatus { get; private set; }
+
+        public bool? LastContinuationFitsContextCapacity { get; private set; }
+
+        public int AttemptCount { get; private set; }
+
+        public int? LastSummaryPreparedInputTokens { get; private set; }
+
+        public ModelRequestAdmissionEstimate? LastSummaryAdmission { get; private set; }
 
         public ActiveTurnCompactionAttemptObserver(
             SessionApplication owner,
             RunRegistration registration,
             int modelRound,
-            string? repositoryIdentity)
+            string? repositoryIdentity,
+            Func<int, ActiveTurnContinuationAdmission> continuationAdmissionProvider)
         {
             _owner = owner;
             _registration = registration;
             _modelRound = modelRound;
             _repositoryIdentity = repositoryIdentity;
+            _continuationAdmissionProvider = continuationAdmissionProvider;
         }
 
         public Task BeforeProviderCallAsync(
@@ -2603,6 +3159,65 @@ public sealed partial class SessionApplication
             return _owner.InvokeBeforeModelRequestHookAsync(
                 CreateBoundary(request, attempt, invocationId),
                 cancellationToken);
+        }
+
+        public Task<bool> TryBeforeProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            IActiveTurnCompactionCandidateAttempt candidateAttempt,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(candidateAttempt);
+            cancellationToken.ThrowIfCancellationRequested();
+            var admissionEstimate = candidateAttempt.AdmissionEstimate;
+            var continuationAdmission = _continuationAdmissionProvider(
+                candidateAttempt.SelectedGroupCount);
+            var continuation = continuationAdmission.Estimate;
+            var combined = ModelRequestAdmissionEstimator.Combine(
+                admissionEstimate,
+                continuation);
+            var status = _registration.Budget.Check(
+                ModelRequestAdmissionEstimator.ToBudgetDimensions(combined));
+            LastCombinedAdmission = combined;
+            LastAdmissionStatus = status;
+            LastContinuationFitsContextCapacity = continuationAdmission.FitsContextCapacity;
+            LastSummaryAdmission = admissionEstimate;
+            LastSummaryPreparedInputTokens = candidateAttempt.PreparedRequest?.WireEstimate?.WireInputTokens;
+            AttemptCount = attempt;
+            if (!continuationAdmission.FitsContextCapacity
+                || status.IsExhausted)
+            {
+                return Task.FromResult(false);
+            }
+
+            return InvokeAsync();
+
+            async Task<bool> InvokeAsync()
+            {
+                if (_owner._sessionUsage is { } sessionUsage
+                    && candidateAttempt.PreparedRequest is { } preparedRequest)
+                {
+                    var usageRequestId = new ModelRequestUsageId(
+                        request.RunId,
+                        "active-turn-compaction",
+                        _modelRound - 1,
+                        invocationId);
+                    var observedRequest = sessionUsage.ObservePreparedRequest(
+                        _registration.SessionId,
+                        usageRequestId,
+                        preparedRequest,
+                        ResolveCandidateContextWindow(request));
+                    candidateAttempt.SetSubmissionObserver(observedRequest.SubmissionObserver);
+                }
+
+                await BeforeProviderCallAsync(
+                    request,
+                    attempt,
+                    invocationId,
+                    cancellationToken);
+                return true;
+            }
         }
 
         public async Task AfterProviderCallAsync(
@@ -2643,18 +3258,28 @@ public sealed partial class SessionApplication
                 }
 
                 var budgetUsage = _registration.Budget.Accrue(new BudgetDimensions(
-                    (usage?.InputTokens ?? 0) + (usage?.OutputTokens ?? 0),
+                    ModelRequestAdmissionEstimator.SaturatingTokenTotal(
+                        usage?.InputTokens ?? 0,
+                        usage?.OutputTokens ?? 0),
                     1,
                     duration,
                     usage?.EstimatedCost ?? 0));
+                LastActualBudgetStatus = budgetUsage;
                 _registration.ModelRequestWallClockAccrued += duration;
-                if (budgetUsage.IsExhausted)
+                if (budgetUsage.IsExhausted
+                    && outcome != ActiveTurnCompactionAttemptOutcome.Cancelled)
                 {
                     throw new BudgetExceededException(
                         budgetUsage.Reason
                             ?? "Execution budget exhausted during active-turn compaction.");
                 }
             }
+        }
+
+        private static int ResolveCandidateContextWindow(ActiveTurnCompactionRequest request)
+        {
+            return request.CandidateProfile?.ContextWindowTokens
+                ?? request.ProfileContextWindowTokens;
         }
 
         private ModelRequestHookBoundary CreateBoundary(
@@ -2691,6 +3316,8 @@ public sealed partial class SessionApplication
         private readonly List<string> _pendingFilesRead = [];
         private readonly HashSet<long> _purgeableGroupSequences = [];
         private readonly List<PendingActiveTurnSource> _pendingSources = [];
+        private ActiveTurnSourceProjection? _sourceProjection;
+        private string? _sourceProjectionAttemptIdentity;
         private int _retainedOutputCharacters;
         private int _retainedToolCalls;
         private long _nextGroupSequence = 1;
@@ -2746,6 +3373,33 @@ public sealed partial class SessionApplication
 
         public long HistoryRewriteGeneration { get; private set; }
 
+        public IReadOnlyList<ActiveTurnEvidenceReference> ActiveTurnEvidenceReferences =>
+            _sourceProjection?.EvidenceReferences ?? [];
+
+        public string? SourceProjectionIdentity => _sourceProjection?.Identity;
+
+        public ActiveTurnSourceProjection? SourceProjection => _sourceProjection;
+
+        public string SourceProjectionInputIdentity
+        {
+            get
+            {
+                var identity = string.Join(
+                    '|',
+                    _groups.Select(group => string.Join(
+                        ':',
+                        group.Sequence,
+                        group.WasDeliveredVerbatim,
+                        string.Join(',', group.Results.Select(result => string.Join(
+                            '/',
+                            result.ToolCallId,
+                            result.ToolInvocationId?.Value.ToString("N") ?? "none",
+                            result.EvidenceId?.Value.ToString("N") ?? "none"))))));
+                return Convert.ToHexStringLower(
+                    System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+            }
+        }
+
         public ModelRequestTransientState TransientState { get; } = new();
 
         public ToolCallHistory InvokedToolCalls { get; } = new();
@@ -2763,7 +3417,8 @@ public sealed partial class SessionApplication
         public void ActivateSummary(
             ActiveTurnCompactionSummary summary,
             IReadOnlyList<ActiveTurnContinuationGroup> compactedPrefix,
-            ActiveTurnCompactionCheckpoint checkpoint)
+            ActiveTurnCompactionCheckpoint checkpoint,
+            ActiveTurnSourceProjection? sourceProjection = null)
         {
             ArgumentNullException.ThrowIfNull(summary);
             ArgumentNullException.ThrowIfNull(compactedPrefix);
@@ -2787,7 +3442,10 @@ public sealed partial class SessionApplication
                     "The active-turn checkpoint does not match the atomic history rewrite.");
             }
 
+            var effectiveSourceProjection = sourceProjection ?? _sourceProjection;
             _groups.RemoveRange(0, compactedPrefix.Count);
+            _sourceProjection = effectiveSourceProjection?.RetainGroups(
+                _groups.Select(group => group.Sequence).ToHashSet());
             CompactionSummary = summary;
             LastCheckpoint = checkpoint;
             HistoryRewriteGeneration = checkpoint.HistoryRewriteGeneration;
@@ -2938,6 +3596,29 @@ public sealed partial class SessionApplication
                 .Distinct()
                 .Take(_maximumSourcesPerGroup)
                 .ToArray();
+            var resultReferences = _currentCalls.Select(call =>
+            {
+                var toolCallId = call.ToolCallId ?? throw new UnreachableException();
+                var invocation = _pendingSources.FirstOrDefault(source =>
+                    string.Equals(source.ToolCallId, toolCallId, StringComparison.Ordinal)
+                    && source.Kind == ActiveTurnSourceKind.ToolInvocation);
+                var evidence = _pendingSources.FirstOrDefault(source =>
+                    string.Equals(source.ToolCallId, toolCallId, StringComparison.Ordinal)
+                    && source.Kind == ActiveTurnSourceKind.Evidence);
+                ToolInvocationId? invocationId = invocation is not null
+                    && Guid.TryParse(invocation.Id, out var parsedInvocationId)
+                        ? new ToolInvocationId(parsedInvocationId)
+                        : null;
+                EvidenceId? evidenceId = evidence is not null
+                    && Guid.TryParse(evidence.Id, out var parsedEvidenceId)
+                        ? new EvidenceId(parsedEvidenceId)
+                        : null;
+                return new ActiveTurnResultReference(
+                    toolCallId,
+                    call.ToolName ?? throw new UnreachableException(),
+                    invocationId,
+                    evidenceId);
+            }).ToArray();
             ModelMessage[] messages = purgeAfterCorrection
                 ? [.. _currentCalls.SelectMany((call, index) => new[] { call, results[index] })]
                 : [.. _currentCalls, .. results];
@@ -2952,6 +3633,7 @@ public sealed partial class SessionApplication
                 Sequence = sequence,
                 CompletedModelRound = modelRound,
                 Messages = messages,
+                Results = resultReferences,
                 Sources = boundedSources,
                 FilesRead = _pendingFilesRead.ToArray(),
                 FilesChanged = [],
@@ -3045,6 +3727,18 @@ public sealed partial class SessionApplication
 
         public ModelVisibleContinuation CreateModelVisibleContinuation()
         {
+            return CreateModelVisibleContinuation(_sourceProjection);
+        }
+
+        public ModelVisibleContinuation CreateProjectionPreview(ActiveTurnSourceProjection projection)
+        {
+            ArgumentNullException.ThrowIfNull(projection);
+            return CreateModelVisibleContinuation(projection);
+        }
+
+        public ModelVisibleContinuation CreateModelVisibleContinuation(
+            ActiveTurnSourceProjection? projection)
+        {
             var messages = new List<ModelMessage>();
             if (CompactionSummary is { } summary)
             {
@@ -3062,15 +3756,26 @@ public sealed partial class SessionApplication
                     firstNeverDeliveredMessageIndex = messages.Count;
                 }
 
-                messages.AddRange(group.Messages);
+                messages.AddRange(projection?.GroupMessages.GetValueOrDefault(group.Sequence)
+                    ?? group.Messages);
             }
 
-            return new ModelVisibleContinuation(messages, firstNeverDeliveredMessageIndex);
+            var retainedSequences = _groups.Select(group => group.Sequence).ToHashSet();
+            var references = projection?.EvidenceReferences
+                .Where(reference => reference.GroupSequence is { } sequence
+                    && retainedSequences.Contains(sequence))
+                .ToArray()
+                ?? [];
+            return new ModelVisibleContinuation(
+                messages,
+                firstNeverDeliveredMessageIndex,
+                references);
         }
 
         public ModelVisibleContinuation CreatePreviewContinuation(
             ActiveTurnCompactionSummary summary,
-            int compactedGroupCount)
+            int compactedGroupCount,
+            ActiveTurnSourceProjection? sourceProjection = null)
         {
             ArgumentNullException.ThrowIfNull(summary);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(compactedGroupCount);
@@ -3089,10 +3794,22 @@ public sealed partial class SessionApplication
                     firstNeverDeliveredMessageIndex = messages.Count;
                 }
 
-                messages.AddRange(group.Messages);
+                messages.AddRange((sourceProjection ?? _sourceProjection)?.GroupMessages.GetValueOrDefault(group.Sequence)
+                    ?? group.Messages);
             }
 
-            return new ModelVisibleContinuation(messages, firstNeverDeliveredMessageIndex);
+            var retainedSequences = _groups.Skip(compactedGroupCount)
+                .Select(group => group.Sequence)
+                .ToHashSet();
+            var references = (sourceProjection ?? _sourceProjection)?.EvidenceReferences
+                .Where(reference => reference.GroupSequence is { } sequence
+                    && retainedSequences.Contains(sequence))
+                .ToArray()
+                ?? [];
+            return new ModelVisibleContinuation(
+                messages,
+                firstNeverDeliveredMessageIndex,
+                references);
         }
 
         public int GetEligibleGroupCount()
@@ -3106,6 +3823,32 @@ public sealed partial class SessionApplication
         public void IncrementAssessmentSequence()
         {
             AssessmentSequence++;
+        }
+
+        public bool ActivateSourceProjection(ActiveTurnSourceProjection projection)
+        {
+            ArgumentNullException.ThrowIfNull(projection);
+            if (string.Equals(_sourceProjection?.Identity, projection.Identity, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            _sourceProjection = projection;
+            TransientState.Clear();
+            HistoryRewriteGeneration++;
+            return true;
+        }
+
+        public bool BeginSourceProjectionAttempt(string identity)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(identity);
+            if (string.Equals(_sourceProjectionAttemptIdentity, identity, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            _sourceProjectionAttemptIdentity = identity;
+            return true;
         }
 
         public void IncrementRetainedToolCalls()
@@ -3145,6 +3888,7 @@ public sealed partial class SessionApplication
             _purgeableGroupSequences.Clear();
             if (removed > 0)
             {
+                _sourceProjection = null;
                 HistoryRewriteGeneration++;
             }
         }

@@ -1550,9 +1550,15 @@ public sealed class WebFetchTests
     {
         private DateTimeOffset _utcNow = DateTimeOffset.UnixEpoch;
 
-        public override DateTimeOffset GetUtcNow() => _utcNow;
+        public override DateTimeOffset GetUtcNow()
+        {
+            return _utcNow;
+        }
 
-        public void Advance(TimeSpan elapsed) => _utcNow += elapsed;
+        public void Advance(TimeSpan elapsed)
+        {
+            _utcNow += elapsed;
+        }
     }
 
     private sealed class CapturingApprovalPrompt : IDirectFetchApprovalPrompt

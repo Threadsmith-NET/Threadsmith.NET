@@ -1,7 +1,6 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
 using Threadsmith.Core;
-using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Models;
@@ -255,11 +254,14 @@ public static partial class Milestone1Tests
             Candidates[1] = Candidates[1] with { Identity = Candidates[1].Identity with { Digest = new SkillDigest("sha256", new string('c', 64)) } };
         }
 
-        private SkillCatalogCandidate Resolve(string selector) => Candidates.Single(candidate =>
+        private SkillCatalogCandidate Resolve(string selector)
+        {
+            return Candidates.Single(candidate =>
             selector == $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}"
             || selector == $"{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value}@{candidate.Metadata.Version}+{candidate.Identity.Digest.Value}"
             || (candidate.Metadata.SkillId.Value.StartsWith("claude.", StringComparison.Ordinal)
                 && selector == $"claude:{candidate.Provenance.Scope}:{candidate.Metadata.SkillId.Value["claude.".Length..]}"));
+        }
 
         private SkillCatalogCandidate Update(SkillCatalogCandidate candidate)
         {
@@ -275,9 +277,15 @@ public static partial class Milestone1Tests
                 Identity = new SkillPackageIdentity(new SkillId(id), id, "1.0.0", new SkillDigest("sha256", new string(digest, 64)), "test"),
                 Metadata = new SkillManifestMetadata
                 {
-                    SkillId = new SkillId(id), PackageId = id, Version = "1.0.0", DisplayName = id,
-                    Description = "Review the repository", Publisher = "test", License = "test",
-                    Assets = [], Requirements = new SkillRequirementSet { MinimumHostVersion = "1.0.0", MaximumHostVersion = "1.0.0" },
+                    SkillId = new SkillId(id),
+                    PackageId = id,
+                    Version = "1.0.0",
+                    DisplayName = id,
+                    Description = "Review the repository",
+                    Publisher = "test",
+                    License = "test",
+                    Assets = [],
+                    Requirements = new SkillRequirementSet { MinimumHostVersion = "1.0.0", MaximumHostVersion = "1.0.0" },
                     Workflow = new SkillWorkflowDefinition { WorkflowId = "review", Steps = [] },
                 },
                 Provenance = new SkillPackageProvenance { Scope = scope, Source = source, PackageRoot = "test:" + source, DiscoveredAt = DateTimeOffset.UtcNow },

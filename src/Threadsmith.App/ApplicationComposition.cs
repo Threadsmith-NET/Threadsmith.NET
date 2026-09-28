@@ -335,6 +335,9 @@ internal static class ApplicationComposition
                 ContextWindowTokens = activeTurnCompactionModelProfile.ContextWindow,
                 OutputReserveTokens =
                     activeTurnCompactionModelProfile.EffectiveRequestOutputTokenReserve,
+                MaximumOutputTokens = activeTurnCompactionModelProfile.MaximumOutputTokens,
+                EnforcesRequestOutputTokenLimit =
+                    activeTurnCompactionModelProfile.EnforcesRequestOutputTokenLimit,
                 ReasoningLevel = activeTurnCompactionModelProfile.DefaultReasoningLevel,
                 SensitiveDataPolicy = activeTurnCompactionModelProfile.SensitiveDataPolicy,
                 Cost = activeTurnCompactionModelProfile.Cost,

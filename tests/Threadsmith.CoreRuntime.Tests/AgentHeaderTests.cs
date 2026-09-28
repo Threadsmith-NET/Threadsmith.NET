@@ -1,7 +1,6 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
@@ -22,7 +21,8 @@ public static class AgentHeaderTests
             LatestRequest = new ModelRequestUsageSnapshot(new(RunId.New(), "conversation", 1, Guid.NewGuid()), new ModelUsage(1000, 20, Cache: new ModelCacheUsage
             {
                 Availability = reads is null ? CacheUsageAvailability.Unavailable : CacheUsageAvailability.Reported,
-                CacheReadTokens = reads, ReadInputSemantics = CacheReadInputSemantics.IncludedInInput,
+                CacheReadTokens = reads,
+                ReadInputSemantics = CacheReadInputSemantics.IncludedInInput,
             })),
         };
         var details = AgentHeader.FormatDetails(State() with { Usage = usage });
@@ -148,5 +148,8 @@ public static class AgentHeaderTests
         Assert.Contains("75%", details, StringComparison.Ordinal);
     }
 
-    private static AgentHeaderState State() => new("MAIN", "DeepSeek V4 Flash", "remote-vllm", ReasoningLevel.Medium, 112640, 256000, new SessionUsageSnapshot(11000, 2000, false, CachedInputTokens: 5000, HasCacheObservation: true), false);
+    private static AgentHeaderState State()
+    {
+        return new("MAIN", "DeepSeek V4 Flash", "remote-vllm", ReasoningLevel.Medium, 112640, 256000, new SessionUsageSnapshot(11000, 2000, false, CachedInputTokens: 5000, HasCacheObservation: true), false);
+    }
 }

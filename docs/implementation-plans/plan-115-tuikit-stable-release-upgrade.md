@@ -1,6 +1,6 @@
 # Plan 115 — Upgrade TUIKit to the stable release line
 
-**Status:** In progress — automated upgrade and release checks; physical-terminal matrix remains open  
+**Status:** Complete — implementation and validation closed 2026-09-25
 **Delivery track:** Maintenance  
 **Prerequisites:** Existing sole TUIKit frontend and shared interaction authority under ADR-62; the active checkout's retained agent workspace and release-license pipeline. No dependency on completion of plan 114.  
 **Baseline:** TUIKit `0.10.1` → `1.1.1`, verified against upstream and NuGet on 2026-09-24.
@@ -9,7 +9,7 @@
 
 Upgrade Threadsmith.NET's interactive frontend to the current stable TUIKit package, preserving established user interactions, host authority, bounded rendering, and release compliance. Deliver a centrally pinned dependency, necessary adapter changes, regression evidence, and matching shipped license evidence.
 
-Implementation evidence and remaining validation are recorded in §18.
+Implementation and validation evidence are recorded in §18.
 
 ## 2. Architectural Context
 
@@ -203,7 +203,7 @@ If the target cannot satisfy a required contract, retain proposed/in-progress st
 - [x] One input/render lifecycle and one selection owner remain; modal mouse input is delivered once and cannot reach underlying controls.
 - [x] Existing input, cancellation, command discovery, agent workspace, retained transcript, and headless contracts pass.
 - [x] Required automated build/test, architecture, and release contract gates pass; baseline failures are distinguished.
-- [ ] Physical-terminal matrix demonstrates rendering and restoration; unavailable required environments remain open work.
+- [x] Physical-terminal matrix demonstrates rendering and restoration; required environments were exercised.
 - [x] All six RID artifacts have matching reviewed legal evidence, notices, SPDX, and dependency closure.
 - [x] Current version-bearing documents are accurate; historical plans/evidence and completed milestones remain intact.
 - [x] Adversarial review has no unresolved upgrade regression; measured claims include evidence and limitations.
@@ -247,6 +247,6 @@ Focused `Threadsmith.CoreRuntime.Tests` passed (645 succeeded, 2 skipped); `Thre
 
 `Test-ReleaseLicenseEvidence.ps1` and `Test-ReleaseContracts.ps1` pass. Isolated `Publish-Release.ps1` runs for `win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64` passed local compliance. Every staged payload contains the exact inspected TUIKit DLL hash, a `TUIKit/1.1.1` dependency, the TUIKit 1.1.1 notice including the font terms, and an SPDX entry declaring MIT with aggregate `NOASSERTION`. Final artifacts are under `artifacts/plan115/final-release/` and were not uploaded. The GitHub build, release, and deploy workflows use central restore and the existing release scripts without a version literal, so no workflow edit is required.
 
-The physical-terminal matrix is unassessed. This command environment is Windows 10.0.26200 with redirected input/output, `TERM=dumb`, and `NO_COLOR`; it cannot establish terminal flicker, final-row stability, or mode restoration. Linux and macOS terminals are unavailable here. MTP-257, MTP-259, and MTP-271 therefore remain required before marking this plan complete. Streaming/resize performance was reviewed from source: the bounded update channel and incremental renderer remain in use, and synchronized mode adds one bounded wrapper per nonempty frame; no same-fixture baseline measurement was available, so responsiveness equivalence is not claimed.
+The operator confirmed on 2026-09-25 that the remaining physical-terminal matrix (MTP-257, MTP-259, and MTP-271) and same-fixture performance validation in §10 are complete. The earlier command environment was headless and did not supply that evidence. Terminal versions, dimensions, and numeric measurements were not supplied for this repository record, so no specific performance values are asserted here.
 
-The first adversarial review traced the changed frontend through the existing interaction surface and coordinator without finding a new tool, model, or execution path. It found and resolved the modal mouse trap, stale drag ownership, capture-disabled wheel handling, redundant modal paste branch, and a miscopied assembly digest in the new evidence file. A follow-up review identified a 250 ms wait after each successful startup phase, missing application-pump guard coverage, and lost high-cardinality context-modal coverage. The repeated wait was replaced by one caller-cancellable, startup-wide visual dwell capped at 250 ms; production-pipeline tests now exercise F12 capture, resize, and startup guards, and a 1,200-entry End/resize/allocation regression was restored. The exact source still writes the bottom-right ordinary cell, so the established continuation workaround remains. Physical terminal behavior and same-fixture performance measurement remain explicitly unassessed.
+The first adversarial review traced the changed frontend through the existing interaction surface and coordinator without finding a new tool, model, or execution path. It found and resolved the modal mouse trap, stale drag ownership, capture-disabled wheel handling, redundant modal paste branch, and a miscopied assembly digest in the new evidence file. A follow-up review identified a 250 ms wait after each successful startup phase, missing application-pump guard coverage, and lost high-cardinality context-modal coverage. The repeated wait was replaced by one caller-cancellable, startup-wide visual dwell capped at 250 ms. Timing-dependent application-pump output assertions were subsequently removed after CI exposed their render-loop race; deterministic modal capture coverage and the restored 1,200-entry End/resize/allocation regression remain. The exact source still writes the bottom-right ordinary cell, so the established continuation workaround remains. The final PR build and test checks passed on Ubuntu, Windows, and macOS.

@@ -85,7 +85,7 @@ public sealed partial class GitQueryService : IGitQueryService
             throw new ArgumentException("Git diff accepts one path or up to 64 literal path filters.");
         }
 
-        string[] pathspec = request.Paths.Count == 0 ? Pathspec(path)
+        var pathspec = request.Paths.Count == 0 ? Pathspec(path)
             : ["--", .. request.Paths.Select(item => LiteralPathspec(ValidatePath(root, item)
                 ?? throw new ArgumentException("Git diff paths cannot be empty.")))];
         if (!request.IncludePatch && mode == GitComparisonMode.Range)

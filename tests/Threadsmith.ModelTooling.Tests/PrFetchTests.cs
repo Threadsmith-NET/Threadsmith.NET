@@ -821,37 +821,48 @@ public sealed class PrFetchTests
     }
 
     private static PrFetchTool CreateTool(HttpClient http, ISecretResolver secrets, PrFetchOptions options, bool bitbucket)
-        => new([bitbucket ? new BitbucketCloudPullRequestProvider(http, secrets, options) : new GitHubPullRequestProvider(http, secrets, options)], options, TestPromptLoader.Instance);
-
-    private static PrFetchOptions Options(bool bitbucket) => new()
     {
-        PageCharacters = 256,
-        Providers = new Dictionary<string, PullRequestProviderOptions>
+        return new([bitbucket ? new BitbucketCloudPullRequestProvider(http, secrets, options) : new GitHubPullRequestProvider(http, secrets, options)], options, TestPromptLoader.Instance);
+    }
+
+    private static PrFetchOptions Options(bool bitbucket)
+    {
+        return new()
         {
-            ["account"] = new()
+            PageCharacters = 256,
+            Providers = new Dictionary<string, PullRequestProviderOptions>
             {
-                Type = bitbucket ? "bitbucketCloud" : "github",
-                Enabled = true,
-                Authentication = new() { Mode = "bearer", SecretReference = "secrets:pr:test" },
+                ["account"] = new()
+                {
+                    Type = bitbucket ? "bitbucketCloud" : "github",
+                    Enabled = true,
+                    Authentication = new() { Mode = "bearer", SecretReference = "secrets:pr:test" },
+                },
             },
-        },
-    };
+        };
+    }
 
-    private static PrFetchInput Input(bool bitbucket) => new()
+    private static PrFetchInput Input(bool bitbucket)
     {
-        Provider = "account",
-        Url = bitbucket ? "https://bitbucket.org/org/repo/pull-requests/1" : "https://github.com/org/repo/pull/1",
-        Kind = PrFetchKind.Diff,
-    };
+        return new()
+        {
+            Provider = "account",
+            Url = bitbucket ? "https://bitbucket.org/org/repo/pull-requests/1" : "https://github.com/org/repo/pull/1",
+            Kind = PrFetchKind.Diff,
+        };
+    }
 
-    private static ToolExecutionContext Context(ToolOperationScope scope) => new(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
+    private static ToolExecutionContext Context(ToolOperationScope scope)
     {
-        RepositoryPath = Path.GetFullPath("."),
-        TrustLevel = RepositoryTrustLevel.TrustedRead,
-        AllowedNetworkHosts = ["api.github.com", "api.bitbucket.org"],
-        OperationScope = scope,
-        RequestedBy = "pr-test",
-    });
+        return new(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
+        {
+            RepositoryPath = Path.GetFullPath("."),
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
+            AllowedNetworkHosts = ["api.github.com", "api.bitbucket.org"],
+            OperationScope = scope,
+            RequestedBy = "pr-test",
+        });
+    }
 
     private static async Task<List<PrFetchOutput>> ReadAllAsync(PrFetchTool tool, PrFetchInput input, ToolExecutionContext context)
     {
@@ -884,7 +895,10 @@ public sealed class PrFetchTests
         private int _metadataRequests;
         private int _diffRequests;
 
-        public PrHandler(bool bitbucket) => _bitbucket = bitbucket;
+        public PrHandler(bool bitbucket)
+        {
+            _bitbucket = bitbucket;
+        }
 
         public int Requests => _requests;
 
@@ -991,8 +1005,14 @@ public sealed class PrFetchTests
                 : Json("""{"title":"PR","body":"desc","state":"open","changed_files":1,"head":{"sha":"HEAD","repo":{"full_name":"org/repo"}},"base":{"sha":"base-with-unrelated-terraform","repo":{"full_name":"org/repo"}}} """.Replace("HEAD", revision, StringComparison.Ordinal).Replace("\"changed_files\":1", $"\"changed_files\":{changedFiles}", StringComparison.Ordinal));
         }
 
-        private static HttpResponseMessage Redirect(string url) => new(HttpStatusCode.Redirect) { Headers = { Location = new Uri(url) } };
+        private static HttpResponseMessage Redirect(string url)
+        {
+            return new(HttpStatusCode.Redirect) { Headers = { Location = new Uri(url) } };
+        }
 
-        private static HttpResponseMessage Json(string json) => new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        private static HttpResponseMessage Json(string json)
+        {
+            return new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        }
     }
 }

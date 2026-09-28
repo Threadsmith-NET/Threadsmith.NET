@@ -2,7 +2,6 @@ namespace Threadsmith.Tools;
 
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
-using Threadsmith.Core;
 
 /// <summary>Overrides the declared runtime limits of built-in and dynamically registered tools.</summary>
 public sealed record ToolRuntimeOptions
@@ -61,7 +60,7 @@ internal sealed class ToolRuntimePolicy
 {
     private readonly ToolRuntimeOverride _defaults;
     private readonly FrozenDictionary<string, ToolRuntimeOverride> _byTool;
-    private readonly ConditionalWeakTable<ITool, ITool> _configured = new();
+    private readonly ConditionalWeakTable<ITool, ITool> _configured = [];
 
     /// <summary>Initializes a new instance of the <see cref="ToolRuntimePolicy"/> class.</summary>
     internal ToolRuntimePolicy(ToolRuntimeOptions options)
@@ -158,37 +157,66 @@ internal sealed class ConfiguredTool : ITool
     }
 
     /// <summary>Returns the implementation that owns tool-specific policy and output behavior.</summary>
-    internal static ITool Unwrap(ITool tool) => tool is ConfiguredTool configured ? configured.Inner : tool;
+    internal static ITool Unwrap(ITool tool)
+    {
+        return tool is ConfiguredTool configured ? configured.Inner : tool;
+    }
 
     private ITool Inner { get; }
 
     /// <inheritdoc />
-    public object DeserializeInput(string argumentsJson) => Inner.DeserializeInput(argumentsJson);
+    public object DeserializeInput(string argumentsJson)
+    {
+        return Inner.DeserializeInput(argumentsJson);
+    }
 
     /// <inheritdoc />
-    public string? GetActivityDetail(object input) => Inner.GetActivityDetail(input);
+    public string? GetActivityDetail(object input)
+    {
+        return Inner.GetActivityDetail(input);
+    }
 
     /// <inheritdoc />
-    public IReadOnlyList<string> GetResourcePaths(object input, ToolInvocationContext context) => Inner.GetResourcePaths(input, context);
+    public IReadOnlyList<string> GetResourcePaths(object input, ToolInvocationContext context)
+    {
+        return Inner.GetResourcePaths(input, context);
+    }
 
     /// <inheritdoc />
-    public IReadOnlyList<string> GetSecretReferences(object input) => Inner.GetSecretReferences(input);
+    public IReadOnlyList<string> GetSecretReferences(object input)
+    {
+        return Inner.GetSecretReferences(input);
+    }
 
     /// <inheritdoc />
-    public string? GetExecutable(object input) => Inner.GetExecutable(input);
+    public string? GetExecutable(object input)
+    {
+        return Inner.GetExecutable(input);
+    }
 
     /// <inheritdoc />
-    public string? GetExecutable(object input, ToolInvocationContext context) => Inner.GetExecutable(input, context);
+    public string? GetExecutable(object input, ToolInvocationContext context)
+    {
+        return Inner.GetExecutable(input, context);
+    }
 
     /// <inheritdoc />
-    public IReadOnlyList<string> GetNetworkHosts(object input) => Inner.GetNetworkHosts(input);
+    public IReadOnlyList<string> GetNetworkHosts(object input)
+    {
+        return Inner.GetNetworkHosts(input);
+    }
 
     /// <inheritdoc />
-    public IReadOnlyList<ToolResourceClaim> GetSchedulingClaims(object input, ToolInvocationContext context) => Inner.GetSchedulingClaims(input, context);
+    public IReadOnlyList<ToolResourceClaim> GetSchedulingClaims(object input, ToolInvocationContext context)
+    {
+        return Inner.GetSchedulingClaims(input, context);
+    }
 
     /// <inheritdoc />
     public Task<ToolExecutionEnvelope> ExecuteAsync(object input, ToolExecutionContext context, CancellationToken cancellationToken = default)
-        => Inner.ExecuteAsync(input, context, cancellationToken);
+    {
+        return Inner.ExecuteAsync(input, context, cancellationToken);
+    }
 }
 
 /// <summary>Configurable presentation bounds applied after output sanitization.</summary>

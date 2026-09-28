@@ -214,8 +214,14 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
     }
 
     /// <inheritdoc />
-    protected override string? DescribeActivity(WriteFileInput input) => input.Path;
+    protected override string? DescribeActivity(WriteFileInput input)
+    {
+        return input.Path;
+    }
 
     /// <inheritdoc />
-    protected override IReadOnlyList<string> GetResourcePaths(WriteFileInput input, ToolInvocationContext context) => [input.Path];
+    protected override IReadOnlyList<string> GetResourcePaths(WriteFileInput input, ToolInvocationContext context)
+    {
+        return [input.Path];
+    }
 }

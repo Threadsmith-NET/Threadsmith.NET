@@ -40,11 +40,11 @@ Common editing rules:
 | System and phase prompts | 29 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
 | Context prompts | 19 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 53 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 200 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **319** | Complete deployed catalog. |
+| **Total** | **320** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -658,6 +658,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Tool-read_file-Description.md` | Bounded line reads and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
+| `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of historical sanitized evidence explicitly referenced by the current request. | `None` |
 | `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
 #### `run_process` family

@@ -922,7 +922,10 @@ public static partial class Plan56SessionLifecycleTests
             yield return new ModelChunk { Text = "The gated request is complete." };
         }
 
-        internal void Release() => _release.TrySetResult();
+        internal void Release()
+        {
+            _release.TrySetResult();
+        }
     }
 
     private sealed class UnusedModelProvider : IModelProvider

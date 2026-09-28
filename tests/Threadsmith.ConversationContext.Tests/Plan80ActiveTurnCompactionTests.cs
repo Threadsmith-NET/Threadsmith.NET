@@ -414,6 +414,95 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.Equal(2, observer.InvocationIds.Distinct().Count());
     }
 
+    /// <summary>A summary attempt is not dispatched unless it and its bounded continuation both fit.</summary>
+    [Theory]
+    [InlineData(850, 10)]
+    [InlineData(10_000, 1)]
+    public static async Task Summary_admission_reserves_continuation_and_two_calls(
+        long tokenLimit,
+        int callLimit)
+    {
+        var candidate = CreateCandidate(
+            priorSummaryVersion: 0,
+            coveredGroups: [1],
+            throughGroupSequence: 1,
+            summaryText: "## Goal\nShould not run.",
+            filesRead: [],
+            filesChanged: []);
+        var provider = new CountingCandidateProvider(candidate, new ModelRequestAdmissionEstimate(100, 100, 1));
+        var policy = new ActiveTurnCompactionPolicy();
+        var compactor = new ActiveTurnCompactor(
+            provider,
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
+        var observer = new BudgetAdmissionObserver(
+            new LimitBudget(new BudgetDimensions(tokenLimit, callLimit, TimeSpan.FromMinutes(1))),
+            actualTokensPerCall: 0);
+        var request = CreateRequest([CreateGroup(1)]) with
+        {
+            ContinuationAdmissionEstimates =
+            [
+                new ActiveTurnContinuationAdmission(
+                    1,
+                    new ModelRequestAdmissionEstimate(500, 200, 1)),
+            ],
+        };
+
+        var result = await compactor.CompactAsync(request, observer);
+
+        Assert.Equal(ActiveTurnCompactionOutcome.AdmissionRejected, result.Outcome);
+        Assert.Equal(0, result.ProviderCalls);
+        Assert.Equal(0, provider.ExecuteCalls);
+        Assert.Empty(observer.Order);
+    }
+
+    /// <summary>Each retry repeats admission after prior attempt usage has consumed headroom.</summary>
+    [Fact]
+    public static async Task Retry_is_not_dispatched_after_actual_usage_consumes_headroom()
+    {
+        var candidate = CreateCandidate(
+            priorSummaryVersion: 0,
+            coveredGroups: [1],
+            throughGroupSequence: 1,
+            summaryText: "## Goal\nRecovered.",
+            filesRead: [],
+            filesChanged: []);
+        var provider = new TransientThenFixedCandidateProvider(candidate);
+        var policy = new ActiveTurnCompactionPolicy();
+        var compactor = new ActiveTurnCompactor(
+            provider,
+            new ActiveTurnCompactionValidator(
+                policy,
+                new SecretOutputSanitizer(),
+                TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
+        var observer = new BudgetAdmissionObserver(
+            new LimitBudget(new BudgetDimensions(800, 4, TimeSpan.FromMinutes(1))),
+            actualTokensPerCall: 300);
+        var request = CreateRequest([CreateGroup(1)]) with
+        {
+            ContinuationAdmissionEstimates =
+            [
+                new ActiveTurnContinuationAdmission(
+                    1,
+                    new ModelRequestAdmissionEstimate(400, 100, 1)),
+            ],
+        };
+
+        var result = await compactor.CompactAsync(request, observer);
+
+        Assert.Equal(ActiveTurnCompactionOutcome.AdmissionRejected, result.Outcome);
+        Assert.Equal(1, result.ProviderCalls);
+        Assert.Equal(2, provider.Calls);
+        Assert.Equal(["before:1", "after:1:Failed"], observer.Order);
+        Assert.Equal(300, observer.ActualTokensAccrued);
+    }
+
     /// <summary>Usage reported before a failed stream remains attached to that exact attempt.</summary>
     [Fact]
     public static async Task Failed_candidate_stream_preserves_partial_reported_usage()
@@ -436,6 +525,29 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.Equal(1, result.ProviderCalls);
         Assert.Equal(["before:1", "after:1:Failed"], observer.Order);
         Assert.Equal(new ModelUsage(100, 20, 1.25m), Assert.Single(observer.Usages));
+    }
+
+    /// <summary>The validator's rendered bound is the same maximum used by continuation admission.</summary>
+    [Fact]
+    public static void Rendered_summary_character_bound_is_enforced()
+    {
+        var policy = new ActiveTurnCompactionPolicy { MaximumRenderedSummaryCharacters = 256 };
+        var validator = new ActiveTurnCompactionValidator(
+            policy,
+            new SecretOutputSanitizer(),
+            TestPromptLoader.Instance);
+        var candidate = CreateCandidate(
+            priorSummaryVersion: 0,
+            coveredGroups: [1],
+            throughGroupSequence: 1,
+            summaryText: new string('x', 300),
+            filesRead: [],
+            filesChanged: []);
+
+        var validation = validator.Validate(CreateRequest([CreateGroup(1)]), candidate);
+
+        Assert.False(validation.IsValid);
+        Assert.Equal(ActiveTurnCompactionRejectionReason.Size, validation.RejectionReason);
     }
 
     /// <summary>Caller cancellation propagates and cannot activate a partial summary.</summary>
@@ -759,6 +871,59 @@ public static class Plan80ActiveTurnCompactionTests
         }
     }
 
+    private sealed class CountingCandidateProvider : IActiveTurnCompactionCandidateProvider
+    {
+        private readonly ModelRequestAdmissionEstimate _admission;
+        private readonly ActiveTurnCompactionCandidate _candidate;
+
+        public CountingCandidateProvider(
+            ActiveTurnCompactionCandidate candidate,
+            ModelRequestAdmissionEstimate admission)
+        {
+            _candidate = candidate;
+            _admission = admission;
+        }
+
+        public int ExecuteCalls { get; private set; }
+
+        public IActiveTurnCompactionCandidateAttempt PrepareCandidate(
+            ActiveTurnCompactionRequest request)
+        {
+            return new CountingCandidateAttempt(this, _candidate, _admission);
+        }
+
+        private sealed class CountingCandidateAttempt : IActiveTurnCompactionCandidateAttempt
+        {
+            private readonly ModelRequestAdmissionEstimate _admission;
+            private readonly ActiveTurnCompactionCandidate _candidate;
+            private readonly CountingCandidateProvider _owner;
+
+            public CountingCandidateAttempt(
+                CountingCandidateProvider owner,
+                ActiveTurnCompactionCandidate candidate,
+                ModelRequestAdmissionEstimate admission)
+            {
+                _owner = owner;
+                _candidate = candidate;
+                _admission = admission;
+            }
+
+            public ModelRequestAdmissionEstimate AdmissionEstimate => _admission;
+
+            public int SelectedGroupCount => 1;
+
+            public ModelUsage? ObservedUsage => null;
+
+            public Task<ActiveTurnCandidateGeneration> ExecuteAsync(
+                CancellationToken cancellationToken = default)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _owner.ExecuteCalls++;
+                return Task.FromResult(new ActiveTurnCandidateGeneration(_candidate, null));
+            }
+        }
+    }
+
     private sealed class TransientThenFixedCandidateProvider : IActiveTurnCompactionCandidateProvider
     {
         private readonly ActiveTurnCompactionCandidate _candidate;
@@ -800,6 +965,10 @@ public static class Plan80ActiveTurnCompactionTests
 
         public ModelUsage? ObservedUsage => null;
 
+        public ModelRequestAdmissionEstimate AdmissionEstimate { get; } = new(100, 100, 1);
+
+        public int SelectedGroupCount => 1;
+
         public Task<ActiveTurnCandidateGeneration> ExecuteAsync(
             CancellationToken cancellationToken = default)
         {
@@ -818,6 +987,10 @@ public static class Plan80ActiveTurnCompactionTests
         }
 
         public ModelUsage? ObservedUsage => null;
+
+        public ModelRequestAdmissionEstimate AdmissionEstimate { get; } = new(100, 100, 1);
+
+        public int SelectedGroupCount => 1;
 
         public Task<ActiveTurnCandidateGeneration> ExecuteAsync(
             CancellationToken cancellationToken = default)
@@ -862,6 +1035,108 @@ public static class Plan80ActiveTurnCompactionTests
             }
 
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class BudgetAdmissionObserver : IActiveTurnCompactionAttemptObserver
+    {
+        private readonly long _actualTokensPerCall;
+        private readonly IBudget _budget;
+
+        public BudgetAdmissionObserver(IBudget budget, long actualTokensPerCall)
+        {
+            _budget = budget;
+            _actualTokensPerCall = actualTokensPerCall;
+        }
+
+        public List<string> Order { get; } = [];
+
+        public long ActualTokensAccrued { get; private set; }
+
+        public Task BeforeProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Order.Add($"before:{attempt}");
+            return Task.CompletedTask;
+        }
+
+        public async Task<bool> TryBeforeProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            ModelRequestAdmissionEstimate admissionEstimate,
+            int selectedGroupCount,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var continuation = Assert.Single(
+                request.ContinuationAdmissionEstimates,
+                item => item.CompactedGroupCount == selectedGroupCount).Estimate;
+            var combined = ModelRequestAdmissionEstimator.Combine(admissionEstimate, continuation);
+            var status = _budget.Check(ModelRequestAdmissionEstimator.ToBudgetDimensions(combined));
+            if (status.IsExhausted)
+            {
+                return false;
+            }
+
+            await BeforeProviderCallAsync(request, attempt, invocationId, cancellationToken);
+            return true;
+        }
+
+        public Task AfterProviderCallAsync(
+            ActiveTurnCompactionRequest request,
+            int attempt,
+            Guid invocationId,
+            ActiveTurnCompactionAttemptOutcome outcome,
+            ModelUsage? usage,
+            TimeSpan duration,
+            CancellationToken cancellationToken = default)
+        {
+            Order.Add($"after:{attempt}:{outcome}");
+            _budget.Accrue(new BudgetDimensions(_actualTokensPerCall, 1, duration));
+            ActualTokensAccrued += _actualTokensPerCall;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class LimitBudget : IBudget
+    {
+        private readonly BudgetDimensions _limit;
+        private BudgetDimensions _used = new(0, 0, TimeSpan.Zero);
+
+        public LimitBudget(BudgetDimensions limit)
+        {
+            _limit = limit;
+        }
+
+        public BudgetStatus Check(BudgetDimensions delta)
+        {
+            var prospective = Add(_used, delta);
+            var exhausted = prospective.Tokens > _limit.Tokens
+                || prospective.Calls > _limit.Calls
+                || prospective.WallClock > _limit.WallClock
+                || (_limit.Cost > 0 && prospective.Cost > _limit.Cost);
+            return new BudgetStatus(exhausted, prospective, exhausted ? "Test limit exceeded." : null);
+        }
+
+        public BudgetStatus Accrue(BudgetDimensions delta)
+        {
+            var status = Check(delta);
+            _used = status.Used;
+            return status;
+        }
+
+        private static BudgetDimensions Add(BudgetDimensions current, BudgetDimensions delta)
+        {
+            return new BudgetDimensions(
+                current.Tokens + delta.Tokens,
+                current.Calls + delta.Calls,
+                current.WallClock + delta.WallClock,
+                current.Cost + delta.Cost);
         }
     }
 

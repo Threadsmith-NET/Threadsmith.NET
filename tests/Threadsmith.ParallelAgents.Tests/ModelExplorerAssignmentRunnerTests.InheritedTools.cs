@@ -294,10 +294,12 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         public ConcurrentQueue<ModelStreamRequest> Requests { get; } = new();
 
         public static string DelegateInput(string task)
-            => JsonSerializer.Serialize(new DelegateAgentsInput
+        {
+            return JsonSerializer.Serialize(new DelegateAgentsInput
             {
                 Agents = [new DelegateAgentRequest { Role = AgentRole.TestReviewer, Task = task, Context = "Integration scope: use only the inherited tools.", ToolAccess = DelegateAgentToolAccess.Inherit }],
             });
+        }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,
@@ -323,11 +325,11 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             }
 
             var call = request.ToolContinuationRound switch
-                {
-                    0 => new ToolRequestModelOutput("run_process", "{\"command\":\"dotnet test\"}"),
-                    1 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/child.md\",\"content\":\"child artifact\"}"),
-                    _ => null,
-                };
+            {
+                0 => new ToolRequestModelOutput("run_process", "{\"command\":\"dotnet test\"}"),
+                1 => new ToolRequestModelOutput("write_file", "{\"path\":\".inbox/child.md\",\"content\":\"child artifact\"}"),
+                _ => null,
+            };
             yield return new ModelChunk
             {
                 Output = call,
@@ -354,15 +356,23 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     private sealed class UnusedInheritedConversationStore : IConversationStore
     {
         public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task SetModeAsync(SessionId sessionId, ConversationContextMode mode, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task<int> RemoveMessageBodiesOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
     }
 }

@@ -615,6 +615,52 @@ public static class Milestone4Tests
         Assert.Empty(model.Requests);
     }
 
+    /// <summary>An ordinary request whose input fits is still rejected when its enforced output allowance does not.</summary>
+    [Fact]
+    public static async Task SessionApplication_OutputAllowanceExceedsBudget_DoesNotDispatchProvider()
+    {
+        await using var events = new DomainEventStream();
+        var sanitizer = new SecretOutputSanitizer();
+        var evidence = new EvidenceStore(events, sanitizer);
+        var model = new ConversationalModelProvider("must not be dispatched");
+        var profile = CreateProfile("output-admission", structuredOutput: true, permitsSensitiveData: true) with
+        {
+            ContextWindow = 64_000,
+            MaximumOutputTokens = 30_000,
+            RequestOutputTokenReserve = 30_000,
+            Capabilities = new ModelCapabilitySet
+            {
+                Streaming = true,
+                StructuredOutput = true,
+                ToolCalls = true,
+            },
+            IntendedWorkloadClasses = [WorkloadClass.General, WorkloadClass.Planning],
+        };
+        var resolver = new ModelResolver(
+            new ConfiguredModelCatalog([profile]),
+            new InMemoryModelPreferenceSnapshotProvider());
+        var application = new SessionApplication(
+            events,
+            model,
+            new ExecutionBudget(new BudgetDimensions(20_000, 10, TimeSpan.FromMinutes(1))),
+            sanitizer,
+            NullLogger<SessionApplication>.Instance,
+            contextAssembler: CreateAssembler(events, evidence, modelResolver: resolver),
+            evidenceStore: evidence,
+            defaultModelProfileId: profile.Id,
+            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+            prompts: TestPromptLoader.Instance);
+        var dispatcher = new CommandDispatcher([application]);
+        var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("output allowance admission"));
+        var runId = await dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, "inspect the repository"));
+
+        var exception = await Assert.ThrowsAsync<BudgetExceededException>(() =>
+            dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+
+        Assert.Contains("30000 output tokens", exception.Message, StringComparison.Ordinal);
+        Assert.Empty(model.Requests);
+    }
+
     /// <summary>Malformed provider-boundary output receives a generic correction-attempt event before retrying.</summary>
     [Fact]
     public static async Task SessionApplication_MalformedProviderOutput_PublishesGenericCorrectionEvent()
@@ -5221,9 +5267,14 @@ public static class Milestone4Tests
         public override ToolDefinition Definition { get; }
 
         public override Task<ToolExecution<ListFilesOutput>> ExecuteAsync(ListFilesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
-            => _inner.ExecuteAsync(input, context, cancellationToken);
+        {
+            return _inner.ExecuteAsync(input, context, cancellationToken);
+        }
 
-        protected override void ValidateInput(ListFilesInput input) => ArgumentNullException.ThrowIfNull(input);
+        protected override void ValidateInput(ListFilesInput input)
+        {
+            ArgumentNullException.ThrowIfNull(input);
+        }
     }
 
     private sealed class DuplicateToolThenPlanModelProvider : IModelProvider

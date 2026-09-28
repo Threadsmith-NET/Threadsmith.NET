@@ -556,23 +556,39 @@ public static class WriteFileTests
         return new ConfigurationBuilder().AddJsonStream(stream).Build();
     }
 
-    private static ToolInvocationPipeline CreatePipeline(DomainEventStream events, ITool tool) => new(
+    private static ToolInvocationPipeline CreatePipeline(DomainEventStream events, ITool tool)
+    {
+        return new(
         new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+    }
 
-    private static Task<ToolInvocationResult> InvokeAsync(ToolInvocationPipeline pipeline, ToolExecutionContext context, WriteFileInput input) => pipeline.InvokeAsync(new ToolInvocationRequest
+    private static Task<ToolInvocationResult> InvokeAsync(ToolInvocationPipeline pipeline, ToolExecutionContext context, WriteFileInput input)
     {
-        SessionId = context.SessionId,
-        RunId = context.RunId,
-        ToolId = "write_file",
-        ArgumentsJson = JsonSerializer.Serialize(input),
-        Context = context.Invocation,
-    });
+        return pipeline.InvokeAsync(new ToolInvocationRequest
+        {
+            SessionId = context.SessionId,
+            RunId = context.RunId,
+            ToolId = "write_file",
+            ArgumentsJson = JsonSerializer.Serialize(input),
+            Context = context.Invocation,
+        });
+    }
 
-    private static ConversationMessage Message(SessionId session, long sequence, string? text) => new()
+    private static ConversationMessage Message(SessionId session, long sequence, string? text)
     {
-        Id = ConversationMessageId.New(), SessionId = session, RunId = RunId.New(), Sequence = sequence,
-        Role = ConversationRole.Assistant, Content = text, ContentHash = "test", EstimatedTokens = 1, OccurredAt = DateTimeOffset.UtcNow,
-    };
+        return new()
+        {
+            Id = ConversationMessageId.New(),
+            SessionId = session,
+            RunId = RunId.New(),
+            Sequence = sequence,
+            Role = ConversationRole.Assistant,
+            Content = text,
+            ContentHash = "test",
+            EstimatedTokens = 1,
+            OccurredAt = DateTimeOffset.UtcNow,
+        };
+    }
 
     private sealed class Fixture : IDisposable
     {
@@ -582,7 +598,9 @@ public static class WriteFileTests
             Repository = Directory.CreateDirectory(Path.Combine(Root, "repo")).FullName;
             Context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
             {
-                RepositoryPath = Repository, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model",
+                RepositoryPath = Repository,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RequestedBy = "model",
             });
         }
 
@@ -592,8 +610,11 @@ public static class WriteFileTests
 
         public ToolExecutionContext Context { get; }
 
-        public WriteFileTool Tool(IConfiguration? configuration = null, ConversationStore? store = null) => new(
+        public WriteFileTool Tool(IConfiguration? configuration = null, ConversationStore? store = null)
+        {
+            return new(
             new WriteFileConfiguration(configuration ?? JsonConfig("{}"), JsonConfig("{}"), Repository), store ?? new ConversationStore(), TestPromptLoader.Instance);
+        }
 
         public void Dispose()
         {
@@ -659,14 +680,29 @@ public static class WriteFileTests
             return Task.FromResult(new ConversationStateSnapshot { SessionId = sessionId, Messages = Messages });
         }
 
-        public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task SetModeAsync(SessionId sessionId, ConversationContextMode mode, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task SetModeAsync(SessionId sessionId, ConversationContextMode mode, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task ReplaceSummaryAsync(SessionId sessionId, IReadOnlyList<ConversationMemoryItem> items, ConversationSummarySnapshot snapshot, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task ReplaceSummaryAsync(SessionId sessionId, IReadOnlyList<ConversationMemoryItem> items, ConversationSummarySnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task UpdateMemoryAsync(ConversationMemoryItem item, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task UpdateMemoryAsync(ConversationMemoryItem item, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task<int> RemoveMessageBodiesOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<int> RemoveMessageBodiesOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
     }
 }

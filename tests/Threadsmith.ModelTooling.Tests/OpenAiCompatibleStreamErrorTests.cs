@@ -77,25 +77,31 @@ public static class OpenAiCompatibleStreamErrorTests
         Assert.Single(chunks, chunk => chunk.Usage is not null);
     }
 
-    private static ModelStreamRequest Request() => new()
+    private static ModelStreamRequest Request()
     {
-        RunId = RunId.New(),
-        Input = "Synthetic test request.",
-        Tools = [new ModelToolDefinition { Name = "inspect", Description = "Inspect synthetic data.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{}}" }],
-    };
+        return new()
+        {
+            RunId = RunId.New(),
+            Input = "Synthetic test request.",
+            Tools = [new ModelToolDefinition { Name = "inspect", Description = "Inspect synthetic data.", ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{}}" }],
+        };
+    }
 
-    private static OpenAiCompatibleModelProvider CreateProvider(HttpClient client) => new(client, new ModelProfile
+    private static OpenAiCompatibleModelProvider CreateProvider(HttpClient client)
     {
-        Id = ModelProfileId.New(),
-        Name = "synthetic",
-        Provider = "openai-compatible",
-        ModelId = "synthetic",
-        Endpoint = new Uri("https://models.example/v1/chat/completions"),
-        ContextWindow = 32000,
-        MaximumOutputTokens = 4000,
-        Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
-        RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
-    });
+        return new(client, new ModelProfile
+        {
+            Id = ModelProfileId.New(),
+            Name = "synthetic",
+            Provider = "openai-compatible",
+            ModelId = "synthetic",
+            Endpoint = new Uri("https://models.example/v1/chat/completions"),
+            ContextWindow = 32000,
+            MaximumOutputTokens = 4000,
+            Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        });
+    }
 
     private sealed class StreamHandler : HttpMessageHandler
     {

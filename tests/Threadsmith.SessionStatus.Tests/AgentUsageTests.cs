@@ -1,7 +1,6 @@
 namespace Threadsmith.SessionStatus.Tests;
 
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Models;
 using Xunit;
 
@@ -21,7 +20,10 @@ public static class AgentUsageTests
         var childId = new ModelRequestUsageId(child, "delegate-agent", 0, Guid.NewGuid());
         var reported = new ModelUsage(1000, 20, Cache: new ModelCacheUsage
         {
-            Availability = CacheUsageAvailability.Reported, CacheReadTokens = 800, CacheWriteTokens = 200, ReadInputSemantics = CacheReadInputSemantics.IncludedInInput,
+            Availability = CacheUsageAvailability.Reported,
+            CacheReadTokens = 800,
+            CacheWriteTokens = 200,
+            ReadInputSemantics = CacheReadInputSemantics.IncludedInInput,
         });
         projection.Observe(session, rootId, reported);
         projection.Observe(session, childId, reported with { InputTokens = 2000 });
@@ -56,7 +58,10 @@ public static class AgentUsageTests
     {
         var request = new ModelRequestUsageSnapshot(new(RunId.New(), "test", 0, Guid.NewGuid()), new ModelUsage(input, 1, IsEstimate: estimate, Cache: new ModelCacheUsage
         {
-            Availability = CacheUsageAvailability.Reported, CacheReadTokens = reads, CacheWriteTokens = 100, ReadInputSemantics = semantics,
+            Availability = CacheUsageAvailability.Reported,
+            CacheReadTokens = reads,
+            CacheWriteTokens = 100,
+            ReadInputSemantics = semantics,
         }));
         Assert.Equal(expected, request.CacheHitPercentage);
     }

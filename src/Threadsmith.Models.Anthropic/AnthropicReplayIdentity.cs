@@ -1,6 +1,5 @@
 namespace Threadsmith.Models.Anthropic;
 
-using System.Text;
 using System.Text.Json;
 using Threadsmith.Models;
 
@@ -49,13 +48,21 @@ internal static class AnthropicReplayIdentity
     }
 
     /// <summary>Anchors each completed response to its exact preceding canonical history, including transient round ordering.</summary>
-    internal static string HistoryDigest(IEnumerable<ModelMessage> messages) => AnthropicRequestMapper.Hash(
+    internal static string HistoryDigest(IEnumerable<ModelMessage> messages)
+    {
+        return AnthropicRequestMapper.Hash(
         JsonSerializer.SerializeToUtf8Bytes(messages.Select(message => new { Message = message, message.ModelRound })));
+    }
 
-    private static string Credential(string apiKey, string providerId, string? reference) => AnthropicRequestMapper.Hash(
+    private static string Credential(string apiKey, string providerId, string? reference)
+    {
+        return AnthropicRequestMapper.Hash(
         JsonSerializer.SerializeToUtf8Bytes(new { providerId, reference, apiKey }));
+    }
 
-    private static string Instructions(ModelStreamRequest request, AnthropicModelCompatibility compatibility) => AnthropicRequestMapper.Hash(
+    private static string Instructions(ModelStreamRequest request, AnthropicModelCompatibility compatibility)
+    {
+        return AnthropicRequestMapper.Hash(
         JsonSerializer.SerializeToUtf8Bytes(new
         {
             Prefix = request.Messages.Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
@@ -73,4 +80,5 @@ internal static class AnthropicReplayIdentity
             request.ContinuationBinding?.Phase,
             request.ContinuationBinding?.InstructionBundleDigest,
         }));
+    }
 }

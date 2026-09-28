@@ -576,18 +576,24 @@ public sealed partial class ExecutionOrchestratorTests
         }
     }
 
-    private static MutationProposalResult Proposal(StagedMutationSet staged, bool? hint) => new()
+    private static MutationProposalResult Proposal(StagedMutationSet staged, bool? hint)
     {
-        StagedMutationSet = staged,
-        StepComplete = hint,
-        Rationale = staged.MutationSet.Rationale,
-    };
+        return new()
+        {
+            StagedMutationSet = staged,
+            StepComplete = hint,
+            Rationale = staged.MutationSet.Rationale,
+        };
+    }
 
-    private static MutationProposalResult CompletionOnly() => new()
+    private static MutationProposalResult CompletionOnly()
     {
-        StepComplete = true,
-        Rationale = "The selected step is complete.",
-    };
+        return new()
+        {
+            StepComplete = true,
+            Rationale = "The selected step is complete.",
+        };
+    }
 
     private static void SetProposals(ExecutionFixture fixture, params MutationProposalResult[] proposals)
     {
@@ -598,7 +604,9 @@ public sealed partial class ExecutionOrchestratorTests
         }
     }
 
-    private static ExecutionOrchestrator RecreateOrchestrator(ExecutionFixture fixture) => new(
+    private static ExecutionOrchestrator RecreateOrchestrator(ExecutionFixture fixture)
+    {
+        return new(
         fixture.ProposalHandler,
         fixture.CommitHandler,
         fixture.BaselineHandler,
@@ -611,4 +619,5 @@ public sealed partial class ExecutionOrchestratorTests
         NullLogger<ExecutionOrchestrator>.Instance,
         new CorrectiveMessageFactory(TestPromptLoader.Instance),
         workspaceLimits: fixture.WorkspaceLimits);
+    }
 }

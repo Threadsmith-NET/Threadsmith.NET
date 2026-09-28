@@ -12,7 +12,6 @@ using Threadsmith.Interaction.Runs;
 using Threadsmith.Interaction.Sessions;
 using Threadsmith.Interaction.Themes;
 using Threadsmith.Models;
-using Threadsmith.Telemetry;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
 using TUIKit.Input;
@@ -341,14 +340,23 @@ public static class ContextUsageTests
         return new ModelStreamRequest { RunId = run, Input = "hello", Messages = messages, WireEstimate = ModelWireEstimator.Estimate(messages, [], ToolTransportMode.Native, 0, 100) };
     }
 
-    private static ContextUsageSnapshot Snapshot(ModelWireEstimate estimate) => new()
+    private static ContextUsageSnapshot Snapshot(ModelWireEstimate estimate)
     {
-        RunId = RunId.New(), InvocationId = Guid.NewGuid(), Stage = "conversation", CapturedAt = DateTimeOffset.UtcNow,
-        InputTokens = estimate.WireInputTokens, ContextWindow = 1_000_000, OutputReserve = 100,
-        StablePrefixTokens = estimate.Components.Take(estimate.StablePrefixComponentCount).Sum(item => item.Tokens),
-        StablePrefixComponentCount = estimate.StablePrefixComponentCount,
-        Components = estimate.Components, EstimationBasis = estimate.EstimationBasis,
-    };
+        return new()
+        {
+            RunId = RunId.New(),
+            InvocationId = Guid.NewGuid(),
+            Stage = "conversation",
+            CapturedAt = DateTimeOffset.UtcNow,
+            InputTokens = estimate.WireInputTokens,
+            ContextWindow = 1_000_000,
+            OutputReserve = 100,
+            StablePrefixTokens = estimate.Components.Take(estimate.StablePrefixComponentCount).Sum(item => item.Tokens),
+            StablePrefixComponentCount = estimate.StablePrefixComponentCount,
+            Components = estimate.Components,
+            EstimationBasis = estimate.EstimationBasis,
+        };
+    }
 
     private static string RenderInventory(
         int width,
@@ -387,15 +395,24 @@ public static class ContextUsageTests
         return Read(buffer);
     }
 
-    private static string Read(CellBuffer buffer) => string.Join('\n', Enumerable.Range(0, buffer.Height).Select(y => string.Concat(Enumerable.Range(0, buffer.Width).Select(x => buffer.Get(x, y).Grapheme))));
+    private static string Read(CellBuffer buffer)
+    {
+        return string.Join('\n', Enumerable.Range(0, buffer.Height).Select(y => string.Concat(Enumerable.Range(0, buffer.Width).Select(x => buffer.Get(x, y).Grapheme))));
+    }
 
     private sealed class InspectionOnlyAssembler : IContextAssembler
     {
         public List<RunId> Reads { get; } = [];
 
-        public Task<ContextAssemblyResult> AssembleAsync(ContextAssemblyRequest request, CancellationToken cancellationToken = default) => throw new InvalidOperationException("Inspection must never assemble context.");
+        public Task<ContextAssemblyResult> AssembleAsync(ContextAssemblyRequest request, CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException("Inspection must never assemble context.");
+        }
 
-        public void InvalidateInspections() => throw new InvalidOperationException("Inspection must not mutate context.");
+        public void InvalidateInspections()
+        {
+            throw new InvalidOperationException("Inspection must not mutate context.");
+        }
 
         public ContextInspectionProjection? GetInspection(RunId runId)
         {
@@ -408,7 +425,10 @@ public static class ContextUsageTests
     {
         private readonly ConversationContextApplication _application;
 
-        public InspectionDispatcher(ConversationContextApplication application) => _application = application;
+        public InspectionDispatcher(ConversationContextApplication application)
+        {
+            _application = application;
+        }
 
         public SessionId SessionId { get; } = SessionId.New();
 
@@ -431,7 +451,10 @@ public static class ContextUsageTests
     {
         private readonly bool _gesture;
 
-        public RecordingSurface(bool gesture) => _gesture = gesture;
+        public RecordingSurface(bool gesture)
+        {
+            _gesture = gesture;
+        }
 
         private int _reads;
 
@@ -439,9 +462,12 @@ public static class ContextUsageTests
 
         public InteractionSurfaceCapabilities Capabilities { get; } = new();
 
-        public Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default) => Task.FromResult(_reads++ > 0
+        public Task<InteractionInput> ReadComposerAsync(ComposerRequest request, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_reads++ > 0
             ? new InteractionInput(true, "/quit", cancellationToken)
             : new InteractionInput(true, _gesture ? string.Empty : "/context map", cancellationToken, _gesture ? InteractionInputKind.ContextMap : InteractionInputKind.Submission));
+        }
 
         public Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default)
         {
@@ -449,12 +475,24 @@ public static class ContextUsageTests
             return Task.CompletedTask;
         }
 
-        public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default) => throw new InvalidOperationException("No selector expected.");
+        public Task<InteractionSelectionResult> SelectAsync(InteractionSelectionRequest request, CancellationToken cancellationToken = default)
+        {
+            throw new InvalidOperationException("No selector expected.");
+        }
 
-        public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task PresentAsync(PresentationBatch batch, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task PresentSessionStatusAsync(SessionStatusSnapshot status, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
-        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default) => operation.WaitAsync(cancellationToken);
+        public Task PresentActivityUntilAsync(InteractionActivity activity, Task operation, CancellationToken cancellationToken = default)
+        {
+            return operation.WaitAsync(cancellationToken);
+        }
     }
 }

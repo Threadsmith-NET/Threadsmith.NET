@@ -104,9 +104,9 @@ public static class Plan84VisibleSourceFrontierTests
         Assert.True(frontier.SourceCharacters > 0);
     }
 
-    /// <summary>Host-only structured sidecars preserve code-explore source frontier in Markdown output mode.</summary>
+    /// <summary>Host-only structured sidecars cannot prove that source survived the visible Markdown projection.</summary>
     [Fact]
-    public static void Build_ReadsHostOnlyCodeExploreSidecarButIgnoresVisibleMarkdown()
+    public static void Build_RequiresHostOnlyCodeExploreSourceToRemainVisibleInMarkdown()
     {
         var workspaceId = WorkspaceId.New();
         var result = CreateCodeExploreResult(
@@ -145,11 +145,8 @@ public static class Plan84VisibleSourceFrontierTests
             workspaceId,
             11);
 
-        var entry = Assert.Single(frontier.Entries);
-        Assert.Equal("holder-markdown", entry.ToolCallId);
-        Assert.Equal("src/Markdown.cs", entry.FilePath);
-        Assert.Equal(new SourceRange(4, 1, 9, 1), entry.Range);
-        Assert.Equal(1, frontier.RangeCount);
+        Assert.Empty(frontier.Entries);
+        Assert.Equal(0, frontier.RangeCount);
     }
 
     /// <summary>Reduced host-only sidecars remain structurally incomplete and do not create stale frontier entries.</summary>

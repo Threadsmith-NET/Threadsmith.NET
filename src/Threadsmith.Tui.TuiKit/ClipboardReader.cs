@@ -14,7 +14,10 @@ internal static class ClipboardReader
     private static readonly UTF8Encoding _strictUtf8 = new(false, true);
 
     /// <summary>Reads clipboard text, preserving newlines, or returns null when unavailable.</summary>
-    internal static Task<string?> ReadAsync(CancellationToken cancellationToken) => ReadAsync(new TuiResourceLimits(), cancellationToken);
+    internal static Task<string?> ReadAsync(CancellationToken cancellationToken)
+    {
+        return ReadAsync(new TuiResourceLimits(), cancellationToken);
+    }
 
     /// <summary>Reads clipboard data under configured platform-independent limits.</summary>
     internal static async Task<string?> ReadAsync(TuiResourceLimits limits, CancellationToken cancellationToken)
@@ -55,7 +58,10 @@ internal static class ClipboardReader
     }
 
     /// <summary>Decodes at most one MiB of strict UTF-8 clipboard data.</summary>
-    internal static Task<string> ReadBoundedAsync(Stream stream, CancellationToken cancellationToken) => ReadBoundedAsync(stream, new TuiResourceLimits(), cancellationToken);
+    internal static Task<string> ReadBoundedAsync(Stream stream, CancellationToken cancellationToken)
+    {
+        return ReadBoundedAsync(stream, new TuiResourceLimits(), cancellationToken);
+    }
 
     /// <summary>Decodes clipboard text within the configured draft limit.</summary>
     internal static async Task<string> ReadBoundedAsync(Stream stream, TuiResourceLimits limits, CancellationToken cancellationToken)

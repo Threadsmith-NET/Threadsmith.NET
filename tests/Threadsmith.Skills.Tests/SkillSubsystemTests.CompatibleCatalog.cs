@@ -16,6 +16,7 @@ public sealed partial class SkillSubsystemTests
         using var package = TemporaryPackage.CopyMaintained(skillId);
         var claudeRoot = Path.Combine(package.Root, "claude", "portable-review");
         Directory.CreateDirectory(claudeRoot);
+
         await File.WriteAllTextAsync(
             Path.Combine(claudeRoot, "SKILL.md"),
             "---\nname: portable-review\ndescription: Review repository\n---\nReview this repository.\n");
@@ -24,6 +25,7 @@ public sealed partial class SkillSubsystemTests
             new SkillCatalogSource(SkillScope.Maintained, MaintainedRoot(), "maintained", IsMaintained: true),
             new SkillCatalogSource(SkillScope.Repository, package.Root, "repository:test"),
         ]);
+
         var catalog = new CompatibleSkillCatalog(native, new ClaudeSkillCompatibilityCatalog(
             [new ClaudeSkillRoot(SkillScope.Repository, Path.GetDirectoryName(claudeRoot)!, "repository:claude", true)]));
         var initial = await catalog.RefreshAsync();
@@ -33,10 +35,11 @@ public sealed partial class SkillSubsystemTests
         var policy = new FileSkillTrustPolicyProvider(policyPath, new SkillTrustPolicySnapshot
         {
             DisabledSelectors = disabled
-                ? new HashSet<string> { $"{selector}+{selected.Identity.Digest.Value}" }
+                ? [$"{selector}+{selected.Identity.Digest.Value}"]
                 : new HashSet<string>(),
         });
         var application = CreateCatalogApplication(catalog, policy, package.Root);
+
         Assert.Equal(SkillVerificationState.Unverified, selected.Verification);
         Assert.False(selected.Enabled);
 

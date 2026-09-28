@@ -159,9 +159,11 @@ public sealed class SkillCompatibilityEvaluator : ISkillCompatibilityEvaluator
     }
 
     /// <summary>Whether the workflow contains a model-backed procedure.</summary>
-    internal static bool RequiresModel(SkillCatalogCandidate candidate) =>
-        candidate.Metadata.Workflow.Steps.Any(step => step.Kind is SkillWorkflowStepKind.InvokeProcedure
+    internal static bool RequiresModel(SkillCatalogCandidate candidate)
+    {
+        return candidate.Metadata.Workflow.Steps.Any(step => step.Kind is SkillWorkflowStepKind.InvokeProcedure
             or SkillWorkflowStepKind.CollectEvidence or SkillWorkflowStepKind.Summarize);
+    }
 
     private static ModelProfile[] OrderByHostSelection(
         IReadOnlyList<ModelProfile> compatible,

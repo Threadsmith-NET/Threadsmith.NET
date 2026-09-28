@@ -96,12 +96,24 @@ public sealed partial class Milestone19Tests
             var payload = JsonNode.Parse(evidence.Content)?.AsObject() ?? throw new InvalidOperationException("Missing test payload.");
             switch (variant)
             {
-                case "changed": payload["Lines"] = JsonSerializer.SerializeToNode(new[] { "first", "different", "last" }); break;
-                case "wrong-path": payload["Path"] = "sibling/AGENTS.md"; break;
-                case "wrong-range": payload["StartLine"] = 0; break;
-                case "wrong-total": payload["TotalLines"] = 4; break;
-                case "unknown-field": payload["Diagnostic"] = "additional evidence"; break;
-                case "bad-metadata": payload["IsTruncated"] = "invalid"; break;
+                case "changed":
+                    payload["Lines"] = JsonSerializer.SerializeToNode(new[] { "first", "different", "last" });
+                    break;
+                case "wrong-path":
+                    payload["Path"] = "sibling/AGENTS.md";
+                    break;
+                case "wrong-range":
+                    payload["StartLine"] = 0;
+                    break;
+                case "wrong-total":
+                    payload["TotalLines"] = 4;
+                    break;
+                case "unknown-field":
+                    payload["Diagnostic"] = "additional evidence";
+                    break;
+                case "bad-metadata":
+                    payload["IsTruncated"] = "invalid";
+                    break;
             }
 
             evidence = evidence with
@@ -117,7 +129,11 @@ public sealed partial class Milestone19Tests
 
             var assembled = await assembler.AssembleAsync(new ContextAssemblyRequest
             {
-                SessionId = sessionId, RunId = runId, RepositoryPath = root, WorkingScope = "src", Phase = RunPhase.ImplementationModelTurn,
+                SessionId = sessionId,
+                RunId = runId,
+                RepositoryPath = root,
+                WorkingScope = "src",
+                Phase = RunPhase.ImplementationModelTurn,
                 Task = new TaskSpecification("Update the scoped file.", []),
             });
 
@@ -168,7 +184,11 @@ public sealed partial class Milestone19Tests
                 instructionResolver: new RepositoryInstructionResolver(sanitizer));
             var request = new ContextAssemblyRequest
             {
-                SessionId = sessionId, RunId = runId, RepositoryPath = root, WorkingScope = "src", Phase = RunPhase.ImplementationModelTurn,
+                SessionId = sessionId,
+                RunId = runId,
+                RepositoryPath = root,
+                WorkingScope = "src",
+                Phase = RunPhase.ImplementationModelTurn,
                 Task = new TaskSpecification("Update the scoped file.", []),
             };
 
@@ -220,7 +240,10 @@ public sealed partial class Milestone19Tests
             var assembler = new ContextAssembler(store, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, TestPromptLoader.Instance);
             var context = await assembler.AssembleAsync(new ContextAssemblyRequest
             {
-                SessionId = sessionId, RunId = runId, RepositoryPath = root, Phase = RunPhase.ImplementationModelTurn,
+                SessionId = sessionId,
+                RunId = runId,
+                RepositoryPath = root,
+                Phase = RunPhase.ImplementationModelTurn,
                 Task = new TaskSpecification("Edit source", []),
             });
             var text = System.Net.WebUtility.HtmlDecode(context.ModelInput);
@@ -243,12 +266,21 @@ public sealed partial class Milestone19Tests
         var endLine = startLine + lines.Length - 1;
         return new Evidence
         {
-            EvidenceId = EvidenceId.New(), SessionId = sessionId, RunId = runId, Kind = EvidenceKind.ToolResult, Sensitivity = EvidenceSensitivity.Sensitive,
+            EvidenceId = EvidenceId.New(),
+            SessionId = sessionId,
+            RunId = runId,
+            Kind = EvidenceKind.ToolResult,
+            Sensitivity = EvidenceSensitivity.Sensitive,
             Provenance = new EvidenceProvenance { Source = "tool:read_file", SourcePath = path, ToolInvocationId = ToolInvocationId.New() },
             Content = JsonSerializer.Serialize(new
             {
-                Path = path, StartLine = startLine, EndLine = endLine, TotalLines = totalLines, Lines = lines,
-                IsTruncated = endLine < totalLines, NextStartLine = endLine < totalLines ? (int?)(endLine + 1) : null,
+                Path = path,
+                StartLine = startLine,
+                EndLine = endLine,
+                TotalLines = totalLines,
+                Lines = lines,
+                IsTruncated = endLine < totalLines,
+                NextStartLine = endLine < totalLines ? (int?)(endLine + 1) : null,
                 TruncationReason = endLine < totalLines ? "LineLimit" : null,
             }),
         };

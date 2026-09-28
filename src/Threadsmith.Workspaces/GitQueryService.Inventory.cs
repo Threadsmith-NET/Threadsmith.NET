@@ -155,5 +155,8 @@ public sealed partial class GitQueryService
         return revision;
     }
 
-    private static string HashMetadata(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    private static string HashMetadata(string text)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant();
+    }
 }

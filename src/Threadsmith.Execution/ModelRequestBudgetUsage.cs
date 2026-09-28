@@ -22,17 +22,26 @@ internal sealed class ModelRequestBudgetUsage
             return;
         }
 
-        var estimatedInputTokens = EstimateInputTokens(request);
-        var admission = new BudgetDimensions(estimatedInputTokens, 1, TimeSpan.Zero);
-        var status = budget.Check(admission);
-        if (status.IsExhausted)
-        {
-            throw new BudgetExceededException(
-                $"Execution budget cannot admit a model request estimated to require {estimatedInputTokens} input tokens.");
-        }
+        CheckAdmission(budget, request);
 
         budget.Accrue(new BudgetDimensions(0, 1, TimeSpan.Zero));
         HasStarted = true;
+    }
+
+    /// <summary>Checks conservative request headroom without charging a rejected or hook-blocked call.</summary>
+    public static void CheckAdmission(IBudget budget, ModelStreamRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        ArgumentNullException.ThrowIfNull(request);
+        var estimate = ModelRequestAdmissionEstimator.Estimate(request);
+        var status = budget.Check(ModelRequestAdmissionEstimator.ToBudgetDimensions(estimate));
+        if (status.IsExhausted)
+        {
+            throw new BudgetExceededException(
+                "Execution budget cannot admit a model request estimated to require "
+                + $"{estimate.InputTokens} input tokens, {estimate.OutputTokens} output tokens, "
+                + $"and {estimate.Calls} call.");
+        }
     }
 
     /// <summary>Accrues only newly reported usage; operational budgets do not refund earlier estimates.</summary>
@@ -43,8 +52,9 @@ internal sealed class ModelRequestBudgetUsage
         ArgumentOutOfRangeException.ThrowIfNegative(usage.InputTokens);
         ArgumentOutOfRangeException.ThrowIfNegative(usage.OutputTokens);
         ArgumentOutOfRangeException.ThrowIfNegative(usage.EstimatedCost);
-        var tokens = usage.InputTokens > long.MaxValue - usage.OutputTokens
-            ? long.MaxValue : usage.InputTokens + usage.OutputTokens;
+        var tokens = ModelRequestAdmissionEstimator.SaturatingTokenTotal(
+            usage.InputTokens,
+            usage.OutputTokens);
         var delta = new BudgetDimensions(
             Math.Max(0, tokens - _chargedTokens),
             0,
@@ -53,35 +63,5 @@ internal sealed class ModelRequestBudgetUsage
         _chargedTokens = Math.Max(_chargedTokens, tokens);
         _chargedCost = Math.Max(_chargedCost, usage.EstimatedCost);
         return budget.Accrue(delta);
-    }
-
-    private static int EstimateInputTokens(ModelStreamRequest request)
-    {
-        if (request.WireEstimate is { } prepared)
-        {
-            return prepared.WireInputTokens;
-        }
-
-        IReadOnlyList<ModelMessage> messages = request.Messages.Count > 0
-            ? request.Messages
-            :
-            [
-                new ModelMessage
-                {
-                    Role = ModelMessageRole.User,
-                    SectionId = "current-user",
-                    Content = [new ModelContentPart { Content = request.Input }],
-                },
-            ];
-        var stablePrefixMessageCount = Math.Min(
-            request.Layout?.StablePrefixMessageCount ?? 0,
-            messages.Count);
-        return ModelWireEstimator.Estimate(
-            messages,
-            request.Tools,
-            request.ToolTransportMode,
-            stablePrefixMessageCount,
-            request.MaximumOutputTokens ?? 0,
-            request.ProviderInstructions).WireInputTokens;
     }
 }

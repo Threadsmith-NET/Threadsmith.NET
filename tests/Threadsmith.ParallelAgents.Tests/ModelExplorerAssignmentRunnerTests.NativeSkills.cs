@@ -5,7 +5,6 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -404,7 +403,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
 
         public ToolInvocationContext? ResolveContext(Guid snapshotId, SessionId sessionId, RunId runId)
-            => _inner.ResolveContext(snapshotId, sessionId, runId);
+        {
+            return _inner.ResolveContext(snapshotId, sessionId, runId);
+        }
 
         public void Release(Guid snapshotId)
         {

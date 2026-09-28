@@ -34,7 +34,8 @@ internal static class PrFetchComposition
                 var selected = addresses.OrderBy(address => address.AddressFamily).First();
                 return await PublicIpAddressPolicy.ConnectAsync(selected, context.DnsEndPoint.Port, token);
             },
-        }) { Timeout = Timeout.InfiniteTimeSpan };
+        })
+        { Timeout = Timeout.InfiniteTimeSpan };
         var tool = new PrFetchTool(
             [new GitHubPullRequestProvider(client, secrets, options), new BitbucketCloudPullRequestProvider(client, secrets, options)],
             options,

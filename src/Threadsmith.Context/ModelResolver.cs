@@ -141,6 +141,8 @@ public sealed class ModelResolver : IModelResolver
         {
             DefaultReasoningLevel = selectedProfile.DefaultReasoningLevel,
             SupportsReasoningOff = selectedProfile.ReasoningCapability.SupportsReasoningOff,
+            Cost = selectedProfile.Cost,
+            EnforcesRequestOutputTokenLimit = selectedProfile.EnforcesRequestOutputTokenLimit,
         };
     }
 }

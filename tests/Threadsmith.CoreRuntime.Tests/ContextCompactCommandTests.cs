@@ -5,9 +5,7 @@ using Threadsmith.Execution;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
-using Threadsmith.Interaction.Runs;
 using Threadsmith.Interaction.Sessions;
-using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Regression coverage for the retired interactive context-compaction command.</summary>

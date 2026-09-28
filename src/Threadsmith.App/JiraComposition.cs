@@ -42,7 +42,8 @@ internal static class JiraComposition
                     context.DnsEndPoint.Port,
                     token);
             },
-        }) { Timeout = Timeout.InfiniteTimeSpan };
+        })
+        { Timeout = Timeout.InfiniteTimeSpan };
         return new JiraTool(new JiraCloudClient(client, secrets, options), options, prompts);
     }
 }

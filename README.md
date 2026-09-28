@@ -297,7 +297,7 @@ The documentation folder contains user and developer references plus implementat
 - [Repository configuration example](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.threadsmith/config.example) — complete annotated configuration schema in the source repository.
 - [Documentation index](docs/index.md) — entry point for the user, operations, authoring, architecture, testing, and guardrail references.
 - [Operations references](docs/operations/README.md) — focused command, conversation-context, provider, tool, theme, and repository workflows.
-- [Conversation context operations](docs/operations/conversation-context.md) — modes, `/context`, inspection, compaction, configuration, retention, and restoration.
+- [Conversation context operations](docs/operations/conversation-context.md) — modes, `/context`, exact-source projection, token and transport reduction, compaction, configuration, retention, and restoration.
 - [Parallel-agent operations](docs/operations/parallel-agents.md) — delegation limits, `/agents`, worktree isolation, cancellation, conflicts, and recovery.
 - [Governed skills operations](docs/operations/skills.md) — catalogs, verification, enablement, `/skills`, invocation, workflows, and recovery.
 - [Declarative skill authoring](docs/skill-authoring.md) — package layout, manifests, safe schemas, workflows, signing, import, and testing.

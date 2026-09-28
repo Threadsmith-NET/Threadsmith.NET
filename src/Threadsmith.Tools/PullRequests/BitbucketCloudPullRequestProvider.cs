@@ -27,7 +27,10 @@ public sealed class BitbucketCloudPullRequestProvider : PullRequestProvider
     protected override bool SupportsBasicAuthentication => true;
 
     /// <inheritdoc />
-    public override PullRequestTarget ParseUrl(string url) => ParseUrl(url, "pull-requests", "/2.0/repositories/", "pullrequests");
+    public override PullRequestTarget ParseUrl(string url)
+    {
+        return ParseUrl(url, "pull-requests", "/2.0/repositories/", "pullrequests");
+    }
 
     /// <inheritdoc />
     public override async Task<PullRequestMetadata> GetMetadataAsync(PullRequestTarget target, PullRequestProviderOptions options, CancellationToken cancellationToken = default)

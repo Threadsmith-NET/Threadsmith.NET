@@ -6,7 +6,10 @@ using TUIKit;
 internal static class ModalFrame
 {
     /// <summary>Checks the shared minimum terminal size before editing or painting.</summary>
-    internal static bool Fits(Size size) => size.Width >= 40 && size.Height >= 12;
+    internal static bool Fits(Size size)
+    {
+        return size.Width >= 40 && size.Height >= 12;
+    }
 
     /// <summary>Clears a centered bordered popup while preserving surrounding application rows.</summary>
     internal static BufferSurface? Create(ISurface surface, CellStyle background, bool large = false)

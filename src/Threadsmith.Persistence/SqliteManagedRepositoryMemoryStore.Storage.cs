@@ -291,11 +291,20 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         return (1 + Math.Log2(1.0 + entry.InclusionCount)) * Math.Pow(2, -age / 30);
     }
 
-    private static string QuoteTerm(string term) => "\"" + term.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+    private static string QuoteTerm(string term)
+    {
+        return "\"" + term.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+    }
 
-    private static string? NullableString(SqliteDataReader reader, int ordinal) => reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+    private static string? NullableString(SqliteDataReader reader, int ordinal)
+    {
+        return reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
+    }
 
-    private static DateTimeOffset ParseTimestamp(string text) => DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).ToUniversalTime();
+    private static DateTimeOffset ParseTimestamp(string text)
+    {
+        return DateTimeOffset.Parse(text, CultureInfo.InvariantCulture).ToUniversalTime();
+    }
 
     private static byte[] EncodeVector(ReadOnlySpan<float> vector)
     {

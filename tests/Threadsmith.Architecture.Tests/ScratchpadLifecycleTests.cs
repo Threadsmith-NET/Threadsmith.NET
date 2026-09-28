@@ -345,21 +345,33 @@ public sealed class ScratchpadLifecycleTests
     private sealed class EmptyConversationStore : IConversationStore
     {
         public Task<ConversationMessage> ArchiveMessageAsync(ConversationMessage message, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task<int> RemoveMessageBodiesOlderThanAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task ReplaceSummaryAsync(SessionId sessionId, IReadOnlyList<ConversationMemoryItem> items, ConversationSummarySnapshot snapshot, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task SetModeAsync(SessionId sessionId, ConversationContextMode mode, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task UpdateMemoryAsync(ConversationMemoryItem item, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
     }
 }

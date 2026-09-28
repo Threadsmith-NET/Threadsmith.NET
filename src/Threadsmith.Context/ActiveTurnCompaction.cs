@@ -22,6 +22,9 @@ public sealed record ActiveTurnCompactionPolicy
     /// <summary>Summary allowance used to request model output, not an exact rendered-text limit.</summary>
     public int SummaryBudgetTokens { get; init; } = 16_384;
 
+    /// <summary>Hard character bound for the complete rendered replacement summary.</summary>
+    public int MaximumRenderedSummaryCharacters { get; init; } = 65_536;
+
     /// <summary>Percentage of the summary budget available to model-written text.</summary>
     public int ModelOutputBudgetPercent { get; init; } = 80;
 
@@ -100,6 +103,8 @@ public sealed record ActiveTurnCompactionPolicy
         ArgumentOutOfRangeException.ThrowIfGreaterThan(OutputReserveTokens, 262_144);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(SummaryBudgetTokens);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(SummaryBudgetTokens, 32_768);
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaximumRenderedSummaryCharacters, 256);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumRenderedSummaryCharacters, 262_144);
         ArgumentOutOfRangeException.ThrowIfLessThan(ModelOutputBudgetPercent, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(ModelOutputBudgetPercent, 95);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MinimumSavingsTokens);
@@ -250,6 +255,13 @@ public sealed record ActiveTurnSourceReference(
     string Id,
     long GroupSequence);
 
+/// <summary>Stable identities for one correlated result retained by an active-turn group.</summary>
+public sealed record ActiveTurnResultReference(
+    string ToolCallId,
+    string ToolName,
+    ToolInvocationId? ToolInvocationId,
+    EvidenceId? EvidenceId);
+
 /// <summary>One complete chronological assistant-call/result group.</summary>
 public sealed record ActiveTurnContinuationGroup
 {
@@ -261,6 +273,9 @@ public sealed record ActiveTurnContinuationGroup
 
     /// <summary>Complete provider-neutral messages in original order.</summary>
     public required IReadOnlyList<ModelMessage> Messages { get; init; }
+
+    /// <summary>Bounded host identities for the group's correlated tool results.</summary>
+    public IReadOnlyList<ActiveTurnResultReference> Results { get; init; } = [];
 
     /// <summary>Host-known source identities for candidate validation.</summary>
     public required IReadOnlyList<ActiveTurnSourceReference> Sources { get; init; }
@@ -473,6 +488,12 @@ public sealed record ActiveTurnAcceptanceIntent
     public bool WasTruncated { get; init; }
 }
 
+/// <summary>Conservative ordinary continuation bound for one candidate prefix size.</summary>
+public sealed record ActiveTurnContinuationAdmission(
+    int CompactedGroupCount,
+    ModelRequestAdmissionEstimate Estimate,
+    bool FitsContextCapacity = true);
+
 /// <summary>Repository-excluding candidate profile facts frozen into one compaction request.</summary>
 public sealed record ActiveTurnCompactionCandidateProfile
 {
@@ -484,6 +505,12 @@ public sealed record ActiveTurnCompactionCandidateProfile
 
     /// <summary>Candidate profile effective request output reserve.</summary>
     public required int OutputReserveTokens { get; init; }
+
+    /// <summary>Provider-advertised hard maximum response size.</summary>
+    public int MaximumOutputTokens { get; init; }
+
+    /// <summary>Whether the provider enforces a request-specific output ceiling.</summary>
+    public bool EnforcesRequestOutputTokenLimit { get; init; } = true;
 
     /// <summary>Candidate profile default reasoning level.</summary>
     public required ReasoningLevel ReasoningLevel { get; init; }
@@ -522,6 +549,21 @@ public sealed record ActiveTurnCompactionRequest
     /// <summary>Exact provider-owned instruction contribution for the ordinary-profile fallback.</summary>
     public ModelProviderInstructions? ProviderInstructions { get; init; }
 
+    /// <summary>Ordinary-profile pricing used when the summary uses the ordinary model.</summary>
+    public ModelCostMetadata? ProfileCost { get; init; }
+
+    /// <summary>Ordinary profile hard output maximum used when a request limit is not enforced.</summary>
+    public int ProfileMaximumOutputTokens { get; init; }
+
+    /// <summary>Whether the ordinary provider enforces the requested output ceiling.</summary>
+    public bool ProfileEnforcesRequestOutputTokenLimit { get; init; } = true;
+
+    /// <summary>Conservative unchanged ordinary request retained as continuation headroom.</summary>
+    public ModelRequestAdmissionEstimate? ContinuationAdmissionEstimate { get; init; }
+
+    /// <summary>Bounded post-summary continuation estimates keyed by compacted group count.</summary>
+    public IReadOnlyList<ActiveTurnContinuationAdmission> ContinuationAdmissionEstimates { get; init; } = [];
+
     /// <summary>Zero-based ordinary tool-continuation round that triggered this candidate assessment.</summary>
     public int ToolContinuationRound { get; init; }
 
@@ -548,6 +590,15 @@ public sealed record ActiveTurnCompactionRequest
 
     /// <summary>Oldest complete eligible raw prefix selected for replacement.</summary>
     public required IReadOnlyList<ActiveTurnContinuationGroup> EligiblePrefix { get; init; }
+
+    /// <summary>
+    /// Dependency-safe model-visible candidate inputs keyed by exact selected prefix length.
+    /// Missing entries use <see cref="EligiblePrefix"/> verbatim.
+    /// </summary>
+    public IReadOnlyDictionary<int, IReadOnlyList<ActiveTurnContinuationGroup>>
+        ProjectedEligiblePrefixes
+    { get; init; }
+        = new Dictionary<int, IReadOnlyList<ActiveTurnContinuationGroup>>();
 
     /// <summary>Selected-model sensitivity constraint, preserved for the candidate call.</summary>
     public required ModelSelectionConstraints SelectionConstraints { get; init; }
@@ -576,6 +627,20 @@ public sealed record ActiveTurnCandidateGeneration(
 /// <summary>One normalized candidate request ready for actual provider I/O.</summary>
 public interface IActiveTurnCompactionCandidateAttempt
 {
+    /// <summary>The exact provider-prepared request, when the attempt can expose it for host telemetry.</summary>
+    ModelStreamRequest? PreparedRequest => null;
+
+    /// <summary>Replaces the transport-submission observer on an exposed prepared request.</summary>
+    void SetSubmissionObserver(Action? submissionObserver)
+    {
+    }
+
+    /// <summary>Conservative usage for this prepared provider attempt.</summary>
+    ModelRequestAdmissionEstimate AdmissionEstimate { get; }
+
+    /// <summary>Number of new raw groups included in this prepared candidate.</summary>
+    int SelectedGroupCount { get; }
+
     /// <summary>Latest normalized usage observed, including usage received before a later failure.</summary>
     ModelUsage? ObservedUsage { get; }
 
@@ -643,6 +708,9 @@ public enum ActiveTurnCompactionOutcome
 
     /// <summary>Cancellation retained the prior continuation.</summary>
     Cancelled,
+
+    /// <summary>The prepared summary and continuation could not be admitted before provider I/O.</summary>
+    AdmissionRejected,
 }
 
 /// <summary>Closed outcome of one candidate-provider attempt at the host model-request boundary.</summary>
@@ -667,6 +735,73 @@ public interface IActiveTurnCompactionAttemptObserver
         int attempt,
         Guid invocationId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Checks one prepared attempt before applying the ordinary request boundary.</summary>
+    Task BeforeProviderCallAsync(
+        ActiveTurnCompactionRequest request,
+        int attempt,
+        Guid invocationId,
+        ModelRequestAdmissionEstimate admissionEstimate,
+        CancellationToken cancellationToken = default)
+    {
+        return BeforeProviderCallAsync(
+            request,
+            attempt,
+            invocationId,
+            cancellationToken);
+    }
+
+    /// <summary>Returns whether one prepared attempt may proceed to the provider boundary.</summary>
+    async Task<bool> TryBeforeProviderCallAsync(
+        ActiveTurnCompactionRequest request,
+        int attempt,
+        Guid invocationId,
+        ModelRequestAdmissionEstimate admissionEstimate,
+        CancellationToken cancellationToken = default)
+    {
+        await BeforeProviderCallAsync(
+            request,
+            attempt,
+            invocationId,
+            admissionEstimate,
+            cancellationToken);
+        return true;
+    }
+
+    /// <summary>Checks one prepared attempt using its exact candidate-prefix size.</summary>
+    Task<bool> TryBeforeProviderCallAsync(
+        ActiveTurnCompactionRequest request,
+        int attempt,
+        Guid invocationId,
+        ModelRequestAdmissionEstimate admissionEstimate,
+        int selectedGroupCount,
+        CancellationToken cancellationToken = default)
+    {
+        return TryBeforeProviderCallAsync(
+            request,
+            attempt,
+            invocationId,
+            admissionEstimate,
+            cancellationToken);
+    }
+
+    /// <summary>Checks one exact prepared attempt and permits host telemetry to observe it.</summary>
+    Task<bool> TryBeforeProviderCallAsync(
+        ActiveTurnCompactionRequest request,
+        int attempt,
+        Guid invocationId,
+        IActiveTurnCompactionCandidateAttempt candidateAttempt,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(candidateAttempt);
+        return TryBeforeProviderCallAsync(
+            request,
+            attempt,
+            invocationId,
+            candidateAttempt.AdmissionEstimate,
+            candidateAttempt.SelectedGroupCount,
+            cancellationToken);
+    }
 
     /// <summary>Records the host post-request boundary after provider I/O completes or fails.</summary>
     Task AfterProviderCallAsync(
@@ -726,6 +861,7 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
     ];
 
     private readonly IPromptLoader _prompts;
+    private readonly ActiveTurnCompactionPolicy _policy;
     private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionValidator"/> class.</summary>
@@ -738,6 +874,7 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(prompts);
         policy.Validate();
+        _policy = policy;
         _sanitizer = sanitizer;
         _prompts = prompts;
     }
@@ -823,6 +960,11 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
             {
                 errors.Add("Candidate summary contains a policy, permission, or instruction marker.");
                 reason = ActiveTurnCompactionRejectionReason.Authority;
+            }
+            else if (content.Length > _policy.MaximumRenderedSummaryCharacters)
+            {
+                errors.Add("Candidate summary exceeds the rendered summary character bound.");
+                reason = ActiveTurnCompactionRejectionReason.Size;
             }
         }
 
@@ -914,6 +1056,11 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 Messages = messages,
                 WireEstimate = wireEstimate,
                 ProviderInstructions = profile.ProviderInstructions,
+                AdmissionCost = profile.Cost,
+                AdmissionOutputTokenCeiling = profile.EnforcesRequestOutputTokenLimit
+                    ? modelOutputTokens
+                    : profile.MaximumOutputTokens,
+                AdmissionContextWindowTokens = profile.ContextWindowTokens,
             });
         if (prepared.WireEstimate is { } preparedEstimate
             && preparedEstimate.TotalCapacityTokens > profile.ContextWindowTokens)
@@ -935,34 +1082,9 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         var maximumCandidateInputTokens = _policy.MaximumInputTokens == 0
             ? profileInputCapacity
             : Math.Min(_policy.MaximumInputTokens, profileInputCapacity);
-        var maximumCandidateCharacters = (long)maximumCandidateInputTokens * 4;
-        var fixedCharacters = EstimateFixedInputCharacters(request, summaryPrompt);
-        var maximumRawGroupCount = 0;
-        var aggregateCharacters = fixedCharacters;
-        foreach (var group in request.EligiblePrefix)
-        {
-            var groupCharacters = EstimateGroupInputCharacters(group);
-            if (aggregateCharacters > maximumCandidateCharacters - groupCharacters)
-            {
-                break;
-            }
-
-            aggregateCharacters += groupCharacters;
-            maximumRawGroupCount++;
-        }
-
-        if (maximumRawGroupCount == 0)
-        {
-            throw new ModelProviderException(
-                "The previous summary and first complete source group cannot fit the bounded candidate request.");
-        }
-
         CandidateInputProjection? selectedInput = null;
-        var lowerBound = 1;
-        var upperBound = maximumRawGroupCount;
-        while (lowerBound <= upperBound)
+        for (var groupCount = 1; groupCount <= request.EligiblePrefix.Count; groupCount++)
         {
-            var groupCount = lowerBound + ((upperBound - lowerBound) / 2);
             var input = CreateInput(request, groupCount, modelOutputTokens);
             var estimate = ModelWireEstimator.Estimate(
                 CreateMessages(summaryPrompt, input.Json),
@@ -991,59 +1113,11 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             if (estimate.WireInputTokens <= maximumCandidateInputTokens)
             {
                 selectedInput = input;
-                lowerBound = groupCount + 1;
-            }
-            else
-            {
-                upperBound = groupCount - 1;
             }
         }
 
         return selectedInput ?? throw new ModelProviderException(
             "The previous summary and first complete source group cannot fit the bounded candidate request.");
-    }
-
-    private long EstimateFixedInputCharacters(
-        ActiveTurnCompactionRequest request,
-        string summaryPrompt)
-    {
-        var characters = (long)_prompts.Get(PromptFileNames.ContextActiveTurnCompactionSystem).Length
-            + _prompts.Get(PromptFileNames.ContextActiveTurnCompactionOutputContract).Length
-            + summaryPrompt.Length
-            + request.TaskObjective.Length
-            + (request.TaskContext?.Length ?? 0)
-            + request.AcceptanceIntent.Sum(intent => (long)intent.Description.Length)
-            + (request.PriorSummary?.Content.Length ?? 0)
-            + (request.PriorSummary?.FilesRead.Sum(path => (long)path.Length) ?? 0)
-            + (request.PriorSummary?.FilesChanged.Sum(path => (long)path.Length) ?? 0)
-            + 1_024;
-        return characters;
-    }
-
-    private static long EstimateGroupInputCharacters(ActiveTurnContinuationGroup group)
-    {
-        return group.Messages.Sum(EstimateMessageInputCharacters)
-            + group.FilesRead.Sum(EstimatePathInputCharacters)
-            + group.FilesChanged.Sum(EstimatePathInputCharacters)
-            + 128;
-    }
-
-    private static long EstimateMessageInputCharacters(ModelMessage message)
-    {
-        return 64L
-            + (message.ToolCallId?.Length ?? 0)
-            + (message.ToolName?.Length ?? 0)
-            + message.Content.Sum(EstimateContentPartInputCharacters);
-    }
-
-    private static long EstimateContentPartInputCharacters(ModelContentPart part)
-    {
-        return part.IsModelVisible ? 32L + part.Content.Length : 0L;
-    }
-
-    private static long EstimatePathInputCharacters(string path)
-    {
-        return 16L + path.Length;
     }
 
     private IReadOnlyList<ModelMessage> CreateMessages(
@@ -1182,6 +1256,9 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     {
         if (request.CandidateProfile is not { } profile)
         {
+            var maximumOutputTokens = request.ProfileMaximumOutputTokens > 0
+                ? request.ProfileMaximumOutputTokens
+                : request.ProfileOutputReserveTokens;
             return new CandidateProfileSelection(
                 request.ProfileId,
                 request.ProfileContextWindowTokens,
@@ -1191,10 +1268,15 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 new ModelCapabilitySet { Streaming = true },
                 request.SelectionConstraints with { ContainsSensitiveData = containsSensitiveData },
                 null,
-                null,
+                request.ProfileCost,
+                maximumOutputTokens,
+                request.ProfileEnforcesRequestOutputTokenLimit,
                 request.ProviderInstructions);
         }
 
+        var candidateMaximumOutputTokens = profile.MaximumOutputTokens > 0
+            ? profile.MaximumOutputTokens
+            : profile.OutputReserveTokens;
         return new CandidateProfileSelection(
             profile.ProfileId,
             profile.ContextWindowTokens,
@@ -1210,6 +1292,8 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             },
             profile.SensitiveDataPolicy,
             profile.Cost,
+            candidateMaximumOutputTokens,
+            profile.EnforcesRequestOutputTokenLimit,
             profile.ProviderInstructions);
     }
 
@@ -1233,7 +1317,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(groupCount, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(groupCount, request.EligiblePrefix.Count);
-        var selectedGroups = request.EligiblePrefix.Take(groupCount).ToArray();
+        var selectedGroups = ResolveSelectedGroups(request, groupCount);
         var files = ActiveTurnFileListBuilder.Build(request.PriorSummary, selectedGroups);
         var source = new
         {
@@ -1285,6 +1369,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         var envelope = new CandidateEnvelope(
             request.PriorSummary?.Version ?? 0,
             selectedGroups[^1].Sequence,
+            selectedGroups.Count,
             (request.PriorSummary?.CoveredGroupSequences ?? [])
                 .Concat(selectedGroups.Select(group => group.Sequence))
                 .ToArray(),
@@ -1292,6 +1377,26 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         return new CandidateInputProjection(
             JsonSerializer.Serialize(source, JsonOptions),
             envelope);
+    }
+
+    private static IReadOnlyList<ActiveTurnContinuationGroup> ResolveSelectedGroups(
+        ActiveTurnCompactionRequest request,
+        int groupCount)
+    {
+        if (!request.ProjectedEligiblePrefixes.TryGetValue(groupCount, out var projected))
+        {
+            return request.EligiblePrefix.Take(groupCount).ToArray();
+        }
+
+        var expectedSequences = request.EligiblePrefix.Take(groupCount).Select(group => group.Sequence);
+        if (projected.Count != groupCount
+            || !projected.Select(group => group.Sequence).SequenceEqual(expectedSequences))
+        {
+            throw new ModelProviderException(
+                "The projected active-turn candidate input does not match its eligible prefix.");
+        }
+
+        return projected;
     }
 
     private sealed record CandidateProfileSelection(
@@ -1304,6 +1409,8 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         ModelSelectionConstraints SelectionConstraints,
         ModelSensitiveDataPolicy? SensitiveDataPolicy,
         ModelCostMetadata? Cost,
+        int MaximumOutputTokens,
+        bool EnforcesRequestOutputTokenLimit,
         ModelProviderInstructions? ProviderInstructions);
 
     private sealed record CandidateInputProjection(
@@ -1313,6 +1420,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     private sealed record CandidateEnvelope(
         int PriorSummaryVersion,
         long ThroughGroupSequence,
+        int SelectedGroupCount,
         IReadOnlyList<long> CoveredGroupSequences,
         ActiveTurnFileLists FileLists);
 
@@ -1320,7 +1428,7 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
     {
         private readonly CandidateEnvelope _envelope;
         private readonly IModelProvider _model;
-        private readonly ModelStreamRequest _request;
+        private ModelStreamRequest _request;
 
         public ModelCandidateAttempt(
             IModelProvider model,
@@ -1332,7 +1440,19 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
             _envelope = envelope;
         }
 
+        public ModelRequestAdmissionEstimate AdmissionEstimate =>
+            ModelRequestAdmissionEstimator.Estimate(_request);
+
+        public ModelStreamRequest PreparedRequest => _request;
+
+        public int SelectedGroupCount => _envelope.SelectedGroupCount;
+
         public ModelUsage? ObservedUsage { get; private set; }
+
+        public void SetSubmissionObserver(Action? submissionObserver)
+        {
+            _request = _request with { SubmissionObserver = submissionObserver };
+        }
 
         public async Task<ActiveTurnCandidateGeneration> ExecuteAsync(
             CancellationToken cancellationToken = default)
@@ -1526,14 +1646,25 @@ public sealed class ActiveTurnCompactor : IActiveTurnCompactor
                     startedAt);
             }
 
-            calls++;
+            var attempt = calls + 1;
             var invocationId = Guid.NewGuid();
-            await attemptObserver.BeforeProviderCallAsync(
+            if (!await attemptObserver.TryBeforeProviderCallAsync(
                 request,
-                calls,
+                attempt,
                 invocationId,
-                cancellationToken);
+                candidateAttempt,
+                cancellationToken))
+            {
+                activity?.SetTag("threadsmith.active_turn.outcome", "budget_admission_rejected");
+                activity?.SetStatus(ActivityStatusCode.Error, "budget_admission_rejected");
+                return CreateFailure(
+                    ActiveTurnCompactionOutcome.AdmissionRejected,
+                    "Host admission rejected the prepared summary-and-continuation path before provider I/O.",
+                    calls,
+                    startedAt);
+            }
 
+            calls++;
             var attemptStartedAt = _timeProvider.GetTimestamp();
             var attemptOutcome = ActiveTurnCompactionAttemptOutcome.Failed;
             ModelUsage? attemptUsage = null;

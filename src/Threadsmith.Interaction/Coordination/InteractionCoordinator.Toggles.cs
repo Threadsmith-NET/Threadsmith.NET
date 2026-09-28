@@ -2,7 +2,6 @@ namespace Threadsmith.Interaction.Coordination;
 
 using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
-using Threadsmith.Tools;
 
 /// <summary>Reconciles retained availability requests through the existing tool authority.</summary>
 public sealed partial class InteractionCoordinator
@@ -73,10 +72,10 @@ public sealed partial class InteractionCoordinator
                 {
                     var result = await controller.ManageMcpAsync(
                         new McpManagementRequest
-                    {
-                        Action = enabled ? McpManagementAction.Connect : McpManagementAction.Disconnect,
-                        ProfileId = id,
-                    },
+                        {
+                            Action = enabled ? McpManagementAction.Connect : McpManagementAction.Disconnect,
+                            ProfileId = id,
+                        },
                         token);
                     if (!result.Succeeded)
                     {

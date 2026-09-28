@@ -277,21 +277,29 @@ public static class Plan34ConversationMemoryTests
         Assert.Equal(0, generator.Calls);
     }
 
-    private static RepositoryMemoryRetrievalRequest Query(string text) => new()
+    private static RepositoryMemoryRetrievalRequest Query(string text)
     {
-        RepositoryIdentity = MemoryTestData.Repository,
-        CurrentInstruction = text,
-        Options = new RepositoryMemoryOptions { SemanticMinimum = 0.8 },
-    };
+        return new()
+        {
+            RepositoryIdentity = MemoryTestData.Repository,
+            CurrentInstruction = text,
+            Options = new RepositoryMemoryOptions { SemanticMinimum = 0.8 },
+        };
+    }
 
-    private static HybridRepositoryMemoryRetriever CreateRetriever(ConversationFixture fixture, ITextEmbeddingGenerator generator) =>
-        new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator);
-
-    private static TestMemoryEmbeddingGenerator CreateGenerator() => new()
+    private static HybridRepositoryMemoryRetriever CreateRetriever(ConversationFixture fixture, ITextEmbeddingGenerator generator)
     {
-        Generate = text => new TextEmbeddingResult(
-            text is "paraphrase" or "alpha beta shared" or "alpha beta" ? (float[])[1, 0, 0] : (float[])[0, 1, 0],
-            4,
-            false),
-    };
+        return new(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator);
+    }
+
+    private static TestMemoryEmbeddingGenerator CreateGenerator()
+    {
+        return new()
+        {
+            Generate = text => new TextEmbeddingResult(
+                text is "paraphrase" or "alpha beta shared" or "alpha beta" ? (float[])[1, 0, 0] : (float[])[0, 1, 0],
+                4,
+                false),
+        };
+    }
 }

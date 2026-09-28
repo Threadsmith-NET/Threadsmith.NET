@@ -44,7 +44,10 @@ public sealed record ModelReplayBinding
     public required string NormalizedRoundDigest { get; init; }
 
     /// <inheritdoc />
-    public override string ToString() => "ModelReplayBinding { private protocol binding }";
+    public override string ToString()
+    {
+        return "ModelReplayBinding { private protocol binding }";
+    }
 }
 
 /// <summary>Detached completed provider response retained only by an active host loop.</summary>
@@ -101,7 +104,10 @@ public sealed class ModelResponseReplayEnvelope : IDisposable
     }
 
     /// <inheritdoc />
-    public override string ToString() => "ModelResponseReplayEnvelope { private protocol data }";
+    public override string ToString()
+    {
+        return "ModelResponseReplayEnvelope { private protocol data }";
+    }
 
     /// <summary>Whether the host accepted ownership of this completed response.</summary>
     [JsonIgnore]
@@ -284,7 +290,10 @@ public sealed class ModelRequestTransientState : IDisposable
     }
 
     /// <inheritdoc />
-    public override string ToString() => "ModelRequestTransientState { private active-loop state }";
+    public override string ToString()
+    {
+        return "ModelRequestTransientState { private active-loop state }";
+    }
 
     private static string ComputeHistoryDigest(int modelRound, IReadOnlyList<ModelMessage> messages)
     {

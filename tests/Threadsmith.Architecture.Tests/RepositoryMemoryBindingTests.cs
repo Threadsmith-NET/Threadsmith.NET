@@ -76,7 +76,10 @@ public static class RepositoryMemoryBindingTests
     {
         private bool _failNext = true;
 
-        public Task AutoConnectAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task AutoConnectAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
 
         public Task RebindRepositoryAsync(CancellationToken cancellationToken = default)
         {
@@ -91,9 +94,14 @@ public static class RepositoryMemoryBindingTests
         }
 
         public Task<McpManagementResult> ExecuteAsync(McpManagementRequest request, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class BindingFixture : IAsyncDisposable
@@ -191,10 +199,12 @@ public static class RepositoryMemoryBindingTests
         }
 
         private static string Connection(string repositoryRoot)
-            => new SqliteConnectionStringBuilder
+        {
+            return new SqliteConnectionStringBuilder
             {
                 DataSource = Path.Combine(repositoryRoot, ".threadsmith", "threadsmith.db"),
                 Pooling = false,
             }.ToString();
+        }
     }
 }

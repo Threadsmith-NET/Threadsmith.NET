@@ -28,7 +28,8 @@ public sealed partial class ExecutionOrchestratorTests
             await using var workspaces = new TransactionalWorkspaceCoordinator(events);
             var baseline = fixture.StartRequest.Baseline with
             {
-                RepositoryPath = root, ApprovedRoots = ["src"],
+                RepositoryPath = root,
+                ApprovedRoots = ["src"],
                 Files = [new WorkspaceFileHash("src/Example.cs", Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(original))), Encoding.UTF8.GetByteCount(original))],
             };
             await workspaces.RegisterBaselineAsync(baseline);
@@ -50,13 +51,17 @@ public sealed partial class ExecutionOrchestratorTests
             {
                 var request = fixture.StartRequest with
                 {
-                    SessionId = SessionId.New(), RunId = RunId.New(), Baseline = workspaces.GetWorkspace(baseline.WorkspaceId).Baseline,
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    Baseline = workspaces.GetWorkspace(baseline.WorkspaceId).Baseline,
                 };
                 request = request with
                 {
                     ValidationRequest = request.ValidationRequest with
                     {
-                        SessionId = request.SessionId, RunId = request.RunId, Baseline = request.Baseline,
+                        SessionId = request.SessionId,
+                        RunId = request.RunId,
+                        Baseline = request.Baseline,
                     },
                 };
                 var pending = await orchestrator.StartAsync(request);
@@ -102,9 +107,14 @@ public sealed partial class ExecutionOrchestratorTests
             Assert.Equal(expected, Source);
             var set = new MutationSet
             {
-                MutationSetId = MutationSetId.New(), SessionId = command.SessionId, RunId = command.RunId, WorkspaceId = command.WorkspaceId,
-                BaselineCapturedAt = workspace.Baseline.CapturedAt, BaselineRevision = workspace.Baseline.GitRevision,
-                Rationale = "Add a field.", IsWithinApprovedPlan = true,
+                MutationSetId = MutationSetId.New(),
+                SessionId = command.SessionId,
+                RunId = command.RunId,
+                WorkspaceId = command.WorkspaceId,
+                BaselineCapturedAt = workspace.Baseline.CapturedAt,
+                BaselineRevision = workspace.Baseline.GitRevision,
+                Rationale = "Add a field.",
+                IsWithinApprovedPlan = true,
                 Mutations = [new Mutation { MutationId = MutationId.New(), Type = MutationType.ReplaceText, RelativePath = "src/Example.cs", StartOffset = 0, Length = expected.Length, ExpectedText = expected, ReplacementText = replacement }],
             };
             return await workspaces.StageAsync(set, cancellationToken);

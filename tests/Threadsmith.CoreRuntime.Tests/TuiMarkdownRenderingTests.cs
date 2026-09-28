@@ -1,8 +1,6 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
-using System.Text;
 using Microsoft.Extensions.Configuration;
-using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;

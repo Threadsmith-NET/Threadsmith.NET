@@ -31,7 +31,10 @@ public interface IToolStateManager
     bool RequiresCurrentMessageUrlConsent();
 
     /// <summary>Checks the current input using the configured URL discovery limits.</summary>
-    bool HasCurrentMessageUrlCandidate(string rawMessage) => CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage);
+    bool HasCurrentMessageUrlCandidate(string rawMessage)
+    {
+        return CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage);
+    }
 
     /// <summary>Disables a non-essential registered tool.</summary>
     Task DisableAsync(string toolId, CancellationToken cancellationToken = default);
@@ -264,7 +267,9 @@ public sealed class ToolStateManager : IToolStateManager
 
     /// <inheritdoc />
     public bool HasCurrentMessageUrlCandidate(string rawMessage)
-        => _fetchAuthorization?.HasCurrentMessageUrlCandidate(rawMessage) ?? CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage);
+    {
+        return _fetchAuthorization?.HasCurrentMessageUrlCandidate(rawMessage) ?? CurrentUserUrlRecognizer.HasEligibleCandidate(rawMessage);
+    }
 
     /// <inheritdoc />
     public bool RequiresCurrentMessageUrlConsent()

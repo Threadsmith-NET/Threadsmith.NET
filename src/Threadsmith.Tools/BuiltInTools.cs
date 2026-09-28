@@ -199,6 +199,15 @@ public sealed record ReadFileOutput(
     int? NextStartLine,
     ReadFileTruncationReason? TruncationReason)
 {
+    /// <summary>SHA256 of the original complete file bytes for exact snapshot identity.</summary>
+    public string? FileSha256 { get; init; }
+
+    /// <summary>SHA256 of the canonical sanitized delivered lines for projection identity.</summary>
+    public string? VisibleRangeSha256 { get; init; }
+
+    /// <summary>Exact current-request support when historical source lines were projected out.</summary>
+    public ReadFileSourceReceipt? SourceReceipt { get; init; }
+
     /// <summary>UTF-8 source content with centrally sanitized values when snapshot mode is requested.</summary>
     public string? Content { get; init; }
 
@@ -208,6 +217,16 @@ public sealed record ReadFileOutput(
     /// <summary>Next UTF-8 byte offset in the sanitized snapshot, or null when complete.</summary>
     public int? NextSnapshotOffset { get; init; }
 }
+
+/// <summary>Compact proof that an exact file range remains visible through another tool result.</summary>
+public sealed record ReadFileSourceReceipt(
+    string ToolCallId,
+    Guid EvidenceId,
+    string FileSha256,
+    string VisibleRangeSha256,
+    int StartLine,
+    int EndLine,
+    string RecoveryTool);
 
 /// <summary>Reads a bounded UTF-8 file range.</summary>
 public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
@@ -317,11 +336,17 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", relativePath)]);
         }
 
-        var sourceText = await File.ReadAllTextAsync(path, cancellationToken);
+        var sourceBytes = await File.ReadAllBytesAsync(path, cancellationToken);
+        using var sourceStream = new MemoryStream(sourceBytes, writable: false);
+        using var sourceReader = new StreamReader(
+            sourceStream,
+            Encoding.UTF8,
+            detectEncodingFromByteOrderMarks: true);
+        var sourceText = await sourceReader.ReadToEndAsync(cancellationToken);
         sourceText = _sanitizer.Sanitize(sourceText);
-        using var reader = new StringReader(sourceText);
+        using var lineReader = new StringReader(sourceText);
         var sourceLines = new List<string>();
-        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        while (await lineReader.ReadLineAsync(cancellationToken) is { } line)
         {
             cancellationToken.ThrowIfCancellationRequested();
             sourceLines.Add(line);
@@ -360,7 +385,16 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
                 selected,
                 truncated,
                 nextStartLine,
-                truncationReason),
+                truncationReason)
+            {
+                FileSha256 = Convert.ToHexStringLower(
+                    System.Security.Cryptography.SHA256.HashData(sourceBytes)),
+                VisibleRangeSha256 = selected.Count == 0
+                    ? null
+                    : Convert.ToHexStringLower(
+                        System.Security.Cryptography.SHA256.HashData(
+                            Encoding.UTF8.GetBytes(string.Join('\n', selected)))),
+            },
             [source],
             truncated);
     }

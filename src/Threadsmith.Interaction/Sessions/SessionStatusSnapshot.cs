@@ -1,7 +1,6 @@
 namespace Threadsmith.Interaction.Sessions;
 
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Models;
 
 /// <summary>Immutable terminal-neutral state displayed beside the active composer.</summary>

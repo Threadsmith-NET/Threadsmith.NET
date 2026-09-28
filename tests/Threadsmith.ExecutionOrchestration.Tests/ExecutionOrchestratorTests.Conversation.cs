@@ -648,10 +648,12 @@ public sealed partial class ExecutionOrchestratorTests
             };
         }
 
-        private static ImplementationPlan CreatePlan() => new()
+        private static ImplementationPlan CreatePlan()
         {
-            Summary = "Add the requested private test field.",
-            Steps =
+            return new()
+            {
+                Summary = "Add the requested private test field.",
+                Steps =
             [
                 new ImplementationPlanStep
                 {
@@ -663,7 +665,8 @@ public sealed partial class ExecutionOrchestratorTests
                     Validation = ["Build the affected project."],
                 },
             ],
-        };
+            };
+        }
 
         private static async Task<ConversationScenario> CreateCoreAsync(
             DomainEventStream events,

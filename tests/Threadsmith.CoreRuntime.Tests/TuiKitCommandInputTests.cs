@@ -177,15 +177,30 @@ public static class TuiKitCommandInputTests
 
         internal HeadlessBackend Input { get; } = new(80, 24);
 
-        public void Start() => Input.Start();
+        public void Start()
+        {
+            Input.Start();
+        }
 
-        public void Stop() => Input.Stop();
+        public void Stop()
+        {
+            Input.Stop();
+        }
 
-        public void Dispose() => Input.Dispose();
+        public void Dispose()
+        {
+            Input.Dispose();
+        }
 
-        public void Flush() => Input.Flush();
+        public void Flush()
+        {
+            Input.Flush();
+        }
 
-        public int ReadInput(byte[] buffer, int offset, int count) => Input.ReadInput(buffer, offset, count);
+        public int ReadInput(byte[] buffer, int offset, int count)
+        {
+            return Input.ReadInput(buffer, offset, count);
+        }
 
         public void Write(string data)
         {

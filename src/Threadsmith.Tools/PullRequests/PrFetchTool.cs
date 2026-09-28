@@ -175,11 +175,15 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetSecretReferences(PrFetchInput input)
-        => ResolveProvider(input).Account.Authentication.SecretReference is { } reference ? [reference] : [];
+    {
+        return ResolveProvider(input).Account.Authentication.SecretReference is { } reference ? [reference] : [];
+    }
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetNetworkHosts(PrFetchInput input)
-        => [ResolveProvider(input).Provider.ApiHost];
+    {
+        return [ResolveProvider(input).Provider.ApiHost];
+    }
 
     /// <inheritdoc />
     protected override string? DescribeActivity(PrFetchInput input)
@@ -199,12 +203,17 @@ public sealed class PrFetchTool : Tool<PrFetchInput, PrFetchOutput>
         return $"{result.Provider} · {FormatKind(result.Kind)} · acquisition complete · {result.Page.Files.Count} files · {result.Metadata.Url}";
     }
 
-    private static string FormatKind(PrFetchKind kind) => kind.ToString().ToLowerInvariant();
+    private static string FormatKind(PrFetchKind kind)
+    {
+        return kind.ToString().ToLowerInvariant();
+    }
 
-    private static int ModelDeliveryBudgetBytes(ToolInvocationContext context) =>
-        (context.ModelRemainingInputBudgetTokens ?? context.ModelEffectiveInputBudgetTokens) is { } effective && effective > 0
+    private static int ModelDeliveryBudgetBytes(ToolInvocationContext context)
+    {
+        return (context.ModelRemainingInputBudgetTokens ?? context.ModelEffectiveInputBudgetTokens) is { } effective && effective > 0
             ? (int)Math.Min(MaximumModelOutputBytes, (long)effective * 3)
             : MaximumModelOutputBytes;
+    }
 
     private static int ModelDeliveryMaximumCharacters(PrFetchOutput captured, int deliveryBudgetBytes)
     {

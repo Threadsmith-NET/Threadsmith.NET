@@ -26,22 +26,28 @@ public static class RepositoryMemoryApplicationTests
         Assert.Equal("my replacement", memories.Request?.Text);
     }
 
-    private static RepositoryMemoryEntry CreateEntry(RepositoryMemoryId id, string text) => new()
+    private static RepositoryMemoryEntry CreateEntry(RepositoryMemoryId id, string text)
     {
-        Id = id,
-        RepositoryIdentity = "test:repository",
-        Text = text,
-        ContentHash = "test-content-hash",
-        Origin = RepositoryMemoryOrigin.Manual,
-        CreatedAt = DateTimeOffset.UnixEpoch,
-        UpdatedAt = DateTimeOffset.UnixEpoch,
-    };
+        return new()
+        {
+            Id = id,
+            RepositoryIdentity = "test:repository",
+            Text = text,
+            ContentHash = "test-content-hash",
+            Origin = RepositoryMemoryOrigin.Manual,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+        };
+    }
 
     private sealed class ConflictMemoryService : IManagedRepositoryMemoryService
     {
         private readonly RepositoryMemoryEntry _currentEntry;
 
-        internal ConflictMemoryService(RepositoryMemoryEntry currentEntry) => _currentEntry = currentEntry;
+        internal ConflictMemoryService(RepositoryMemoryEntry currentEntry)
+        {
+            _currentEntry = currentEntry;
+        }
 
         internal RepositoryMemoryOperationRequest? Request { get; private set; }
 
@@ -57,26 +63,38 @@ public static class RepositoryMemoryApplicationTests
         public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
             string repositoryIdentity,
             CancellationToken cancellationToken = default)
-            => Task.FromResult(new RepositoryMemoryReadSnapshot(repositoryIdentity, 1, [_currentEntry], [], []));
+        {
+            return Task.FromResult(new RepositoryMemoryReadSnapshot(repositoryIdentity, 1, [_currentEntry], [], []));
+        }
 
         public Task<IReadOnlyList<RepositoryMemoryId>> EnforceCapacityAsync(
             string repositoryIdentity,
             RepositoryMemoryOptions options,
             CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<RepositoryMemoryId>>([]);
+        {
+            return Task.FromResult<IReadOnlyList<RepositoryMemoryId>>([]);
+        }
 
         public Task RecordInclusionsAsync(
             string repositoryIdentity,
             RunId runId,
             IReadOnlyList<RepositoryMemoryInclusion> inclusions,
             CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
+        {
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class TestOptionsProvider : IRepositoryMemoryOptionsProvider
     {
-        public RepositoryMemoryOptions CaptureCurrent() => new();
+        public RepositoryMemoryOptions CaptureCurrent()
+        {
+            return new();
+        }
 
-        public RepositoryMemoryOptions Capture(string repositoryIdentity) => new();
+        public RepositoryMemoryOptions Capture(string repositoryIdentity)
+        {
+            return new();
+        }
     }
 }

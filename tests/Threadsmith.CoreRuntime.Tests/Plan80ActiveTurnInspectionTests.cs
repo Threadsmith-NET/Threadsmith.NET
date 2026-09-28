@@ -72,6 +72,29 @@ public static class Plan80ActiveTurnInspectionTests
         Assert.Contains("10,000 → 5,000", segment.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>Deterministic projection completion is rendered as a successful reduction.</summary>
+    [Fact]
+    public static void Deterministic_projection_completion_renders_one_success_segment()
+    {
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(
+            segments,
+            new ActiveTurnCompactionCompleted(
+                SessionId.New(),
+                DateTimeOffset.UtcNow,
+                RunId.New(),
+                ModelProfileId.New(),
+                ActiveTurnCompactionInspectionStatus.DeterministicReduction,
+                BeforeInputTokens: 73_893,
+                AfterInputTokens: 32_455,
+                DurationMilliseconds: null),
+            string.Empty);
+
+        var segment = Assert.Single(segments);
+        Assert.Equal(PresentationTextRole.Success, segment.Role);
+        Assert.Contains("73,893 → 32,455", segment.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>Interactive inspection exposes bounded active-turn metadata without summary content.</summary>
     [Fact]
     public static void Active_turn_inspection_formats_pressure_cut_and_outcome_metadata()

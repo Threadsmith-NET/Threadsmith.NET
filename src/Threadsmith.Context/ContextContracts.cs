@@ -145,6 +145,12 @@ public interface IEvidenceStore
     /// <summary>Gets a detached session evidence snapshot.</summary>
     IReadOnlyList<Evidence> Snapshot(SessionId sessionId);
 
+    /// <summary>Gets one detached evidence item without enumerating the session.</summary>
+    Evidence? Find(SessionId sessionId, EvidenceId evidenceId)
+    {
+        return Snapshot(sessionId).FirstOrDefault(item => item.EvidenceId == evidenceId);
+    }
+
     /// <summary>Copies one session's detached governed evidence into another session.</summary>
     void CopySession(SessionId sourceSessionId, SessionId destinationSessionId);
 
@@ -409,6 +415,12 @@ public sealed record ModelResolution(
 
     /// <summary>Whether the resolved model permits reasoning off; null retains legacy behavior.</summary>
     public bool? SupportsReasoningOff { get; init; }
+
+    /// <summary>Reviewed pricing used for conservative execution-budget admission.</summary>
+    public ModelCostMetadata? Cost { get; init; }
+
+    /// <summary>Whether the provider enforces the request-specific output ceiling.</summary>
+    public bool EnforcesRequestOutputTokenLimit { get; init; } = true;
 
     /// <summary>Gets the effective per-request reserve, including compatibility for older callers.</summary>
     public int EffectiveRequestOutputTokenReserve => RequestOutputTokenReserve > 0

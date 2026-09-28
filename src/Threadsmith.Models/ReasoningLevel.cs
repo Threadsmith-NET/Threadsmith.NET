@@ -57,21 +57,29 @@ public readonly record struct ReasoningLevel
 
     /// <summary>Compares names using the existing case-insensitive selection semantics.</summary>
     public bool Equals(ReasoningLevel other)
-        => StringComparer.OrdinalIgnoreCase.Equals(Value, other.Value);
+    {
+        return StringComparer.OrdinalIgnoreCase.Equals(Value, other.Value);
+    }
 
     /// <inheritdoc />
-    public override int GetHashCode() => StringComparer.OrdinalIgnoreCase.GetHashCode(Value);
+    public override int GetHashCode()
+    {
+        return StringComparer.OrdinalIgnoreCase.GetHashCode(Value);
+    }
 
     /// <summary>Preserves legacy display names while retaining custom reasoning names.</summary>
-    public override string ToString() => Value switch
+    public override string ToString()
     {
-        "none" => "None",
-        "minimal" => "Minimal",
-        "low" => "Low",
-        "medium" => "Medium",
-        "high" => "High",
-        _ => Value,
-    };
+        return Value switch
+        {
+            "none" => "None",
+            "minimal" => "Minimal",
+            "low" => "Low",
+            "medium" => "Medium",
+            "high" => "High",
+            _ => Value,
+        };
+    }
 }
 
 /// <summary>Preserves model-defined names in catalog values, mapping keys, and request snapshots.</summary>
@@ -105,15 +113,21 @@ internal sealed class ReasoningLevelJsonConverter : JsonConverter<ReasoningLevel
 
     /// <inheritdoc />
     public override void Write(Utf8JsonWriter writer, ReasoningLevel value, JsonSerializerOptions options)
-        => writer.WriteStringValue(value.Value);
+    {
+        writer.WriteStringValue(value.Value);
+    }
 
     /// <inheritdoc />
     public override ReasoningLevel ReadAsPropertyName(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-        => ReasoningLevel.TryParse(reader.GetString(), out var level)
-            ? level
-            : throw new JsonException("A reasoning mapping key must be a nonempty string.");
+    {
+        return ReasoningLevel.TryParse(reader.GetString(), out var level)
+                ? level
+                : throw new JsonException("A reasoning mapping key must be a nonempty string.");
+    }
 
     /// <inheritdoc />
     public override void WriteAsPropertyName(Utf8JsonWriter writer, ReasoningLevel value, JsonSerializerOptions options)
-        => writer.WritePropertyName(value.Value);
+    {
+        writer.WritePropertyName(value.Value);
+    }
 }

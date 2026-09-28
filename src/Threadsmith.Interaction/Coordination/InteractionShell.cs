@@ -768,7 +768,10 @@ public class InteractionPresenter
     /// <summary>Gets the exact context inspection for a run.</summary>
     public Task<ContextInspectionProjection?> GetContextInspectionAsync(
         RunId runId,
-        CancellationToken cancellationToken = default) => GetContextInspectionAsync(runId, null, cancellationToken);
+        CancellationToken cancellationToken = default)
+    {
+        return GetContextInspectionAsync(runId, null, cancellationToken);
+    }
 
     /// <summary>Gets assembly inspection and the latest actual primary request for a session.</summary>
     public Task<ContextInspectionProjection?> GetContextInspectionAsync(
@@ -795,7 +798,9 @@ public class InteractionPresenter
         string repositoryIdentity,
         string text,
         CancellationToken cancellationToken = default)
-        => RememberRepositoryMemoryAsync(sessionId, repositoryIdentity, text, null, cancellationToken);
+    {
+        return RememberRepositoryMemoryAsync(sessionId, repositoryIdentity, text, null, cancellationToken);
+    }
 
     /// <summary>Creates an explicit repository-scoped memory item with an optional type.</summary>
     public Task<RepositoryMemoryEntry> RememberRepositoryMemoryAsync(
@@ -840,7 +845,9 @@ public class InteractionPresenter
         RepositoryMemoryId memoryId,
         string replacementText,
         CancellationToken cancellationToken = default)
-        => UpdateRepositoryMemoryAsync(sessionId, repositoryIdentity, memoryId, replacementText, null, cancellationToken);
+    {
+        return UpdateRepositoryMemoryAsync(sessionId, repositoryIdentity, memoryId, replacementText, null, cancellationToken);
+    }
 
     /// <summary>Updates an existing memory in place with an optional type.</summary>
     public Task<RepositoryMemoryEntry> UpdateRepositoryMemoryAsync(

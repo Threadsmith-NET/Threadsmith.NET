@@ -9,7 +9,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
-using Threadsmith.Context;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Tools;

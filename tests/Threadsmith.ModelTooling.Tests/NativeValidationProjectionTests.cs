@@ -26,8 +26,13 @@ public static class NativeValidationProjectionTests
         });
         var original = new Diagnostic
         {
-            Id = "id", Code = "code", Project = "app", TargetFramework = "net",
-            File = "a.cs", Message = "text", Severity = DiagnosticSeverity.Warning,
+            Id = "id",
+            Code = "code",
+            Project = "app",
+            TargetFramework = "net",
+            File = "a.cs",
+            Message = "text",
+            Severity = DiagnosticSeverity.Warning,
             Confidence = SemanticConfidenceLevel.PartialCompilation,
         };
         const string tooLong = "abc😀";

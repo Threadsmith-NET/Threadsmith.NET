@@ -151,11 +151,16 @@ public sealed class JiraTool : Tool<JiraInput, JiraReadOutput>, IPostSanitizatio
     }
 
     /// <inheritdoc />
-    protected override void ValidateInput(JiraInput input) => _ = Resolve(input);
+    protected override void ValidateInput(JiraInput input)
+    {
+        _ = Resolve(input);
+    }
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetSecretReferences(JiraInput input)
-        => [Resolve(input).Provider.Authentication.SecretReference];
+    {
+        return [Resolve(input).Provider.Authentication.SecretReference];
+    }
 
     /// <inheritdoc />
     protected override IReadOnlyList<string> GetNetworkHosts(JiraInput input)
@@ -174,9 +179,11 @@ public sealed class JiraTool : Tool<JiraInput, JiraReadOutput>, IPostSanitizatio
     }
 
     private static string FormatIdentity(string requested, string returned)
-        => requested.Equals(returned, StringComparison.Ordinal)
-            ? returned
-            : $"{returned} (requested {requested})";
+    {
+        return requested.Equals(returned, StringComparison.Ordinal)
+                ? returned
+                : $"{returned} (requested {requested})";
+    }
 
     private static OutputBoundaryResult BoundOutput(JiraReadOutput output, int maximumOutputBytes)
     {

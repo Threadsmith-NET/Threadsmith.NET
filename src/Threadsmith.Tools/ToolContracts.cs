@@ -286,6 +286,10 @@ public sealed record ToolDefinition
 /// <summary>Repository and requester state evaluated for every tool invocation.</summary>
 public sealed record ToolInvocationContext
 {
+    /// <summary>Request-local evidence references authorized for active-turn recovery.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<ActiveTurnEvidenceReference> ActiveTurnEvidenceReferences { get; init; } = [];
+
     /// <summary>Optional session-scoped scratchpad authority.</summary>
     [JsonIgnore]
     public ScratchpadSessionCapability Scratchpad { get; init; }
@@ -367,6 +371,17 @@ public sealed record ToolInvocationContext
     /// <summary>Requester identity retained in audit events.</summary>
     public required string RequestedBy { get; init; }
 }
+
+/// <summary>One historical evidence body explicitly referenced by the current model request.</summary>
+public sealed record ActiveTurnEvidenceReference(
+    EvidenceId EvidenceId,
+    string ToolCallId,
+    ToolInvocationId ToolInvocationId,
+    string RepositoryIdentity,
+    string FilePath,
+    int StartLine,
+    int EndLine,
+    long? GroupSequence = null);
 
 /// <summary>A model or host request entering the dynamic invocation pipeline.</summary>
 public sealed record ToolInvocationRequest

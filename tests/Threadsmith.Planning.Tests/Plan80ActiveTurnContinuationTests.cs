@@ -49,6 +49,7 @@ public static class Plan80ActiveTurnContinuationTests
                 PressureTargetPercent = 1,
                 OutputReserveTokens = 128,
                 SummaryBudgetTokens = 256,
+                MaximumRenderedSummaryCharacters = 1_024,
                 MinimumSavingsTokens = 1,
                 RetainedRecentTokens = 150,
             };
@@ -176,6 +177,18 @@ public static class Plan80ActiveTurnContinuationTests
             Assert.True(activeTurn.AfterInputTokens < activeTurn.BeforeInputTokens);
             Assert.True(activeTurn.AfterInputTokens > activeTurn.PressureTargetTokens);
             Assert.Equal(1, activeTurn.HistoryRewriteGeneration);
+            Assert.Equal(1, activeTurn.CandidateAttemptCount);
+            Assert.NotNull(activeTurn.SummaryPreparedInputTokens);
+            Assert.Equal(100, activeTurn.SummaryAdmissionOutputTokens);
+            Assert.Equal(2, activeTurn.CombinedAdmissionCalls);
+            Assert.True(
+                activeTurn.CombinedAdmissionTokens
+                    > activeTurn.SummaryPreparedInputTokens
+                        + activeTurn.SummaryAdmissionOutputTokens);
+            Assert.NotNull(finalRequest.WireEstimate);
+            Assert.True(finalRequest.WireEstimate.NativeToolTokens > 0);
+            Assert.True(finalRequest.WireEstimate.FramingTokens > 0);
+            Assert.Equal(128, finalRequest.WireEstimate.OutputReserveTokens);
             Assert.Equal(compactionProfileId.Value, activeTurn.CandidateProfileId);
             Assert.StartsWith("sha256:", activeTurn.SummaryContentHash, StringComparison.Ordinal);
             Assert.Equal(3, evidence.Snapshot(sessionId).Count);
@@ -341,6 +354,7 @@ public static class Plan80ActiveTurnContinuationTests
                 PressureTargetPercent = 1,
                 OutputReserveTokens = 128,
                 SummaryBudgetTokens = 256,
+                MaximumRenderedSummaryCharacters = 1_024,
                 MinimumSavingsTokens = 1,
                 RetainedRecentTokens = 64,
             };
@@ -409,6 +423,525 @@ public static class Plan80ActiveTurnContinuationTests
                 .ToArray();
             var denied = Assert.Single(candidateHookInvocations);
             Assert.Equal(HookPoint.BeforeModelRequest, denied.Point);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>The conversation path does not spend its final call on a summary without continuation headroom.</summary>
+    [Fact]
+    public static async Task Summary_without_two_call_headroom_is_not_dispatched()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan113-admission-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var operationBudget = new RejectCombinedBudget();
+            var toolBudget = new ExecutionBudget(new BudgetDimensions(
+                1_000_000,
+                100,
+                TimeSpan.FromMinutes(2)));
+            var registry = new ToolRegistry([new TestDeterministicOutputTool(new string('x', 256))]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                toolBudget);
+            var profile = CreateProfile();
+            var assembler = CreateAssembler(
+                events,
+                evidence,
+                new ModelResolver(
+                    new ConfiguredModelCatalog([profile]),
+                    new InMemoryModelPreferenceSnapshotProvider()),
+                sanitizer);
+            var model = new ToolsThenTextProvider { ToolRounds = 2 };
+            var policy = new ActiveTurnCompactionPolicy
+            {
+                PressureTargetPercent = 1,
+                OutputReserveTokens = 128,
+                SummaryBudgetTokens = 256,
+                MaximumRenderedSummaryCharacters = 1_024,
+                MinimumSavingsTokens = 1,
+                RetainedRecentTokens = 64,
+            };
+            var candidateProvider = new RequestCandidateProvider();
+            var compactor = new ActiveTurnCompactor(
+                candidateProvider,
+                new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
+                policy,
+                TestPromptLoader.Instance);
+            var application = new SessionApplication(
+                events,
+                model,
+                operationBudget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
+                }),
+                assembler,
+                evidence,
+                registry,
+                profile.Id,
+                new ExecutionLimits { MaxModelRounds = 5 },
+                activeTurnCompactor: compactor,
+                activeTurnCompactionPolicy: policy,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-admission"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Inspect the repository thoroughly."));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.Equal(3, model.Requests.Count);
+            Assert.Empty(candidateProvider.Requests);
+            Assert.Contains(
+                model.Requests[^1].Messages,
+                message => message.ToolCallId == "host-tool-1-1"
+                    && message.Role == ModelMessageRole.Tool);
+            Assert.Equal(0, model.Requests[^1].HistoryRewriteGeneration);
+            Assert.Contains(operationBudget.Checks, delta => delta.Calls == 2);
+            Assert.Equal(
+                ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected,
+                assembler.GetInspection(runId)?.ActiveTurnCompaction?.Status);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>The summary headroom check applies the existing delivered-result reducer before rejecting capacity.</summary>
+    [Fact]
+    public static async Task Summary_continuation_headroom_uses_delivered_result_capacity_fallback()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan113-fallback-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(
+                1_000_000,
+                100,
+                TimeSpan.FromMinutes(2)));
+            var registry = new ToolRegistry(
+                [new VariableDeterministicOutputTool()]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var profile = CreateProfile();
+            var assembler = CreateAssembler(
+                events,
+                evidence,
+                new ModelResolver(
+                    new ConfiguredModelCatalog([profile]),
+                    new InMemoryModelPreferenceSnapshotProvider()),
+                sanitizer);
+            var model = new ToolsThenTextProvider { ToolRounds = 3 };
+            var policy = new ActiveTurnCompactionPolicy
+            {
+                PressureTargetPercent = 70,
+                OutputReserveTokens = 128,
+                SummaryBudgetTokens = 256,
+                MaximumRenderedSummaryCharacters = 256,
+                MinimumSavingsTokens = 1,
+                RetainedRecentTokens = 800,
+            };
+            var candidateProvider = new RequestCandidateProvider();
+            var compactor = new ActiveTurnCompactor(
+                candidateProvider,
+                new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
+                policy,
+                TestPromptLoader.Instance);
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
+                }),
+                assembler,
+                evidence,
+                registry,
+                profile.Id,
+                new ExecutionLimits { MaxModelRounds = 5 },
+                activeTurnCompactor: compactor,
+                activeTurnCompactionPolicy: policy,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-fallback"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Inspect the repository thoroughly."));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.NotEmpty(candidateProvider.Requests);
+            Assert.Equal(4, model.Requests.Count);
+            Assert.Equal(
+                ActiveTurnCompactionInspectionStatus.EmergencyReduction,
+                assembler.GetInspection(runId)?.ActiveTurnCompaction?.Status);
+            Assert.Equal(1, model.Requests[^1].HistoryRewriteGeneration);
+            Assert.Contains(
+                model.Requests[^1].Messages,
+                message => message.SectionId == "active-turn-summary");
+            Assert.Contains(
+                model.Requests[^1].Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && message.GetModelVisibleContent().Contains(
+                        "\"isTruncated\":true",
+                        StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>An irreducible maximum-summary bound declines optional compaction without aborting an ordinary request that fits.</summary>
+    [Fact]
+    public static async Task Oversized_summary_bound_declines_context_only_compaction()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan113-capacity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(
+                1_000_000,
+                100,
+                TimeSpan.FromMinutes(2)));
+            var registry = new ToolRegistry([new TestDeterministicOutputTool(new string('x', 256))]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var profile = CreateProfile();
+            var assembler = CreateAssembler(
+                events,
+                evidence,
+                new ModelResolver(
+                    new ConfiguredModelCatalog([profile]),
+                    new InMemoryModelPreferenceSnapshotProvider()),
+                sanitizer);
+            var model = new ToolsThenTextProvider { ToolRounds = 2 };
+            var policy = new ActiveTurnCompactionPolicy
+            {
+                PressureTargetPercent = 1,
+                OutputReserveTokens = 128,
+                SummaryBudgetTokens = 256,
+                MaximumRenderedSummaryCharacters = 65_536,
+                MinimumSavingsTokens = 1,
+                RetainedRecentTokens = 64,
+            };
+            var candidateProvider = new RequestCandidateProvider();
+            var compactor = new ActiveTurnCompactor(
+                candidateProvider,
+                new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
+                policy,
+                TestPromptLoader.Instance);
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
+                }),
+                assembler,
+                evidence,
+                registry,
+                profile.Id,
+                new ExecutionLimits { MaxModelRounds = 4 },
+                activeTurnCompactor: compactor,
+                activeTurnCompactionPolicy: policy,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-capacity"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Inspect the repository thoroughly."));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.Equal(3, model.Requests.Count);
+            Assert.Empty(candidateProvider.Requests);
+            Assert.Equal(0, model.Requests[^1].HistoryRewriteGeneration);
+            Assert.Equal(
+                ActiveTurnCompactionInspectionStatus.CapacityExceeded,
+                assembler.GetInspection(runId)?.ActiveTurnCompaction?.Status);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>The rebuilt ordinary request is rechecked after summary usage accrues and before activation.</summary>
+    [Fact]
+    public static async Task Summary_activation_rechecks_final_prepared_request()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan113-final-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var operationBudget = new RejectFinalAfterSummaryBudget();
+            var toolBudget = new ExecutionBudget(new BudgetDimensions(
+                1_000_000,
+                100,
+                TimeSpan.FromMinutes(2)));
+            var registry = new ToolRegistry([new TestDeterministicOutputTool(new string('x', 256))]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                toolBudget);
+            var profile = CreateProfile();
+            var assembler = CreateAssembler(
+                events,
+                evidence,
+                new ModelResolver(
+                    new ConfiguredModelCatalog([profile]),
+                    new InMemoryModelPreferenceSnapshotProvider()),
+                sanitizer);
+            var model = new ToolsThenTextProvider { ToolRounds = 3 };
+            var policy = new ActiveTurnCompactionPolicy
+            {
+                PressureTargetPercent = 1,
+                OutputReserveTokens = 128,
+                SummaryBudgetTokens = 256,
+                MaximumRenderedSummaryCharacters = 1_024,
+                MinimumSavingsTokens = 1,
+                RetainedRecentTokens = 150,
+            };
+            var candidateProvider = new RequestCandidateProvider();
+            var compactor = new ActiveTurnCompactor(
+                candidateProvider,
+                new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
+                policy,
+                TestPromptLoader.Instance);
+            var application = new SessionApplication(
+                events,
+                model,
+                operationBudget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedRead,
+                    RequestedBy = "model",
+                }),
+                assembler,
+                evidence,
+                registry,
+                profile.Id,
+                new ExecutionLimits { MaxModelRounds = 5 },
+                activeTurnCompactor: compactor,
+                activeTurnCompactionPolicy: policy,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-final"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Inspect the repository thoroughly."));
+
+            await Assert.ThrowsAsync<BudgetExceededException>(() =>
+                dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.Single(candidateProvider.Requests);
+            Assert.Equal(3, model.Requests.Count);
+            Assert.True(operationBudget.FinalRequestRejected);
+            var inspection = Assert.IsType<ActiveTurnCompactionInspectionProjection>(
+                assembler.GetInspection(runId)?.ActiveTurnCompaction);
+            Assert.Equal(ActiveTurnCompactionInspectionStatus.BudgetAdmissionRejected, inspection.Status);
+            Assert.Equal(BudgetExhaustionDimension.Calls, inspection.AdmissionRejectedDimensions);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>The baseline uses actual native-validation projection and opaque pipeline delivery messages.</summary>
+    [Fact]
+    public static async Task Admission_baseline_replays_actual_pipeline_model_results()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan113-baseline-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "src"));
+            await File.WriteAllTextAsync(
+                Path.Combine(root, "src", "Threadsmith.sln"),
+                string.Empty);
+            const string hiddenValidationOutputPrefix = "hidden-native-validation-output:";
+            var hiddenValidationOutput = hiddenValidationOutputPrefix + new string('v', 20_000);
+            var opaqueOutput = new string('p', 2_000);
+            await using var events = new DomainEventStream();
+            var sanitizer = new SecretOutputSanitizer();
+            var evidence = new EvidenceStore(events, sanitizer);
+            var budget = new ExecutionBudget(new BudgetDimensions(
+                1_000_000,
+                100,
+                TimeSpan.FromMinutes(2)));
+            var registry = new ToolRegistry(
+            [
+                new ConversationAvailableTool(new DotNetBuildTool(
+                    new BaselineNativeValidationService(hiddenValidationOutput),
+                    TestPromptLoader.Instance)),
+                new RunProcessTool(
+                    new BaselineProcessManager(opaqueOutput),
+                    TestPromptLoader.Instance,
+                    allowedExecutables: ["powershell"],
+                    requireApproval: false,
+                    shellExecutable: "powershell"),
+            ]);
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new AllowApprovalPolicy(),
+                events,
+                sanitizer,
+                NullLogger<ToolInvocationPipeline>.Instance,
+                budget);
+            var profile = CreateProfile();
+            var usage = new SessionUsageProjection();
+            var model = new BaselineProjectionProvider();
+            var application = new SessionApplication(
+                events,
+                model,
+                budget,
+                sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                pipeline,
+                (_, _) => Task.FromResult(new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    ApprovedRoots = ["."],
+                    AllowedExecutables = ["dotnet", "powershell"],
+                    RequestedBy = "plan-113-baseline",
+                }),
+                CreateAssembler(
+                    events,
+                    evidence,
+                    new ModelResolver(
+                        new ConfiguredModelCatalog([profile]),
+                        new InMemoryModelPreferenceSnapshotProvider()),
+                    sanitizer),
+                evidence,
+                registry,
+                profile.Id,
+                new ExecutionLimits { MaxModelRounds = 4 },
+                sessionUsage: usage,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
+            var dispatcher = new CommandDispatcher([application]);
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("plan-113-baseline"));
+            var runId = await dispatcher.DispatchAsync(
+                new SubmitRequestCommand(sessionId, "Build, then collect opaque evidence."));
+
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
+            Assert.Equal(3, model.Requests.Count);
+            var projected = Assert.Single(
+                model.Requests[1].Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && message.ToolName == "dotnet_build");
+            var opaque = Assert.Single(
+                model.Requests[2].Messages,
+                message => message.Role == ModelMessageRole.Tool
+                    && message.ToolName == "run_process");
+            var projectedContent = projected.GetModelVisibleContent();
+            var opaqueContent = opaque.GetModelVisibleContent();
+            Assert.False(projected.IsError, projectedContent);
+            Assert.DoesNotContain(hiddenValidationOutputPrefix, projectedContent, StringComparison.Ordinal);
+            Assert.Contains("\"success\":true", projectedContent, StringComparison.Ordinal);
+            Assert.Contains(opaqueOutput, opaqueContent, StringComparison.Ordinal);
+
+            var toolDefinitions = model.Requests[2].Tools;
+            ModelWireEstimate Estimate(params ModelMessage[] messages) => ModelWireEstimator.Estimate(
+                messages,
+                toolDefinitions,
+                ToolTransportMode.Native,
+                stablePrefixMessageCount: 0,
+                outputReserveTokens: 128);
+            var overlapReplay = projected with { ToolCallId = "projected-replay" };
+            var uniqueEvidence = opaque with
+            {
+                ToolCallId = "unique-evidence",
+                Content = [new ModelContentPart { Content = new string('u', 6_000) }],
+            };
+            var overlapping = Estimate(projected, opaque, overlapReplay);
+            var unique = Estimate(projected, opaque, uniqueEvidence);
+            var replayRequests = new[]
+            {
+                Estimate(projected),
+                Estimate(projected, opaque),
+                Estimate(projected, opaque, overlapReplay),
+            };
+            var retryAttempt = Estimate(projected, opaque);
+            var cumulativeReplay = replayRequests.Sum(item => (long)item.WireInputTokens);
+            var failedRetryCumulative = retryAttempt.WireInputTokens * 2L;
+
+            Assert.Equal(1_688, overlapping.WireInputTokens);
+            Assert.Equal(3_161, unique.WireInputTokens);
+            Assert.Equal(1_688, replayRequests[^1].WireInputTokens);
+            Assert.Equal(4_435, cumulativeReplay);
+            Assert.Equal(1_056, overlapping.NativeToolTokens);
+            Assert.Equal(12, overlapping.FramingTokens);
+            Assert.Equal(3_197, model.Requests[1].WireEstimate?.WireInputTokens);
+            Assert.Equal(3_771, model.Requests[2].WireEstimate?.WireInputTokens);
+            Assert.True(unique.WireInputTokens > overlapping.WireInputTokens);
+            Assert.True(cumulativeReplay > replayRequests[^1].WireInputTokens);
+            Assert.Equal(retryAttempt.WireInputTokens * 2L, failedRetryCumulative);
+            Assert.Equal(projectedContent, projected.GetModelVisibleContent());
+            Assert.Equal(opaqueContent, opaque.GetModelVisibleContent());
+            var usageSnapshot = usage.GetSnapshot(sessionId);
+            Assert.Equal(45, usageSnapshot.TotalTokens);
+            Assert.Equal(3, model.Requests.Count);
         }
         finally
         {
@@ -598,6 +1131,7 @@ public static class Plan80ActiveTurnContinuationTests
         {
             private readonly RequestCandidateProvider _owner;
             private readonly ActiveTurnCompactionRequest _request;
+            private ModelStreamRequest _preparedRequest;
 
             public RequestCandidateAttempt(
                 RequestCandidateProvider owner,
@@ -605,14 +1139,52 @@ public static class Plan80ActiveTurnContinuationTests
             {
                 _owner = owner;
                 _request = request;
+                var messages = new[]
+                {
+                    new ModelMessage
+                    {
+                        Role = ModelMessageRole.User,
+                        SectionId = "candidate:instruction",
+                        Content = [new ModelContentPart { Content = "Create a bounded summary." }],
+                    },
+                };
+                _preparedRequest = new ModelStreamRequest
+                {
+                    RunId = request.RunId,
+                    Input = "Create a bounded summary.",
+                    ResolvedProfileId = request.CandidateProfile?.ProfileId ?? request.ProfileId,
+                    Messages = messages,
+                    MaximumOutputTokens = 100,
+                    WireEstimate = ModelWireEstimator.Estimate(
+                        messages,
+                        [],
+                        ToolTransportMode.Native,
+                        stablePrefixMessageCount: 0,
+                        outputReserveTokens: 100),
+                };
             }
 
             public ModelUsage? ObservedUsage => null;
+
+            public ModelRequestAdmissionEstimate AdmissionEstimate { get; } = new(100, 100, 1);
+
+            public ModelStreamRequest PreparedRequest => _preparedRequest;
+
+            public int SelectedGroupCount => _request.EligiblePrefix.Count;
+
+            public void SetSubmissionObserver(Action? submissionObserver)
+            {
+                _preparedRequest = _preparedRequest with
+                {
+                    SubmissionObserver = submissionObserver,
+                };
+            }
 
             public Task<ActiveTurnCandidateGeneration> ExecuteAsync(
                 CancellationToken cancellationToken = default)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                _preparedRequest.SubmissionObserver?.Invoke();
                 _owner._timeProvider?.Advance(_owner._elapsed);
 
                 _owner.Requests.Add(_request);
@@ -638,6 +1210,219 @@ public static class Plan80ActiveTurnContinuationTests
                 };
                 return Task.FromResult(new ActiveTurnCandidateGeneration(candidate, null));
             }
+        }
+    }
+
+    private sealed class VariableDeterministicOutputTool :
+        Tool<TestDeterministicOutputInput, TestDeterministicOutput>
+    {
+        private readonly ToolDefinition _definition = new()
+        {
+            Id = "deterministic_output",
+            Version = "1.0",
+            Description = "Returns a sequence-dependent deterministic test output.",
+            Category = ToolCategory.FileRead,
+            InputSchema = new ToolSchema(
+                nameof(TestDeterministicOutputInput),
+                1,
+                "{\"type\":\"object\",\"properties\":{\"sequence\":{\"type\":\"integer\"}},\"required\":[\"sequence\"],\"additionalProperties\":false}"),
+            OutputSchema = new ToolSchema(nameof(TestDeterministicOutput), 1, "{\"type\":\"object\"}"),
+            RequiredTrust = RepositoryTrustLevel.UntrustedInspection,
+            SideEffect = ToolSideEffect.ReadOnly,
+            Idempotency = ToolIdempotency.Idempotent,
+            SupportsCancellation = true,
+            Timeout = TimeSpan.FromSeconds(5),
+            MaximumOutputBytes = 8_192,
+        };
+
+        public override ToolDefinition Definition => _definition;
+
+        public override Task<ToolExecution<TestDeterministicOutput>> ExecuteAsync(
+            TestDeterministicOutputInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var content = input.Sequence <= 2
+                ? new string('x', 3_500)
+                : new string('y', 50);
+            return Task.FromResult(new ToolExecution<TestDeterministicOutput>(
+                new TestDeterministicOutput(content),
+                []));
+        }
+
+        protected override void ValidateInput(TestDeterministicOutputInput input)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(input.Sequence);
+        }
+    }
+
+    private sealed class BaselineNativeValidationService(string capturedOutput) :
+        INativeValidationToolService
+    {
+        public IReadOnlyList<string> ConfiguredNetworkHosts => [];
+
+        public IReadOnlyList<string> ConfiguredSecretReferences => [];
+
+        public Task<ValidationToolResult> BuildAsync(
+            string repositoryPath,
+            RunId runId,
+            BuildToolRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ValidationToolResult(
+                "plan-113-build",
+                ValidationInvocationKind.Build,
+                ValidationAuthority.Exploratory,
+                true,
+                request.TargetPath,
+                ["build", "--no-restore"],
+                [],
+                capturedOutput,
+                0,
+                TimeSpan.FromMilliseconds(25),
+                false,
+                false));
+        }
+
+        public Task<NuGetDependencyHealthResult> InspectPackagesAsync(
+            string repositoryPath,
+            RunId runId,
+            NuGetDependencyHealthRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<NuGetDependencyHealthResult>(new NotSupportedException());
+        }
+
+        public Task<ValidationToolResult> AnalyzeAsync(
+            string repositoryPath,
+            RunId runId,
+            AnalyzerToolRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<ValidationToolResult>(new NotSupportedException());
+        }
+
+        public Task<ValidationToolResult> CheckFormatAsync(
+            string repositoryPath,
+            RunId runId,
+            FormatCheckRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<ValidationToolResult>(new NotSupportedException());
+        }
+
+        public Task<DiagnosticQueryResult> QueryDiagnosticsAsync(
+            string repositoryPath,
+            DiagnosticQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<DiagnosticQueryResult>(new NotSupportedException());
+        }
+
+        public Task<TestDiscoveryResult> DiscoverTestsAsync(
+            string repositoryPath,
+            RunId runId,
+            TestDiscoveryRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<TestDiscoveryResult>(new NotSupportedException());
+        }
+
+        public string ResolveTestProjectPath(string repositoryPath, DiscoveredTestId testId)
+        {
+            throw new NotSupportedException();
+        }
+
+        public Task<TargetedTestResult> RunTargetedTestAsync(
+            string repositoryPath,
+            RunId runId,
+            TargetedTestRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromException<TargetedTestResult>(new NotSupportedException());
+        }
+    }
+
+    private sealed class ConversationAvailableTool(ITool inner) : ITool
+    {
+        public ToolDefinition Definition { get; } = inner.Definition with
+        {
+            ConversationAvailable = true,
+        };
+
+        public object DeserializeInput(string argumentsJson)
+        {
+            return inner.DeserializeInput(argumentsJson);
+        }
+
+        public string? GetActivityDetail(object input)
+        {
+            return inner.GetActivityDetail(input);
+        }
+
+        public IReadOnlyList<string> GetResourcePaths(
+            object input,
+            ToolInvocationContext context)
+        {
+            return inner.GetResourcePaths(input, context);
+        }
+
+        public IReadOnlyList<string> GetSecretReferences(object input)
+        {
+            return inner.GetSecretReferences(input);
+        }
+
+        public string? GetExecutable(object input)
+        {
+            return inner.GetExecutable(input);
+        }
+
+        public string? GetExecutable(object input, ToolInvocationContext context)
+        {
+            return inner.GetExecutable(input, context);
+        }
+
+        public IReadOnlyList<string> GetNetworkHosts(object input)
+        {
+            return inner.GetNetworkHosts(input);
+        }
+
+        public IReadOnlyList<ToolResourceClaim> GetSchedulingClaims(
+            object input,
+            ToolInvocationContext context)
+        {
+            return inner.GetSchedulingClaims(input, context);
+        }
+
+        public Task<ToolExecutionEnvelope> ExecuteAsync(
+            object input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            return inner.ExecuteAsync(input, context, cancellationToken);
+        }
+    }
+
+    private sealed class BaselineProcessManager(string output) : IProcessManager
+    {
+        public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => [];
+
+        public Task<ProcessExecutionResult> RunAsync(
+            ProcessExecutionRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new ProcessExecutionResult(
+                113,
+                0,
+                output,
+                string.Empty,
+                false,
+                false,
+                false,
+                TimeSpan.FromMilliseconds(25)));
         }
     }
 
@@ -773,6 +1558,106 @@ public static class Plan80ActiveTurnContinuationTests
         }
     }
 
+    private sealed class RejectCombinedBudget : IBudget
+    {
+        private readonly Lock _gate = new();
+        private BudgetDimensions _used = new(0, 0, TimeSpan.Zero);
+
+        public List<BudgetDimensions> Checks { get; } = [];
+
+        public BudgetStatus Accrue(BudgetDimensions delta)
+        {
+            lock (_gate)
+            {
+                _used = Add(_used, delta);
+                return new BudgetStatus(false, _used, null);
+            }
+        }
+
+        public BudgetStatus Check(BudgetDimensions delta)
+        {
+            lock (_gate)
+            {
+                Checks.Add(delta);
+                var rejected = delta.Calls >= 2;
+                return new BudgetStatus(
+                    rejected,
+                    Add(_used, delta),
+                    rejected ? "Two-call admission rejected for test." : null)
+                {
+                    ExhaustedDimensions = rejected
+                        ? BudgetExhaustionDimension.Calls
+                        : BudgetExhaustionDimension.None,
+                };
+            }
+        }
+
+        private static BudgetDimensions Add(BudgetDimensions current, BudgetDimensions delta)
+        {
+            return new BudgetDimensions(
+                current.Tokens + delta.Tokens,
+                current.Calls + delta.Calls,
+                current.WallClock + delta.WallClock,
+                current.Cost + delta.Cost);
+        }
+    }
+
+    private sealed class RejectFinalAfterSummaryBudget : IBudget
+    {
+        private readonly Lock _gate = new();
+        private BudgetDimensions _used = new(0, 0, TimeSpan.Zero);
+        private bool _combinedAdmissionObserved;
+        private bool _summaryUsageAccrued;
+
+        public bool FinalRequestRejected { get; private set; }
+
+        public BudgetStatus Accrue(BudgetDimensions delta)
+        {
+            lock (_gate)
+            {
+                _used = Add(_used, delta);
+                if (_combinedAdmissionObserved && delta.Calls == 1)
+                {
+                    _summaryUsageAccrued = true;
+                }
+
+                return new BudgetStatus(false, _used, null);
+            }
+        }
+
+        public BudgetStatus Check(BudgetDimensions delta)
+        {
+            lock (_gate)
+            {
+                if (delta.Calls >= 2)
+                {
+                    _combinedAdmissionObserved = true;
+                }
+
+                var rejected = _summaryUsageAccrued && delta.Calls == 1;
+                FinalRequestRejected |= rejected;
+                return new BudgetStatus(
+                    rejected,
+                    Add(_used, delta),
+                    rejected ? "Final prepared request rejected for test." : null)
+                {
+                    ExhaustedDimensions = rejected
+                        ? BudgetExhaustionDimension.Calls
+                        : BudgetExhaustionDimension.None,
+                };
+            }
+        }
+
+        private static BudgetDimensions Add(BudgetDimensions current, BudgetDimensions delta)
+        {
+            return new BudgetDimensions(
+                current.Tokens + delta.Tokens,
+                current.Calls + delta.Calls,
+                current.WallClock + delta.WallClock,
+                current.Cost + delta.Cost);
+        }
+    }
+
     private sealed class PendingThenInlineSiblingProvider : IModelProvider
     {
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -892,6 +1777,52 @@ public static class Plan80ActiveTurnContinuationTests
             yield return new ModelChunk
             {
                 Text = "Inspection complete.",
+                Usage = new ModelUsage(10, 5),
+                FinishReason = ModelFinishReason.Stop,
+            };
+        }
+    }
+
+    private sealed class BaselineProjectionProvider : IModelProvider
+    {
+        public List<ModelStreamRequest> Requests { get; } = [];
+
+        public async IAsyncEnumerable<ModelChunk> StreamAsync(
+            ModelStreamRequest request,
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            cancellationToken.ThrowIfCancellationRequested();
+            await Task.Yield();
+            if (Requests.Count == 1)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "dotnet_build",
+                        "{\"targetPath\":\"src/Threadsmith.sln\"}"),
+                    Usage = new ModelUsage(10, 5),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            if (Requests.Count == 2)
+            {
+                yield return new ModelChunk
+                {
+                    Output = new ToolRequestModelOutput(
+                        "run_process",
+                        "{\"command\":\"Write-Output baseline\"}"),
+                    Usage = new ModelUsage(10, 5),
+                    FinishReason = ModelFinishReason.ToolCalls,
+                };
+                yield break;
+            }
+
+            yield return new ModelChunk
+            {
+                Text = "Baseline complete.",
                 Usage = new ModelUsage(10, 5),
                 FinishReason = ModelFinishReason.Stop,
             };

@@ -156,7 +156,10 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
         }
     }
 
-    private static string Normalize(string text) => text.ReplaceLineEndings("\n").Trim();
+    private static string Normalize(string text)
+    {
+        return text.ReplaceLineEndings("\n").Trim();
+    }
 
     private static void ValidateArguments(RepositoryMemoryOperationRequest request)
     {

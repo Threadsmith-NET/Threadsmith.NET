@@ -468,7 +468,8 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                     await _surface.PresentAsync(
                         new PresentationBatch([new PresentationTextItem([
                         new(TerminalControlEncoder.Encode(item.Text), PresentationTextRole.Reasoning),
-                    ])]) { Target = child.Snapshot.Target },
+                    ])])
+                        { Target = child.Snapshot.Target },
                         cancellationToken);
                 }
 

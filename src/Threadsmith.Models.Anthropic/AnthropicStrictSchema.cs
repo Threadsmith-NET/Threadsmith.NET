@@ -38,13 +38,16 @@ internal static class AnthropicStrictSchema
     }
 
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
-    internal static int CountUnions(JsonNode? node) => node switch
+    internal static int CountUnions(JsonNode? node)
     {
-        JsonObject item => (item.ContainsKey("anyOf") || item["type"] is JsonArray ? 1 : 0)
-            + item.Sum(property => CountUnions(property.Value)),
-        JsonArray items => items.Sum(CountUnions),
-        _ => 0,
-    };
+        return node switch
+        {
+            JsonObject item => (item.ContainsKey("anyOf") || item["type"] is JsonArray ? 1 : 0)
+                + item.Sum(property => CountUnions(property.Value)),
+            JsonArray items => items.Sum(CountUnions),
+            _ => 0,
+        };
+    }
 
     private static bool NormalizeNullableEnums(JsonNode? node)
     {
@@ -106,14 +109,17 @@ internal static class AnthropicStrictSchema
         return true;
     }
 
-    private static bool MatchesScalarType(JsonNode value, string type) => value is JsonValue scalar && type switch
+    private static bool MatchesScalarType(JsonNode value, string type)
     {
-        "string" => scalar.GetValueKind() == JsonValueKind.String,
-        "boolean" => scalar.GetValueKind() is JsonValueKind.True or JsonValueKind.False,
-        "number" => scalar.GetValueKind() == JsonValueKind.Number,
-        "integer" => scalar.TryGetValue<decimal>(out var number) && decimal.Truncate(number) == number,
-        _ => false,
-    };
+        return value is JsonValue scalar && type switch
+        {
+            "string" => scalar.GetValueKind() == JsonValueKind.String,
+            "boolean" => scalar.GetValueKind() is JsonValueKind.True or JsonValueKind.False,
+            "number" => scalar.GetValueKind() == JsonValueKind.Number,
+            "integer" => scalar.TryGetValue<decimal>(out var number) && decimal.Truncate(number) == number,
+            _ => false,
+        };
+    }
 
     private static bool Validate(JsonNode? node, JsonObject root, HashSet<string> references, int depth)
     {

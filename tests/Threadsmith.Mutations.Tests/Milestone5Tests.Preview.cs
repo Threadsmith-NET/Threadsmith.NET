@@ -75,18 +75,24 @@ public static partial class Milestone5Tests
         Assert.Equal(source, await File.ReadAllTextAsync(Path.Combine(repository.Root, "src/Example.cs")));
     }
 
-    private static string PreviewArguments(string expected, string replacement) => JsonSerializer.Serialize(new
+    private static string PreviewArguments(string expected, string replacement)
     {
-        mutationSet = new
+        return JsonSerializer.Serialize(new
         {
-            rationale = "Make the approved edit.",
-            mutations = new[] { new { type = "ReplaceText", relativePath = "src/Example.cs", expectedText = expected, replacementText = replacement } },
-        },
-    });
+            mutationSet = new
+            {
+                rationale = "Make the approved edit.",
+                mutations = new[] { new { type = "ReplaceText", relativePath = "src/Example.cs", expectedText = expected, replacementText = replacement } },
+            },
+        });
+    }
 
-    private static ImplementationPlan PreviewPlan() => new()
+    private static ImplementationPlan PreviewPlan()
     {
-        Summary = "Make an edit.",
-        Steps = [new ImplementationPlanStep { StepId = StepId.New(), Title = "Edit", Description = "Edit source.", FileIntents = ModifyIntents("src/Example.cs"), ExpectedOutcome = "Source is updated." }],
-    };
+        return new()
+        {
+            Summary = "Make an edit.",
+            Steps = [new ImplementationPlanStep { StepId = StepId.New(), Title = "Edit", Description = "Edit source.", FileIntents = ModifyIntents("src/Example.cs"), ExpectedOutcome = "Source is updated." }],
+        };
+    }
 }

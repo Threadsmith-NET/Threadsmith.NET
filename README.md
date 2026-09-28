@@ -1,265 +1,80 @@
 # Threadsmith.NET
 
-A .NET-native, terminal-first coding harness that treats your C# code as code and not just text. 
+A .NET-native, terminal-first coding harness that treats C# code as code, not just text.
 
-Threadsmith.NET opens real .NET repositories with Roslyn (Compiler as a Service) and MSBuild, gives models governed read-only tools that leverage compiler-backed semantics, requires host-validated plans before repository changes, stages mutations transactionally, and performs Roslyn-based semantic checks on proposed changes _before_ the project is built, providing fail-fast feedback and corrective opportunities. Interactive use defaults to a full-screen TUIKit interface; equivalent headless operation supports scripts and CI.
+Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives models governed tools backed by compiler semantics, requires host-validated plans before repository changes, stages mutations transactionally, and performs semantic checks before the project is built. Interactive use defaults to a full-screen TUIKit interface; the same application workflows are available headlessly for scripts and CI.
 
-## Current state
+Threadsmith.NET is currently in beta and under active testing and refinement. For current implementation status, see the [milestone plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/milestones.md).
 
-Threadsmith.NET is currently under active testing and feature refinement. As of 09-20-2026 I'll call it in Beta. Enough of the toys are in place and working for it to genuinely be useful. I used it last week as my daily driver for my day job. 
+## Why Threadsmith?
 
-Some recent enhancements (most recent first): 
-- Fixed bug with Codex provider where I wasn't setting the proper properties in the request to ensure optimal prefix caching. 
-- I've been performing considerable analysis of conversation histories, doing a variety of tasks, and I've been using that information to adjust things such as tool definitions, system and exploration prompts, the code_explore tool, context management, and the plan/propose/mutate cycle.
-- Visual context viewer in the TUI. You can see every item in your context and what's taking up space. 
-- "Code Review" native skill. This is a Threadsmith native skill, not Claude-style skill. It can accept its input from several places, and I'm adding more. Spawns five specialist subagents, each reviewed different areas. And remember, Threadsmith sub-agent roles can each be configured with their own provider and model! Writes a detailed output to .inbox in your repo or to the output and you can write it anywhere else from there.
-- New native tools for reading PRs and Jira tickets. The PR tool interacts with repositories using an adapter pattern and I currently have GitHub and Bitbucket adapters in place. Currently, PRs can only be read, but additional functionality will be coming in the next week or two.
-- Governed Jira Cloud issue reads from ticket keys or browse URLs, with scoped and unscoped API-token support
-- Provider-backed GitHub.com and Bitbucket Cloud pull-request retrieval for inventories and bounded diff evidence
-- Significant TUI enhancements
-- Configurable parameters expansion
-- Built out subagent roles and tabbed UI
-- Anthropic adapter
-- total re-work of repository memory with new memory tool and semantic/lexical hybrid retrieval with cross-encoder reranker. 
-- Optimization of tool calling
-- Integrated documentation native skill
-- New, re-designed alternate TUI (now the default, original is still available)
-- Broad code cleanup and optimizations
-- build out of the "code_explore" tool to refine natural language abilities, improve ranking, and optimize model-facing markdown output
-- introduced sub-agent delegation tool to allow model to invoke sub-agents using the already-existing delegator
-- and more! 
+Many coding agents treat a repository primarily as text and depend on repeated edit/build/test cycles to discover whether a change was valid. Threadsmith combines model reasoning with host-owned discovery, governed mutation, and targeted validation. When a repository is trusted for build execution, compiler-backed evidence improves navigation, impact analysis, refactoring, and early detection of syntax or binding problems. A text-only path remains available when semantic evaluation is unavailable, unnecessary, or inappropriate.
 
-If you are interested in helping, contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for details or contact me at [mwright556@gmail.com](mailto:mwright556@gmail.com). Areas that need substantial testing include the Codex provider and its authentication flow, as well as MCP support—particularly SSO authentication flows. This work will take time, and I maintain the project alongside a demanding full-time job.
+Threadsmith is designed for unfamiliar or large C# solutions, multi-project changes, refactoring, API evolution, and work where dependencies or overloads make text-only editing unreliable. Its core principles are:
 
-I aim to provide complete cross-platform installers, and the groundwork is already in place. I do not own or have access to a Mac, so macOS testing and packaging are major areas where help would be especially valuable. GitHub-hosted CI and tag-gated release packaging are configured in this repository, though the first public release still needs real runner rehearsal and platform installation verification. I will not use paid GitHub features because I cannot pay out of pocket to give software away.
+- **Compiler-aware evidence** — Roslyn and MSBuild provide symbol, reference, caller, project, and diagnostic context.
+- **Human-governed changes** — models cannot authorize their own plans or mutations.
+- **Transactional mutation** — proposed changes are scope-checked, staged, shown as exact diffs, approved under host policy, applied transactionally, and validated.
+- **Host-owned control flow** — trust, policy, approvals, containment, cancellation, and validation remain outside the model.
+- **Interactive/headless parity** — the terminal and automation adapters project the same application commands and state.
+- **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries remain behind host-owned contracts.
 
-Detailed implementation and milestone status remains in [the source-repository milestone plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/milestones.md).
+Threadsmith is a governed execution environment, not a general operating-system sandbox. Grant repository trust deliberately and use the minimum level required for the task. The [user guide explains each trust level](docs/user-guide.md#trust-levels), and the [safety model](docs/user-guide.md#safety-model) describes the enforced boundaries and limitations.
 
-## Key principles
+## Who is Threadsmith for?
 
-### Why Threadsmith?
-
-Many coding agents treat a repository primarily as text and rely on a repeated edit/build/test/feedback loop to discover whether a change was valid. Threadsmith combines model reasoning with host-owned discovery, governed mutation, and targeted validation. It can use compiler-backed semantic knowledge when the repository is trusted for build execution, but it retains a text-only path when semantic evaluation is unavailable, unnecessary, or inappropriate. Semantic awareness does not make the model intrinsically smarter; it gives the model better evidence and gives the host stronger ways to constrain and verify its work.
-
-This approach should reduce common large-project failures through:
-
-- symbol-aware navigation rather than ambiguous text matching;
-- accurate caller, reference, and dependency discovery;
-- safer rename and syntax transformations;
-- compiler-aware project and solution context;
-- early detection of syntax and binding problems;
-- affected-project build and test selection;
-- exact baseline and external-change detection;
-- bounded correction using normalized diagnostics;
-- prevention of out-of-plan or stale mutations.
-
-The expected benefit is greatest for unfamiliar or large C# solutions, multi-project changes, refactoring, API evolution, and work where dependencies or overloads make text-only edits unreliable. When enabled, earlier semantic feedback can reject many malformed or incorrectly bound changes before a full build, while affected-project validation avoids repeatedly building and testing unrelated work. For simpler changes, ordinary text mutations still pass through host-owned scope, baseline, exact-diff, approval, and validation gates. Bounded context, conversation compaction, and structured evidence should also reduce the amount of unchanged source, transcript, and diagnostic text sent back to the model.
-
-### Who is Threadsmith for?
-
-Short answer - me. There is no shortage of coding harnesses out there (in fact, I almost named this YACH - Yet Another Coding Harness). I'm a huge .NET fan and have been using it consistently since version 1.0 in the early 2000s. IMO it's the best general-purpose language available. Not perfect by any means, but over the last 8+ years it has truly become a viable cross platform, high-performance option suitable for large scale, enterprise development projects. You may disagree. We all have our favorites. Anyone who knows me also knows my preference for strongly-typed languages. In fact, I believe that - especially for agentic engineering - that type safety and more structure allow for agents to produce _better_ code that is cleaner and less prone to runtime errors.
-
-Maybe I am completely wrong - but "It's my repo and I'll preach if I want to." :D
-
-I hope someone finds this tool, and more importantly, _this approach_ useful. It could certainly be applied to other languages. In fact, I recently read an article outlining some similar thoughts in _Towards Data Science_. 
-
-### Choose trust deliberately
-
-Repository trust is cumulative and controls what the host may inspect or execute. It is separate from model capability, tool enablement, mutation approval policy, and per-invocation consent.
-
-| Trust level | What it permits | When to use it |
-|---|---|---|
-| `UntrustedInspection` | Safe repository configuration inspection and candidate discovery without reading repository file content or executing repository-controlled code. | Start here for an unknown, downloaded, or potentially hostile repository. Review what Threadsmith discovers before granting more access. |
-| `TrustedRead` | Repository file reads, text search/indexing, solution/project selection, target-framework inventory, text baselines, text-only discovery, and mutation preview/staging. It does not execute MSBuild or repository build logic. | Use when you trust the source content enough to inspect it but do not trust the repository to execute code. This is also the appropriate mode when you intentionally want to bypass compiler-backed semantic evaluation. |
-| `TrustedBuild` | Everything in `TrustedRead`, plus restore, MSBuild evaluation, analyzers, source generators, compilation, tests, compiler-backed semantic discovery, and approved build/process tools. Repository-controlled code may execute. | Use for repositories whose build scripts, dependencies, analyzers, generators, and tests you trust. Choose this when semantic navigation and authoritative build/test feedback are worth the execution risk. |
-| `TrustedMutation` | Everything in `TrustedBuild`, plus commit of explicitly authorized mutations inside configured repository roots. | Use when Threadsmith should implement changes, not merely inspect, analyze, or stage them. Exact diffs, mutation policy, path restrictions, baseline checks, and validation still apply. |
-| `FullyTrustedAutomation` | The highest-trust explicitly configured automation capabilities, including eligible tools such as isolated C# scripting. | Reserve for repositories and workflows you strongly trust and where the additional automation is required. It does not disable hard host guardrails or automatically grant every tool or mutation approval. |
-
-Use `--trust <level>` at startup, or `/trust inspect`, `/trust read`, `/trust build`, and `/trust mutation` in the interactive terminal. Higher trust can be persisted for the normalized repository path, so grant only the minimum level needed for the task.
-
-Threadsmith may carry more orchestration overhead than a conventional agent for a small, isolated text or configuration edit. Roslyn analysis also does not replace MSBuild, source generators, analyzers, target-specific compilation, non-C# build steps, or meaningful tests. Final quality still depends on model capability, repository guidance, evidence selection, architectural constraints, and test quality.
-
-Accordingly, Threadsmith aims for better **validated completion per token and per minute**, fewer speculative edits and correction loops, and lower cost variance—not simply the fewest model turns. Those advantages should be measured with representative tasks and identical models rather than assumed from architecture alone.
-
-- **Human-governed changes** — models cannot authorize their own mutations.
-- **Host-owned control flow** — trust, policy, approvals, path checks, application, and validation remain outside the model.
-- **End-to-end cancellation** — cancellation flows through model, tool, process, workspace, build, and test boundaries.
-- **Repository containment** — approved roots, prohibited paths, reparse-point checks, and transactional writes protect the workspace.
-- **Structured file lifecycle** — create, delete, move, case-only move, and move-plus-edit remain accepted-plan-scoped, identity-bound, exactly previewed, compensating, rollback-protected mutations rather than shell commands.
-- **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries stay behind host-owned contracts.
-- **Provider-neutral secret discovery** — typed static credentials stay outside ordinary configuration and resolve only at final privileged boundaries through fixed environment → eligible repository → user precedence; repository stores must be confined, untracked, and effectively ignored, while higher-trust consumers such as Brave, MCP, hooks, and private NuGet sources reject repository values.
-- **Interactive/headless parity** — the terminal is a projection of the same application commands used by automation.
-- **Bounded conversation continuity** — sanitized visible turns and provenance-linked governed memory preserve useful context without unbounded transcript replay.
+Short answer: me—and, I hope, other developers who value .NET, strong typing, and compiler-aware agentic engineering. The project grew from the belief that better structure and better evidence can help agents produce cleaner code with fewer avoidable runtime and integration errors. The approach is especially relevant to substantial C# codebases, but its underlying ideas can apply to other languages and toolchains too.
 
 ## Requirements
 
-- .NET 10 SDK
+- .NET 10 SDK when building from source.
 - PowerShell for the examples below. Bash and Git Bash should also work, although every combination has not been tested.
+
+Self-contained release artifacts include the matching .NET runtime. See [release installation and verification](docs/operations/release-packaging.md) for supported packages and platform-specific instructions.
 
 ## Quick start
 
-Build the repository:
+Restore and build the repository:
 
 ```powershell
 dotnet restore src\Threadsmith.sln
 dotnet build src\Threadsmith.sln
 ```
 
-Launch the interactive terminal from the repository you want to inspect:
+From the repository you want to inspect, launch the interactive terminal:
 
 ```powershell
 dotnet run --project C:\source\repos\Threadsmith\src\Threadsmith.App -- --tui
 ```
 
-Bare `--tui` launches the retained TUIKit interface; `--tui=tuikit` is the equivalent explicit form. TUIKit moves each committed ordinary entry into retained output before the composer clears. If Enter is pressed while the initial semantic model is loading, TUIKit visibly queues one message and submits it when repository semantics are ready. See the [user guide](docs/user-guide.md#retained-tuikit-frontend-default) for keys, fixed status, and selection.
-
-When running Threadsmith against its own source tree:
+When running Threadsmith against its own source tree, use:
 
 ```powershell
 dotnet run --project src\Threadsmith.App -- --tui
 ```
 
-Run a headless request:
+For a headless request:
 
 ```powershell
 dotnet run --project src\Threadsmith.App -- "inspect this repository"
 ```
 
-Open a specific repository and solution:
+The current directory is the default repository. Interactive startup guides trust and ambiguous solution selection. For repository and solution arguments, compiled-application usage, terminal commands, and configuration, continue with the [user guide](docs/user-guide.md#starting-threadsmith).
 
-```powershell
-dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedRead --solution src\MyRepo.sln
-```
+## Releases
+Packaged releases are available on the [releases](https://github.com/Threadsmith-NET/Threadsmith.NET/releases) page. Note that the latest release is not necessarily the latest commit on the main branch. The main branch is under active development and may be unstable.
 
-Run a headless request against a specific trusted solution:
+## Capabilities
 
-```powershell
-dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedBuild --solution src\MyRepo.sln "explain the request pipeline"
-```
+Threadsmith provides governed repository inspection, local Git evidence, .NET inventory and validation, Roslyn-backed code exploration, transactional changes, resumable sessions, parallel tools and agents, model-provider selection, declarative skills, lifecycle hooks, extensions, MCP connections, and optional web, pull-request, and Jira integrations.
 
-The current directory is the default repository. Interactive startup guides trust and ambiguous solution selection, remembers successful solution choices, and can initialize minimal `.threadsmith/config.json` configuration for an empty repository. Adjust any of the other flags to personal preference of immediate need.
+Tool availability is determined by repository trust, configuration, policy, semantic-workspace state, and approval. Loaded extensions and configured MCP servers can contribute capabilities through the same host-owned policy pipeline. See:
 
-### SQLite
-Threadsmith keeps its SQLite session store and content-addressed artifacts under `.threadsmith/` by default. Startup applies transactional migrations, audits persisted content for secrets, and runs configured age-based retention. Static credentials belong in the separate user-level `~/.threadsmith/secrets/config.json` user store, an eligible confined/untracked/ignored repository store, or exact `THREADSMITH_` environment variables—not ordinary configuration or command arguments. Consumer trust determines which sources are eligible; lifecycle-owned Codex and MCP OAuth token caches remain separate. See the [user guide](docs/user-guide.md#secrets) and [secret-discovery operations](docs/operations/secret-discovery.md).
-
-## Tools and governed changes
-
-Threadsmith registers a built-in runtime tool catalog. Repository configuration, trust, invocation policy, semantic-workspace availability, and user approval determine which tools are available for a request.
-
-**Notable Features**
-- Tools may be enabled/disabled at the machine, user, and repository levels for any reason (such as to reduce context size by removing unused tools)
-- Multithreaded parallel tool execution when appropriate. System evaluates sequential/parallel execution opportunities based on tool metadata, dependencies and model request. 
-
-| Tool | Purpose |
-|---|---|
-| `list_files` | List files beneath an approved repository root. |
-| `read_file` | Read a bounded range from an approved repository file. |
-| `search` | Search text in bounded, approved repository files. |
-| `git_status` | Report bounded Git branch and working-tree status. |
-| `git_diff` | Compare working-tree, staged, commit, range, or merge-base changes. |
-| `git_log` | Read bounded local commit history. |
-| `git_show` | Inspect a bounded local commit, tree, tag, or blob. |
-| `git_blame` | Attribute a bounded line range without invoking external helpers. |
-| `git_compare_branches` | Report merge base, ahead/behind counts, and changed paths. |
-| `dotnet_inventory` | Report normalized solution, project, TFM, reference, package, and test inventory. |
-| `nuget_health` | Inspect existing dependency assets and optional trusted-source package advisories. |
-| `dotnet_build` | Run a typed exploratory no-restore build. |
-| `dotnet_analyzers` | Run analyzers through a typed no-restore build. |
-| `dotnet_format_check` | Verify formatting without applying changes. |
-| `diagnostic_query` | Query normalized diagnostics from exploratory native runs. |
-| `test_discover` | Discover bounded stable test identities in a selected test project. |
-| `test_run_targeted` | Run one host-issued test identity with a generated exact filter. |
-| `find_symbol` | Find compiler symbols with stable identity and semantic confidence. |
-| `code_explore` | Resolve natural-language C# questions, exact symbols, stable IDs, or path anchors and return bounded ranked candidates, current line-numbered source or safe current-context back-references, flow/impact evidence, associated prompt/config/project artifacts, digests, confidence, omissions, and continuations. |
-| `find_references` | Find references to a compiler symbol. |
-| `find_implementations` | Find implementations of a compiler symbol. |
-| `call_hierarchy` | Traverse incoming/outgoing compiler-known calls from a symbol with one optional depth hint and compact call-list output. |
-| `symbol_impact` | Explain ranked reference, caller, implementation, dependent-project/test, and classified-source impact for a symbol. |
-| `csharp_pattern_search` | Search declarations and expression shapes with a flat, closed, inert C# pattern schema. |
-| `generated_code_query` | Inventory and optionally inspect bounded generated content already loaded by the semantic workspace. |
-| `run_process` | Run an allow-listed, approved, non-interactive process with bounded output and process-tree cancellation. |
-| `datetime` | Return current UTC and local date/time with timezone information. |
-| `csharp_script` | Run bounded C# in a fresh isolated worker; disabled by default and reserved for fully trusted automation. |
-| `web_search` | Search the web through Brave after explicit repository-scoped outbound consent; disabled by default, with bounded results treated as untrusted evidence. |
-| `web_fetch` | Retrieve web content from authorized sources that you control through several mechanisms. |
-| `pr_fetch` | Read configured GitHub.com or Bitbucket Cloud pull-request metadata, complete changed-file inventories, and optional bounded diff pages without checking out or modifying the PR. |
-| `jira` | Read a configured Jira Cloud issue's identity, summary, and bounded plain-text description from an issue key or browse URL; disabled until an account is configured and enabled. |
-
-Loaded extensions and configured MCP servers may contribute additional tools to the same governed pipeline. At `TrustedRead` or higher, the conditional `invoke_skill` tool lets a model invoke an explicit enabled, compatible declarative skill during evidence collection; it cannot invoke another skill recursively or grant itself additional tools, trust, models, agents, approval, or mutation authority.
-
-The pull-request integration is read-only and uses trusted user or machine account profiles, with optional credentials supplied through the standard Secrets boundary. It supports GitHub.com and Bitbucket Cloud, requires normal network policy and repository-bound outbound consent, and shares bounded acquisition snapshots across authorized review agents and skills. See [pull-request retrieval](docs/operations/pr-fetch.md) for the complete paging and cache contract, or the [user guide](docs/user-guide.md#hosted-pull-request-retrieval) for setup and common calls.
-
-The Jira integration is read-only and uses trusted user or machine account profiles plus the standard Secrets boundary. It supports scoped tokens through Atlassian's API gateway and unscoped tokens through the configured tenant, requires normal network policy and repository-bound outbound consent, and keeps ticket content out of compact tool-progress blocks. See [Jira issue reads](docs/operations/jira.md) for setup and examples, or the [user guide](docs/user-guide.md#jira-cloud-issue-reads) for the quick workflow.
-
-`propose_plan` is also a model-callable tool, but it is intentionally not a general-purpose runtime tool. It is a phase-gated workflow signal: during an initial or continuation evidence turn, the model uses its schema-constrained arguments to propose one governed plan tranche. It does not read, execute, or mutate repository content, cannot be used outside that phase, and never authorizes its own proposal.
-
-The built-in repository inspection and semantic tools do not directly edit, create, or delete repository code. An approved `run_process` command is the exception: the child process runs in the repository working directory and may have direct filesystem side effects that do not pass through Threadsmith's staged mutation, diff-approval, or rollback lifecycle. For host-managed changes, the model proposes one complete structured plan tranche and the user or plan policy approves that tranche. The same run then selects the earliest incomplete step and requests one exclusive implementation decision: its next coherent mutation batch through proposal-only `propose_mutations`, or `request_replan` when incremental planning is enabled and more evidence or a replacement plan is needed. Each batch is validated against active-step scope, staged in a private workspace, shown as an exact diff, separately authorized under mutation policy, transactionally applied, and validated before the host continues the step or advances to the next one. When every step in the tranche passes, the host returns to ordinary evidence/planning with the original objective, conversation history, authoritative execution receipt, and current repository. The model either calls `propose_plan` once for the next independently valid tranche or confirms completion with `complete_objective` and exactly `{}`. Completion reruns configured validation over the cumulative affected scope; only a passing result terminalizes the objective successfully. A replanning request returns unfinished work through that same evidence/planning/approval cycle. Applied changes and unresolved validation evidence are retained; completion is unavailable at that boundary. There is no plan-count limit. Ordinary text leaves remaining work resumable without reporting success. `csharp_script` executes code but is not a file-editing mechanism; `propose_plan` requests this governed workflow but does not perform it.
-
-See the [user guide](docs/user-guide.md#tools-and-tool-availability) for tool availability and policy configuration, and [how repository changes are governed](docs/user-guide.md#how-repository-changes-are-governed) for the complete mutation lifecycle.
-
-## Governed skills quick example
-
-Threadsmith supports metadata-first, immutable declarative skills and resumable workflows. Maintained packages ship with the host and use the same trust, model, tool, planning, delegation, mutation, and validation boundaries as third-party packages. The maintained `threadsmith-docs-help` package answers product and authoring questions from the installed local documentation bundle with exact citations and no access to the opened repository.
-
-Host-owned typed lifecycle hooks support advisory-by-default executable, HTTP, MCP, and extension adapters. Repository declarations require exact external approval and remain advisory/fail-open; only repository-excluding managed policy can grant bounded blocking authority at eligible pre-action points. Approvals and redacted audit data are stored outside repository control.
-
-```text
-/skills list analyzer
-/skills inspect Maintained:fix-analyzer-warnings@1.0.0
-/skills verify Maintained:fix-analyzer-warnings@1.0.0
-/skills use Maintained:fix-analyzer-warnings@1.0.0 {"diagnostics":["CA1822: Member 'Normalize' does not access instance data"],"scope":["src/Example/Normalizer.cs"]}
-```
-
-The invocation may return a typed `ProposePlan` action. That payload is only a proposal: normal plan review and approval, exact-diff policy, transactional application, affected build/test validation, and correction still apply. A custom skill may similarly propose bounded Plan-38 exploration, implementation, or specialist-review agents; the host validates and schedules those children, and `/agents <delegation-id>` reports their durable state. Skill model requirements narrow the configured provider catalog by workload, capabilities, context, sensitivity, and optional profile IDs—the package never downloads or chooses an unconfigured model.
-
-See [governed skills and reusable workflows](docs/user-guide.md#governed-skills-and-reusable-workflows) for complete analyzer-fix, package-upgrade, PR-review, model-selection, subagent, lifecycle, continuation, cancellation, and recovery examples.
-
-## How to contribute
-
-Bug reports, feature proposals, code changes, and documentation improvements are welcome. Participation is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). Before opening a pull request, review the repository's development setup, coding guardrails, testing expectations, and submission checklist in [CONTRIBUTING.md](CONTRIBUTING.md).
-
-Currently, I am using the fork-and-pr method of accepting contributions.
-
-Please keep changes focused, include meaningful tests for behavior changes, and avoid placing credentials or private repository content in issues, fixtures, logs, or screenshots.
-
-### Statement on AI-generated Code
-
-I used AI substantially (but not exclusively) for this project. Everything was done over the course of weeks, using a very focused, incremental process that was quite time-consuming and also intentionally deliberate. I approach AI tools as an accelerator for my own ideas and as an extension to my skills, which I have developed for decades. Everything here I _could_ have written 100% from scratch. But that is not the world we live in any longer.
-
-I run local AI on two clustered NVidia DGX Spark boxes, and Qwen 3.6-27B-FP8 with full-precision KV cache is my daily driver. It's amazing and hits _way_ above its weight class. Additionally, I leveraged GLM 5.2 in Ollama cloud for some of the heavier lifting. IMO GLM 5.2 is the best option out there for the money. Don't believe me? Write something with Opus or GPT 5.6 Sol and have GLM 5.2 perform a review. Hell, have _Qwen 3.6 27B_ do a review. Then give the review feedback back to the "frontier" models.
-
-So, I don't care where your code came from. If you submit a PR you need to understand it and be able to answer any questions about the how/why intelligently and without just regurgitating Chat GPT output. I think that is reasonable. If you're a 100% vibe coder and have never actually done this for a living (or at least a serious hobby!) please skip contributing code, but I'd still love to hear any new feature ideas or bug reports you may have.
-
-So, please no 100% AI generated, AI submitted PRs where you never looked at the code. I don't care what anyone else says - looking _still_ matters.
-
-## Build and test
-
-```powershell
-dotnet build src\Threadsmith.sln
-dotnet test --solution src\Threadsmith.sln
-```
-
-For a lower-overhead interactive run:
-
-```powershell
-dotnet run --configuration Release --project src\Threadsmith.App -- --tui
-```
-
-### Local Publish
-
-Local publish (Windows Example):
-```powershell
-   dotnet publish .\src\Threadsmith.App\Threadsmith.App.csproj `
-       -c Release `
-       -r win-x64 `
-       --self-contained true `
-       -p:DebugType=none `
-       -p:DebugSymbols=false `
-       -o "C:\Program Files\Threadsmith"
-```
-Note that Windows protects the Program Files folder, and your shell will need to be an administrator if you want to publish to that location. Otherwise, you can change the publish target to suit your preference. `PublishSingleFile` is intentionally not used because Threadsmith loads extensions via `AssemblyLoadContext` and spawns the scripting worker as a separate process, both of which require separate assembly files.
-
-**Note:** Release packaging is driven by `.github/workflows/release.yml`. A manual workflow run builds and verifies the installer set without uploading a GitHub Release; pushing a reviewed `v<semver>` tag runs the same matrix and attaches the verified artifacts to that immutable release.
+- [Tools and tool availability](docs/user-guide.md#tools-and-tool-availability)
+- [How repository changes are governed](docs/user-guide.md#how-repository-changes-are-governed)
+- [Governed skills and reusable workflows](docs/user-guide.md#governed-skills-and-reusable-workflows)
+- [Model providers, secrets, and reasoning](docs/user-guide.md#model-providers-secrets-and-reasoning)
+- [MCP connection profiles](docs/user-guide.md#mcp-connection-profiles)
 
 ## Project layout
 
@@ -267,50 +82,39 @@ Note that Windows protects the Program Files folder, and your shell will need to
 Threadsmith/
 ├── src/
 │   ├── Threadsmith.App/                  # composition root and executable host
-│   ├── Threadsmith.Core/                 # commands, events, projections, policy-neutral contracts
+│   ├── Threadsmith.Core/                 # commands, events, projections, and core contracts
 │   ├── Threadsmith.Execution/            # governed turn and run orchestration
-│   ├── Threadsmith.Context/              # evidence, conversation memory, prompts, and model resolution
+│   ├── Threadsmith.Context/              # evidence, conversation context, prompts, and model resolution
 │   ├── Threadsmith.Models/               # provider-neutral model contracts and adapters
-│   ├── Threadsmith.Tools/                # tool contracts, registry, policy, and built-ins
+│   ├── Threadsmith.Tools/                # tool registry, policy, and built-ins
 │   ├── Threadsmith.DotNet/               # Roslyn/MSBuild discovery and semantic operations
 │   ├── Threadsmith.Workspaces/            # repository lifecycle and transactional mutation
 │   ├── Threadsmith.Validation/            # build, diagnostic, and test validation
-│   ├── Threadsmith.Persistence/           # durable events, facts, artifacts, and migrations
-│   ├── Threadsmith.Telemetry/             # metrics, tracing, logging, and diagnostics
-│   ├── Threadsmith.Interaction/           # frontend-neutral interactive coordination and presentation
-│   ├── Threadsmith.Tui.TuiKit/            # default retained TUIKit terminal adapter
-│   ├── Threadsmith.Cli/                   # headless command adapter
-│   ├── Threadsmith.Mcp/                   # host-owned MCP boundary
-│   ├── Threadsmith.Skills/                # governed declarative catalog and workflows
+│   ├── Threadsmith.Persistence/           # durable events, artifacts, and migrations
+│   ├── Threadsmith.Interaction/           # frontend-neutral interactive coordination
+│   ├── Threadsmith.Tui.TuiKit/            # default terminal frontend
 │   └── Threadsmith.Extensions.*/          # extension contracts and runtime
-├── tests/                                 # architecture and scope-focused verification
-├── docs/                                  # user, architecture, operations, and planning docs
+├── tests/                                 # architecture and behavior verification
+├── docs/                                  # user, operations, authoring, and architecture documentation
 └── .threadsmith/config.example             # annotated repository configuration schema
 ```
 
+## Contributing
+
+Bug reports, feature proposals, code changes, and documentation improvements are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, coding standards, testing expectations, the policy for AI-assisted contributions, and the pull-request checklist. Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Areas where additional testing is especially useful include provider authentication, MCP and SSO flows, cross-platform terminal behavior, and installer verification—particularly on macOS.
+
 ## Documentation
 
-The documentation folder contains user and developer references plus implementation milestones, requirements, checklists, and plans. The installed documentation bundle intentionally omits implementation plans, feature proposals, and release-readiness assessments because those can describe future or provisional behavior. If you find a gap or inconsistency, please report it or submit a pull request with the correction.
+- **[User guide](docs/user-guide.md)** — installation, repository onboarding, trust, commands, governed changes, tools, models, configuration, automation, safety, and troubleshooting.
+- [Documentation index](docs/index.md) — operations, authoring, architecture, testing, and guardrail references.
+- [Operations references](docs/operations/README.md) — focused subsystem configuration and workflows.
+- [Contributing guide](CONTRIBUTING.md) — development setup, repository standards, tests, commits, and pull requests.
+- [Architecture decisions](docs/architecture/README.md) — accepted decisions and subsystem contracts.
 
-- **[User guide](docs/user-guide.md)** — installation, repository onboarding, trust, commands, governed changes, tools, models, configuration, extensions, automation, safety, and troubleshooting.
-- [Contributing guide](CONTRIBUTING.md) — local setup, coding standards, tests, commits, and pull-request expectations.
-- [Repository configuration example](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/.threadsmith/config.example) — complete annotated configuration schema in the source repository.
-- [Documentation index](docs/index.md) — entry point for the user, operations, authoring, architecture, testing, and guardrail references.
-- [Operations references](docs/operations/README.md) — focused command, conversation-context, provider, tool, theme, and repository workflows.
-- [Conversation context operations](docs/operations/conversation-context.md) — modes, `/context`, exact-source projection, token and transport reduction, compaction, configuration, retention, and restoration.
-- [Parallel-agent operations](docs/operations/parallel-agents.md) — delegation limits, `/agents`, worktree isolation, cancellation, conflicts, and recovery.
-- [Governed skills operations](docs/operations/skills.md) — catalogs, verification, enablement, `/skills`, invocation, workflows, and recovery.
-- [Declarative skill authoring](docs/skill-authoring.md) — package layout, manifests, safe schemas, workflows, signing, import, and testing.
-- [Extension authoring guide](docs/extension-authoring/authoring-guide.md) — stable extension contracts and lifecycle guidance.
-- [Architecture decisions](docs/architecture/README.md) — ADRs and subsystem contracts.
-- [Implementation roadmap](https://github.com/Threadsmith-NET/Threadsmith.NET/tree/main/docs/implementation-plans) — source-repository plans, milestones, acceptance scenarios, and manual verification; not installed as product help.
-- [Milestones](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/milestones.md)
-- [C# guardrails](docs/guardrails/portable-csharp-guardrails.md) — required repository coding standards.
-- [AGENTS.md](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/AGENTS.md) — source-repository behavioral contract for coding agents.
+Implementation plans and release-readiness material can describe future or provisional behavior and are therefore maintained separately from installed product documentation.
 
 ## License
 
-Threadsmith.NET is open source under the [Apache License 2.0](LICENSE).
-
-### As-is
-_Threadsmith.NET is provided on an “AS IS” basis, without warranties or conditions of any kind. It can execute tools and modify repository files when authorized. Review proposed changes, maintain backups, and use appropriate repository permissions. See the [Apache License 2.0](LICENSE) for the applicable warranty disclaimer and limitation of liability._
+Threadsmith.NET is licensed under the [Apache License 2.0](LICENSE) and is provided on an “AS IS” basis, without warranties or conditions of any kind.

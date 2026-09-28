@@ -150,6 +150,12 @@ Keep commits reviewable and avoid mixing unrelated work. Conventional prefixes s
 
 Maintainers may request changes to preserve host authority, repository containment, public contracts, cross-platform behavior, terminal compatibility, or test quality.
 
+## AI-assisted contributions
+
+AI-assisted contributions are welcome, but the person submitting a change remains responsible for it. Review and understand all submitted code, documentation, tests, and generated artifacts, and be prepared to explain the design and implementation choices during review.
+
+Do not submit unattended, entirely model-generated pull requests that you have not examined and validated. AI tools should accelerate informed engineering rather than replace contributor ownership. Contributors without the experience needed to assess a generated code change are still welcome to submit bug reports and feature ideas.
+
 ## License
 
 By contributing, you agree that your contribution will be licensed under the repository's [Apache License 2.0](LICENSE).

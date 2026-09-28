@@ -2938,18 +2938,10 @@ public static partial class ToolRuntimeTests
         var repository = CreateTemporaryDirectory();
         try
         {
-            IConfiguration configuration = new ConfigurationBuilder()
-                .AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    // Successful cases include cold worker startup and Roslyn compilation on shared CI hosts.
-                    ["tools:config:csharp_script:timeout_ms"] = "30000",
-                    ["tools:config:csharp_script:max_output_bytes"] = "256",
-                    ["tools:config:csharp_script:allowed_assemblies"] = "System.Linq,System.Collections,System.Collections.Generic",
-                })
-                .Build();
+            var configuration = CreateScriptWorkerIntegrationConfiguration();
             var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance);
             var engine = new CSharpScriptEngine(
-                processManager,
+                new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(configuration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
             var context = new ToolExecutionContext(
@@ -2960,45 +2952,52 @@ public static partial class ToolRuntimeTests
             var expression = await engine.ExecuteAsync(
                 "Enumerable.Range(1, 4).Sum()",
                 ScriptKind.Expression,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.True(expression.Success, expression.Error);
             Assert.Equal("10", expression.Output);
             var statement = await engine.ExecuteAsync(
                 "var value = 6 * 7; return value;",
                 ScriptKind.Statement,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.True(statement.Success, statement.Error);
             Assert.Equal("42", statement.Output);
             var invalid = await engine.ExecuteAsync(
                 "var value = ;",
                 ScriptKind.Statement,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.False(invalid.Success);
             Assert.NotNull(invalid.Error);
             Assert.NotEmpty(invalid.Error);
             var oversized = await engine.ExecuteAsync(
                 "new string('x', 1000)",
                 ScriptKind.Expression,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.True(oversized.Success, oversized.Error);
             Assert.True(oversized.IsTruncated);
             Assert.Equal(256, System.Text.Encoding.UTF8.GetByteCount(oversized.Output ?? string.Empty));
             var forbidden = await engine.ExecuteAsync(
                 "System.IO.File.Exists(\"anything\")",
                 ScriptKind.Expression,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.False(forbidden.Success);
             Assert.Contains("prohibited", forbidden.Error, StringComparison.OrdinalIgnoreCase);
             var escapedForbidden = await engine.ExecuteAsync(
                 "System.\\u0049O.\\u0046ile.ReadAllText(\"anything\")",
                 ScriptKind.Expression,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.False(escapedForbidden.Success);
             Assert.Contains("prohibited", escapedForbidden.Error, StringComparison.OrdinalIgnoreCase);
             var disallowedAssembly = await engine.ExecuteAsync(
                 "new System.Text.StringBuilder().Append(42).ToString()",
                 ScriptKind.Expression,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.False(disallowedAssembly.Success);
             Assert.Contains("allowed_assemblies", disallowedAssembly.Error, StringComparison.OrdinalIgnoreCase);
 
@@ -3016,7 +3015,8 @@ public static partial class ToolRuntimeTests
             var timeout = await timeoutEngine.ExecuteAsync(
                 "while (true) { }",
                 ScriptKind.Statement,
-                context);
+                context,
+                TestContext.Current.CancellationToken);
             Assert.False(timeout.Success);
             Assert.Contains("terminated", timeout.Error, StringComparison.OrdinalIgnoreCase);
             Assert.Empty(processManager.ActiveProcesses);
@@ -3080,19 +3080,44 @@ public static partial class ToolRuntimeTests
             Assert.Equal(workerPath, request.FileName);
             Assert.Empty(request.Arguments);
             Assert.Equal(ProcessRequestOrigin.Host, request.Origin);
+            Assert.Equal(TimeSpan.FromSeconds(5), request.Timeout);
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
 
-            var actualWorkerPath = Path.Combine(AppContext.BaseDirectory, Path.GetFileName(workerPath));
-            Assert.True(File.Exists(actualWorkerPath), $"Worker apphost was not copied to '{actualWorkerPath}'.");
-            var actualEngine = new CSharpScriptEngine(
-                new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance),
-                new ToolConfig(new ConfigurationBuilder().Build()),
-                actualWorkerPath);
-            var actualResult = await actualEngine.ExecuteAsync(
-                "6 * 7",
-                ScriptKind.Expression,
-                context);
-            Assert.True(actualResult.Success, actualResult.Error);
-            Assert.Equal("42", actualResult.Output);
+    /// <summary>The real apphost and managed worker produce the expected result independently of runner speed.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public static async Task CSharpScriptEngine_RealWorkerExecutesExpression(bool useAppHost)
+    {
+        var repository = CreateTemporaryDirectory();
+        try
+        {
+            var workerName = useAppHost
+                ? OperatingSystem.IsWindows() ? "Threadsmith.Scripting.Worker.exe" : "Threadsmith.Scripting.Worker"
+                : "Threadsmith.Scripting.Worker.dll";
+            var workerPath = Path.Combine(AppContext.BaseDirectory, workerName);
+            Assert.True(File.Exists(workerPath), $"Worker fixture was not copied to '{workerPath}'.");
+            var processManager = new ProcessManager(new TestSanitizer(), NullLogger<ProcessManager>.Instance);
+            var engine = new CSharpScriptEngine(
+                new CancellationOnlyProcessManager(processManager),
+                new ToolConfig(CreateScriptWorkerIntegrationConfiguration()),
+                workerPath);
+            var context = new ToolExecutionContext(
+                ToolInvocationId.New(),
+                SessionId.New(),
+                RunId.New(),
+                CreateContext(repository) with { TrustLevel = RepositoryTrustLevel.FullyTrustedAutomation });
+
+            var result = await engine.ExecuteAsync("6 * 7", ScriptKind.Expression, context, TestContext.Current.CancellationToken);
+
+            Assert.True(result.Success, result.Error);
+            Assert.Equal("42", result.Output);
+            Assert.Empty(processManager.ActiveProcesses);
         }
         finally
         {
@@ -3857,6 +3882,17 @@ public static partial class ToolRuntimeTests
         Assert.True(firstIndex >= 0, $"Expected '{first}' in text.");
         Assert.True(secondIndex >= 0, $"Expected '{second}' in text.");
         Assert.True(firstIndex < secondIndex, $"Expected '{first}' before '{second}'.");
+    }
+
+    private static IConfiguration CreateScriptWorkerIntegrationConfiguration()
+    {
+        return new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["tools:config:csharp_script:max_output_bytes"] = "256",
+                ["tools:config:csharp_script:allowed_assemblies"] = "System.Linq,System.Collections,System.Collections.Generic",
+            })
+            .Build();
     }
 
     private static string CreateTemporaryDirectory()

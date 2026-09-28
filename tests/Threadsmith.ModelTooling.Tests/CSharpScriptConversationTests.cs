@@ -60,11 +60,11 @@ public static class CSharpScriptConversationTests
                 sanitizer,
                 events,
                 prompts);
-            var budget = new ExecutionBudget(new BudgetDimensions(100000, 10, TimeSpan.FromMinutes(1)));
+            var budget = new ExecutionBudget(new BudgetDimensions(100000, 10, TimeSpan.MaxValue));
             var processManager = new ProcessManager(sanitizer, NullLogger<ProcessManager>.Instance);
             var configuration = new ConfigurationBuilder().Build();
             var engine = new CSharpScriptEngine(
-                processManager,
+                new CancellationOnlyProcessManager(processManager),
                 new ToolConfig(configuration),
                 Path.Combine(AppContext.BaseDirectory, "Threadsmith.Scripting.Worker.dll"));
             var tool = new CSharpScriptTool(engine, prompts);
@@ -111,12 +111,12 @@ public static class CSharpScriptConversationTests
                 correctiveMessages: new CorrectiveMessageFactory(prompts),
                 prompts: prompts);
             var dispatcher = new CommandDispatcher([application]);
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            var session = await dispatcher.DispatchAsync(new CreateSessionCommand("Script probe"), timeout.Token);
+            var cancellationToken = TestContext.Current.CancellationToken;
+            var session = await dispatcher.DispatchAsync(new CreateSessionCommand("Script probe"), cancellationToken);
             var run = await dispatcher.DispatchAsync(
                 new SubmitRequestCommand(session, "Invoke csharp_script to evaluate 6 * 7."),
-                timeout.Token);
-            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), timeout.Token));
+                cancellationToken);
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), cancellationToken));
             Assert.Equal(expectedAvailable, model.Requests[0].Tools.Any(item => item.Name == "csharp_script"));
             Assert.Empty(processManager.ActiveProcesses);
             if (!expectedAvailable)

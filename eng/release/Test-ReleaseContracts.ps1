@@ -13,8 +13,30 @@ Test-Contract 'semantic versions' {
     Assert-ReleaseVersion '1.2.3'; Assert-ReleaseVersion '1.2.3-rc.1'
     try { Assert-ReleaseVersion 'v1.2.3'; throw 'Invalid version was accepted.' } catch { if ($_.Exception.Message -eq 'Invalid version was accepted.') { throw } }
 }
+Test-Contract 'workflow versions normalize once for manual and tag builds' {
+    foreach ($inputVersion in @('0.1.1-beta1', 'v0.1.1-beta1', ' v0.1.1-beta1 ')) {
+        $actual = Resolve-ReleaseWorkflowVersion -EventName workflow_dispatch -RequestedVersion $inputVersion -RefName main -RefType branch
+        if ($actual -cne '0.1.1-beta1') { throw "Manual input '$inputVersion' was not normalized." }
+    }
+    $actual = Resolve-ReleaseWorkflowVersion -EventName push -RefName v0.1.1-beta1 -RefType tag
+    if ($actual -cne '0.1.1-beta1') { throw 'Tag version was not normalized.' }
+    foreach ($arguments in @(
+        @{ EventName = 'workflow_dispatch'; RequestedVersion = '' },
+        @{ EventName = 'workflow_dispatch'; RequestedVersion = 'vv0.1.1-beta1' },
+        @{ EventName = 'workflow_dispatch'; RequestedVersion = '0.1' },
+        @{ EventName = 'workflow_dispatch'; RequestedVersion = "0.1.1`nversion=2.0.0" },
+        @{ EventName = 'push'; RefName = 'v0.1.1-beta1'; RefType = 'branch' },
+        @{ EventName = 'push'; RefName = '0.1.1-beta1'; RefType = 'tag' }
+    )) {
+        try { Resolve-ReleaseWorkflowVersion @arguments; throw 'Invalid workflow version was accepted.' }
+        catch { if ($_.Exception.Message -eq 'Invalid workflow version was accepted.') { throw } }
+    }
+}
 Test-Contract 'source prompt filename catalog is readable' {
     Get-CodeDeclaredPromptNames -SourceRoot (Get-RepositoryRoot) | Out-Null
+}
+Test-Contract 'packaged source documentation has a complete local link closure' {
+    & (Join-Path $PSScriptRoot 'Test-SourceDocumentation.ps1') | Out-Null
 }
 Test-Contract 'prompt payload is complete, collision-free, byte-exact, and validated for every RID' {
     $temp = Join-Path ([IO.Path]::GetTempPath()) "threadsmith-prompts-contract-$([Guid]::NewGuid().ToString('N'))"

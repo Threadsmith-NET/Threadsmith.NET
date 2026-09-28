@@ -33,6 +33,10 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Verify packaged documentation
+        shell: pwsh
+        run: ./eng/release/Test-SourceDocumentation.ps1
+
       - name: Restore
         run: dotnet restore src/Threadsmith.sln
 

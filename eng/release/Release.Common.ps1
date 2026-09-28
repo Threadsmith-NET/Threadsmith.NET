@@ -8,6 +8,25 @@ function Assert-ReleaseVersion {
     }
 }
 
+function Resolve-ReleaseWorkflowVersion {
+    param(
+        [Parameter(Mandatory)][string] $EventName,
+        [AllowEmptyString()][string] $RequestedVersion = '',
+        [AllowEmptyString()][string] $RefName = '',
+        [AllowEmptyString()][string] $RefType = ''
+    )
+    if ($EventName -eq 'workflow_dispatch') {
+        $version = $RequestedVersion.Trim()
+        if ($version.StartsWith('v', [StringComparison]::Ordinal)) { $version = $version.Substring(1) }
+    } elseif ($EventName -eq 'push' -and $RefType -eq 'tag' -and $RefName.StartsWith('v', [StringComparison]::Ordinal)) {
+        $version = $RefName.Substring(1)
+    } else {
+        throw 'Release builds require a manual version input or a pushed v-prefixed version tag.'
+    }
+    Assert-ReleaseVersion $version
+    return $version
+}
+
 function Assert-ReleaseRid {
     param([Parameter(Mandatory)][string] $RuntimeIdentifier)
     $supported = @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')

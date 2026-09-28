@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: SemVer used for a dry-run package build (no release upload)
+        description: 'Dry-run version, e.g. 0.1.1-beta1 or v0.1.1-beta1 (no release upload)'
         required: true
         type: string
 
@@ -16,8 +16,19 @@ permissions:
 jobs:
   contracts:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          . ./eng/release/Release.Common.ps1
+          $version = Resolve-ReleaseWorkflowVersion -EventName $env:GITHUB_EVENT_NAME -RequestedVersion $env:REQUESTED_VERSION -RefName $env:GITHUB_REF_NAME -RefType $env:GITHUB_REF_TYPE
+          "version=$version" >> $env:GITHUB_OUTPUT
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
@@ -27,6 +38,8 @@ jobs:
 
   package:
     needs: contracts
+    env:
+      RELEASE_VERSION: ${{ needs.contracts.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,16 +74,9 @@ jobs:
         if: startsWith(matrix.rid, 'win-')
         shell: pwsh
         run: ./eng/release/Install-WindowsPackagingTools.ps1 -InstallDirectory '${{ runner.temp }}/threadsmith-windows-packaging-tools'
-      - name: Resolve version
-        id: version
-        shell: pwsh
-        run: |
-          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.Substring(1) }
-          if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?$') { throw 'Tag/input is not a supported SemVer.' }
-          "version=$version" >> $env:GITHUB_OUTPUT
       - name: Build platform artifact
         shell: pwsh
-        run: ./eng/release/${{ matrix.script }} -Version '${{ steps.version.outputs.version }}' -RuntimeIdentifier '${{ matrix.rid }}' -OutputRoot '${{ runner.temp }}/threadsmith-release'
+        run: ./eng/release/${{ matrix.script }} -Version $env:RELEASE_VERSION -RuntimeIdentifier '${{ matrix.rid }}' -OutputRoot '${{ runner.temp }}/threadsmith-release'
       - name: Reject secret canary leakage
         shell: pwsh
         env:
@@ -93,8 +99,10 @@ jobs:
           retention-days: 7
 
   verify:
-    needs: package
+    needs: [contracts, package]
     runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.contracts.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -110,7 +118,7 @@ jobs:
       - name: Verify aggregate release
         shell: pwsh
         run: |
-          $version = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.Substring(1) }
+          $version = $env:RELEASE_VERSION
           ./eng/release/New-ReleaseManifest.ps1 -Version $version -ReleaseTag "v$version" -SourceCommit '${{ github.sha }}' -ArtifactDirectory artifacts
       - name: Upload verified aggregate
         uses: actions/upload-artifact@v4

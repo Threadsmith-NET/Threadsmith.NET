@@ -82,39 +82,35 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Scripting",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Workspaces",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Scripting.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
-              "resolvedVersion": "5.6.0"
-            },
-            {
-              "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Data.Sqlite",
@@ -581,13 +577,13 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Workspaces",
-              "requestedVersion": "5.6.0",
-              "resolvedVersion": "5.6.0"
+              "requestedVersion": "5.9.0",
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
-              "requestedVersion": "5.6.0",
-              "resolvedVersion": "5.6.0"
+              "requestedVersion": "5.9.0",
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Extensions.Logging.Abstractions",
@@ -617,23 +613,19 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.Common",
-              "resolvedVersion": "5.6.0"
-            },
-            {
-              "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Extensions.Configuration",
@@ -1259,8 +1251,8 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "requestedVersion": "5.6.0",
-              "resolvedVersion": "5.6.0"
+              "requestedVersion": "5.9.0",
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Extensions.Configuration.Binder",
@@ -1334,35 +1326,31 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Scripting",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Workspaces",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Scripting.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
-              "resolvedVersion": "5.6.0"
-            },
-            {
-              "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Data.Sqlite",
@@ -1783,31 +1771,27 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Workspaces",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
-              "resolvedVersion": "5.6.0"
-            },
-            {
-              "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Data.Sqlite",
@@ -2040,39 +2024,35 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Scripting",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Workspaces",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Scripting.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
-              "resolvedVersion": "5.6.0"
-            },
-            {
-              "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Data.Sqlite",
@@ -2461,31 +2441,27 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Workspaces",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
-              "resolvedVersion": "5.6.0"
-            },
-            {
-              "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Data.Sqlite",
@@ -3346,8 +3322,8 @@
           "topLevelPackages": [
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Scripting",
-              "requestedVersion": "5.6.0",
-              "resolvedVersion": "5.6.0"
+              "requestedVersion": "5.9.0",
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.VisualStudio.Threading.Analyzers",
@@ -3368,19 +3344,19 @@
           "transitivePackages": [
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Scripting.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "StyleCop.Analyzers.Unstable",
@@ -4807,31 +4783,27 @@
             },
             {
               "id": "Microsoft.CodeAnalysis.Analyzers",
-              "resolvedVersion": "5.3.0"
+              "resolvedVersion": "5.9.0-1.26328.17"
             },
             {
               "id": "Microsoft.CodeAnalysis.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.CSharp.Workspaces",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.Common",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild",
-              "resolvedVersion": "5.6.0"
-            },
-            {
-              "id": "Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts",
-              "resolvedVersion": "5.6.0"
+              "resolvedVersion": "5.9.0"
             },
             {
               "id": "Microsoft.Data.Sqlite",
@@ -6349,6 +6321,92 @@
             {
               "id": "xunit.v3.runner.inproc.console",
               "resolvedVersion": "3.2.2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "C:/source/repos/Threadsmith/tests/Threadsmith.SemanticFixtures.Roslyn59/Threadsmith.SemanticFixtures.Roslyn59.csproj",
+      "frameworks": [
+        {
+          "framework": "netstandard2.0",
+          "topLevelPackages": [
+            {
+              "id": "Microsoft.CodeAnalysis.CSharp",
+              "requestedVersion": "5.9.0",
+              "resolvedVersion": "5.9.0"
+            },
+            {
+              "id": "Microsoft.VisualStudio.Threading.Analyzers",
+              "requestedVersion": "18.7.23",
+              "resolvedVersion": "18.7.23"
+            },
+            {
+              "id": "NETStandard.Library",
+              "requestedVersion": "[2.0.3, )",
+              "resolvedVersion": "2.0.3",
+              "autoReferenced": "true"
+            },
+            {
+              "id": "Roslynator.Analyzers",
+              "requestedVersion": "4.15.0",
+              "resolvedVersion": "4.15.0"
+            },
+            {
+              "id": "StyleCop.Analyzers",
+              "requestedVersion": "1.2.0-beta.556",
+              "resolvedVersion": "1.2.0-beta.556"
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "Microsoft.CodeAnalysis.Analyzers",
+              "resolvedVersion": "5.9.0-1.26328.17"
+            },
+            {
+              "id": "Microsoft.CodeAnalysis.Common",
+              "resolvedVersion": "5.9.0"
+            },
+            {
+              "id": "Microsoft.NETCore.Platforms",
+              "resolvedVersion": "1.1.0"
+            },
+            {
+              "id": "StyleCop.Analyzers.Unstable",
+              "resolvedVersion": "1.2.0.556"
+            },
+            {
+              "id": "System.Buffers",
+              "resolvedVersion": "4.6.1"
+            },
+            {
+              "id": "System.Collections.Immutable",
+              "resolvedVersion": "10.0.1"
+            },
+            {
+              "id": "System.Memory",
+              "resolvedVersion": "4.6.3"
+            },
+            {
+              "id": "System.Numerics.Vectors",
+              "resolvedVersion": "4.6.1"
+            },
+            {
+              "id": "System.Reflection.Metadata",
+              "resolvedVersion": "10.0.1"
+            },
+            {
+              "id": "System.Runtime.CompilerServices.Unsafe",
+              "resolvedVersion": "6.1.2"
+            },
+            {
+              "id": "System.Text.Encoding.CodePages",
+              "resolvedVersion": "8.0.0"
+            },
+            {
+              "id": "System.Threading.Tasks.Extensions",
+              "resolvedVersion": "4.6.3"
             }
           ]
         }

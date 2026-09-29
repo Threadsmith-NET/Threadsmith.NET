@@ -22,7 +22,7 @@ Threadsmith is a governed coding harness: the host owns trust, approval, mutatio
 ### Prerequisites
 
 - Git.
-- The .NET 10 SDK selected by [`global.json`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/global.json) (currently `10.0.204`, with latest-feature roll-forward).
+- The .NET 10 SDK selected by [`global.json`](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/global.json) (currently `10.0.401`, with patch-only roll-forward inside the 10.0.4xx feature band).
 - PowerShell for repository-maintained release scripts. Normal restore, build, and test commands are cross-platform.
 - An editor or IDE with current .NET and C# support.
 
@@ -126,7 +126,7 @@ Also run checks owned by the area you changed:
 
 If a relevant check cannot be run locally, explain why in the pull request and identify the check that remains outstanding.
 
-Test fixtures remain parallel and own their mutable resources. On non-Windows platforms, the semantic workspace composition omits Roslyn 5.6's optional SQLite service because it [shares one in-memory write cache across workspaces](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs). Roslyn uses its built-in nonpersistent fallback; semantic queries remain available, but persisted symbol indexes are not reused between runs. Composition and concurrent-query tests exercise this fallback on every platform, including Windows.
+Test fixtures remain parallel and own their mutable resources. On non-Windows platforms, the semantic workspace composition continues to omit Roslyn 5.9's optional SQLite service. This preserves the mitigation for the process-shared in-memory write-cache design documented in the [Roslyn 5.6 source](https://github.com/dotnet/roslyn/blob/c0573ed0a7dc3e3b4d2e70da47f97cc51a35524f/src/Workspaces/Core/Portable/Storage/SQLite/v2/Interop/SqlConnection.cs) until repeated cross-platform evidence proves the workaround unnecessary. Roslyn uses its built-in nonpersistent fallback; semantic queries remain available, but persisted symbol indexes are not reused between runs. Composition and concurrent-query tests exercise this fallback on every platform, including Windows.
 
 ## Commits
 

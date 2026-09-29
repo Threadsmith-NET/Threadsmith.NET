@@ -13,8 +13,10 @@ Target **.NET 10 LTS** as the runtime baseline. All product and test projects ta
 
 ## Consequences
 - We depend on .NET 10 APIs (collectible ALC refinements, `Microsoft.Extensions.AI`, the new Microsoft Testing Platform, collection expressions, file-scoped namespaces).
-- The SDK is pinned via `global.json` (`10.0.204`, `rollForward: latestFeature`).
+- The SDK is pinned via `global.json` (`10.0.401`, `rollForward: latestPatch`). Patch-only roll-forward keeps local and CI builds inside the approved 10.0.4xx feature band and prevents accidental .NET 11 selection.
 - LTS gives us a supported baseline for the product's lifetime; upgrades are deliberate.
 
 ## Validation
 All six M0 spikes built and ran on .NET 10 SDK 10.0.204. See `docs/architecture/spike-notes.md`.
+
+Plan 117 revalidated the product solution and semantic toolchain on .NET SDK 10.0.401 (MSBuild 18.9.11) without changing the `net10.0` target or language-version policy. The original M0 spike result above remains the historical adoption evidence.

@@ -4813,7 +4813,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         SourceText? PreloadedText,
         string? PreloadedFileSha256,
         CodeExploreSourceImportance Importance = CodeExploreSourceImportance.Supporting,
-        bool IsFlowSpine = false)
+        bool IsFlowSpine = false,
+        bool IsSourceGenerated = false)
     {
         /// <summary>Gets additional declaration identities represented by a clustered source span.</summary>
         public IReadOnlyList<SemanticSymbolIdentity> AdditionalIdentities { get; init; } = [];
@@ -4969,7 +4970,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         int SourceCharacters,
         IReadOnlyList<CodeExploreContinuationTarget> ContinuationTargets,
         SourceText? Text = null,
-        TextSpan? Span = null);
+        TextSpan? Span = null,
+        bool IsSourceGenerated = false);
 
     private enum CodeExploreArtifactCandidateAdmission
     {
@@ -12507,20 +12509,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .ThenBy(reference => reference.Span.Start))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var syntaxPath = reference.SyntaxTree.FilePath;
-            if (string.IsNullOrWhiteSpace(syntaxPath)
-                || !Path.IsPathRooted(syntaxPath)
-                || !sourceReader.IsPathAllowed(syntaxPath))
-            {
-                continue;
-            }
-
             var declaration = await reference.GetSyntaxAsync(cancellationToken);
             var locatedDocument = await FindDocumentForSyntaxTreeAsync(
                 snapshot,
                 declaration.SyntaxTree,
                 cancellationToken);
             if (locatedDocument is null)
+            {
+                continue;
+            }
+
+            var syntaxPath = reference.SyntaxTree.FilePath;
+            if (!locatedDocument.IsSourceGenerated
+                && (string.IsNullOrWhiteSpace(syntaxPath)
+                    || !Path.IsPathRooted(syntaxPath)
+                    || !sourceReader.IsPathAllowed(syntaxPath)))
             {
                 continue;
             }
@@ -12554,7 +12557,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 importance,
-                importance == CodeExploreSourceImportance.FlowSpine));
+                importance == CodeExploreSourceImportance.FlowSpine,
+                locatedDocument.IsSourceGenerated));
         }
 
         if (symbol.DeclaringSyntaxReferences.Length > 0)
@@ -12602,7 +12606,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 importance,
-                importance == CodeExploreSourceImportance.FlowSpine));
+                importance == CodeExploreSourceImportance.FlowSpine,
+                locatedDocument?.IsSourceGenerated == true));
         }
     }
 
@@ -12935,7 +12940,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(drifted, 0, []);
         }
 
-        if (!Path.IsPathRooted(candidate.FilePath))
+        var isSourceGenerated = candidate.IsSourceGenerated;
+        if (!isSourceGenerated && !Path.IsPathRooted(candidate.FilePath))
         {
             var source = new CodeExploreSourceRange(
                 candidate.Location?.Range ?? CreateLineRange(candidate.PreferredLine ?? 1),
@@ -12957,7 +12963,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(omitted, 0, []);
         }
 
-        if (candidate.Document is not null && !sourceReader.IsPathAllowed(candidate.FilePath))
+        if (!isSourceGenerated
+            && candidate.Document is not null
+            && !sourceReader.IsPathAllowed(candidate.FilePath))
         {
             var source = new CodeExploreSourceRange(
                 candidate.Location?.Range ?? CreateLineRange(candidate.PreferredLine ?? 1),
@@ -13006,13 +13014,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(omitted, 0, []);
         }
 
-        var fileIdentity = candidate.Document is null && candidate.PreloadedFileSha256 is not null
-            ? (FileSha256: candidate.PreloadedFileSha256, DriftReason: (string?)null)
-            : await VerifyCurrentFileIdentityAsync(
-                sourceReader,
-                candidate.FilePath,
-                text,
-                cancellationToken);
+        var fileIdentity = isSourceGenerated
+            ? (FileSha256: ComputeSha256(text.ToString()), DriftReason: (string?)null)
+            : candidate.Document is null && candidate.PreloadedFileSha256 is not null
+                ? (FileSha256: candidate.PreloadedFileSha256, DriftReason: (string?)null)
+                : await VerifyCurrentFileIdentityAsync(
+                    sourceReader,
+                    candidate.FilePath,
+                    text,
+                    cancellationToken);
         if (fileIdentity.DriftReason is null
             && candidate.ExpectedFileSha256 is { } expectedFileSha256
             && !string.Equals(fileIdentity.FileSha256, expectedFileSha256, StringComparison.OrdinalIgnoreCase))
@@ -13047,7 +13057,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             span.Value,
             fileIdentity.FileSha256,
             sourceCharacterBudget,
-            relativePath);
+            isSourceGenerated ? null : relativePath);
         if (projected.Range.ContinuationAnchor is not null)
         {
             continuations.Add(new CodeExploreContinuationTarget(
@@ -13072,7 +13082,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             candidate.Location?.IsGenerated ?? IsGeneratedPath(candidate.FilePath),
             candidate.Location?.IsLinked ?? false,
             candidate.SelectionReason);
-        return new(section, projected.SourceCharacters, continuations, text, span);
+        return new(section, projected.SourceCharacters, continuations, text, span, isSourceGenerated);
     }
 
     private ProjectedCodeExploreSection FitPreparedSource(ProjectedCodeExploreSection prepared, int allowance, long generation)
@@ -13083,9 +13093,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         var section = prepared.Section;
-        var fitted = ProjectSourceRange(text, span, section.Source.FileSha256, allowance, section.FilePath);
+        var fitted = ProjectSourceRange(text, span, section.Source.FileSha256, allowance, prepared.IsSourceGenerated ? null : section.FilePath);
         var remainingLine = fitted.NextLine ?? (fitted.SourceCharacters == 0 ? section.Source.Range.StartLine : (int?)null);
-        IReadOnlyList<CodeExploreContinuationTarget> continuations = remainingLine is { } line
+        IReadOnlyList<CodeExploreContinuationTarget> continuations = !prepared.IsSourceGenerated && remainingLine is { } line
             ? [new CodeExploreContinuationTarget(
                 CodeExploreAnchorKind.Path,
                 section.FilePath,
@@ -13221,7 +13231,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         TextSpan span,
         string? fileSha256,
         int sourceCharacterBudget,
-        string relativePath)
+        string? relativePath)
     {
         if (sourceCharacterBudget <= 0)
         {
@@ -13423,19 +13433,41 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var location = symbol.Locations
-            .Where(location => location.IsInSource
-                && location.SourceTree is not null
-                && !string.IsNullOrWhiteSpace(location.SourceTree.FilePath)
-                && Path.IsPathRooted(location.SourceTree.FilePath)
-                && sourceReader.IsPathAllowed(location.SourceTree.FilePath))
+        var locations = symbol.Locations
+            .Where(location => location.IsInSource && location.SourceTree is not null)
             .OrderBy(location => location.SourceTree?.FilePath ?? string.Empty, PathComparer)
             .ThenBy(location => location.SourceSpan.Start)
-            .FirstOrDefault();
-        var sourceLocation = location is null
-            ? null
-            : await CreateLocationAsync(snapshot, projection, location, cancellationToken);
-        return sourceLocation is null ? null : ToCodeExploreLocation(sourceLocation, snapshot.RepositoryPath);
+            .ToArray();
+        foreach (var location in locations)
+        {
+            var locatedDocument = await FindDocumentForSyntaxTreeAsync(
+                snapshot,
+                location.SourceTree!,
+                cancellationToken);
+            if (locatedDocument is null)
+            {
+                continue;
+            }
+
+            var path = location.SourceTree!.FilePath;
+            if (!locatedDocument.IsSourceGenerated
+                && (string.IsNullOrWhiteSpace(path)
+                    || !Path.IsPathRooted(path)
+                    || !sourceReader.IsPathAllowed(path)))
+            {
+                continue;
+            }
+
+            var sourceLocation = CreateDocumentLocation(
+                locatedDocument.Document,
+                location.SourceTree,
+                location.SourceSpan,
+                projection,
+                locatedDocument.IsSourceGenerated);
+            return ToCodeExploreLocation(sourceLocation, snapshot.RepositoryPath);
+        }
+
+        return null;
     }
 
     private static CodeExploreLocation ToCodeExploreLocation(
@@ -14042,7 +14074,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var document = snapshot.Solution.GetDocument(syntaxTree);
         if (document is not null)
         {
-            return new LocatedSemanticDocument(document, false);
+            return new LocatedSemanticDocument(document, document is SourceGeneratedDocument);
         }
 
         foreach (var project in snapshot.Solution.Projects
@@ -14060,8 +14092,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     continue;
                 }
 
-                if (ReferenceEquals(root.SyntaxTree, syntaxTree)
-                    || string.Equals(root.SyntaxTree.FilePath, syntaxTree.FilePath, PathComparison))
+                if (ReferenceEquals(root.SyntaxTree, syntaxTree))
                 {
                     return new LocatedSemanticDocument(generatedDocument, true);
                 }

@@ -1,6 +1,6 @@
 # Plan 117 — Roslyn and .NET semantic toolchain upgrade
 
-**Status:** Planned  
+**Status:** Implemented — supported CI validation pending
 **Delivery track:** Maintenance — compiler-service compatibility, semantic correctness, and upgrade evidence  
 **Prerequisites:** The existing Roslyn/MSBuild semantic engine and confidence contract; external semantic refresh; advanced semantic tools; isolated C# scripting worker; central package management; .NET 10 LTS build baseline; and release-license closure.  
 **Baseline and target:** `Microsoft.CodeAnalysis.*` `5.6.0` → `5.9.0`; .NET SDK floor `10.0.204` with `latestFeature` roll-forward → `10.0.401` with patch roll-forward inside the 10.0.4xx feature band. The target SDK supplies the supported MSBuild runtime. Keep `Microsoft.Build.Locator` `1.11.2` and the compile-only `Microsoft.Build.Framework` `17.11.48` pin unless the exact restored target closure proves a change is required. Versions were verified against official release and NuGet metadata on 2026-09-25.
@@ -146,6 +146,21 @@ Before editing production call sites, build a ledger in this plan or an implemen
 At minimum audit `MSBuildWorkspace.Create`, `OpenSolutionAsync`, `OpenProjectAsync`, `ProjectLoadProgress`, workspace diagnostics, `Solution` document replacement, `Project.GetCompilationAsync`, compilation diagnostics, symbol identity/display, `SymbolFinder`, operation trees used by advanced queries, generated-document APIs, parsing options, and scripting APIs.
 
 Adapt the existing path only where the exact target requires it. A compatibility shim is acceptable only when it keeps one execution path and has an identified removal condition. Do not fork a 5.6 and 5.9 implementation.
+
+Implementation audit (2026-09-28):
+
+| API or behavior | Current owner and call path | 5.9 audit result | Adaptation and focused evidence |
+|---|---|---|---|
+| `MSBuildLocator.RegisterDefaults`, `MSBuildWorkspace.Create` | `SemanticEngine.LoadCoreAsync` before workspace construction | Source-compatible; locator ordering and SDK-owned runtime remain required. | No adaptation. Architecture/load tests verify registration precedes workspace creation and publish outputs exclude MSBuild runtime assemblies. |
+| `OpenSolutionAsync`, `OpenProjectAsync`, `ProjectLoadProgress` | Initial load and complete refresh through `SemanticEngine.LoadCoreAsync` | Existing overloads remain compatible; the progress overload provides the plan-required bounded evaluation observations. | Pass one aggregate progress observer through both existing branches; solution and direct-project tests cover the shared path. |
+| Workspace diagnostics | `RegisterWorkspaceFailedHandler` in `SemanticEngine.LoadCoreAsync` | Event and diagnostic-kind contract is source-compatible. Analyzer/build-host failures remain confidence-relevant. | No classification change. Existing degraded-load coverage plus target analyzer/generator failure coverage prevents false `FullSemantic`. |
+| Immutable `Solution` document replacement | `SemanticEngine` incremental refresh, diagnostics overlay, mutation overlay | `WithDocumentText`, `AddDocument`, `RemoveDocument`, additional-document, and analyzer-config operations are source-compatible. | No adaptation. Refresh, generation-fence, validation, and mutation suites exercise the established path. |
+| `Project.GetCompilationAsync` and compilation diagnostics | Initial preparation, refresh, validation, mutation, and advanced queries | Source-compatible. A non-null compilation alone does not override workspace-failure or missing-project confidence rules. | Add phase timing around the existing sequential eager loop only; diagnostic and confidence tests retain current decisions. |
+| Symbol identity/display and `SymbolFinder` | `SemanticEngine` and `AdvancedSemanticQueryService` | Declaration, reference, implementation, override, and caller APIs used by Threadsmith are source-compatible. Extension members add target-language symbols without a parallel query path. | No source adaptation. C# 14 fixture assertions cover host-owned names, kinds, ranges, references, implementations, and code exploration. |
+| Operation trees and syntax parsing | `CodeExploreToolCapabilityClassifier`, advanced query parsing and pattern flows | `GetOperation`, C# parsing, and operation interfaces used by Threadsmith are source-compatible. New syntax requires behavioral coverage rather than a compatibility shim. | No source adaptation. C# 14 extension/property fixture coverage exercises the real semantic/code-explore path. |
+| Generated documents and analyzer loading | Generated-code inventory and advanced semantic queries over the loaded `Solution` | Existing generated-document APIs are source-compatible; analyzer/compiler family mismatch remains the material behavioral risk. | No API adaptation. A deterministic target-line generator/analyzer fixture and generated-symbol queries prove visibility; failure coverage proves honest confidence. |
+| C# scripting (`CSharpScript`, `ScriptOptions`, diagnostics) | Isolated `Threadsmith.Scripting.Worker` process | Creation, compilation, evaluation, reference, import, and diagnostic APIs used by the worker are source-compatible. | No adaptation. Real worker success, diagnostic, bounds, timeout, cancellation, cleanup, and publish checks cover the process boundary. |
+| Non-Windows workspace storage composition | `RoslynWorkspaceHost` MEF composition | The optional SQLite export identity must be verified against the exact restored 5.9 implementation; package version alone is not evidence that process-shared contention is gone. | Retain the nonpersistent composition and pinned-identity contract test unless Windows inspection and Linux/macOS CI prove the target implementation changed. |
 
 ### 6.4 Semantic correctness fixtures
 
@@ -501,3 +516,69 @@ The implementation must resolve and record these evidence questions without sile
 3. Which load phase dominates the full Threadsmith solution after upgrade?
 4. Do any target Roslyn behavior changes require a documented correction to host-owned semantic output?
 5. Is a separate staged/lazy semantic-readiness plan justified by measured benefit after compatibility closure?
+
+## 18. Implementation Record
+
+### 18.1 Selected stack and compatibility adaptations
+
+Implementation used SDK 10.0.401 (`latestPatch`), MSBuild 18.9.11, and the four direct Roslyn 5.9.0 packages. `Microsoft.Build.Locator` remains 1.11.2 and `Microsoft.Build.Framework` remains a compile-only/private 17.11.48 reference. The regenerated closure contains one 5.9 Roslyn runtime/compiler/workspaces family; `Microsoft.CodeAnalysis.Analyzers` resolves to `5.9.0-1.26328.17`, and the 5.9 closure no longer contains `Microsoft.CodeAnalysis.Workspaces.MSBuild.Contracts`.
+
+The only target-required production query adaptation is in the established generated-code path. Roslyn 5.9 can resolve a source-generated symbol from a compilation to a generated `Document`, while the previous helper treated that document as ordinary disk-backed source. The helper now identifies generated documents before ordinary solution documents, reads their bounded Roslyn text, and preserves the existing repository-policy path for every non-generated document. No alternate workspace, semantic engine, compilation lifecycle, or scripting path was added.
+
+Initial loads now attach one `ProjectLoadProgress` observer, emit one aggregate structured measurement, and publish low-cardinality phase/count histograms. Completed, degraded, thrown-failure, text-only, and cancelled attempts share one terminal measurement owner. The existing sequential eager compilation and terminal lifecycle remain unchanged. Analyzer references are validated once per unique reference during the existing load loop, including Roslyn's `AnalyzerLoadFailed` event; a target analyzer/generator load failure reduces confidence and produces a sanitized diagnostic instead of allowing false `FullSemantic`. Cancellation cleans up abandoned workspace results, while ownership transfers atomically with committed engine state before lifecycle-event delivery.
+
+### 18.2 Correctness and package evidence
+
+The existing small semantic fixture now contains the minimum C# 14, multi-target, analyzer, and incremental-generator inputs needed for the upgrade. The target tests prove extension-block members, a field-backed property, generated-document inventory, generated-symbol `code_explore`, cross-project references, direct-project/solution load behavior, corrupt analyzer degradation, unavailable SDK degradation, and an installed older 10.0.303 repository SDK. The real isolated scripting worker evaluated C# 14 null-conditional assignment and retained its existing success, diagnostic, output-bound, timeout, cancellation, and cleanup behavior.
+
+`docs/dotnet-package-graph.json` and `eng/release/release-license-evidence.json` were regenerated from the target restore. The existing legal approval for self-contained .NET runtime 10.0.4 remains unchanged: it owns distributed runtime bytes and is distinct from the repository's 10.0.401 build-SDK selection.
+
+All six supported RIDs (`win-x64`, `win-arm64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`) published through the existing release workflow and were republished from the final post-review bytes. Every staged artifact contained the Roslyn build host, locator, and scripting worker apphost, used Roslyn file version `5.900.26.35703`, and omitted product-local `Microsoft.Build.dll`, `Microsoft.Build.Framework.dll`, `Microsoft.Build.Tasks.Core.dll`, and `Microsoft.Build.Utilities.Core.dll`. The final `win-x64` application and native worker were executed locally, including the C# 14 scripting probe; the other RIDs were cross-publish inspections only.
+
+### 18.3 Performance evidence and limitation
+
+Measurements were collected on Windows 11 Pro 10.0.26200, a 13th Gen Intel Core i9-13980HX with 32 logical processors, 63.7 GiB RAM, and SSD storage, using Debug configuration, SDK 10.0.401, MSBuild 18.9.11, and Roslyn 5.9.0. Durations are milliseconds and working set is process bytes at terminal load.
+
+| Selection | Run | Total | Evaluation | Confinement | Compilation | Working set | Result |
+|---|---|---:|---:|---:|---:|---:|---|
+| Small semantic fixture | Cold | 3,914.5 | 2,094.0 | included in remainder | 1,808.6 | 180,965,376 | `FullSemantic` |
+| Small semantic fixture | Warm range (2) | 1,603.2–1,608.2 | 1,443.9–1,472.1 | included in remainder | 126.2–159.8 | 204,759,040–217,640,960 | `FullSemantic` |
+| Direct App project | Cold | 12,112.7 | 10,599.5 | included in remainder | 1,498.8 | 221,663,232 | `FullSemantic` |
+| Direct App project | Warm range (2) | 5,504.6–5,682.0 | 5,342.5–5,511.9 | included in remainder | 156.5–164.4 | 245,874,688–294,670,336 | `FullSemantic` |
+| Full Threadsmith solution | Cold | 19,197.1 | 12,972.4 | 5,944.7 | included in remainder | 424,488,960 | `PartialCompilation` |
+| Full Threadsmith solution | Warm range (2) | 15,225.3–15,291.3 | 11,632.3–12,489.9 | included in remainder | 2,373.6–3,391.1 | 476,516,352–586,502,144 | `PartialCompilation` |
+
+The full solution contains 52 solution entries after adding the test-only analyzer/generator project and materializes 63 target-specific projects. Its 25 workspace failures are the existing confinement of Microsoft.Testing.Platform-generated `DefaultRunnerReporters.cs` paths outside the repository, so the honest terminal result is `PartialCompilation`. MSBuild evaluation is the dominant warm-load phase; any lazy, parallel, or staged-readiness proposal belongs in a separate plan.
+
+A comparable Roslyn 5.6 phase baseline could not be produced. Temporarily restoring the baseline pins and fixture state caused the 5.6 build host to fail during evaluation with an RPC null-result failure on this SDK/host, before the new phase boundaries could complete. The target pins and fixture were restored immediately. The recorded 5.9 figures are target measurements, not evidence of a speedup or regression against 5.6.
+
+### 18.4 Verification completed on the implementation host
+
+- Exact-SDK restore and final Debug build passed with zero warnings and zero errors.
+- The final full solution run passed 3,600 tests, skipped 31 environment/explicit tests, and failed none.
+- The combined Plan 117 and `SemanticRefreshCoordinatorTests` selection passed 70/70 with two opt-in skips three consecutive times; `Plan43AdvancedSemanticToolTests` passed 15/15 three consecutive times.
+- The opt-in older-SDK matrix passed with installed SDK 10.0.303, and the declared-but-unavailable SDK case degraded without false semantic confidence.
+- The opt-in real scripting-worker conversation matrix passed 7/7, and the targeted C# 14 worker/bounds/diagnostic/timeout test passed.
+- Release-license evidence and all release-contract checks passed.
+- Supported-RID publish, notice, SBOM, dependency, and runtime-assembly exclusion gates passed for all six artifacts.
+
+The follow-up analyzer-validation cancellation fix passed four real blocked-constructor cases: analyzer and generator construction during initial load and full refresh. Cancellation completed before releasing each constructor, published no replacement state, and retained usable prior state during refresh. The focused upgrade suite passed 11 tests with two opt-in skips, and all 63 refresh-coordinator tests passed. The full-solution and release results above precede this focused follow-up.
+
+The generated-source compatibility path classifies documents already resolved by Roslyn through the public `SourceGeneratedDocument` subtype. Ordinary document locations therefore return in constant time without enumerating a project's generated documents; project-wide generated-document enumeration is reserved for syntax trees that the captured solution cannot resolve directly. After this follow-up, the focused upgrade suite again passed 11 tests with two opt-in skips and the 15 advanced semantic-tool tests passed. The full-solution and release results above precede this focused follow-up.
+
+Linux/macOS native execution, their independent concurrent-workspace query checks, and hosted CI remain unassessed locally. They must run in the repository's supported CI environments; cross-publishing is not counted as native validation. The implementation therefore does not infer acceptance criteria 19 or 23 from Windows evidence.
+
+### 18.5 Adversarial review
+
+The independent adversarial review traced the completed diff and the established load, refresh, query, mutation, scripting, and publish entry points. Its valid findings were fixed and re-reviewed:
+
+- analyzer load failures reported through `AnalyzerFileReference.AnalyzerLoadFailed` are confidence-relevant and covered by a valid assembly whose analyzer construction fails;
+- physical generated-looking files retain ordinary path and drift enforcement, while actual source-generated provenance is explicit;
+- generated-document lookup uses Roslyn document/project identity and cannot select another target framework by matching a virtual path;
+- abandoned and post-evaluation cancellation paths dispose only unowned workspaces, with ownership transferred at the exact state-commit boundary before event delivery;
+- synchronous analyzer/generator validation runs through the existing bounded abandon-and-discard wrapper, with blocked-construction cancellation coverage for load and full refresh;
+- code exploration classifies directly resolved source-generated documents without rescanning every generated document for ordinary locations;
+- all terminal load outcomes emit one bounded measurement; and
+- project-count observations receive independent low-cardinality tag sets.
+
+The final independent re-review was clean. It identified source-generated path continuations as an optional broader enhancement, not a Plan 117 blocker; this upgrade does not add that new continuation mechanism.

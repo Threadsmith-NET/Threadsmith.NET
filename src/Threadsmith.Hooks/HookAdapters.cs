@@ -184,8 +184,10 @@ public sealed class HttpHookAdapter : IHookHandlerAdapter
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-        using var bounded = new MemoryStream();
+        await using var bounded = new MemoryStream();
+
         var buffer = new byte[4096];
+
         while (true)
         {
             var read = await stream.ReadAsync(buffer, cancellationToken);

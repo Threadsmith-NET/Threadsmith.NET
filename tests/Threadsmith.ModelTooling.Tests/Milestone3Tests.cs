@@ -2982,7 +2982,9 @@ public static class Milestone3Tests
             Path.Combine("App", "Program.cs"),
             Path.Combine("Contracts", "Contracts.csproj"),
             Path.Combine("Contracts", "GeneratedMarker.g.cs"),
+            Path.Combine("Contracts", "ModernSyntax.cs"),
             Path.Combine("Contracts", "Services.cs"),
+            Path.Combine("Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"),
             Path.Combine("Shared", "Linked.cs"),
         ];
 

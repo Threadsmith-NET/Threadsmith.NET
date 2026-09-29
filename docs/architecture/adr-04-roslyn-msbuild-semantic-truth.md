@@ -9,12 +9,14 @@
 The harness must be meaningfully compiler-aware: load solutions, resolve symbols, find references/implementations, classify generated/linked code, and (later) propose semantic mutations. Roslyn types must not leak across boundaries unless the consumer is explicitly compiler-aware (§8.1).
 
 ## Decision
-Use **Roslyn** (`Microsoft.CodeAnalysis.*` 5.6.0) + **MSBuild** (`Microsoft.CodeAnalysis.Workspaces.MSBuild`) as the semantic sources of truth. `MSBuildLocator.RegisterDefaults()` must run before creating an `MSBuildWorkspace`. Roslyn object references are never persisted (§7.1).
+Use **Roslyn** (`Microsoft.CodeAnalysis.*` 5.9.0) + **MSBuild** (`Microsoft.CodeAnalysis.Workspaces.MSBuild`) as the semantic sources of truth. `MSBuildLocator.RegisterDefaults()` must run before creating an `MSBuildWorkspace`. Roslyn object references are never persisted (§7.1).
 
 ## Consequences
 - `Microsoft.Build.Locator` 1.11.2 is required to register the MSBuild host; `Microsoft.Build.Framework` must be excluded from runtime output (`ExcludeAssets="runtime"`) to avoid assembly-load conflicts.
-- **Open issue (gap #7):** Roslyn/MSBuild APIs may be non-cooperatively cancellable. plan-06/plan-12 must use the abandon-and-discard pattern with a bounded-wait backstop (§13).
+- Roslyn/MSBuild APIs may be non-cooperatively cancellable. The implemented semantic path uses the plan-06/plan-12 abandon-and-discard pattern with a bounded-wait backstop (§13).
 - `SemanticConfidenceLevel` (gap #2) will be encoded in plan-06.
 
 ## Validation
 `Spike.MsBuildWorkspace` loads `src/Threadsmith.sln` and resolves `Threadsmith.App.Program` (type kind, namespace, assembly) → `PASS` (exit 0). See `spikes/Spike.MsBuildWorkspace/README.md` and `docs/architecture/spike-notes.md`.
+
+Plan 117 revalidated this boundary with Roslyn 5.9.0 and the SDK 10.0.401-owned MSBuild 18.9.11 runtime. The validation covers solution and direct-project loading, C# 14 symbols, analyzers, source generators, generated-source queries, scripting isolation, cancellation, dependency closure, and runtime-assembly exclusion.

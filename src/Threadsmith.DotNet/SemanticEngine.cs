@@ -2,12 +2,14 @@ namespace Threadsmith.DotNet;
 
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
@@ -15,9 +17,13 @@ using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
 
 /// <summary>Provides confidence-aware Roslyn and MSBuild semantic discovery.</summary>
-public sealed class SemanticEngine : ISemanticEngine
+public sealed partial class SemanticEngine : ISemanticEngine
 {
+    private const int MaximumSlowProjectSamples = 3;
     private static readonly Lock _msBuildGate = new();
+    private static VisualStudioInstance? _registeredMsBuildInstance;
+    private static int _semanticLoadSequence;
+    private static int _versionFactsLogged;
     private readonly TimeSpan _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly IDomainEventStream _events;
@@ -114,6 +120,77 @@ public sealed class SemanticEngine : ISemanticEngine
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SolutionPath);
+        var selectionExtension = Path.GetExtension(request.SolutionPath);
+        var isDirectProject = selectionExtension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
+            || selectionExtension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
+            || selectionExtension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase);
+        var measurement = new SemanticLoadMeasurementState(
+            isDirectProject ? "project" : "solution",
+            Interlocked.Increment(ref _semanticLoadSequence) == 1 ? "cold" : "warm");
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        var callerCancellation = cancellationToken;
+        long ownership;
+        CancellationToken ownershipToken;
+        lock (_gate)
+        {
+            ownership = _preparationOwnership;
+            ownershipToken = _preparationOwnerLifetime.Token;
+        }
+
+        using var loadLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _engineLifetime.Token, ownershipToken);
+        cancellationToken = loadLifetime.Token;
+        var transitionAcquired = false;
+        try
+        {
+            await _transition.WaitAsync(cancellationToken);
+            transitionAcquired = true;
+            lock (_gate)
+            {
+                if (ownership != _preparationOwnership)
+                {
+                    throw new InvalidOperationException("The semantic preparation owner changed before load admission.");
+                }
+            }
+
+            return await LoadCoreImplementationAsync(
+                request,
+                publishLoadCompleted,
+                publishConfidenceChanged,
+                allowTextFallback,
+                measurement,
+                ownership,
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            measurement.Outcome = "cancelled";
+            if (callerCancellation.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(callerCancellation);
+            }
+
+            throw;
+        }
+        finally
+        {
+            RecordSemanticLoadMeasurement(measurement);
+            if (transitionAcquired)
+            {
+                _transition.Release();
+            }
+        }
+    }
+
+#pragma warning disable SA1202 // The private implementation keeps one measurement owner around the public load operation.
+    private async Task<SemanticLoadResult> LoadCoreImplementationAsync(
+        SemanticLoadRequest request,
+        bool publishLoadCompleted,
+        bool publishConfidenceChanged,
+        bool allowTextFallback,
+        SemanticLoadMeasurementState measurement,
+        long ownership,
+        CancellationToken cancellationToken)
+    {
         var repositoryPath = Path.TrimEndingDirectorySeparator(
             Path.GetFullPath(request.RepositoryPath));
         var solutionPath = Path.GetFullPath(request.SolutionPath);
@@ -123,10 +200,7 @@ public sealed class SemanticEngine : ISemanticEngine
             throw new InvalidOperationException("The semantic solution must exist under the repository root.");
         }
 
-        var selectionExtension = Path.GetExtension(solutionPath);
-        var isDirectProject = selectionExtension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
-            || selectionExtension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
-            || selectionExtension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase);
+        var isDirectProject = measurement.Mode == "project";
         var projectPaths = new List<string>();
         if (isDirectProject)
         {
@@ -169,6 +243,7 @@ public sealed class SemanticEngine : ISemanticEngine
                     SemanticConfidenceLevel.ProjectGraphOnly,
                     [],
                     []))];
+        measurement.ExpectedProjects = metadata.Length;
         var normalizedRequest = request with
         {
             RepositoryPath = repositoryPath,
@@ -187,9 +262,14 @@ public sealed class SemanticEngine : ISemanticEngine
                 projects: textOnly,
                 confidence: textConfidence,
                 normalizedRequest,
+                ownership,
                 publishLoadCompleted,
                 publishConfidenceChanged,
                 cancellationToken);
+            measurement.Outcome = "completed";
+            measurement.LoadedProjects = textOnly.Length;
+            measurement.FailedProjects = textOnly.Length;
+            measurement.Confidence = textConfidence;
             return new SemanticLoadResult(
                 request.WorkspaceId,
                 Confidence,
@@ -198,7 +278,7 @@ public sealed class SemanticEngine : ISemanticEngine
         }
 
         var diagnostics = new ConcurrentQueue<string>();
-        var workspaceFailureCount = 0;
+        var evaluationStarted = Stopwatch.GetTimestamp();
         (MSBuildWorkspace Workspace, Solution Solution) load;
         try
         {
@@ -209,8 +289,10 @@ public sealed class SemanticEngine : ISemanticEngine
                     {
                         if (!MSBuildLocator.IsRegistered)
                         {
-                            MSBuildLocator.RegisterDefaults();
+                            _registeredMsBuildInstance = MSBuildLocator.RegisterDefaults();
                         }
+
+                        LogSemanticToolchainVersionFacts();
                     }
 
                     var workspace = MSBuildWorkspace.Create(RoslynWorkspaceHost.Services);
@@ -221,7 +303,7 @@ public sealed class SemanticEngine : ISemanticEngine
                             $"{eventArgs.Diagnostic.Kind}: {eventArgs.Diagnostic.Message}");
                         if (eventArgs.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure)
                         {
-                            Interlocked.Increment(ref workspaceFailureCount);
+                            measurement.IncrementWorkspaceFailure();
                         }
                     });
                     try
@@ -231,7 +313,7 @@ public sealed class SemanticEngine : ISemanticEngine
                         {
                             var project = await workspace.OpenProjectAsync(
                                 solutionPath,
-                                progress: null,
+                                measurement.Progress,
                                 operationToken);
                             solution = project.Solution;
                         }
@@ -239,7 +321,7 @@ public sealed class SemanticEngine : ISemanticEngine
                         {
                             solution = await workspace.OpenSolutionAsync(
                                 solutionPath,
-                                progress: null,
+                                measurement.Progress,
                                 operationToken);
                         }
 
@@ -251,10 +333,12 @@ public sealed class SemanticEngine : ISemanticEngine
                         throw;
                     }
                 },
-                cancellationToken);
+                cancellationToken,
+                static abandoned => abandoned.Workspace.Dispose());
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            measurement.EnsureWorkspaceFailure();
             _logger.LogWarning(
                 exception,
                 "Semantic MSBuild loading failed for solution {SolutionPath}; using text metadata",
@@ -278,16 +362,26 @@ public sealed class SemanticEngine : ISemanticEngine
                 projects: degradedProjects,
                 confidence: degradedConfidence,
                 normalizedRequest,
+                ownership,
                 publishLoadCompleted,
                 publishConfidenceChanged,
                 cancellationToken);
+            measurement.LoadedProjects = degradedProjects.Length;
+            measurement.FailedProjects = degradedProjects.Length;
+            measurement.Confidence = degradedConfidence;
             return new SemanticLoadResult(
                 request.WorkspaceId,
                 degradedConfidence,
                 degradedProjects,
                 diagnostics.ToArray());
         }
+        finally
+        {
+            measurement.EvaluationDuration = Stopwatch.GetElapsedTime(evaluationStarted);
+        }
 
+        using var workspaceLease = new WorkspaceLease(load.Workspace);
+        var confinementStarted = Stopwatch.GetTimestamp();
         var confinedSolution = load.Solution;
         foreach (var project in confinedSolution.Projects.ToArray())
         {
@@ -295,7 +389,8 @@ public sealed class SemanticEngine : ISemanticEngine
             {
                 diagnostics.Enqueue(
                     $"Project '{project.Name}' was excluded because it is outside the repository root.");
-                Interlocked.Increment(ref workspaceFailureCount);
+                measurement.IncrementWorkspaceFailure();
+                measurement.ExcludedProjects++;
                 confinedSolution = confinedSolution.RemoveProject(project.Id);
                 continue;
             }
@@ -306,7 +401,7 @@ public sealed class SemanticEngine : ISemanticEngine
             {
                 diagnostics.Enqueue(
                     $"Document '{document.Name}' was excluded by repository path policy.");
-                Interlocked.Increment(ref workspaceFailureCount);
+                measurement.IncrementWorkspaceFailure();
                 confinedSolution = confinedSolution.RemoveDocument(document.Id);
             }
 
@@ -318,7 +413,7 @@ public sealed class SemanticEngine : ISemanticEngine
             {
                 diagnostics.Enqueue(
                     $"Additional document '{document.Name}' was excluded by repository path policy.");
-                Interlocked.Increment(ref workspaceFailureCount);
+                measurement.IncrementWorkspaceFailure();
                 confinedSolution = confinedSolution.RemoveAdditionalDocument(document.Id);
             }
 
@@ -330,112 +425,186 @@ public sealed class SemanticEngine : ISemanticEngine
             {
                 diagnostics.Enqueue(
                     $"Analyzer config '{document.Name}' was excluded by repository path policy.");
-                Interlocked.Increment(ref workspaceFailureCount);
+                measurement.IncrementWorkspaceFailure();
                 confinedSolution = confinedSolution.RemoveAnalyzerConfigDocument(document.Id);
             }
         }
 
         load = (load.Workspace, confinedSolution);
+        measurement.ConfinementDuration = Stopwatch.GetElapsedTime(confinementStarted);
 
-        var compiledProjects = new HashSet<ProjectId>();
-        var loadedProjects = new List<SemanticProjectInfo>();
-        foreach (var project in load.Solution.Projects)
+        var compilationStarted = Stopwatch.GetTimestamp();
+        var staged = publishLoadCompleted || !publishConfidenceChanged;
+        var loadedProjects = load.Solution.Projects.Select(project =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            Compilation? compilation = null;
-            try
-            {
-                compilation = await RunNonCooperativeAsync<Compilation?>(
-                    project.GetCompilationAsync,
-                    cancellationToken);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                _logger.LogWarning(
-                    exception,
-                    "Compilation creation failed for project {ProjectName}",
-                    project.Name);
-                diagnostics.Enqueue($"{project.Name}: {exception.Message}");
-            }
-
-            var projectConfidence = compilation is null
-                ? SemanticConfidenceLevel.ProjectGraphOnly
-                : SemanticConfidenceLevel.FullSemantic;
-            if (compilation is not null)
-            {
-                compiledProjects.Add(project.Id);
-            }
-
-            var filePath = project.FilePath ?? string.Empty;
-            var projectMetadata = metadata.FirstOrDefault(item => string.Equals(
-                item.FilePath,
-                filePath,
-                PathComparison));
-            loadedProjects.Add(projectMetadata is null
+            var info = metadata.FirstOrDefault(item => string.Equals(item.FilePath, project.FilePath, PathComparison));
+            return info is null
                 ? new SemanticProjectInfo(
                     project.Name,
-                    filePath,
+                    project.FilePath ?? string.Empty,
                     [],
-                    projectConfidence,
-                    project.ProjectReferences
-                        .Select(reference => load.Solution.GetProject(reference.ProjectId)?.Name)
-                        .Where(name => name is not null)
-                        .Select(name => name ?? string.Empty)
-                        .ToArray(),
+                    SemanticConfidenceLevel.ProjectGraphOnly,
+                    project.ProjectReferences.Select(reference => load.Solution.GetProject(reference.ProjectId)?.Name ?? string.Empty).ToArray(),
                     [])
-                : projectMetadata with
-                {
-                    Name = project.Name,
-                    Confidence = projectConfidence,
-                });
+                : info with { Name = project.Name, Confidence = SemanticConfidenceLevel.ProjectGraphOnly };
+        }).ToList();
+        var loadedPaths = loadedProjects.Select(project => project.FilePath).ToHashSet(StringComparerForCurrentPlatform());
+        loadedProjects.AddRange(metadata.Where(info => !loadedPaths.Contains(info.FilePath)));
+        SemanticCompilationCoordinator? previousPreparation;
+        lock (_gate)
+        {
+            if (ownership != _preparationOwnership)
+            {
+                throw new InvalidOperationException("The semantic preparation owner changed during evaluation.");
+            }
+
+            previousPreparation = _preparation;
+            previousPreparation?.Abort();
         }
 
-        var loadedProjectPaths = loadedProjects
-            .Select(project => project.FilePath)
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .ToHashSet(pathComparer);
-        loadedProjects.AddRange(metadata
-            .Where(project => !loadedProjectPaths.Contains(project.FilePath))
-            .Select(project => project with
+        var preparation = CreatePreparationCoordinator(load.Solution, new HashSet<ProjectId>());
+        var previousState = CaptureReplacementState();
+        try
+        {
+            if (previousPreparation is not null)
             {
-                Confidence = SemanticConfidenceLevel.ProjectGraphOnly,
-            }));
+                await previousPreparation.DisposeAsync();
+            }
 
-        var compiledProjectPaths = compiledProjects
-            .Select(projectId => load.Solution.GetProject(projectId)?.FilePath)
-            .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => path ?? string.Empty)
-            .ToHashSet(pathComparer);
-        var everyExpectedProjectCompiled = metadata.Length > 0
-            && metadata.All(project => compiledProjectPaths.Contains(project.FilePath));
-        var everyLoadedProjectCompiled = loadedProjects.Count > 0
-            && loadedProjects.All(project => project.Confidence == SemanticConfidenceLevel.FullSemantic);
-        var aggregate = loadedProjects.Count == 0
-            ? metadata.Length == 0
-                ? SemanticConfidenceLevel.None
-                : SemanticConfidenceLevel.ProjectGraphOnly
-            : everyExpectedProjectCompiled
-                && everyLoadedProjectCompiled
-                && Volatile.Read(ref workspaceFailureCount) == 0
-                ? SemanticConfidenceLevel.FullSemantic
-                : compiledProjects.Count > 0
-                    ? SemanticConfidenceLevel.PartialCompilation
-                    : SemanticConfidenceLevel.ProjectGraphOnly;
-        await ReplaceStateAsync(
-            load.Solution,
-            load.Workspace,
-            compiledProjects,
-            loadedProjects,
-            aggregate,
-            normalizedRequest,
-            publishLoadCompleted,
-            publishConfidenceChanged,
-            cancellationToken);
-        return new SemanticLoadResult(
+            previousState = CaptureReplacementState();
+            await _preparationPublication.WaitAsync(cancellationToken);
+            try
+            {
+                lock (_gate)
+                {
+                    if (ownership != _preparationOwnership)
+                    {
+                        throw new InvalidOperationException("The semantic preparation owner changed before load publication.");
+                    }
+
+                    _workspace = load.Workspace;
+                    _solution = load.Solution;
+                    _compiledProjects = [];
+                    _projects = loadedProjects;
+                    _confidence = SemanticConfidenceLevel.ProjectGraphOnly;
+                    _lastRequest = normalizedRequest;
+                    _preparation = preparation;
+                    _preparationDiagnostics.Clear();
+                    _preparationFailures = 0;
+                    _preparationSlowSamples.Clear();
+                    _preparationHasWorkspaceFailures = measurement.WorkspaceFailureCount > 0;
+                    _expectedPreparationPaths = metadata.Select(info => info.FilePath).ToArray();
+                    _initialPublication = staged ? new(TaskCreationOptions.RunContinuationsAsynchronously) : CompletedPublication();
+                    _allowPreparationEvents = false;
+                    _pendingInitialResult = null;
+                    _generation++;
+                    _solutionGeneration = _generation;
+                }
+            }
+            finally
+            {
+                _preparationPublication.Release();
+            }
+
+            var ranked = RankReadinessProjects(load.Solution, solutionPath);
+            if (staged)
+            {
+                var pending = new List<Task<SemanticPreparationOutcome>>();
+                var next = 0;
+                while (next < ranked.Length || pending.Count > 0)
+                {
+                    while (pending.Count < _preparationLimits.Frontier && next < ranked.Length)
+                    {
+                        pending.Add(preparation.PrepareAsync(ranked[next++], demand: true, cancellationToken));
+                    }
+
+                    var completed = await Task.WhenAny(pending);
+                    pending.Remove(completed);
+                    if ((await completed).Succeeded)
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                preparation.Warm(ranked);
+                await preparation.Completion.WaitAsync(cancellationToken);
+            }
+
+            lock (_gate)
+            {
+                if (ownership != _preparationOwnership)
+                {
+                    throw new InvalidOperationException("The semantic preparation owner changed during loading.");
+                }
+            }
+        }
+        catch
+        {
+            await preparation.DisposeAsync();
+            RestoreReplacementState(previousState, preparation, ownership);
+            throw;
+        }
+
+        workspaceLease.TransferOwnership();
+        if (!ReferenceEquals(previousState.Workspace, load.Workspace))
+        {
+            previousState.Workspace?.Dispose();
+        }
+
+        var aggregate = Confidence;
+        var initialFailures = _preparationFailures;
+        var result = new SemanticLoadResult(
             request.WorkspaceId,
             aggregate,
-            loadedProjects,
-            diagnostics.ToArray());
+            Projects,
+            diagnostics.Concat(_preparationDiagnostics).ToArray());
+        if (staged)
+        {
+            lock (_gate)
+            {
+                if (ownership != _preparationOwnership)
+                {
+                    throw new InvalidOperationException("The semantic preparation owner changed before initial publication.");
+                }
+
+                _pendingInitialResult = result;
+                _pendingInitialOwnership = ownership;
+            }
+        }
+
+        try
+        {
+            if (publishConfidenceChanged && previousState.Confidence != aggregate)
+            {
+                await _events.PublishAsync(new SemanticConfidenceChanged(request.SessionId, DateTimeOffset.UtcNow, aggregate.ToString()), cancellationToken);
+            }
+
+            if (publishLoadCompleted)
+            {
+                await _events.PublishAsync(new SemanticLoadCompleted(request.SessionId, DateTimeOffset.UtcNow, request.WorkspaceId, aggregate.ToString()), cancellationToken);
+                await CompleteInitialPublicationAsync(result, succeeded: true, cancellationToken);
+            }
+        }
+        catch
+        {
+            await CompleteInitialPublicationAsync(result, succeeded: false, CancellationToken.None);
+            throw;
+        }
+
+        measurement.CompilationDuration = Stopwatch.GetElapsedTime(compilationStarted);
+        measurement.Outcome = "completed";
+        measurement.LoadedProjects = loadedProjects.Count;
+        measurement.CompiledProjects = result.Projects.Count(info => info.Confidence == SemanticConfidenceLevel.FullSemantic);
+        measurement.FailedProjects = initialFailures;
+        lock (_gate)
+        {
+            measurement.SlowProjectSamples.AddRange(_preparationSlowSamples);
+        }
+
+        measurement.Confidence = aggregate;
+        return result;
     }
 
     /// <inheritdoc />
@@ -444,7 +613,8 @@ public sealed class SemanticEngine : ISemanticEngine
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
-        (var solution, var compiledProjects, var confidence, var _) = CaptureSemanticState();
+        var preparedSolution = await EnsurePreparedAsync(null, "symbols", requireSuccess: true, cancellationToken);
+        (var solution, var compiledProjects, var confidence, var _) = CaptureSemanticState(preparedSolution);
         var symbols = await RunNonCooperativeAsync(
             async operationToken =>
             {
@@ -478,6 +648,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
         }
 
+        EnsurePreparedSolutionCurrent(preparedSolution);
         return results;
     }
 
@@ -627,7 +798,8 @@ public sealed class SemanticEngine : ISemanticEngine
             return fallback;
         }
 
-        (var solution, var _, var currentConfidence, var _) = CaptureSemanticState();
+        var preparedSolution = await EnsurePreparedAsync(null, "references", requireSuccess: true, cancellationToken);
+        (var solution, var _, var currentConfidence, var _) = CaptureSemanticState(preparedSolution);
         var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
         var referencedSymbols = await RunNonCooperativeAsync(
             token => SymbolFinder.FindReferencesAsync(symbol, solution, token),
@@ -644,6 +816,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
         }
 
+        EnsurePreparedSolutionCurrent(preparedSolution);
         return results;
     }
 
@@ -653,7 +826,8 @@ public sealed class SemanticEngine : ISemanticEngine
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
-        (var solution, var _, var confidence, var _) = CaptureSemanticState();
+        var preparedSolution = await EnsurePreparedAsync(null, "implementations", requireSuccess: true, cancellationToken);
+        (var solution, var _, var confidence, var _) = CaptureSemanticState(preparedSolution);
         var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
         var implementations = await RunNonCooperativeAsync(
             token => SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: token),
@@ -673,6 +847,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
         }
 
+        EnsurePreparedSolutionCurrent(preparedSolution);
         return results;
     }
 
@@ -687,27 +862,66 @@ public sealed class SemanticEngine : ISemanticEngine
     public async Task<SemanticConfidenceLevel> ApplyInvalidationsAsync(
         CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var changed = new List<string>();
-        while (_invalidations.TryDequeue(out var path))
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _engineLifetime.Token);
+        await _transition.WaitAsync(lifetime.Token);
+        try
         {
-            changed.Add(path);
+            return await ApplyInvalidationsCoreAsync(lifetime.Token);
         }
+        finally
+        {
+            _transition.Release();
+        }
+    }
 
-        if (changed.Count == 0)
+    private async Task<SemanticConfidenceLevel> ApplyInvalidationsCoreAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_invalidations.IsEmpty)
         {
             return Confidence;
         }
 
         SemanticLoadRequest? request;
         SemanticConfidenceLevel previous;
-        lock (_gate)
+        SemanticCompilationCoordinator? preparation;
+
+        // Cancellation before publication ownership must retain both queued invalidations and preparation.
+        await _preparationPublication.WaitAsync(cancellationToken);
+        try
         {
-            request = _lastRequest;
-            previous = _confidence;
-            _confidence = SemanticConfidenceLevel.ProjectGraphOnly;
-            _compiledProjects = [];
-            _generation++;
+            var changed = false;
+            while (_invalidations.TryDequeue(out _))
+            {
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return Confidence;
+            }
+
+            lock (_gate)
+            {
+                preparation = _preparation;
+                preparation?.Abort();
+                _preparation = null;
+                request = _lastRequest;
+                previous = _confidence;
+                _confidence = SemanticConfidenceLevel.ProjectGraphOnly;
+                _compiledProjects = [];
+                _generation++;
+                _solutionGeneration = _generation;
+            }
+        }
+        finally
+        {
+            _preparationPublication.Release();
+        }
+
+        if (preparation is not null)
+        {
+            await preparation.DisposeAsync();
         }
 
         if (request is not null && previous != SemanticConfidenceLevel.ProjectGraphOnly)
@@ -759,8 +973,47 @@ public sealed class SemanticEngine : ISemanticEngine
         IReadOnlyList<SemanticDocumentRefresh> documents,
         CancellationToken cancellationToken = default)
     {
+        long ownership;
+        CancellationToken ownershipToken;
+        lock (_gate)
+        {
+            ownership = _preparationOwnership;
+            ownershipToken = _preparationOwnerLifetime.Token;
+        }
+
+        using var refreshLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _engineLifetime.Token, ownershipToken);
+        await _transition.WaitAsync(refreshLifetime.Token);
+        try
+        {
+            lock (_gate)
+            {
+                if (ownership != _preparationOwnership)
+                {
+                    throw new InvalidOperationException("The semantic preparation owner changed before refresh admission.");
+                }
+            }
+
+            return await RefreshDocumentsCoreAsync(documents, ownership, refreshLifetime.Token);
+        }
+        finally
+        {
+            _transition.Release();
+        }
+    }
+
+    private async Task<SemanticLoadResult> RefreshDocumentsCoreAsync(
+        IReadOnlyList<SemanticDocumentRefresh> documents,
+        long ownership,
+        CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(documents);
         cancellationToken.ThrowIfCancellationRequested();
+        SemanticCompilationCoordinator? previousPreparation;
+        lock (_gate)
+        {
+            previousPreparation = _preparation;
+        }
+
         Solution solution;
         HashSet<ProjectId> compiledProjects;
         IReadOnlyList<SemanticProjectInfo> projects;
@@ -804,30 +1057,97 @@ public sealed class SemanticEngine : ISemanticEngine
             }
         }
 
-        foreach (var projectId in affectedProjects.Where(compiledProjects.Contains))
+        // Validate replacement inputs before obsoleting useful shared work.
+        lock (_gate)
         {
-            var project = replacement.GetProject(projectId);
-            if (project is null
-                || await RunNonCooperativeAsync<Compilation?>(
-                    project.GetCompilationAsync,
-                    cancellationToken) is null)
+            if (ownership != _preparationOwnership)
             {
-                throw new InvalidOperationException(
-                    "Incremental semantic refresh could not prepare an affected compilation.");
+                throw new InvalidOperationException("The semantic preparation owner changed during refresh validation.");
             }
+
+            previousPreparation?.Abort();
+        }
+
+        if (previousPreparation is not null)
+        {
+            await previousPreparation.DisposeAsync();
         }
 
         lock (_gate)
         {
-            if (_generation != generation
-                || _lastRequest?.WorkspaceId != request.WorkspaceId)
+            if (ownership != _preparationOwnership || !ReferenceEquals(_solution, solution))
             {
-                throw new InvalidOperationException(
-                    "The semantic workspace changed while refresh was being prepared.");
+                throw new InvalidOperationException("The semantic solution changed during refresh validation.");
             }
 
-            _solution = replacement;
-            _generation++;
+            compiledProjects = [.. _compiledProjects];
+            projects = _projects.ToArray();
+            confidence = _confidence;
+            generation = _generation;
+        }
+
+        var graph = replacement.GetProjectDependencyGraph();
+        foreach (var id in affectedProjects.ToArray())
+        {
+            affectedProjects.UnionWith(graph.GetProjectsThatTransitivelyDependOnThisProject(id));
+        }
+
+        var required = affectedProjects.Where(compiledProjects.Contains).ToHashSet();
+        var retained = compiledProjects.Except(affectedProjects).ToHashSet();
+        var preparation = CreatePreparationCoordinator(replacement, retained);
+        try
+        {
+            foreach (var id in required)
+            {
+                var outcome = await preparation.PrepareAsync(id, demand: true, cancellationToken);
+                if (!outcome.Succeeded || outcome.Obsolete)
+                {
+                    throw new InvalidOperationException("Incremental semantic refresh could not prepare required affected coverage.");
+                }
+            }
+
+            lock (_gate)
+            {
+                if (ownership != _preparationOwnership || _generation != generation || !ReferenceEquals(_solution, solution))
+                {
+                    throw new InvalidOperationException("The semantic workspace changed while refresh was being prepared.");
+                }
+
+                // Incremental replacement retains the lifecycle owner's outstanding publication barrier.
+                _solution = replacement;
+                _preparation = preparation;
+                _generation++;
+                _solutionGeneration = _generation;
+            }
+        }
+        catch
+        {
+            await preparation.DisposeAsync();
+            SemanticCompilationCoordinator? recovered;
+            lock (_gate)
+            {
+                recovered = ownership == _preparationOwnership ? CreatePreparationCoordinator(solution, compiledProjects) : null;
+                if (recovered is not null)
+                {
+                    _preparation = recovered;
+                    if (_allowPreparationEvents)
+                    {
+                        recovered.Warm(RankReadinessProjects(solution, request.SolutionPath));
+                        _warmObservation = ObserveWarmAsync(recovered);
+                    }
+                }
+            }
+
+            throw;
+        }
+
+        lock (_gate)
+        {
+            if (_allowPreparationEvents)
+            {
+                preparation.Warm(RankReadinessProjects(replacement, request.SolutionPath));
+                _warmObservation = ObserveWarmAsync(preparation);
+            }
         }
 
         return new SemanticLoadResult(request.WorkspaceId, confidence, projects, []);
@@ -930,8 +1250,27 @@ public sealed class SemanticEngine : ISemanticEngine
     {
         ArgumentNullException.ThrowIfNull(projectPaths);
         ArgumentNullException.ThrowIfNull(changedFiles);
+        SemanticPreparationReceipt? preparedSolution = null;
+        if (projectPaths.Count == 0)
+        {
+            preparedSolution = await EnsurePreparedAsync(null, "diagnostics", requireSuccess: true, cancellationToken);
+        }
+        else
+        {
+            foreach (var projectPath in projectPaths)
+            {
+                var current = await EnsurePreparedAsync(projectPath, "diagnostics", requireSuccess: true, cancellationToken);
+                if (preparedSolution is not null && preparedSolution != current)
+                {
+                    throw new InvalidOperationException("The semantic solution changed during diagnostic preparation.");
+                }
+
+                preparedSolution = current;
+            }
+        }
+
         (var solution, var compiledProjects, var confidence, var repositoryPath) =
-            CaptureSemanticState();
+            CaptureSemanticState(preparedSolution);
         var pathComparer = StringComparerForCurrentPlatform();
         var requestedPaths = new HashSet<string>(
             projectPaths
@@ -960,7 +1299,8 @@ public sealed class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            var compilation = await RunNonCooperativeAsync<Compilation?>(
+            var compilation = await RunPreparedOperationAsync<Compilation?>(
+                preparedSolution,
                 project.GetCompilationAsync,
                 cancellationToken);
             if (compilation is null)
@@ -1009,6 +1349,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
         }
 
+        EnsurePreparedSolutionCurrent(preparedSolution);
         return diagnostics;
     }
 
@@ -1052,6 +1393,22 @@ public sealed class SemanticEngine : ISemanticEngine
         var sourceByFullPath = CreateOverlayMap(
             sourceFiles,
             repositoryPath);
+        SemanticPreparationReceipt? preparationReceipt = null;
+        if (solution is not null && confidence >= SemanticConfidenceLevel.PartialCompilation)
+        {
+            var owners = solution.Projects.Where(project => project.Documents.Any(document => document.FilePath is not null
+                && sourceByFullPath.ContainsKey(Path.GetFullPath(document.FilePath)))).Select(project => project.Id).ToHashSet();
+            owners.UnionWith(sourceByFullPath.Keys.SelectMany(path => FindContainingProjects(solution, path).Select(project => project.Id)));
+            var dependencyGraph = solution.GetProjectDependencyGraph();
+            foreach (var id in owners.ToArray())
+            {
+                owners.UnionWith(dependencyGraph.GetProjectsThatThisProjectTransitivelyDependsOn(id));
+            }
+
+            preparationReceipt = await EnsureProjectsPreparedAsync(solution, owners, "pre-mutation", requireSuccess: true, cancellationToken);
+            (solution, compiledProjects, confidence, loadedRepository) = TryCaptureSemanticState(preparationReceipt);
+        }
+
         var documentsByPath = solution is null
             ? new Dictionary<string, DocumentId[]>(StringComparerForCurrentPlatform())
             : CreateDocumentsByPath(solution);
@@ -1172,7 +1529,8 @@ public sealed class SemanticEngine : ISemanticEngine
                     .OrderBy(project => project.Name, StringComparer.Ordinal))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var compilation = await RunNonCooperativeAsync<Compilation?>(
+                    var compilation = await RunPreparedOperationAsync<Compilation?>(
+                        preparationReceipt,
                         project.GetCompilationAsync,
                         cancellationToken);
                     if (compilation is null)
@@ -1187,6 +1545,7 @@ public sealed class SemanticEngine : ISemanticEngine
                         : ReadProjectInfo(project.FilePath).TargetFrameworks.FirstOrDefault() ?? string.Empty;
                     var baselineDiagnostics = await GetBaselineCompilationDiagnosticFingerprintsAsync(
                         solution,
+                        preparationReceipt,
                         project.Id,
                         repositoryPath,
                         cancellationToken);
@@ -1292,6 +1651,7 @@ public sealed class SemanticEngine : ISemanticEngine
             .ThenBy(diagnostic => diagnostic.Range?.StartColumn ?? 0)
             .ThenBy(diagnostic => diagnostic.Code, StringComparer.Ordinal)];
         var blockingCount = distinctDiagnostics.Count(diagnostic => diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error);
+        EnsurePreparedSolutionCurrent(preparationReceipt);
         return new PreMutationAnalysisResult
         {
             Decision = blockingCount > 0
@@ -1316,19 +1676,39 @@ public sealed class SemanticEngine : ISemanticEngine
     }
 
     /// <inheritdoc />
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        await _engineLifetime.CancelAsync();
+        await _transition.WaitAsync();
+        SemanticCompilationCoordinator? preparation;
         MSBuildWorkspace? workspace;
         lock (_gate)
         {
+            preparation = _preparation;
+            _preparation = null;
+            _initialPublication.TrySetCanceled();
             workspace = _workspace;
             _workspace = null;
             _solution = null;
             _compiledProjects = [];
         }
 
+        if (preparation is not null)
+        {
+            await preparation.DisposeAsync();
+        }
+
+#pragma warning disable VSTHRD003 // The engine owns its terminal warming observation.
+        await _warmObservation;
+#pragma warning restore VSTHRD003
         workspace?.Dispose();
-        return ValueTask.CompletedTask;
+        _preparationOwnerLifetime.Dispose();
+        _transition.Release();
     }
 
     /// <summary>Captures semantic readiness before deciding whether code_explore can return source.</summary>
@@ -1342,15 +1722,17 @@ public sealed class SemanticEngine : ISemanticEngine
                 _confidence,
                 _lastRequest?.RepositoryPath,
                 _lastRequest?.SolutionPath,
-                _generation);
+                _generation,
+                _solutionGeneration);
         }
     }
 
     /// <summary>Captures immutable Roslyn references for one fenced advanced semantic query.</summary>
-    internal AdvancedSemanticSnapshot CaptureAdvancedSnapshot()
+    internal AdvancedSemanticSnapshot CaptureAdvancedSnapshot(SemanticPreparationReceipt? preparedSolution = null)
     {
         lock (_gate)
         {
+            CheckPreparedSolution(preparedSolution);
             if (_confidence < SemanticConfidenceLevel.PartialCompilation
                 || _solution is null
                 || _lastRequest is null)
@@ -1374,15 +1756,17 @@ public sealed class SemanticEngine : ISemanticEngine
     {
         lock (_gate)
         {
-            return generation == _generation;
+            // Coverage promotion does not change immutable source identity. Source replacements reset the floor.
+            return generation >= _solutionGeneration && generation <= _generation;
         }
     }
 
     /// <summary>Captures immutable Roslyn references for one serialized semantic mutation turn.</summary>
-    internal SemanticMutationSnapshot CaptureMutationSnapshot()
+    internal SemanticMutationSnapshot CaptureMutationSnapshot(SemanticPreparationReceipt? preparedSolution = null)
     {
         lock (_gate)
         {
+            CheckPreparedSolution(preparedSolution);
             if (_confidence < SemanticConfidenceLevel.PartialCompilation
                 || _solution is null
                 || _lastRequest is null)
@@ -1495,10 +1879,11 @@ public sealed class SemanticEngine : ISemanticEngine
     }
 
     private (Solution? Solution, HashSet<ProjectId> CompiledProjects, SemanticConfidenceLevel Confidence, string RepositoryPath)
-        TryCaptureSemanticState()
+        TryCaptureSemanticState(SemanticPreparationReceipt? preparedSolution = null)
     {
         lock (_gate)
         {
+            CheckPreparedSolution(preparedSolution);
             return _solution is null || _lastRequest is null
                 ? (null, [], _confidence, string.Empty)
                 : (_solution, [.. _compiledProjects], _confidence, _lastRequest.RepositoryPath);
@@ -1507,6 +1892,7 @@ public sealed class SemanticEngine : ISemanticEngine
 
     private async Task<Dictionary<string, int>> GetBaselineCompilationDiagnosticFingerprintsAsync(
         Solution solution,
+        SemanticPreparationReceipt? preparationReceipt,
         ProjectId projectId,
         string repositoryPath,
         CancellationToken cancellationToken)
@@ -1517,7 +1903,8 @@ public sealed class SemanticEngine : ISemanticEngine
             return [];
         }
 
-        var baselineCompilation = await RunNonCooperativeAsync<Compilation?>(
+        var baselineCompilation = await RunPreparedOperationAsync<Compilation?>(
+            preparationReceipt,
             baselineProject.GetCompilationAsync,
             cancellationToken);
         if (baselineCompilation is null)
@@ -1999,10 +2386,11 @@ public sealed class SemanticEngine : ISemanticEngine
     }
 
     private (Solution Solution, HashSet<ProjectId> CompiledProjects, SemanticConfidenceLevel Confidence, string RepositoryPath)
-        CaptureSemanticState()
+        CaptureSemanticState(SemanticPreparationReceipt? preparedSolution = null)
     {
         lock (_gate)
         {
+            CheckPreparedSolution(preparedSolution);
             if (_confidence < SemanticConfidenceLevel.PartialCompilation || _solution is null || _lastRequest is null)
             {
                 throw new InvalidOperationException(
@@ -2032,7 +2420,7 @@ public sealed class SemanticEngine : ISemanticEngine
             .Select(path => Path.GetFullPath(path ?? string.Empty))];
     }
 
-    private async Task<Solution> RefreshChangedDocumentsAsync(
+    private static async Task<Solution> RefreshChangedDocumentsAsync(
         Solution solution,
         IReadOnlyList<string> changedFiles,
         string repositoryPath,
@@ -2122,17 +2510,7 @@ public sealed class SemanticEngine : ISemanticEngine
             }
         }
 
-        if (!ReferenceEquals(refreshed, solution))
-        {
-            lock (_gate)
-            {
-                if (ReferenceEquals(_solution, solution))
-                {
-                    _solution = refreshed;
-                }
-            }
-        }
-
+        // Diagnostic overlays do not publish source state. The refresh coordinator owns replacement generations.
         return refreshed;
     }
 
@@ -2193,24 +2571,52 @@ public sealed class SemanticEngine : ISemanticEngine
         IReadOnlyList<SemanticProjectInfo> projects,
         SemanticConfidenceLevel confidence,
         SemanticLoadRequest request,
+        long ownership,
         bool publishLoadCompleted,
         bool publishConfidenceChanged,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action? stateCommitted = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
         MSBuildWorkspace? previousWorkspace;
+        SemanticCompilationCoordinator? previousPreparation;
         SemanticConfidenceLevel previousConfidence;
-        lock (_gate)
+        await _preparationPublication.WaitAsync(cancellationToken);
+        try
         {
-            previousWorkspace = _workspace;
-            previousConfidence = _confidence;
-            _workspace = workspace;
-            _solution = solution;
-            _compiledProjects = compiledProjects;
-            _projects = projects;
-            _confidence = confidence;
-            _lastRequest = request;
-            _generation++;
+            lock (_gate)
+            {
+                if (ownership != _preparationOwnership)
+                {
+                    throw new InvalidOperationException("The semantic preparation owner changed before metadata publication.");
+                }
+
+                previousWorkspace = _workspace;
+                previousPreparation = _preparation;
+                previousPreparation?.Abort();
+                _preparation = null;
+                _pendingInitialResult = null;
+                _initialPublication.TrySetCanceled();
+                previousConfidence = _confidence;
+                _workspace = workspace;
+                _solution = solution;
+                _compiledProjects = compiledProjects;
+                _projects = projects;
+                _confidence = confidence;
+                _lastRequest = request;
+                _generation++;
+                _solutionGeneration = _generation;
+                stateCommitted?.Invoke();
+            }
+        }
+        finally
+        {
+            _preparationPublication.Release();
+        }
+
+        if (previousPreparation is not null)
+        {
+            await previousPreparation.DisposeAsync();
         }
 
         if (!ReferenceEquals(previousWorkspace, workspace))
@@ -2240,9 +2646,262 @@ public sealed class SemanticEngine : ISemanticEngine
         }
     }
 
+#pragma warning restore SA1202
+    private static void AddSlowProjectSample(
+        List<ProjectCompilationSample> samples,
+        string projectName,
+        TimeSpan duration)
+    {
+        samples.Add(new ProjectCompilationSample(projectName, duration));
+        samples.Sort(static (left, right) => right.Duration.CompareTo(left.Duration));
+        if (samples.Count > MaximumSlowProjectSamples)
+        {
+            samples.RemoveAt(samples.Count - 1);
+        }
+    }
+
+    private static string GetInformationalVersion(Assembly assembly)
+    {
+        return assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? assembly.GetName().Version?.ToString()
+            ?? "unknown";
+    }
+
+    private static string SanitizeProjectName(string projectName)
+    {
+        const int maximumLength = 64;
+        var length = Math.Min(projectName.Length, maximumLength);
+        var sanitized = new StringBuilder(length);
+        for (var index = 0; index < length; index++)
+        {
+            var character = projectName[index];
+            sanitized.Append(char.IsLetterOrDigit(character) || character is '.' or '-' or '_'
+                ? character
+                : '_');
+        }
+
+        return sanitized.ToString();
+    }
+
+    private static IReadOnlyList<string> ValidateAnalyzerReferences(
+        Project project,
+        HashSet<object> validatedReferences,
+        CancellationToken cancellationToken)
+    {
+        var failedReferences = new List<string>(MaximumSlowProjectSamples);
+        foreach (var reference in project.AnalyzerReferences)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!validatedReferences.Add(reference.Id))
+            {
+                continue;
+            }
+
+            var analyzerLoadFailed = false;
+            EventHandler<AnalyzerLoadFailureEventArgs>? loadFailureHandler = null;
+            if (reference is AnalyzerFileReference fileReference)
+            {
+                loadFailureHandler = (_, _) => analyzerLoadFailed = true;
+                fileReference.AnalyzerLoadFailed += loadFailureHandler;
+            }
+
+            try
+            {
+                var analyzers = reference.GetAnalyzersForAllLanguages();
+                var generators = reference.GetGeneratorsForAllLanguages();
+                if (analyzerLoadFailed)
+                {
+                    AddFailedAnalyzerReference(failedReferences, reference.Display);
+                }
+                else if (analyzers.IsEmpty && generators.IsEmpty)
+                {
+                    if (string.IsNullOrWhiteSpace(reference.FullPath)
+                        || !File.Exists(reference.FullPath))
+                    {
+                        AddFailedAnalyzerReference(failedReferences, reference.Display);
+                        continue;
+                    }
+
+                    _ = AssemblyName.GetAssemblyName(reference.FullPath);
+                }
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                AddFailedAnalyzerReference(failedReferences, reference.Display);
+            }
+            finally
+            {
+                if (reference is AnalyzerFileReference fileReferenceForCleanup
+                    && loadFailureHandler is not null)
+                {
+                    fileReferenceForCleanup.AnalyzerLoadFailed -= loadFailureHandler;
+                }
+            }
+        }
+
+        return failedReferences;
+    }
+
+    private static void AddFailedAnalyzerReference(List<string> failedReferences, string? display)
+    {
+        if (failedReferences.Count >= MaximumSlowProjectSamples)
+        {
+            return;
+        }
+
+        failedReferences.Add(SanitizeProjectName(Path.GetFileNameWithoutExtension(display ?? "unknown")));
+    }
+
+    private void LogSemanticToolchainVersionFacts()
+    {
+        if (Interlocked.Exchange(ref _versionFactsLogged, 1) != 0)
+        {
+            return;
+        }
+
+        var msBuildAssembly = Assembly.Load(new AssemblyName("Microsoft.Build"));
+        _logger.LogDebug(
+            "Semantic toolchain selected: SDK/MSBuild instance {InstanceVersion}; MSBuild {MSBuildVersion}; discovery {DiscoveryType}; Roslyn compiler {CompilerVersion}; Roslyn workspaces {WorkspacesVersion}",
+            _registeredMsBuildInstance?.Version.ToString() ?? "externally-registered",
+            GetInformationalVersion(msBuildAssembly),
+            _registeredMsBuildInstance?.DiscoveryType.ToString() ?? "external",
+            GetInformationalVersion(typeof(Compilation).Assembly),
+            GetInformationalVersion(typeof(MSBuildWorkspace).Assembly));
+    }
+
+    private void RecordSemanticLoadMeasurement(SemanticLoadMeasurementState measurement)
+    {
+        var totalDuration = Stopwatch.GetElapsedTime(measurement.TotalStarted);
+        var workingSetBytes = Environment.WorkingSet;
+        SemanticLoadMetrics.Record(
+            measurement.Mode,
+            measurement.Temperature,
+            measurement.Outcome,
+            measurement.Confidence,
+            totalDuration,
+            measurement.EvaluationDuration,
+            measurement.ConfinementDuration,
+            measurement.CompilationDuration,
+            measurement.ExpectedProjects,
+            measurement.LoadedProjects,
+            measurement.ExcludedProjects,
+            measurement.FailedProjects,
+            measurement.CompiledProjects,
+            measurement.WorkspaceFailureCount,
+            workingSetBytes);
+        _logger.LogInformation(
+            "Semantic load {Outcome}: mode {Mode}; temperature {Temperature}; total {TotalMs} ms; evaluation {EvaluationMs} ms; progress {ProgressOperations}; confinement {ConfinementMs} ms; compilation {CompilationMs} ms; projects expected {ExpectedProjects}, loaded {LoadedProjects}, excluded {ExcludedProjects}, failed {FailedProjects}, compiled {CompiledProjects}; workspace failures {WorkspaceFailures}; confidence {Confidence}; working set {WorkingSetBytes} bytes",
+            measurement.Outcome,
+            measurement.Mode,
+            measurement.Temperature,
+            totalDuration.TotalMilliseconds,
+            measurement.EvaluationDuration.TotalMilliseconds,
+            measurement.Progress.Summary,
+            measurement.ConfinementDuration.TotalMilliseconds,
+            measurement.CompilationDuration.TotalMilliseconds,
+            measurement.ExpectedProjects,
+            measurement.LoadedProjects,
+            measurement.ExcludedProjects,
+            measurement.FailedProjects,
+            measurement.CompiledProjects,
+            measurement.WorkspaceFailureCount,
+            measurement.Confidence,
+            workingSetBytes);
+        if (_logger.IsEnabled(LogLevel.Debug) && measurement.SlowProjectSamples.Count > 0)
+        {
+            var summary = string.Join(
+                ", ",
+                measurement.SlowProjectSamples.Select(sample =>
+                    $"{sample.ProjectName}={sample.Duration.TotalMilliseconds:F3}ms"));
+            _logger.LogDebug("Slowest semantic project compilations: {SlowProjects}", summary);
+        }
+    }
+
+    private sealed class SemanticLoadMeasurementState(string mode, string temperature)
+    {
+        private int _workspaceFailureCount;
+
+        public int CompiledProjects { get; set; }
+
+        public TimeSpan CompilationDuration { get; set; }
+
+        public SemanticConfidenceLevel Confidence { get; set; }
+
+        public TimeSpan ConfinementDuration { get; set; }
+
+        public int ExcludedProjects { get; set; }
+
+        public int ExpectedProjects { get; set; }
+
+        public int FailedProjects { get; set; }
+
+        public int LoadedProjects { get; set; }
+
+        public string Mode { get; } = mode;
+
+        public string Outcome { get; set; } = "failed";
+
+        public ProjectLoadProgressCollector Progress { get; } = new();
+
+        public List<ProjectCompilationSample> SlowProjectSamples { get; } =
+            new(MaximumSlowProjectSamples);
+
+        public string Temperature { get; } = temperature;
+
+        public long TotalStarted { get; } = Stopwatch.GetTimestamp();
+
+        public TimeSpan EvaluationDuration { get; set; }
+
+        public int WorkspaceFailureCount => Volatile.Read(ref _workspaceFailureCount);
+
+        public void EnsureWorkspaceFailure()
+        {
+            _ = Interlocked.CompareExchange(ref _workspaceFailureCount, 1, 0);
+        }
+
+        public void IncrementWorkspaceFailure()
+        {
+            _ = Interlocked.Increment(ref _workspaceFailureCount);
+        }
+    }
+
+    private sealed class ProjectLoadProgressCollector : IProgress<ProjectLoadProgress>
+    {
+        private readonly ConcurrentDictionary<ProjectLoadOperation, int> _operations = new();
+
+        public string Summary => string.Join(
+            ",",
+            _operations
+                .OrderBy(static pair => pair.Key)
+                .Select(static pair => $"{pair.Key}={pair.Value}"));
+
+        public void Report(ProjectLoadProgress value)
+        {
+            _operations.AddOrUpdate(value.Operation, 1, static (_, count) => count + 1);
+        }
+    }
+
+    private sealed record ProjectCompilationSample(string ProjectName, TimeSpan Duration);
+
+    private sealed class WorkspaceLease(MSBuildWorkspace workspace) : IDisposable
+    {
+        private MSBuildWorkspace? _workspace = workspace;
+
+        public void TransferOwnership()
+        {
+            _workspace = null;
+        }
+
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref _workspace, null)?.Dispose();
+        }
+    }
+
     private async Task<T> RunNonCooperativeAsync<T>(
         Func<CancellationToken, Task<T>> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<T>? abandonedResultCleanup = null)
     {
         using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
@@ -2261,7 +2920,8 @@ public sealed class SemanticEngine : ISemanticEngine
             {
                 try
                 {
-                    _ = await task;
+                    var abandonedResult = await task;
+                    abandonedResultCleanup?.Invoke(abandonedResult);
                 }
                 catch (OperationCanceledException)
                 {
@@ -2275,11 +2935,30 @@ public sealed class SemanticEngine : ISemanticEngine
             else
             {
                 _ = task.ContinueWith(
-                    faulted => _logger.LogWarning(
-                        faulted.Exception,
-                        "Abandoned semantic operation faulted after cancellation"),
+                    completedTask =>
+                    {
+                        if (completedTask.Status == TaskStatus.RanToCompletion)
+                        {
+                            try
+                            {
+                                abandonedResultCleanup?.Invoke(completedTask.Result);
+                            }
+                            catch (Exception exception)
+                            {
+                                _logger.LogWarning(
+                                    exception,
+                                    "Abandoned semantic operation cleanup failed after cancellation");
+                            }
+                        }
+                        else if (completedTask.IsFaulted)
+                        {
+                            _logger.LogWarning(
+                                completedTask.Exception,
+                                "Abandoned semantic operation faulted after cancellation");
+                        }
+                    },
                     CancellationToken.None,
-                    TaskContinuationOptions.OnlyOnFaulted,
+                    TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
             }
 

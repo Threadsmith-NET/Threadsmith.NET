@@ -55,7 +55,8 @@ public sealed class SemanticMutationEngine :
         SemanticMutationSnapshot snapshot;
         try
         {
-            snapshot = _engines.GetEngine(request.WorkspaceId).CaptureMutationSnapshot();
+            var preparedSolution = await _engines.GetEngine(request.WorkspaceId).EnsurePreparedAsync(null, "rename", requireSuccess: true, cancellationToken);
+            snapshot = _engines.GetEngine(request.WorkspaceId).CaptureMutationSnapshot(preparedSolution);
         }
         catch (InvalidOperationException exception)
         {
@@ -223,7 +224,8 @@ public sealed class SemanticMutationEngine :
         SemanticMutationSnapshot snapshot;
         try
         {
-            snapshot = _engines.GetEngine(request.WorkspaceId).CaptureMutationSnapshot();
+            var preparedSolution = await _engines.GetEngine(request.WorkspaceId).EnsurePreparedAsync(request.RelativePath, "syntax-replacement", requireSuccess: true, cancellationToken);
+            snapshot = _engines.GetEngine(request.WorkspaceId).CaptureMutationSnapshot(preparedSolution);
         }
         catch (InvalidOperationException exception)
         {

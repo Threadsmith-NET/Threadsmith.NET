@@ -23,6 +23,8 @@
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Scripting.Worker\Threadsmith.Scripting.Worker.csproj" />
+    <ProjectReference Include="..\Threadsmith.SemanticFixtures.Roslyn59\Threadsmith.SemanticFixtures.Roslyn59.csproj"
+                      ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\fixtures\model\*.sse"
@@ -35,4 +37,17 @@
           Link="fixtures\semantic\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <Target Name="CopySemanticFixtureAnalyzer" AfterTargets="Build">
+    <PropertyGroup>
+      <SemanticFixtureAnalyzerPath>$(MSBuildThisFileDirectory)..\Threadsmith.SemanticFixtures.Roslyn59\bin\$(Configuration)\netstandard2.0\Threadsmith.SemanticFixtures.Roslyn59.dll</SemanticFixtureAnalyzerPath>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(SemanticFixtureAnalyzerPath)')"
+           Text="The Roslyn 5.9 semantic fixture analyzer was not built." />
+    <Copy SourceFiles="$(SemanticFixtureAnalyzerPath)"
+          DestinationFolder="$(OutDir)fixtures\semantic\SmallDotNetSolution\Analyzers"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(SemanticFixtureAnalyzerPath)"
+          DestinationFolder="$(OutDir)plan117\analyzer-failure"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

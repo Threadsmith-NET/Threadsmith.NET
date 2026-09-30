@@ -107,6 +107,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.Models.Anthropi
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.AnthropicProvider.Tests", "..\tests\Threadsmith.AnthropicProvider.Tests\Threadsmith.AnthropicProvider.Tests.csproj", "{FA45CC76-1C36-4F11-841E-B03315BA4265}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.SemanticFixtures.Roslyn59", "..\tests\Threadsmith.SemanticFixtures.Roslyn59\Threadsmith.SemanticFixtures.Roslyn59.csproj", "{A1170000-0000-4000-8000-000000000117}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -729,6 +731,18 @@ Global
 		{FA45CC76-1C36-4F11-841E-B03315BA4265}.Release|x64.Build.0 = Release|Any CPU
 		{FA45CC76-1C36-4F11-841E-B03315BA4265}.Release|x86.ActiveCfg = Release|Any CPU
 		{FA45CC76-1C36-4F11-841E-B03315BA4265}.Release|x86.Build.0 = Release|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Debug|x64.Build.0 = Debug|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Debug|x86.Build.0 = Debug|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Release|x64.ActiveCfg = Release|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Release|x64.Build.0 = Release|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Release|x86.ActiveCfg = Release|Any CPU
+		{A1170000-0000-4000-8000-000000000117}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -759,5 +773,6 @@ Global
 		{15AD35BE-CDEC-4E32-818A-9943067A03C5} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 		{F1E7ACDA-BAE7-4A6D-9B1D-6D98AC874820} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 		{FA45CC76-1C36-4F11-841E-B03315BA4265} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
+		{A1170000-0000-4000-8000-000000000117} = {D6A6484D-5446-4B1C-994A-D25C0C25A9EC}
 	EndGlobalSection
 EndGlobal

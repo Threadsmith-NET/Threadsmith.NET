@@ -1,6 +1,6 @@
 # Plan 118 — Staged semantic readiness and bounded compilation warming
 
-**Status:** Planned  
+**Status:** Active — implemented and locally validated; native cross-platform and manual verification pending
 **Delivery track:** Maintenance — semantic startup performance, readiness coordination, and bounded resource use  
 **Prerequisites:** Completed Plan 117 with Roslyn 5.9/.NET 10.0.4xx compatibility closed and same-host load-phase measurements recorded; the existing semantic confidence contract; external semantic refresh; request-admission freshness; advanced semantic query and code-explore generation fencing; pre-mutation analysis; and frontend-neutral startup coordination.  
 **Related contracts:** [planning governance](planning-governance.md), [shared context §G](00-shared-context.md#g-implementation-document-template-and-agent-instructions), [Plan 06](plan-06-roslyn-msbuild-semantic-discovery.md), [Plan 74](plan-74-roslyn-based-pre-mutation-analysis.md), [Plan 81](plan-81-roslyn-code-explore-exact-anchors-and-source.md), [Plan 97](plan-97-external-semantic-refresh.md), [Plan 117](plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md), [semantic confidence](../architecture/semantic-confidence.md), [event catalog](../architecture/event-catalog.md), and [portable C# guardrails](../guardrails/portable-csharp-guardrails.md).
@@ -612,3 +612,149 @@ These are measurement-resolved implementation decisions, not permission to broad
 4. Can incremental solution replacement safely retain unaffected proven coverage under the exact Roslyn 5.9 behavior, or must the coordinator conservatively reprove more projects?
 5. Must explicit manual `/semantic_refresh` await full warm to preserve its current operator meaning? The default decision is yes unless current contract tracing proves terminal partial refresh is already accepted.
 6. Does progressive project inventory need a frontend-neutral retained status detail beyond aggregate confidence? The default decision is no per-project UI stream.
+
+## 18. Prerequisite Verification
+
+### 18.1 Completion gate (2026-09-29)
+
+Verification uses the active checkout on branch `plan-117-roslyn-dotnet-semantic-toolchain-upgrade`, at commit `227e5d97eb96b0b68b6c4ccdfa9ad15761073465`. SDK selection is `10.0.401`, and the existing confidence, external refresh/admission, advanced query generation fencing, pre-mutation analysis, and frontend-neutral startup paths are present.
+
+The initial prerequisite audit found Plan 117's recorded supported-CI closure pending. On 2026-09-29 the user confirmed that Plan 117 had passed its commit requirements and explicitly instructed implementation to proceed. That confirmation closes the prerequisite for this work; no waiver of Plan 118's own validation is inferred.
+
+At the initial audit, the latest observed hosted [build run 36456205940](https://github.com/Threadsmith-NET/Threadsmith.NET/actions/runs/36456205940) covered predecessor commit `f4abea387760dc1a52b0a34c8fe65e299dc84507`. This historical observation is superseded for prerequisite admission by the user's completion confirmation, and is not represented as validation of Plan 118.
+
+Implementation proceeded in the active checkout. The existing confidence, refresh/freshness, advanced-query generation fencing, mutation-analysis, interactive/headless admission, tool policy, and shared workspace ownership contracts are present and reused. Historical Plan 117 records remain unchanged.
+
+### 18.2 Performance decision gate
+
+Plan 117's same-host full-solution warm measurements report 15,225.3–15,291.3 ms total and 2,373.6–3,391.1 ms compilation preparation, approximately 16–22% of total load. Evaluation dominates, but those figures alone neither prove material staged-readiness improvement nor require abandoning it. Removing most of the compilation barrier could still save seconds; the frontier cost and first-query behavior must be measured before selecting production bounds.
+
+The existing opt-in production-path harness is `Plan117RoslynUpgradeTests.SemanticEngine_PerformanceEvidence_UsesProductionLoadPath`, selected with `THREADSMITH_PLAN117_PERFORMANCE_TARGET=fixture|app|solution` and `THREADSMITH_PLAN117_REPOSITORY_ROOT`. It performs three loads and records terminal phases, counts, confidence, and working set. At the prerequisite audit it did not record first-query latency, generated-document counts, CPU, or peak memory. Section 19 records the subsequent extension and measurements; the earlier run alone did not satisfy the P118-01 baseline.
+
+The current full-solution harness was rerun on the implementation host with the `solution` target: one test passed, none failed or skipped, in 1m 58s overall. This checks three production loads and their expected partial confidence. The invocation did not surface individual phase output, so its overall test duration is not reported as semantic-load or readiness timing and no new phase comparison is claimed.
+
+The upgraded solution record contains 52 solution entries and 63 materialized target-specific projects; the 51-project description in §2 reflects the earlier graph and must not be used as the measurement denominator.
+
+### 18.3 Independent prerequisite review
+
+A separate read-only reviewer traced the plan gates, implementation records, existing source paths, measurement harness, and hosted build provenance. The review independently confirmed the incomplete Plan 117 prerequisite, missing baseline dimensions, and unresolved performance decision gate. It found no additional missing architectural prerequisite in the confidence, freshness, generation-fencing, mutation-analysis, or startup ownership paths. This is a prerequisite assessment, not a clean implementation review.
+
+## 19. Implementation and Verification Record
+
+### 19.1 Implemented ownership and decisions
+
+The existing engine remains the only workspace/load owner. `SemanticCompilationCoordinator` owns one immutable evaluated solution, one shared terminal outcome per project, and one bounded priority worker set. Initial readiness, on-demand preparation, warming, incremental replacement, and complete reload use it. Foreground diagnostic/overlay compilations are distinct compiler operations admitted through those same workers, with a maximum of 32 queued operations; they do not introduce another semaphore or loader. Ordinary semantic model/symbol retrieval after proven preparation continues to use established Roslyn paths and caches.
+
+Production bounds are immutable **one worker and one readiness-frontier project**. The internal test/measurement constructor supports at most two workers and a frontier no larger than the worker bound. There is no repository configuration, processor-count fan-out, test/name exclusion rule, new durable event, or per-project UI stream. Direct selection prioritizes its selected project. Solution selection ranks transitive dependents, direct dependents, declared project order, and path. Failed candidates are terminal for their generation; initial readiness tries the next candidate until success or exhaustion.
+
+The lifecycle observer acknowledges the exact initial result only after successful confidence and load-completion publication. A failed or superseded publication aborts warming. Progressive confidence uses the existing refresh coordinator's authoritative workspace/session bindings, including aliases, without a second load completion. Last-owner detach captures and retires its preparation owner before asynchronous teardown, so overlapping rebind cannot retire the replacement owner. An ownership epoch and cancellation lifetime fence the entire old load/refresh operation, including evaluation, publication, and recovery. Registry disposal owns retained workspace disposal. Caller cancellation abandons its wait; generation/application cancellation fences shared work through the existing non-cooperative backstop.
+
+Coverage publication copies immutable inventory/compiled sets under an ordered publication gate. Coverage advancement can increase the public generation without invalidating unchanged source. A separate source-generation receipt checks both immutable solution identity and explicit invalidation, including invalidation that retains the same Roslyn solution. Code-explore evidence, continuations, back-references, and catalog supersession use that source generation; catalog identity still includes candidate project scope. Full/manual refresh awaits every project's terminal outcome. Incremental refresh reproves affected previously compiled projects and transitive dependents, retains unaffected proven coverage, then warms the remaining graph. Failed/cancelled replacement restores previous state and restarts preparation only while the operation still owns it; invalid input is rejected before stopping it.
+
+### 19.2 Consumer coverage audit
+
+| Existing consumer | Preparation and result contract |
+|---|---|
+| Project inventory, graph, text fallback, syntax-only pattern | Existing graph/text/syntax behavior; no compiler completeness inferred. |
+| Global symbols, references, implementations, call hierarchy, symbol impact, rename | Require all loaded projects to prepare successfully; recapture and fence the resulting snapshot. Unavailable coverage fails closed rather than proving absence. Hierarchy/impact internal timeouts include demand and root resolution, returning honest bounded partial evidence and a time-limit omission. |
+| Scoped diagnostics and pre-mutation analysis | Prepare requested/affected owners and their dependency closure; established affected-project analysis adds required dependents. Transient overlay/baseline/post-change compilations share worker admission and source receipts. |
+| Syntax replacement | Prepare the exact path's owner/dependency closure; retain existing mutation policy, generation checks, and approval/validation execution. |
+| Code exploration | Discover bounded ordinary path/syntax candidates before compiler work, including existing interpreted exact identifiers, prepare candidate dependency closure, and recapture. Caller-pinned exact symbols and exact-symbol queries await complete project coverage through the shared queue before resolving absence or unique ownership, including generated identities; unavailable required coverage fails closed. Discovery-generated anchors retain bounded omission behavior and explicit/inferred paths retain path resolution. Graph-only project/test impact summaries traverse the original evaluated graph. Omitted projects/generated declarations are disclosed, and candidate-specific catalog cache keys prevent competing coverage views from sharing a cache entry. |
+| Generated-code enumeration | Prepare relevant owner/dependency scope; an unowned virtual path prepares the graph before resolving generated documents. Filter to prepared owner scope and retain final generation fencing. |
+| Incremental/full/manual refresh | Existing dirty/applied admission remains authoritative. Incremental replacement retains safe unaffected coverage; full/manual attempts wait for all terminal preparation and can honestly remain partial/degraded. |
+| Interactive/headless/delegated callers | Existing frontend-neutral initial completion and partial admission are reused; normal tool waits include demand preparation. Shared workspace aliases use the same owner, publication, policy, refresh, and cancellation paths. |
+
+The prior diagnostics helper's silent `_solution` replacement was removed: refreshing document text for a diagnostic overlay is transient, while established refresh paths alone publish source replacement. This prevents a diagnostic request from detaching the warming coordinator. Generated-source truncation still suppresses unsupported virtual-file path continuations, as fixed before this work.
+
+### 19.3 Measurement method and environment
+
+Measurements ran in the active checkout on Windows 11 Pro `10.0.26200`, Intel Core i9-13980HX (32 logical processors), 63.7 GiB RAM and SSD storage, Debug configuration, .NET SDK `10.0.401`, runtime `10.0.12`, MSBuild `18.9.11`, and Roslyn `5.9.0`. No expensive builds or test suites ran concurrently with timed measurements.
+
+The existing production-load harness now accepts `fixture|app|solution|generator|broken`, records three loads per process, and measures immediate scoped diagnostics, terminal warm join, subsequent complete global search, generated-document counts, process CPU delta, working set, and process peak working set. `THREADSMITH_PLAN118_WORKERS=1|2` selects immutable test bounds. The generator fixture adds ten independent generator projects to the existing fixture; every generator-bearing materialized project must retain its single expected generated declaration. The broken fixture uses an unavailable analyzer and verifies scoped/global failure rather than absence.
+
+For a current complete-barrier comparison, `THREADSMITH_PLAN118_BASELINE=1` invokes the existing complete-refresh `LoadCoreAsync` mode on a fresh engine, with the same evaluated graph, confinement, coordinator, and query workload. It adds no alternate preparation implementation. Diagnostics now select an explicit fixed project in both modes: `Threadsmith.Core` for the full solution, the selected app for direct selection, and `Contracts` for small/generator/broken fixtures. The project identity is recorded with each observation. An earlier primed `RefreshFullAsync` run is not used for CPU/memory or controlled readiness comparisons because its seed loads changed process/cache exposure. Earlier fresh-mode runs picked the first compiled project, which differed between complete and staged loading; their resource comparisons are confounded and excluded from the controlled conclusion. Plan 117's historical 15.2-second total remains provenance only: current MSBuild evaluation alone takes about 23.7–25.0 seconds, so that historical total cannot establish a controlled speedup.
+
+`StagedCodeExplorePerformanceEvidenceUsesProductionQueryPath` measures an immediately submitted exact-path query through the registry and real advanced query service, and asserts useful source sections. The full-solution path is `src/Threadsmith.DotNet/SemanticEngine.cs`; direct app selection uses its own `src/Threadsmith.App/Program.cs`. The separate `MessageService` global search measures a complete absence search in this repository, not useful-result latency.
+
+Each matrix process separates its first cold process/SDK-host observation from warm repetitions 2 and 3. Warm medians below are the midpoint of those two repetitions. `warmMs` includes the immediately submitted scoped diagnostic workload and its queue contention before the terminal join; it is not a pure preparation-only completion timestamp. CPU excludes SDK/MSBuild child processes. Peak working set is the process-lifetime high-water across three repetitions, not an independent per-load peak or aggregate process-tree memory measurement. Ignored xUnit artifacts under `TestResults/plan118-performance-*.xml` retain raw observations locally.
+
+### 19.4 Performance matrix and chosen bounds
+
+| Target / worker-frontier bound | Materialized / prepared projects; generated documents | Warm median usable ms | Warm median warm-join ms | Warm usable range ms | Initial to terminal confidence |
+|---|---|---:|---:|---:|---|
+| Small fixture / 1–1 | 2 / 2; 1 | 1,768.3 | 1,866.6 | 1,737.9–1,798.7 | Partial → Full |
+| Small fixture / 2–2 | 2 / 2; 1 | 1,757.8 | 1,818.8 | 1,720.3–1,795.2 | Partial → Full |
+| Direct app / 1–1 | 1 / 1; 0 | 10,035.5 | 10,927.4 | 10,006.9–10,064.1 | Full → Full |
+| Direct app / 2–2 | 1 / 1; 0 | 10,106.2 | 11,011.2 | 10,019.2–10,193.1 | Full → Full |
+| Full solution / 1–1 | 63 / 63; 5 | 24,520.2 | 28,332.2 | 24,483.8–24,556.6 | Partial → Partial |
+| Full solution / 2–2 | 63 / 63; 5 | 24,994.8 | 28,032.5 | 24,941.8–25,047.9 | Partial → Partial |
+| Generator fixture / 1–1 | 13 / 13; 12 | 4,138.7 | 4,510.6 | 4,071.9–4,205.5 | Partial → Full |
+| Generator fixture / 2–2 | 13 / 13; 12 | 4,109.2 | 4,300.0 | 4,080.2–4,138.1 | Partial → Full |
+| Broken fixture / 1–1 | 3 / 1; 0 | 2,040.2 | 2,040.7 | 2,016.3–2,064.1 | Partial → Partial |
+
+The full solution retains honest partial confidence despite all 63 loaded projects preparing: 25 pre-existing workspace failures refer to disallowed SDK-generated files outside the repository. They were not suppressed to produce an artificial full-confidence timing. Direct app selection materializes one project using existing metadata-reference preference; it remains an authoritative narrow selection rather than a separate engine.
+
+First cold usable/warm-join observations for one worker were 5,638.6/7,025.2 ms (small), 13,256.9/15,456.5 ms (app), 28,320.8/36,371.7 ms (solution), 7,454.9/9,490.8 ms (generator), and 6,093.1/6,112.1 ms (broken). Corresponding two-worker observations were 4,367.8/5,489.1, 13,192.7/15,364.6, 28,336.1/33,676.3, and 7,248.2/8,520.0 ms for small/app/solution/generator.
+
+In the initial staged-only matrix, two workers did not improve full-solution usable readiness and improved the warm-join median by only 299.7 ms (1.1%). Its observed warm CPU median was 29,101.6 versus 26,437.5 ms (10.1% more), and the final cumulative process peak was 831,741,952 versus 823,943,168 bytes. Those diagnostic targets were selected from initial compiled coverage, so the observations inform conservative tuning without proving controlled resource equivalence. Small and generator fixtures showed modest terminal gains, with no missing generated documents. The fixed-project comparison below resolves the resource decision.
+
+The final fixed-`Threadsmith.Core` comparison ran each mode in a fresh process with three loads and the identical diagnostic/global/generated-document workload:
+
+| Mode | First cold usable / warm-join ms | Warm usable median (range) ms | Warm-join median (range) ms | Warm CPU median (range) ms | Final cumulative peak bytes |
+|---|---:|---:|---:|---:|---:|
+| Complete barrier, 1–1 | 35,804.9 / 37,687.2 | 28,081.1 (27,983.0–28,179.1) | 28,895.8 (28,815.9–28,975.7) | 25,765.6 (23,406.2–28,125.0) | 795,537,408 |
+| Staged, 1–1 | 28,232.8 / 36,475.3 | 24,983.3 (24,947.7–25,018.8) | 28,754.5 (28,470.1–29,038.8) | 25,836.0 (23,250.0–28,421.9) | 789,213,184 |
+| Staged, 2–2 | 28,575.8 / 33,850.5 | 24,987.1 (24,420.4–25,553.7) | 27,855.3 (26,622.5–29,088.1) | 28,703.2 (27,062.5–30,343.8) | 849,457,152 |
+
+One worker made usable readiness **3,097.8 ms (11.0%) earlier** than the current complete barrier on warm repetitions, with non-overlapping readiness ranges. Its warm-join median was 141.3 ms (0.5%) lower; process CPU was 0.3% higher and cumulative peak 0.8% lower. This resolves the earlier confounded CPU/peak observations without asserting a universal memory or performance guarantee. Both modes retained 63 prepared projects and five generated documents at honest partial confidence.
+
+Two workers had essentially identical usable-readiness median to one worker (3.8 ms later), a 899.2 ms (3.1%) lower warm-join median, 11.1% more process CPU, and 7.6% higher cumulative peak. This balance selects the conservative production **1–1** bound. Maximum admitted worker concurrency was exactly one/two respectively; warm receipts reported 63 successes, no project failures, two/three duplicate joins, and zero demand promotions for the already-prepared Core diagnostic target. Deterministic tests separately exercise missing-project promotion and concurrent waiter deduplication; telemetry records terminal queue/outcome counts without a durable event per project.
+
+| Immediate useful exact-path query | First observation query / selection-to-result ms | Warm query median (range) ms | Warm selection-to-result median (range) ms |
+|---|---:|---:|---:|
+| Full solution, staged | 1,540.3 / 29,527.4 | 422.5 (253.5–591.4) | 24,896.6 (24,633.3–25,159.9) |
+| Full solution, complete barrier | 4,039.4 / 31,033.3 | 87.7 (86.3–89.0) | 27,527.3 (27,208.5–27,846.0) |
+| Direct app, staged | 309.6 / 10,856.3 | 5.1 (4.4–5.8) | 9,954.5 (9,923.6–9,985.3) |
+
+Every query produced a source section. Staged full-solution query time includes remaining candidate preparation, so the post-readiness query interval is longer than complete mode; selection-to-useful-result was still 2,630.7 ms (9.6%) earlier on warm repetitions. Query benchmarks ran separately from the load matrix; the complete-query and direct-app first observations followed other measurements within their processes and are not independent cold SDK-host starts. The small fixture's three useful-query observations were 4,619.2, 39.4, and 54.6 ms. The broken fixture remained partial with only one of three projects prepared, reached terminal outcomes without retries, and rejected incomplete scoped/global queries.
+
+### 19.5 Adversarial review and remaining evidence
+
+Independent read-only implementation reviews traced actual lifecycle, binding, query, diagnostics, mutation, refresh, and disposal paths outside the diff. Valid findings were corrected and re-reviewed: foreground overlays competing with warming capacity; shared-session confidence fan-out; last-owner detach; failed confidence publication recovery; transient diagnostic source replacement; invalidation receipts; cancelled replacement recovery; reused-alias publication cancellation; exact symbol/filename candidate coverage; candidate-specific catalog caching; cancellation dropping pending invalidations before publication ownership; old teardown retiring a replacement owner; and exact-symbol collisions producing false absence from omitted candidates. The invalidation regression blocks the real warm event, cancels the waiter, proves shared preparation remains usable, and then applies the retained invalidation successfully. Overlapping unbind/rebind tests capture the retired owner, and blocked real-generator cases exercise cancellation/retirement during load and refresh plus ordinary, qualified, and generated exact-identity collisions. The final production-source review found no remaining concrete defect.
+
+The independent native-tool suite exposed additional integration regressions beyond the focused coordinator suite. Corrections preserve unchanged source back-references/continuations across warming, retain the evaluated dependency graph for compact project/test impact, distinguish caller-pinned exact anchors from discovery-generated anchors, catch internal expiry during demand/root/projection, and retain interpreted exact-identifier owners in mixed prose. Lexical hints alone neither force whole-graph preparation nor add syntax scans to explicit and query-only paths. Deterministic blocked-generator tests prove coverage advances while an existing cursor remains replayable; explicit invalidation advances the source epoch. The affected native-tool regressions and the full native-tool project passed with their existing behavior assertions.
+
+The fresh-engine complete-mode baseline was independently reviewed as reuse of the existing load/coordinator path. Review identified the timing/CPU/peak-memory reporting limits recorded above and prompted per-project generator assertions rather than relying on an aggregate output count. Final build/test and evidence review records follow below.
+
+Source tracing confirms that `InteractionCoordinator` waits for initial `SemanticLoadCompleted`, while `HeadlessShell` admits requests at `PartialCompilation`. Load/query measurements do not measure actual composer responsiveness, headless process output/exit, real-terminal teardown, or native Linux/macOS behavior. MTP-275 is an executable procedure, not evidence that those manual cases ran. These areas remain unassessed locally and must not be inferred from source review or cross-publishing.
+
+### 19.6 Final local gates (2026-09-29)
+
+These gates used the active checkout on branch `plan-117-roslyn-dotnet-semantic-toolchain-upgrade` before the follow-up correction in §19.7; the implementation remains uncommitted above prerequisite commit `227e5d97eb96b0b68b6c4ccdfa9ad15761073465`.
+
+| Gate | Final result |
+|---|---|
+| Solution restore and Debug build | Passed; zero build warnings/errors. |
+| Affected semantic concurrency/cancellation suites, three consecutive runs | Each passed: 194 succeeded, 2 opt-in measurement tests skipped, 0 failed (196 total). Artifacts: `TestResults/plan118-final-gate-concurrency-1.xml` through `-3.xml`. |
+| Independent mutation project | 105 succeeded, 0 skipped/failed. |
+| Independent native-tool project | 160 succeeded, 1 opt-in large-source test skipped, 0 failed. |
+| Explicit large-source boundary | The separately enabled above-one-MiB source probe passed, 1 succeeded, 0 skipped/failed. |
+| Full solution, four parallel test modules | Passed: 3,637 succeeded, 31 skipped, 0 failed (3,668 total across 25 modules), 4m 44s. Includes architecture, refresh, mutation, validation, frontend/headless, and shared-agent regressions. Log: `TestResults/plan118-full-solution.log`. |
+| Generator correctness after stronger assertions | One- and two-worker production-harness runs passed: all 13 projects prepared, 12 generated documents, every generator-bearing project retained its single expected declaration. |
+| Release contracts / packaged source documentation | All release contracts passed, including prompt/legal payload contracts for all six supported RIDs and documentation link closure. |
+| Actual local publish smoke | Debug framework-dependent application publish passed; deployed prompt payload validation and semantic build-host/worker dependency presence checks passed; published application `--help` exited successfully. This is not a native release matrix or installed-package runtime test. |
+| Formatting and analyzers | Standard changed-file formatting and whitespace verification passed. Info-level analyzer verification of the new coordinator/preparation code, lifecycle owner, and coordinator tests passed. The broader affected-file info scan also reported pre-existing suggestions on unrelated lines; those were not suppressed or represented as a clean whole-file info scan. |
+| Planning hygiene | Three governance searches returned no prohibited bookkeeping matches; `git diff --check` passed. |
+| Independent adversarial review | Two independent read-only implementation reviewers found valid defects, reviewed corrections through real entry points, and ended with no remaining concrete production finding. A separate final documentation/evidence review was clean. |
+
+The repeated and full runs enabled the locally installed older SDK selection case with `THREADSMITH_PLAN117_OLDER_SDK_VERSION=10.0.303`. Full-suite skips are retained opt-in live-provider/MCP/script/model/measurement/stress cases and unavailable filesystem cases; they are not counted as successes. The load/query measurement opt-ins and large-source boundary were executed separately as recorded above.
+
+Local implementation, measured-bound selection, automated gates, and source/evidence review are finished. Native Linux/macOS execution, supported hosted CI for this uncommitted change, and MTP-275 real-terminal/headless procedure remain pending. The plan therefore remains Active rather than declaring those acceptance areas complete.
+
+### 19.7 Reused-session publication ordering correction (2026-09-30)
+
+A subsequent review identified that a reused session could capture partial confidence before warming and publish it after the final promotion. Reused lifecycle publication now completes refresh admission first, then captures current confidence and publishes both lifecycle events under the engine's existing preparation publication semaphore. Binding lifetime and observer cancellation continue to fence obsolete sessions. No additional confidence store or projection-specific ordering mechanism was introduced.
+
+The deterministic regression exercises the real observer, refresh coordinator, registry, and engine for both reuse-first and warm-first ordering. It blocks the reused lifecycle pair, proves warming cannot pass the same publication boundary, and checks the exact confidence sequence and single completion. Both cases passed. Independent adversarial source review of the fix found no actionable issue; that reviewer did not independently execute runtime tests.
+
+Follow-up validation passed: Debug solution build with zero warnings/errors; standard formatting verification for the four affected C# files; packaged source documentation validation; and three consecutive affected semantic suite runs, each with 196 succeeded, two opt-in measurements skipped, and zero failed (198 total). Artifacts are `TestResults/plan118-reused-publication-regression.xml` and `TestResults/plan118-reused-publication-concurrency-1.xml` through `-3.xml`. These runs enabled the installed older SDK case as in §19.6. The full solution test suite and publish smoke were not repeated for this focused correction; their earlier evidence remains in §19.6. Native, hosted-CI, and manual verification remain pending.

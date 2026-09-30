@@ -2826,10 +2826,11 @@ public static partial class Milestone5Tests
             repository.Root,
             repository.PathOf("SmallDotNetSolution.sln"),
             RepositoryTrustLevel.TrustedBuild));
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, load.Confidence);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
         var symbol = Assert.Single(
             await engines.FindSymbolsAsync(repository.WorkspaceId, "IService"),
-            item => item.Symbol.DisplayName.EndsWith("IService", StringComparison.Ordinal));
+            item => item.Symbol.DisplayName.EndsWith("IService", StringComparison.Ordinal)
+                && item.Location.ProjectName.EndsWith("(net10.0)", StringComparison.Ordinal));
         var semanticMutations = new SemanticMutationEngine(engines);
 
         var rename = await semanticMutations.RenameSymbolAsync(new RenameSymbolMutationRequest
@@ -3909,7 +3910,23 @@ public static partial class Milestone5Tests
                     continue;
                 }
 
-                files[relativePath] = await File.ReadAllTextAsync(sourcePath);
+                if (relativePath.Equals(
+                    "Analyzers/Threadsmith.SemanticFixtures.Roslyn59.dll",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var content = await File.ReadAllTextAsync(sourcePath);
+                if (relativePath.Equals("Contracts/Contracts.csproj", StringComparison.Ordinal))
+                {
+                    const string analyzerReference = "    <Analyzer Include=\"..\\Analyzers\\Threadsmith.SemanticFixtures.Roslyn59.dll\" />";
+                    content = content
+                        .Replace(analyzerReference + "\r\n", string.Empty, StringComparison.Ordinal)
+                        .Replace(analyzerReference + "\n", string.Empty, StringComparison.Ordinal);
+                }
+
+                files[relativePath] = content;
             }
 
             return await CreateAsync(files);

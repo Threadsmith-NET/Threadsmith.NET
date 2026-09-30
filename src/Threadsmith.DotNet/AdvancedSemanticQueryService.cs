@@ -271,17 +271,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
         var engine = _registry.GetEngine(workspaceId);
-        var snapshot = engine.CaptureAdvancedSnapshot();
-        var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
-        var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
+        var snapshot = engine.CaptureAdvancedSnapshot();
         var nodes = new Dictionary<string, CallHierarchyNode>(StringComparer.Ordinal);
         var edges = new List<CallHierarchyEdge>();
         var pending = new Queue<(ISymbol Symbol, int Depth)>();
         var expanded = new HashSet<string>(StringComparer.Ordinal);
-
-        AddNode(nodes, root, 0, snapshot, projection);
-        pending.Enqueue((root, 0));
 
         var depthReached = false;
         var nodeReached = false;
@@ -290,6 +285,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         try
         {
+            var preparedSolution = await engine.EnsurePreparedAsync(null, "call-hierarchy", requireSuccess: true, timeout.Token);
+            snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
+            var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, timeout.Token);
+            var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
+            AddNode(nodes, root, 0, snapshot, projection);
+            pending.Enqueue((root, 0));
             while (pending.Count > 0)
             {
                 timeout.Token.ThrowIfCancellationRequested();
@@ -416,15 +417,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
         var engine = _registry.GetEngine(workspaceId);
-        var snapshot = engine.CaptureAdvancedSnapshot();
-        var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
-        var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
-        var rootIdentity = CreateIdentity(root);
-        var nodes = new Dictionary<string, ImpactNode>(StringComparer.Ordinal)
-        {
-            [rootIdentity.Id] = new(rootIdentity.Id, rootIdentity.DisplayName, ImpactKind.RootSymbol, null, null),
-        };
+        var snapshot = engine.CaptureAdvancedSnapshot();
+        var nodes = new Dictionary<string, ImpactNode>(StringComparer.Ordinal);
         var edges = new List<ImpactEdge>();
         var omissions = new List<string>();
         var depthReached = false;
@@ -434,6 +429,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         try
         {
+            var preparedSolution = await engine.EnsurePreparedAsync(null, "symbol-impact", requireSuccess: true, timeout.Token);
+            snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
+            var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, timeout.Token);
+            var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
+            var rootIdentity = CreateIdentity(root);
+            nodes.Add(rootIdentity.Id, new(rootIdentity.Id, rootIdentity.DisplayName, ImpactKind.RootSymbol, null, null));
             var references = await SymbolFinder.FindReferencesAsync(root, snapshot.Solution, timeout.Token);
             foreach (var reference in references.SelectMany(item => item.Locations))
             {
@@ -711,14 +712,23 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         var engine = _registry.GetEngine(workspaceId);
-        var snapshot = engine.CaptureAdvancedSnapshot();
+        var preparedSolution = await engine.EnsurePreparedAsync(request.Path, "generated-code", requireSuccess: true, cancellationToken);
+        var snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
         var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
         var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
+        var ordinaryScope = normalizedScope is not null && snapshot.Solution.Projects.Any(project => IsInScope(project.FilePath, normalizedScope)
+            || project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope)));
         var documents = new List<GeneratedDocumentInfo>();
         var truncated = false;
         foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!snapshot.CompiledProjects.Contains(project.Id) || (ordinaryScope && !IsInScope(project.FilePath, normalizedScope)
+                && !project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope))))
+            {
+                continue;
+            }
+
             var projectFileScoped = normalizedScope is not null
                 && project.FilePath is not null
                 && Path.GetFullPath(project.FilePath).Equals(normalizedScope, PathComparison);
@@ -811,6 +821,26 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 unavailableBudget);
         }
 
+        var admittedSolution = readiness.Solution;
+        var admittedGeneration = readiness.Generation;
+        IReadOnlySet<ProjectId> candidateProjects;
+        try
+        {
+            candidateProjects = await PrepareCodeExploreCandidatesAsync(engine, readiness, request, sourceReader, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            readiness = engine.CaptureCodeExploreReadinessSnapshot();
+            request = ApplyCodeExploreAdaptiveDefaults(request, CreateUnknownCodeExploreRepositoryScale(request.AssociatedArtifactPathAnchors.Count), out var timedOutBudget);
+            return CreateUnavailableCodeExploreResult(readiness, request, queryInterpretation, CreateInitialTimeoutCodeExploreAvailability(readiness), timedOutBudget);
+        }
+
+        readiness = engine.CaptureCodeExploreReadinessSnapshot();
+        if (!ReferenceEquals(admittedSolution, readiness.Solution) || !engine.IsCurrentGeneration(admittedGeneration))
+        {
+            throw new InvalidOperationException("The semantic solution changed during candidate preparation; retry code exploration.");
+        }
+
         var solution = readiness.Solution
             ?? throw new InvalidOperationException("Code exploration requires a captured semantic solution.");
         var repositoryPath = readiness.RepositoryPath
@@ -818,12 +848,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var workspacePath = readiness.WorkspacePath
             ?? throw new InvalidOperationException("Code exploration requires an opened project or solution path.");
         var snapshot = new AdvancedSemanticSnapshot(
-            solution,
+            RestrictCodeExploreSolution(solution, candidateProjects, readiness.CompiledProjects),
             readiness.CompiledProjects,
             readiness.Confidence,
             repositoryPath,
             workspacePath,
-            readiness.Generation);
+            readiness.SourceGeneration);
         CodeExploreRepositoryScale repositoryScale;
         try
         {
@@ -852,12 +882,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         request = ApplyCodeExploreAdaptiveDefaults(request, repositoryScale, out var adaptiveBudget);
         var anchors = BuildCodeExploreAnchors(request, queryInterpretation).ToList();
+        var requiredSymbolAnchors = anchors.Where(anchor => !IsCodeExplorePathAnchor(anchor))
+            .Select(anchor => (anchor.Kind, anchor.Value))
+            .ToHashSet();
         var omittedNamedFiles = request.PathAnchors.Count + request.SymbolIds.Count + request.ExactSymbolAnchors.Count == 0
             ? Math.Max(0, queryInterpretation.PathLikeSpans.Count - anchors.Count)
             : 0;
         var resolutions = new List<CodeExploreAnchorResolution>();
         var candidates = new List<CodeExploreSectionCandidate>();
         var omissions = new List<string>();
+        if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count)
+        {
+            omissions.Add(ModelVisibleStructuredFact.Exact("Code exploration used bounded candidate project coverage; other projects and their generated declarations were omitted."));
+        }
+
         if (omittedNamedFiles > 0)
         {
             omissions.Add(ModelVisibleStructuredFact.Exact(
@@ -931,7 +969,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     continue;
                 }
 
-                if (anchor.Kind == CodeExploreAnchorKind.Path || QueryLooksLikePath(anchor.Value))
+                if (IsCodeExplorePathAnchor(anchor))
                 {
                     var pathResult = await ResolveCodeExplorePathAsync(
                         snapshot,
@@ -956,6 +994,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     candidates,
                     timeout.Token);
                 alternativesCapped |= result.AlternativesCapped;
+            }
+
+            if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
+                && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
+                    && resolution.Outcome == CodeExploreResolutionOutcome.NotFound))
+            {
+                throw new InvalidOperationException("Exact symbol absence cannot be established while semantic candidate projects are omitted; retry after preparation or supply an owning path.");
+            }
+
+            // A retained match cannot prove uniqueness: omitted ordinary or generated declarations may share its anchor.
+            if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
+                && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
+                    && resolution.Outcome == CodeExploreResolutionOutcome.Resolved))
+            {
+                throw new InvalidOperationException("Exact symbol ownership cannot be established while semantic candidate projects are omitted; retry after preparation.");
             }
 
             for (var companionIndex = 0; companionIndex < naturalLanguageSourceCompanions.Count; companionIndex++)
@@ -1033,6 +1086,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 {
                     blastRadius = await BuildCodeExploreBlastRadiusAsync(
                         snapshot,
+                        solution,
                         projection,
                         sourceReader,
                         request,
@@ -1529,6 +1583,136 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         };
     }
 
+    /// <summary>Discovers bounded syntax/path ownership without preparing compilations or generated documents.</summary>
+    internal async Task<IReadOnlySet<ProjectId>> DiscoverCodeExploreCandidatesAsync(
+        CodeExploreReadinessSnapshot readiness,
+        CodeExploreRequest request,
+        ICodeExploreSourceReader sourceReader,
+        CancellationToken cancellationToken)
+    {
+        var solution = readiness.Solution ?? throw new InvalidOperationException("Code exploration requires a solution.");
+        var repository = readiness.RepositoryPath ?? throw new InvalidOperationException("Code exploration requires a repository.");
+        if (readiness.CompiledProjects.Count == solution.ProjectIds.Count)
+        {
+            return readiness.CompiledProjects;
+        }
+
+        var interpretation = InterpretCodeExploreQuery(request.Query);
+        var anchors = BuildCodeExploreAnchors(request, interpretation);
+        var candidates = new HashSet<ProjectId>();
+        string[] symbols = anchors.Count == 0
+            ? [.. interpretation.ExactIdentifiers.Concat(interpretation.QualifiedNames).Distinct(StringComparer.Ordinal)]
+            : [.. anchors.Where(anchor => !IsCodeExplorePathAnchor(anchor)).Select(anchor => anchor.Value)];
+        foreach (var anchor in anchors.Where(IsCodeExplorePathAnchor))
+        {
+            string? path;
+            try
+            {
+                path = NormalizeScope(anchor.Value, repository);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            if (path is not null && sourceReader.IsPathAllowed(path))
+            {
+                candidates.UnionWith(FindDocumentsByPath(solution, path).Select(document => document.Project.Id));
+            }
+
+            if (!anchor.Value.Contains('/') && !anchor.Value.Contains('\\'))
+            {
+                candidates.UnionWith(solution.Projects.Where(project => project.Documents.Any(document => document.FilePath is { } documentPath
+                    && Path.GetFileName(documentPath).Equals(Path.GetFileName(path), PathComparison)
+                    && sourceReader.IsPathAllowed(documentPath))).Select(project => project.Id));
+            }
+        }
+
+        if (symbols.Length > 0 || anchors.Count == 0)
+        {
+            var scores = new Dictionary<ProjectId, int>();
+            var inspected = 0;
+            var maximumDocuments = Math.Max(64, Math.Min(4096, _options.MaximumNaturalLanguageCandidateSummaries * 16));
+            foreach (var project in solution.Projects)
+            {
+                var score = 0;
+                foreach (var document in project.Documents)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (inspected++ >= maximumDocuments)
+                    {
+                        break;
+                    }
+
+                    if (document.FilePath is not { } path || !sourceReader.IsPathAllowed(path))
+                    {
+                        continue;
+                    }
+
+                    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Path.GetFileNameWithoutExtension(path) };
+                    var root = await document.GetSyntaxRootAsync(cancellationToken);
+                    if (root is not null)
+                    {
+                        foreach (var declaration in EnumerateCodeExploreCatalogDeclarations(root))
+                        {
+                            foreach (var token in declaration.ChildTokens().Where(token => token.IsKind(SyntaxKind.IdentifierToken)))
+                            {
+                                names.Add(token.ValueText);
+                            }
+                        }
+                    }
+
+                    if (symbols.Any(symbol => names.Contains(ExtractSymbolSearchTerm(LooksLikeDocumentationId(symbol) ? symbol[2..] : symbol))))
+                    {
+                        score += 1000;
+                    }
+
+                    var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var name in names)
+                    {
+                        AddCodeExploreTerms(terms, new HashSet<string>(StringComparer.OrdinalIgnoreCase), name);
+                    }
+
+                    score += GetCodeExploreTermCoverage(terms.ToArray(), interpretation.Terms).Length;
+                }
+
+                if (score > 0)
+                {
+                    scores[project.Id] = score;
+                }
+
+                if (inspected >= maximumDocuments)
+                {
+                    break;
+                }
+            }
+
+            var declaredOrder = solution.ProjectIds.Select((id, index) => (id, index)).ToDictionary(item => item.id, item => item.index);
+            candidates.UnionWith(scores.OrderByDescending(pair => pair.Value).ThenBy(pair => declaredOrder[pair.Key])
+                .Take(Math.Max(1, request.Limits.MaximumAnchors)).Select(pair => pair.Key));
+
+            // Generated declarations have no ordinary syntax candidate. Exact absence needs the remaining scope.
+            if (anchors.Any(anchor => !IsCodeExplorePathAnchor(anchor))
+                && scores.Count == 0)
+            {
+                candidates.UnionWith(solution.ProjectIds);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            candidates.UnionWith(readiness.CompiledProjects);
+        }
+
+        var graph = solution.GetProjectDependencyGraph();
+        foreach (var id in candidates.ToArray())
+        {
+            candidates.UnionWith(graph.GetProjectsThatThisProjectTransitivelyDependsOn(id));
+        }
+
+        return candidates;
+    }
+
     private CodeExploreAvailability? CreateInitialCodeExploreAvailability(
         CodeExploreReadinessSnapshot snapshot)
     {
@@ -1626,7 +1810,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             null,
             adaptiveBudget.PresentationVerbosity);
         return new CodeExploreResult(
-            snapshot.Generation,
+            snapshot.SourceGeneration,
             snapshot.Confidence,
             [],
             [],
@@ -4813,7 +4997,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         SourceText? PreloadedText,
         string? PreloadedFileSha256,
         CodeExploreSourceImportance Importance = CodeExploreSourceImportance.Supporting,
-        bool IsFlowSpine = false)
+        bool IsFlowSpine = false,
+        bool IsSourceGenerated = false)
     {
         /// <summary>Gets additional declaration identities represented by a clustered source span.</summary>
         public IReadOnlyList<SemanticSymbolIdentity> AdditionalIdentities { get; init; } = [];
@@ -4969,7 +5154,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         int SourceCharacters,
         IReadOnlyList<CodeExploreContinuationTarget> ContinuationTargets,
         SourceText? Text = null,
-        TextSpan? Span = null);
+        TextSpan? Span = null,
+        bool IsSourceGenerated = false);
 
     private enum CodeExploreArtifactCandidateAdmission
     {
@@ -6506,6 +6692,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private async Task<CodeExploreBlastRadius> BuildCodeExploreBlastRadiusAsync(
         AdvancedSemanticSnapshot snapshot,
+        Solution evaluatedSolution,
         SemanticSourceProjection projection,
         ICodeExploreSourceReader sourceReader,
         CodeExploreRequest request,
@@ -6597,6 +6784,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
             var projects = FindDependentProjects(
                 snapshot,
+                evaluatedSolution,
                 anchor.Symbol,
                 request.Limits.MaximumFlowDepth,
                 cancellationToken);
@@ -6726,6 +6914,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static IReadOnlyList<Project> FindDependentProjects(
         AdvancedSemanticSnapshot snapshot,
+        Solution evaluatedSolution,
         ISymbol symbol,
         int maximumDepth,
         CancellationToken cancellationToken)
@@ -6746,7 +6935,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        var projects = snapshot.Solution.Projects
+        var projects = evaluatedSolution.Projects
             .OrderBy(project => project.Name, StringComparer.Ordinal)
             .ToArray();
         var seen = new HashSet<ProjectId>(rootProjectIds);
@@ -7406,7 +7595,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         SemanticSourceProjection projection,
         CancellationToken cancellationToken)
     {
-        var key = CreateCodeExploreCatalogKey(workspaceId, snapshot.Generation);
+        var key = CreateCodeExploreCatalogKey(workspaceId, snapshot);
         CodeExploreDeclarationCatalog? cachedCatalog = null;
         SharedCodeExploreBuild<CodeExploreDeclarationCatalog>? build = null;
         List<ISharedCodeExploreBuild> supersededBuilds = [];
@@ -7606,6 +7795,45 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             _naturalLanguageGraphNeighbors.Remove(graphKey);
         }
+    }
+
+    private async Task<IReadOnlySet<ProjectId>> PrepareCodeExploreCandidatesAsync(
+        SemanticEngine engine,
+        CodeExploreReadinessSnapshot readiness,
+        CodeExploreRequest request,
+        ICodeExploreSourceReader sourceReader,
+        CancellationToken cancellationToken)
+    {
+        var solution = readiness.Solution ?? throw new InvalidOperationException("Code exploration requires a solution.");
+
+        // Exact identities need complete coverage to prove absence or distinguish collisions,
+        // including generated declarations that ordinary syntax discovery cannot see.
+        var anchors = BuildCodeExploreAnchors(request, InterpretCodeExploreQuery(request.Query));
+        if (anchors.Any(anchor => !IsCodeExplorePathAnchor(anchor)))
+        {
+            var required = solution.ProjectIds.ToHashSet();
+            await engine.EnsureProjectsPreparedAsync(solution, required, "code-explore-exact", requireSuccess: true, cancellationToken);
+            return required;
+        }
+
+        var candidates = await DiscoverCodeExploreCandidatesAsync(readiness, request, sourceReader, cancellationToken);
+        await engine.EnsureProjectsPreparedAsync(solution, candidates, "code-explore", requireSuccess: true, cancellationToken);
+        return candidates;
+    }
+
+    private static Solution RestrictCodeExploreSolution(Solution solution, IReadOnlySet<ProjectId> candidates, IReadOnlySet<ProjectId> prepared)
+    {
+        if (prepared.Count == solution.ProjectIds.Count)
+        {
+            return solution;
+        }
+
+        foreach (var id in solution.ProjectIds.Where(id => !candidates.Contains(id) || !prepared.Contains(id)).ToArray())
+        {
+            solution = solution.RemoveProject(id);
+        }
+
+        return solution;
     }
 
     private async Task<CodeExploreDeclarationCatalog> BuildCodeExploreCatalogAsync(
@@ -8830,7 +9058,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         IReadOnlyDictionary<string, CodeExploreDeclarationCatalogEntry[]> allowedById,
         CancellationToken cancellationToken)
     {
-        var catalogKey = CreateCodeExploreCatalogKey(workspaceId, snapshot.Generation);
+        var catalogKey = CreateCodeExploreCatalogKey(workspaceId, snapshot);
         var cacheKey = $"{catalogKey}:{identity}";
         IReadOnlyList<string>? cachedResult = null;
         SharedCodeExploreBuild<IReadOnlyList<string>>? build = null;
@@ -11186,9 +11414,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             && normalized.Split('.', StringSplitOptions.RemoveEmptyEntries).All(part => SyntaxFacts.IsValidIdentifier(part));
     }
 
-    private static string CreateCodeExploreCatalogKey(WorkspaceId workspaceId, long generation)
+    private static string CreateCodeExploreCatalogKey(WorkspaceId workspaceId, AdvancedSemanticSnapshot snapshot)
     {
-        return $"{workspaceId.Value:D}:{generation}";
+        var scope = string.Join(',', snapshot.Solution.ProjectIds.Select(id => id.Id.ToString("N")).Order(StringComparer.Ordinal));
+        return $"{workspaceId.Value:D}:{snapshot.Generation}:{ComputeSha256(scope)}";
     }
 
     private static string NormalizeComparableName(string value)
@@ -12507,20 +12736,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .ThenBy(reference => reference.Span.Start))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var syntaxPath = reference.SyntaxTree.FilePath;
-            if (string.IsNullOrWhiteSpace(syntaxPath)
-                || !Path.IsPathRooted(syntaxPath)
-                || !sourceReader.IsPathAllowed(syntaxPath))
-            {
-                continue;
-            }
-
             var declaration = await reference.GetSyntaxAsync(cancellationToken);
             var locatedDocument = await FindDocumentForSyntaxTreeAsync(
                 snapshot,
                 declaration.SyntaxTree,
                 cancellationToken);
             if (locatedDocument is null)
+            {
+                continue;
+            }
+
+            var syntaxPath = reference.SyntaxTree.FilePath;
+            if (!locatedDocument.IsSourceGenerated
+                && (string.IsNullOrWhiteSpace(syntaxPath)
+                    || !Path.IsPathRooted(syntaxPath)
+                    || !sourceReader.IsPathAllowed(syntaxPath)))
             {
                 continue;
             }
@@ -12554,7 +12784,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 importance,
-                importance == CodeExploreSourceImportance.FlowSpine));
+                importance == CodeExploreSourceImportance.FlowSpine,
+                locatedDocument.IsSourceGenerated));
         }
 
         if (symbol.DeclaringSyntaxReferences.Length > 0)
@@ -12602,7 +12833,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 null,
                 null,
                 importance,
-                importance == CodeExploreSourceImportance.FlowSpine));
+                importance == CodeExploreSourceImportance.FlowSpine,
+                locatedDocument?.IsSourceGenerated == true));
         }
     }
 
@@ -12935,7 +13167,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(drifted, 0, []);
         }
 
-        if (!Path.IsPathRooted(candidate.FilePath))
+        var isSourceGenerated = candidate.IsSourceGenerated;
+        if (!isSourceGenerated && !Path.IsPathRooted(candidate.FilePath))
         {
             var source = new CodeExploreSourceRange(
                 candidate.Location?.Range ?? CreateLineRange(candidate.PreferredLine ?? 1),
@@ -12957,7 +13190,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(omitted, 0, []);
         }
 
-        if (candidate.Document is not null && !sourceReader.IsPathAllowed(candidate.FilePath))
+        if (!isSourceGenerated
+            && candidate.Document is not null
+            && !sourceReader.IsPathAllowed(candidate.FilePath))
         {
             var source = new CodeExploreSourceRange(
                 candidate.Location?.Range ?? CreateLineRange(candidate.PreferredLine ?? 1),
@@ -13006,13 +13241,15 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return new(omitted, 0, []);
         }
 
-        var fileIdentity = candidate.Document is null && candidate.PreloadedFileSha256 is not null
-            ? (FileSha256: candidate.PreloadedFileSha256, DriftReason: (string?)null)
-            : await VerifyCurrentFileIdentityAsync(
-                sourceReader,
-                candidate.FilePath,
-                text,
-                cancellationToken);
+        var fileIdentity = isSourceGenerated
+            ? (FileSha256: ComputeSha256(text.ToString()), DriftReason: (string?)null)
+            : candidate.Document is null && candidate.PreloadedFileSha256 is not null
+                ? (FileSha256: candidate.PreloadedFileSha256, DriftReason: (string?)null)
+                : await VerifyCurrentFileIdentityAsync(
+                    sourceReader,
+                    candidate.FilePath,
+                    text,
+                    cancellationToken);
         if (fileIdentity.DriftReason is null
             && candidate.ExpectedFileSha256 is { } expectedFileSha256
             && !string.Equals(fileIdentity.FileSha256, expectedFileSha256, StringComparison.OrdinalIgnoreCase))
@@ -13047,7 +13284,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             span.Value,
             fileIdentity.FileSha256,
             sourceCharacterBudget,
-            relativePath);
+            isSourceGenerated ? null : relativePath);
         if (projected.Range.ContinuationAnchor is not null)
         {
             continuations.Add(new CodeExploreContinuationTarget(
@@ -13072,7 +13309,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             candidate.Location?.IsGenerated ?? IsGeneratedPath(candidate.FilePath),
             candidate.Location?.IsLinked ?? false,
             candidate.SelectionReason);
-        return new(section, projected.SourceCharacters, continuations, text, span);
+        return new(section, projected.SourceCharacters, continuations, text, span, isSourceGenerated);
     }
 
     private ProjectedCodeExploreSection FitPreparedSource(ProjectedCodeExploreSection prepared, int allowance, long generation)
@@ -13083,9 +13320,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         var section = prepared.Section;
-        var fitted = ProjectSourceRange(text, span, section.Source.FileSha256, allowance, section.FilePath);
+        var fitted = ProjectSourceRange(text, span, section.Source.FileSha256, allowance, prepared.IsSourceGenerated ? null : section.FilePath);
         var remainingLine = fitted.NextLine ?? (fitted.SourceCharacters == 0 ? section.Source.Range.StartLine : (int?)null);
-        IReadOnlyList<CodeExploreContinuationTarget> continuations = remainingLine is { } line
+        IReadOnlyList<CodeExploreContinuationTarget> continuations = !prepared.IsSourceGenerated && remainingLine is { } line
             ? [new CodeExploreContinuationTarget(
                 CodeExploreAnchorKind.Path,
                 section.FilePath,
@@ -13221,7 +13458,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         TextSpan span,
         string? fileSha256,
         int sourceCharacterBudget,
-        string relativePath)
+        string? relativePath)
     {
         if (sourceCharacterBudget <= 0)
         {
@@ -13423,19 +13660,41 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var location = symbol.Locations
-            .Where(location => location.IsInSource
-                && location.SourceTree is not null
-                && !string.IsNullOrWhiteSpace(location.SourceTree.FilePath)
-                && Path.IsPathRooted(location.SourceTree.FilePath)
-                && sourceReader.IsPathAllowed(location.SourceTree.FilePath))
+        var locations = symbol.Locations
+            .Where(location => location.IsInSource && location.SourceTree is not null)
             .OrderBy(location => location.SourceTree?.FilePath ?? string.Empty, PathComparer)
             .ThenBy(location => location.SourceSpan.Start)
-            .FirstOrDefault();
-        var sourceLocation = location is null
-            ? null
-            : await CreateLocationAsync(snapshot, projection, location, cancellationToken);
-        return sourceLocation is null ? null : ToCodeExploreLocation(sourceLocation, snapshot.RepositoryPath);
+            .ToArray();
+        foreach (var location in locations)
+        {
+            var locatedDocument = await FindDocumentForSyntaxTreeAsync(
+                snapshot,
+                location.SourceTree!,
+                cancellationToken);
+            if (locatedDocument is null)
+            {
+                continue;
+            }
+
+            var path = location.SourceTree!.FilePath;
+            if (!locatedDocument.IsSourceGenerated
+                && (string.IsNullOrWhiteSpace(path)
+                    || !Path.IsPathRooted(path)
+                    || !sourceReader.IsPathAllowed(path)))
+            {
+                continue;
+            }
+
+            var sourceLocation = CreateDocumentLocation(
+                locatedDocument.Document,
+                location.SourceTree,
+                location.SourceSpan,
+                projection,
+                locatedDocument.IsSourceGenerated);
+            return ToCodeExploreLocation(sourceLocation, snapshot.RepositoryPath);
+        }
+
+        return null;
     }
 
     private static CodeExploreLocation ToCodeExploreLocation(
@@ -13614,6 +13873,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         return LooksLikeDocumentationId(query)
             || CSharpPatternConstraints.IsValidDottedIdentifierName(StripParameters(query));
+    }
+
+    private static bool IsCodeExplorePathAnchor(CodeExploreAnchor anchor)
+    {
+        return anchor.Kind != CodeExploreAnchorKind.SymbolId
+            && (anchor.Kind == CodeExploreAnchorKind.Path || QueryLooksLikePath(anchor.Value));
     }
 
     private static bool QueryLooksLikePath(string query)
@@ -14042,7 +14307,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var document = snapshot.Solution.GetDocument(syntaxTree);
         if (document is not null)
         {
-            return new LocatedSemanticDocument(document, false);
+            return new LocatedSemanticDocument(document, document is SourceGeneratedDocument);
         }
 
         foreach (var project in snapshot.Solution.Projects
@@ -14060,8 +14325,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     continue;
                 }
 
-                if (ReferenceEquals(root.SyntaxTree, syntaxTree)
-                    || string.Equals(root.SyntaxTree.FilePath, syntaxTree.FilePath, PathComparison))
+                if (ReferenceEquals(root.SyntaxTree, syntaxTree))
                 {
                     return new LocatedSemanticDocument(generatedDocument, true);
                 }
@@ -14427,7 +14691,8 @@ internal sealed record CodeExploreReadinessSnapshot(
     SemanticConfidenceLevel Confidence,
     string? RepositoryPath,
     string? WorkspacePath,
-    long Generation);
+    long Generation,
+    long SourceGeneration);
 
 /// <summary>Immutable compiler-aware state captured for one advanced query.</summary>
 internal sealed record AdvancedSemanticSnapshot(

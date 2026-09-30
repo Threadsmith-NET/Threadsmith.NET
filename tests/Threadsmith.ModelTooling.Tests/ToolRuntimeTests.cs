@@ -2963,6 +2963,13 @@ public static partial class ToolRuntimeTests
                 TestContext.Current.CancellationToken);
             Assert.True(statement.Success, statement.Error);
             Assert.Equal("42", statement.Output);
+            var csharp14 = await engine.ExecuteAsync(
+                "var values = new[] { 0 }; values?[0] = 59; return values[0];",
+                ScriptKind.Statement,
+                context,
+                TestContext.Current.CancellationToken);
+            Assert.True(csharp14.Success, csharp14.Error);
+            Assert.Equal("59", csharp14.Output);
             var invalid = await engine.ExecuteAsync(
                 "var value = ;",
                 ScriptKind.Statement,

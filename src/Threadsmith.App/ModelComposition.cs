@@ -1,6 +1,7 @@
 namespace Threadsmith.App;
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -63,6 +64,7 @@ internal static class ModelComposition
         // One application-lifetime pool follows Microsoft's HttpClient guidance. Profile cancellation owns
         // request deadlines, while bounded handler settings refresh DNS and constrain connection resources.
         var transportOptions = ModelHttpTransportOptions.Load(configuration);
+        var codexTimeoutSeconds = LoadCodexTimeoutSeconds(trustedConfiguration);
         var httpClient = new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = transportOptions.PooledConnectionLifetime,
@@ -109,6 +111,12 @@ internal static class ModelComposition
                 : await codexCache.LoadAsync(codexStartupToken.Token).ConfigureAwait(false);
             if (codexConfiguration is not null)
             {
+                codexConfiguration = codexConfiguration with
+                {
+                    Models = codexConfiguration.Models
+                        .Select(model => model with { TimeoutSeconds = codexTimeoutSeconds })
+                        .ToArray(),
+                };
                 var enforceHttps = configuration.GetValue("model:enforceModelEndpointHttps", true);
                 effectiveCatalog = AddHostOwnedCodexProvider(
                     effectiveCatalog,
@@ -537,6 +545,28 @@ internal static class ModelComposition
     }
 
     /// <summary>Returns whether the path is inside the directory, including equality.</summary>
+    /// <summary>Loads the trusted total deadline for each native Codex request.</summary>
+    internal static int LoadCodexTimeoutSeconds(IConfiguration trustedConfiguration)
+    {
+        ArgumentNullException.ThrowIfNull(trustedConfiguration);
+        const string path = "model:openAiCodex:timeoutSeconds";
+        const int maximumSeconds = (int)(uint.MaxValue / 1000);
+        var configured = trustedConfiguration[path];
+        if (configured is null)
+        {
+            return OpenAiCodexProviderRegistration.DefaultTimeoutSeconds;
+        }
+
+        if (!int.TryParse(configured, NumberStyles.None, CultureInfo.InvariantCulture, out var seconds)
+            || seconds > maximumSeconds)
+        {
+            throw new InvalidOperationException(
+                $"Trusted configuration '{path}' must be between 0 and {maximumSeconds} seconds.");
+        }
+
+        return seconds;
+    }
+
     private static bool IsPathInsideDirectory(string directory, string path)
     {
         var normalizedDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory));

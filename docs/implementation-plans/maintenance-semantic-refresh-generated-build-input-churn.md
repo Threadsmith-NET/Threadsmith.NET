@@ -1,6 +1,6 @@
 # Semantic Refresh Generated Build-Input Churn Maintenance
 
-**Status:** Planned.
+**Status:** Implemented; updated-application manual verification remains outstanding.
 **Delivery track:** Maintenance — prevent derived MSBuild output from causing redundant semantic reloads
 **Prerequisites:** Implemented [Plan 97](plan-97-external-semantic-refresh.md), the current `SemanticRefreshCoordinator`, `SemanticEngine` refresh inventory, shared semantic refresh path policy, and deterministic semantic-refresh test seams
 **Strategy source:** [Shared implementation context](00-shared-context.md), especially one host-owned refresh authority, immutable Roslyn snapshots, controlled publication, cancellation propagation, bounded observation, and maintenance-track routing
@@ -69,7 +69,7 @@ Existing tests correctly prove that arbitrary loaded additional documents under 
 
 Extend `SemanticRefreshPathPolicy` with one case-insensitive, path-normalized predicate for a generated MSBuild editor-config document. It returns true only when both conditions hold:
 
-1. the path is beneath a recognized build-output directory, initially `obj`; and
+1. the path is beneath a recognized build-output directory, `obj`, `bin`, `TestResults`, or `artifacts`; and
 2. the filename matches the MSBuild convention `*.GeneratedMSBuildEditorConfig.editorconfig`.
 
 Do not classify arbitrary `.editorconfig`, `.globalconfig`, JSON additional documents, or user-selected analyzer inputs as derived merely because they are loaded or reside under a directory with an unfortunate name. Keep path confinement, prohibited-path, reparse-point, and platform-comparer behavior unchanged.
@@ -201,4 +201,16 @@ No user-guide or operations change is required unless implementation changes a v
 
 ## 17 Open Decisions
 
-None. The fix is intentionally narrow: classify the known MSBuild-derived artifact once, preserve it in Roslyn compilation, and exclude it from refresh monitoring and identity projections.
+None. Use one shared derived-document policy throughout refresh projections and coordinator boundaries. Preserve Roslyn compilation inputs and explicit user-owned ignored-directory documents.
+
+## 18 Implementation and holistic review (2026-09-30)
+
+The completed change uses `IsIgnoredGeneratedDocument` for source, additional, and analyzer-config refresh projections, initial and post-full-refresh loaded identities, notification admission, settled classification, and explicit watcher-root defense. Generated MSBuild editor configs remain in the Roslyn solution. Existing generated-source exclusions now also recognize WPF `.g.i.cs` and MSBuild `TemporaryGeneratedFile_*.cs` under build-output directories.
+
+The review traced ordinary notification, manual full reload, initial binding, dirty/applied convergence, authoritative pre/post snapshots, watcher restart topology, and new-request admission. Ordinary NuGet assets/generated props and targets, assembly-reference caches, file lists, compiled DLL/PDB files, and test results already pass through general output-directory exclusion; regressions exercise them together rather than adding individual filename exclusions. The loaded-document exception remains available for user-authored additional and analyzer configuration under ignored directories. Real project/props/targets/source/configuration inputs retain the existing paths.
+
+The regression backend deliberately reports derived files as source, additional, and analyzer-config documents. Every file-change kind leaves currentness intact and produces zero refresh work; a forced reload with another generated rewrite converges once without creating a generated-directory watcher root. A real SDK project test proves generated analyzer configuration remains available to Roslyn but is absent from refresh projections, alongside a retained custom analyzer config under `obj`.
+
+This correction does not claim a fixed refresh duration or update the running installed binary. Live MTP-256 verification remains outstanding on the updated application.
+
+Automated verification: solution build passed with zero warnings/errors; full Model Tooling suite passed 899 tests with 14 environment-dependent tests skipped; final focused refresh suite passed 76 tests; architecture suite passed 290 tests with four optional live tests skipped. `git diff --check` passed. No installed binary was replaced and no claim is made that the original running process has picked up these changes.

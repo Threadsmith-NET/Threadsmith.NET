@@ -51,6 +51,7 @@ Do not duplicate milestone status elsewhere. Change lifecycle status here only; 
 | M29 | Active | Deployable Markdown prompts, descriptions, corrections, and provider instructions with cached loading and bounded customization. | [Details](milestones/milestone-29-deployable-prompt-customization.md) |
 | M30 | Complete | Native Anthropic API-key model discovery, governed tools, private thinking continuity and prompt caching. | [Details](milestones/milestone-30-native-anthropic-model-provider.md) |
 | M31 | Active | Governed Jira Cloud issue-description reads through trusted accounts and the standard tool pipeline. | [Details](milestones/milestone-31-governed-jira-issue-reads.md) |
+| M32 | Planned | In-process public hosting with API-driven TUI composition, final-answer streaming, and shared shutdown. | [Details](milestones/milestone-32-in-process-tui-automation.md) |
 | Maintenance | Active | Cross-cutting remediation, internal refactoring, hardening, and compatibility work. | [Details](milestones/maintenance-track.md) |
 
 ## Dependency and sequencing

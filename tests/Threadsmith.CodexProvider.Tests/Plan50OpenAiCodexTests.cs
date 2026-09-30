@@ -32,6 +32,7 @@ public sealed class Plan50OpenAiCodexTests
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, catalog.Models.Count);
+        Assert.All(catalog.Models, model => Assert.Equal(600, model.TimeoutSeconds));
         var astra = Assert.Single(catalog.Models, model => model is OpenAiCodexModelConfiguration codex
             && codex.ModelId == "gpt-6-astra");
         Assert.Equal("GPT-6-Astra", astra.Name);

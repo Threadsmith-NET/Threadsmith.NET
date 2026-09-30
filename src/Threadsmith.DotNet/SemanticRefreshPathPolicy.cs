@@ -70,9 +70,29 @@ internal static class SemanticRefreshPathPolicy
                 .Any(IsBuildOutputDirectorySegment);
     }
 
+    /// <summary>Recognizes MSBuild-derived analyzer configuration beneath build-output directories.</summary>
+    public static bool IsIgnoredGeneratedEditorConfig(string repositoryPath, string path)
+    {
+        var normalized = Path.GetRelativePath(repositoryPath, path).Replace('\\', '/');
+        return normalized.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Any(segment => IsBuildOutputDirectorySegment(segment)
+                    || segment.Equals("artifacts", StringComparison.OrdinalIgnoreCase))
+            && Path.GetFileName(normalized).EndsWith(".GeneratedMSBuildEditorConfig.editorconfig", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Excludes known derived text inputs even when Roslyn reports them as explicitly loaded.</summary>
+    public static bool IsIgnoredGeneratedDocument(string repositoryPath, string path)
+    {
+        return IsIgnoredGeneratedSourceDocument(repositoryPath, path)
+            || IsIgnoredGeneratedEditorConfig(repositoryPath, path);
+    }
+
     private static bool IsGeneratedSourceDocumentName(string name)
     {
         return name.EndsWith(".g.cs", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".g.i.cs", StringComparison.OrdinalIgnoreCase)
+            || (name.StartsWith("TemporaryGeneratedFile_", StringComparison.OrdinalIgnoreCase)
+                && name.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
             || name.EndsWith(".AssemblyInfo.cs", StringComparison.OrdinalIgnoreCase)
             || name.EndsWith("AssemblyAttributes.cs", StringComparison.OrdinalIgnoreCase);
     }

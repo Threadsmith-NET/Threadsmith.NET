@@ -3,6 +3,7 @@ namespace Threadsmith.CoreRuntime.Tests;
 using System.Text;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Coordination;
 using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tui.TuiKit;
 using TUIKit;
@@ -14,6 +15,83 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class SemanticRefreshNotificationTests
 {
+    /// <summary>Session restoration observes prior refresh events before later terminal events.</summary>
+    [Fact]
+    public static async Task RefreshRestorationIsOrderedWithLifecycleDelivery()
+    {
+        var dispatcher = new InteractionEventDispatcher();
+        var activities = new InteractionOperationActivities(TimeProvider.System, true);
+        var started = new SemanticRefreshStarted(SessionId.New(), DateTimeOffset.UtcNow, SemanticRefreshId.New(), WorkspaceId.New(), SemanticRefreshReason.ExternalChange, SemanticRefreshMode.Full, 1, 1);
+        await dispatcher.QueueAsync(started, TestContext.Current.CancellationToken);
+        await dispatcher.QueueWorkAsync(
+            _ =>
+        {
+            Assert.Single(activities.Activities);
+            return Task.CompletedTask;
+        },
+            TestContext.Current.CancellationToken);
+        await dispatcher.QueueAsync(new SemanticRefreshCompleted(SessionId.New(), DateTimeOffset.UtcNow, started.RefreshId, started.WorkspaceId, started.Reason, started.Mode, 1, 1, 1, SemanticConfidenceLevel.PartialCompilation, 240), TestContext.Current.CancellationToken);
+        dispatcher.Complete();
+        await dispatcher.DrainAsync(
+            (batch, _) =>
+        {
+            foreach (var item in batch)
+            {
+                activities.Observe(item);
+            }
+
+            return Task.CompletedTask;
+        },
+            TestContext.Current.CancellationToken);
+        Assert.Empty(activities.Activities);
+    }
+
+    /// <summary>Native output shows refresh progress while an unsent composer draft is retained.</summary>
+    [Fact]
+    public static async Task NativeRefreshIndicatorStaysVisibleDuringDraft()
+    {
+        using var backend = new HeadlessBackend(120, 35);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], static () => { }, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            var read = surface.ReadComposerAsync(new ComposerRequest("Threadsmith > "), token);
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            backend.FeedInput("draft");
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            _ = backend.TakeOutput();
+            var activity = new InteractionActivity("SEMANTIC REFRESH — new requests blocked", TimeProvider.System.GetTimestamp(), true, TimeProvider.System)
+            {
+                SemanticWorkspaceId = WorkspaceId.New(),
+            };
+            await surface.PresentToolActivitiesAsync([activity], token);
+            await surface.PresentAsync(new PresentationBatch([]), token);
+            Assert.Contains("new requests blocked", backend.TakeOutput(), StringComparison.Ordinal);
+            Assert.False(read.IsCompleted);
+            backend.FeedInput("\r");
+            Assert.Equal("draft", (await read).Text);
+            await surface.PresentToolActivitiesAsync([], token);
+        },
+            TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>A workspace refresh persists independently of conversation output and run lifecycles.</summary>
+    [Fact]
+    public static void RefreshActivityPersistsUntilMatchingWorkspaceCompletion()
+    {
+        var started = new SemanticRefreshStarted(SessionId.New(), DateTimeOffset.UtcNow, SemanticRefreshId.New(), WorkspaceId.New(), SemanticRefreshReason.ExternalChange, SemanticRefreshMode.Full, 1, 1);
+        var activities = new InteractionOperationActivities(TimeProvider.System, false);
+        Assert.True(activities.Observe(started));
+        var activity = Assert.Single(activities.Activities);
+        Assert.Equal(started.WorkspaceId, activity.SemanticWorkspaceId);
+        Assert.Contains("blocked", activity.Label, StringComparison.Ordinal);
+        Assert.False(activities.Observe(started));
+        Assert.False(activities.Observe(new ModelOutputObserved(SessionId.New(), DateTimeOffset.UtcNow, "Other session output")));
+        Assert.Same(activity, Assert.Single(activities.Activities));
+        Assert.True(activities.Observe(new SemanticRefreshCompleted(SessionId.New(), DateTimeOffset.UtcNow, started.RefreshId, started.WorkspaceId, started.Reason, started.Mode, 1, 1, 1, SemanticConfidenceLevel.PartialCompilation, 240)));
+        Assert.Empty(activities.Activities);
+    }
+
     /// <summary>Only external changes and recovery produce transient echoes, regardless of transcript wording.</summary>
     [Theory]
     [InlineData(SemanticRefreshReason.ExternalChange, true)]

@@ -156,6 +156,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 116 | [plan-116-session-scratchpad.md](plan-116-session-scratchpad.md) | Configurable session-scoped scratchpad with bounded tool authority and lifecycle cleanup |
 | 117 | [plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md](plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md) | Roslyn 5.9 and .NET 10 semantic toolchain upgrade with compatibility, load measurement, and release gates |
 | 118 | [plan-118-staged-semantic-readiness-and-compilation-warming.md](plan-118-staged-semantic-readiness-and-compilation-warming.md) | Staged semantic readiness with demand-driven project preparation and bounded background warming |
+| 119 | [plan-119-in-process-tui-automation-api.md](plan-119-in-process-tui-automation-api.md) | In-process public API for read-only-composer TUI automation and final-answer streaming |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 | Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
 | Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |
@@ -165,6 +166,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-mid-tranche-replanning.md` | Implementation-requested replanning through the ordinary conversation cycle |
 | Maintenance | `maintenance-test-suite-runtime-and-signal.md` | Incremental test runtime, reliability, and assertion-signal improvements |
 | Maintenance | `maintenance-retire-original-tui.md` | Retire the original scrollback frontend and its product dependencies |
+| Maintenance | `maintenance-semantic-refresh-readiness-and-visibility.md` | Share startup readiness and retain visible refresh activity with trigger files |
 | Maintenance | `maintenance-semantic-refresh-generated-build-input-churn.md` | Ignore derived MSBuild editor-config churn without weakening semantic freshness |
 
 ## Update discipline

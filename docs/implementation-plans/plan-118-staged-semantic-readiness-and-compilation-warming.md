@@ -1,6 +1,6 @@
 # Plan 118 — Staged semantic readiness and bounded compilation warming
 
-**Status:** Active — implemented and locally validated; native cross-platform and manual verification pending
+**Status:** Implemented
 **Delivery track:** Maintenance — semantic startup performance, readiness coordination, and bounded resource use  
 **Prerequisites:** Completed Plan 117 with Roslyn 5.9/.NET 10.0.4xx compatibility closed and same-host load-phase measurements recorded; the existing semantic confidence contract; external semantic refresh; request-admission freshness; advanced semantic query and code-explore generation fencing; pre-mutation analysis; and frontend-neutral startup coordination.  
 **Related contracts:** [planning governance](planning-governance.md), [shared context §G](00-shared-context.md#g-implementation-document-template-and-agent-instructions), [Plan 06](plan-06-roslyn-msbuild-semantic-discovery.md), [Plan 74](plan-74-roslyn-based-pre-mutation-analysis.md), [Plan 81](plan-81-roslyn-code-explore-exact-anchors-and-source.md), [Plan 97](plan-97-external-semantic-refresh.md), [Plan 117](plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md), [semantic confidence](../architecture/semantic-confidence.md), [event catalog](../architecture/event-catalog.md), and [portable C# guardrails](../guardrails/portable-csharp-guardrails.md).

@@ -51,6 +51,7 @@ A milestone may begin when every listed prerequisite capability contract exists.
 | M29 | M12, M15, M23.4, M28 |
 | M30 | M7.3, M18, M19, M21, M22.2 |
 | M31 | M3, M18, M22.2, M29 |
+| M32 | M2, M7.4, M11, M11.1, M15, M20, M29 |
 | Maintenance | Item-specific; declared by each active maintenance document |
 
 ## Parallelization rules

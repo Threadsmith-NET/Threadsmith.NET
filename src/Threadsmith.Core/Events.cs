@@ -552,7 +552,11 @@ public sealed record SemanticRefreshStarted(
     SemanticRefreshReason Reason,
     SemanticRefreshMode Mode,
     int ChangedFileCount,
-    long DirtyVersion) : DomainEvent(SessionId, OccurredAt);
+    long DirtyVersion) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Gets a bounded list of repository-relative inputs that triggered this refresh.</summary>
+    public IReadOnlyList<string> TriggerPaths { get; init; } = [];
+}
 
 /// <summary>A coalesced semantic refresh published current state.</summary>
 public sealed record SemanticRefreshCompleted(
@@ -566,7 +570,11 @@ public sealed record SemanticRefreshCompleted(
     long DirtyVersion,
     long AppliedVersion,
     SemanticConfidenceLevel Confidence,
-    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt);
+    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Gets a bounded list of repository-relative inputs reconciled by this refresh.</summary>
+    public IReadOnlyList<string> TriggerPaths { get; init; } = [];
+}
 
 /// <summary>A semantic refresh failed without advancing its applied version.</summary>
 public sealed record SemanticRefreshFailed(
@@ -581,7 +589,11 @@ public sealed record SemanticRefreshFailed(
     long AppliedVersion,
     SemanticRefreshFailureKind FailureKind,
     string SafeReason,
-    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt);
+    long ElapsedMilliseconds) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Gets a bounded list of repository-relative inputs that triggered the failed refresh.</summary>
+    public IReadOnlyList<string> TriggerPaths { get; init; } = [];
+}
 
 /// <summary>A run transitioned.</summary>
 public sealed record RunTransitioned(

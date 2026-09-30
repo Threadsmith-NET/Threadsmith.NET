@@ -195,7 +195,7 @@ public sealed class OpenAiCodexCatalogClient
             IntendedWorkloadClasses = Enum.GetValues<WorkloadClass>(),
             DefaultReasoningLevel = defaultLevel,
             SupportedReasoningLevels = supported,
-            TimeoutSeconds = 120,
+            TimeoutSeconds = OpenAiCodexProviderRegistration.DefaultTimeoutSeconds,
             RetryMaxAttempts = 2,
             RetryDelayMilliseconds = 1000,
         };

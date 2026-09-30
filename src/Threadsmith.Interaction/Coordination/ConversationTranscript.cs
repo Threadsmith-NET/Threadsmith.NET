@@ -3,6 +3,7 @@ namespace Threadsmith.Interaction.Coordination;
 using System.Text;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
+using Threadsmith.Interaction.Markdown;
 using Threadsmith.Interaction.Presentation;
 
 /// <summary>Owns the ordered conversation text produced from live domain events.</summary>
@@ -205,7 +206,8 @@ internal sealed class ConversationTranscript
                 AppendSystemResponse("Semantic confidence: Unavailable");
                 return true;
             case SemanticRefreshStarted started when IsVisibleSemanticRefreshStart(started.Reason):
-                AppendLifecycleBlock(FormatSemanticRefreshStart(started.Reason));
+                AppendLifecycleBlock(FormatSemanticRefreshStart(started.Reason)
+                    + FormatSemanticRefreshTriggers(started.TriggerPaths, started.ChangedFileCount));
                 TrackRenderedSemanticRefreshStart(started.RefreshId);
                 return true;
             case SemanticRefreshCompleted completed:
@@ -509,7 +511,8 @@ internal sealed class ConversationTranscript
             || completed.Confidence != SemanticConfidenceLevel.FullSemantic
                 ? $"; confidence {completed.Confidence}"
                 : string.Empty;
-        return $"Semantic model updated ({fileText}{duration}{confidence}).{Environment.NewLine}";
+        return $"Semantic model updated ({fileText}{duration}{confidence}).{Environment.NewLine}"
+            + FormatSemanticRefreshTriggers(completed.TriggerPaths, completed.ChangedFileCount);
     }
 
     private string FormatSemanticRefreshFailure(SemanticRefreshFailed failed)
@@ -520,7 +523,23 @@ internal sealed class ConversationTranscript
                 : string.Empty;
         return $"Semantic model refresh failed ({failed.FailureKind}){duration}: "
             + failed.SafeReason
+            + Environment.NewLine
+            + FormatSemanticRefreshTriggers(failed.TriggerPaths, failed.ChangedFileCount);
+    }
+
+    private static string FormatSemanticRefreshTriggers(IReadOnlyList<string> paths, int changedFileCount)
+    {
+        if (paths.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var shown = paths.Take(16).ToArray();
+        var text = "Triggered by:" + Environment.NewLine
+            + string.Join(Environment.NewLine, shown.Select(path => "  " + TerminalControlEncoder.Encode(path)))
             + Environment.NewLine;
+        var remaining = changedFileCount - shown.Length;
+        return remaining > 0 ? text + $"  … and {remaining} other files.{Environment.NewLine}" : text;
     }
 
     private void TrackRenderedSemanticRefreshStart(SemanticRefreshId refreshId)

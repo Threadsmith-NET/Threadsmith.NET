@@ -12,6 +12,125 @@ using Xunit;
 /// <summary>Verifies external semantic refresh coordination, fencing, and recovery.</summary>
 public static class SemanticRefreshCoordinatorTests
 {
+    /// <summary>Derived build outputs stay irrelevant across binding, reload, watcher topology, and admission.</summary>
+    [Fact]
+    public static async Task GeneratedBuildOutputsNeverCreateRefreshWorkOrWatcherRoots()
+    {
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Enqueue(item);
+            return Task.CompletedTask;
+        });
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var generatedDirectory = Directory.CreateDirectory(Path.Combine(repository.Root, "src", "App", "obj", "Debug", "net10.0")).FullName;
+        string[] names = ["App.GeneratedMSBuildEditorConfig.editorconfig", "App.GlobalUsings.g.cs", "App.AssemblyInfo.cs", ".NETCoreApp,Version=v10.0.AssemblyAttributes.cs", "View.g.i.cs", "TemporaryGeneratedFile_fixture.cs"];
+        var paths = names.Select(name => Path.Combine(generatedDirectory, name)).ToArray();
+        foreach (var path in paths)
+        {
+            await File.WriteAllTextAsync(path, "initial", TestContext.Current.CancellationToken);
+            backend.AddAnalyzerConfigDocument(repository.WorkspaceId, path);
+            backend.AddAdditionalDocument(repository.WorkspaceId, path);
+            backend.AddSourceDocument(repository.WorkspaceId, path);
+        }
+
+        var watcherRoots = new List<string>();
+        FileSystemWatcher CreateWatcher(string path)
+        {
+            watcherRoots.Add(path);
+            return new FileSystemWatcher(path);
+        }
+
+        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), TestContext.Current.CancellationToken);
+        var baseline = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, TestContext.Current.CancellationToken);
+        foreach (var path in paths)
+        {
+            await File.WriteAllTextAsync(path, "changed", TestContext.Current.CancellationToken);
+            foreach (var kind in Enum.GetValues<SemanticFileChangeKind>())
+            {
+                await coordinator.ObserveChangeAsync(new(repository.SessionId, path, kind), TestContext.Current.CancellationToken);
+            }
+        }
+
+        string[] ordinaryBuildOutputs = ["obj/project.assets.json", "obj/App.csproj.nuget.g.props", "obj/App.csproj.nuget.g.targets", "obj/App.csproj.FileListAbsolute.txt", "obj/App.AssemblyReference.cache", "bin/Debug/App.dll", "bin/Debug/App.pdb", "TestResults/run.trx"];
+        foreach (var relative in ordinaryBuildOutputs)
+        {
+            await coordinator.ObserveChangeAsync(new(repository.SessionId, Path.Combine(repository.Root, relative), SemanticFileChangeKind.Created), TestContext.Current.CancellationToken);
+        }
+
+        var clean = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, TestContext.Current.CancellationToken);
+        Assert.False(clean.WasRefreshed);
+        Assert.Equal(baseline.DirtyVersion, clean.DirtyVersion);
+        Assert.Equal(baseline.AppliedVersion, clean.AppliedVersion);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+        Assert.Equal(0, backend.RefreshCount);
+        Assert.DoesNotContain(observed, item => item is SemanticRefreshStarted or SemanticRefreshCompleted or SemanticRefreshFailed);
+        Assert.DoesNotContain(generatedDirectory, watcherRoots);
+
+        var barrier = backend.BlockNextRefresh();
+        var manual = coordinator.ForceRefreshAsync(repository.SessionId, TestContext.Current.CancellationToken);
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(paths[0], "rewritten by full evaluation", TestContext.Current.CancellationToken);
+        barrier.Release.TrySetResult();
+        await manual;
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+        Assert.Equal(1, backend.RefreshCount);
+        Assert.DoesNotContain(generatedDirectory, watcherRoots);
+        Assert.Single(observed.OfType<SemanticRefreshStarted>());
+        Assert.Single(observed.OfType<SemanticRefreshCompleted>());
+    }
+
+    /// <summary>Derived editor-config recognition covers build roots and both separator spellings.</summary>
+    [Theory]
+    [InlineData("src/App/obj/Debug/net10.0/App.GeneratedMSBuildEditorConfig.editorconfig", true)]
+    [InlineData("src/App/OBJ/Debug/App.GENERATEDMSBUILDEDITORCONFIG.EDITORCONFIG", true)]
+    [InlineData("artifacts/obj/App/App.GeneratedMSBuildEditorConfig.editorconfig", true)]
+    [InlineData("bin/App.GeneratedMSBuildEditorConfig.editorconfig", true)]
+    [InlineData("src/App.GeneratedMSBuildEditorConfig.editorconfig", false)]
+    [InlineData("obj/custom.editorconfig", false)]
+    [InlineData("obj/.globalconfig", false)]
+    public static void GeneratedEditorConfigPolicyIsSpecific(string relativePath, bool expected)
+    {
+        using var repository = new TemporaryRepository();
+        var path = Path.Combine(repository.Root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        Assert.Equal(expected, SemanticRefreshPathPolicy.IsIgnoredGeneratedEditorConfig(repository.Root, path));
+        Assert.Equal(expected, SemanticRefreshPathPolicy.IsIgnoredGeneratedEditorConfig(repository.Root, path.Replace('\\', '/')));
+    }
+
+    /// <summary>Explicit user-owned configuration beneath obj remains watched and refreshes.</summary>
+    [Theory]
+    [InlineData("obj/custom.editorconfig")]
+    [InlineData("obj/.globalconfig")]
+    [InlineData("src/App.GeneratedMSBuildEditorConfig.editorconfig")]
+    public static async Task UserOwnedAnalyzerConfigStillRefreshes(string relativePath)
+    {
+        using var repository = new TemporaryRepository();
+        var path = Path.Combine(repository.Root, relativePath.Replace('/', Path.DirectorySeparatorChar));
+        var directory = Directory.CreateDirectory(Path.GetDirectoryName(path)!).FullName;
+        await File.WriteAllTextAsync(path, "root = true", TestContext.Current.CancellationToken);
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        backend.AddAnalyzerConfigDocument(repository.WorkspaceId, path);
+        var watcherRoots = new List<string>();
+        FileSystemWatcher CreateWatcher(string root)
+        {
+            watcherRoots.Add(root);
+            return new FileSystemWatcher(root);
+        }
+
+        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), TestContext.Current.CancellationToken);
+        Assert.Contains(directory, watcherRoots);
+        await File.WriteAllTextAsync(path, "root = false", TestContext.Current.CancellationToken);
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, path, SemanticFileChangeKind.Changed), TestContext.Current.CancellationToken);
+        var refreshed = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, TestContext.Current.CancellationToken);
+        Assert.True(refreshed.WasRefreshed);
+        Assert.Equal(SemanticRefreshMode.Full, refreshed.Mode);
+    }
+
     /// <summary>The semantic refresh resource seam preserves every production guardrail value.</summary>
     [Fact]
     public static void SemanticRefreshResourceLimits_Production_PreservesExactDefaults()
@@ -116,6 +235,7 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(SemanticRefreshReason.ExternalChange, observed.Reason);
         Assert.Equal(SemanticRefreshMode.Incremental, observed.Mode);
         Assert.Equal(1, observed.ChangedFileCount);
+        Assert.Equal([Path.GetRelativePath(repository.Root, repository.SourcePath).Replace('\\', '/')], observed.TriggerPaths);
         Assert.Equal(1, backend.RefreshCount);
     }
 
@@ -1703,6 +1823,11 @@ public static class SemanticRefreshCoordinatorTests
             var projectPath = Path.Combine(repositoryPath, "App.csproj");
             var visibleAdditional = Path.Combine(repositoryPath, "visible.json");
             var visibleConfig = Path.Combine(repositoryPath, ".editorconfig");
+            var outputDirectory = Directory.CreateDirectory(Path.Combine(repositoryPath, "obj")).FullName;
+            var generatedConfig = Path.Combine(outputDirectory, "App.GeneratedMSBuildEditorConfig.editorconfig");
+            var customConfig = Path.Combine(outputDirectory, "custom.editorconfig");
+            await File.WriteAllTextAsync(generatedConfig, "root = true", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(customConfig, "root = true", TestContext.Current.CancellationToken);
             var externalAdditional = Path.Combine(container, "outside.json");
             var externalConfig = Path.Combine(container, ".editorconfig");
             var externalDirectory = Path.Combine(container, "external");
@@ -1734,6 +1859,8 @@ public static class SemanticRefreshCoordinatorTests
                     <AdditionalFiles Include="secret\hidden.json" />
                     <AdditionalFiles Include="linked\linked.json" />
                     <EditorConfigFiles Include=".editorconfig" />
+                    <EditorConfigFiles Include="obj/App.GeneratedMSBuildEditorConfig.editorconfig" />
+                    <EditorConfigFiles Include="obj/custom.editorconfig" />
                     <EditorConfigFiles Include="..\.editorconfig" />
                     <EditorConfigFiles Include="secret\.editorconfig" />
                   </ItemGroup>
@@ -1763,6 +1890,11 @@ public static class SemanticRefreshCoordinatorTests
 
             Assert.Contains(visibleAdditional, inventory.AdditionalDocuments);
             Assert.Contains(visibleConfig, inventory.AnalyzerConfigDocuments);
+            Assert.Contains(customConfig, inventory.AnalyzerConfigDocuments);
+            Assert.DoesNotContain(generatedConfig, inventory.AnalyzerConfigDocuments);
+            Assert.DoesNotContain(loaded, document => document.Path == generatedConfig);
+            Assert.Contains(loaded, document => document.Path == customConfig);
+            Assert.Contains(engine.CaptureAdvancedSnapshot().Solution.Projects.SelectMany(project => project.AnalyzerConfigDocuments), document => document.FilePath == generatedConfig);
             Assert.DoesNotContain(externalAdditional, inventory.AdditionalDocuments);
             Assert.DoesNotContain(externalConfig, inventory.AnalyzerConfigDocuments);
             Assert.DoesNotContain(prohibitedAdditional, inventory.AdditionalDocuments);

@@ -324,9 +324,9 @@ public sealed class SemanticRefreshCoordinator :
             binding.StartWatching(
                 change => QueueChange(binding, change),
                 () => QueueRecovery(binding, restartWatcher: true));
-            var loadedDocuments = await _backend.GetLoadedDocumentsAsync(
+            var loadedDocuments = (await _backend.GetLoadedDocumentsAsync(
                 request.WorkspaceId,
-                cancellationToken);
+                cancellationToken)).Where(document => !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(request.RepositoryPath, document.Path)).ToArray();
             lock (binding.Gate)
             {
                 foreach (var document in loadedDocuments)
@@ -1297,6 +1297,11 @@ public sealed class SemanticRefreshCoordinator :
         string path,
         SemanticFileChangeKind kind)
     {
+        if (SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(binding.Request.RepositoryPath, path))
+        {
+            return false;
+        }
+
         if (kind == SemanticFileChangeKind.Uncertain)
         {
             return true;
@@ -1511,7 +1516,10 @@ public sealed class SemanticRefreshCoordinator :
                     sequence.Reason,
                     sequence.Mode,
                     sequence.ChangedPaths.Count,
-                    sequence.DirtyVersion),
+                    sequence.DirtyVersion)
+                {
+                    TriggerPaths = CaptureTriggerPaths(binding, sequence),
+                },
                 cancellationToken);
         }
     }
@@ -1564,7 +1572,10 @@ public sealed class SemanticRefreshCoordinator :
                     result.DirtyVersion,
                     result.AppliedVersion,
                     result.Confidence,
-                    ToElapsedMilliseconds(result.Duration)),
+                    ToElapsedMilliseconds(result.Duration))
+                {
+                    TriggerPaths = CaptureTriggerPaths(binding, sequence),
+                },
                 cancellationToken);
         }
 
@@ -1724,9 +1735,9 @@ public sealed class SemanticRefreshCoordinator :
                 new Dictionary<string, StableFileContent>(PathComparer);
             if (mode == SemanticRefreshMode.Full)
             {
-                refreshedDocuments = await _backend.GetLoadedDocumentsAsync(
+                refreshedDocuments = (await _backend.GetLoadedDocumentsAsync(
                     binding.Request.WorkspaceId,
-                    cancellationToken);
+                    cancellationToken)).Where(document => !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(binding.Request.RepositoryPath, document.Path)).ToArray();
                 refreshedInventory = _backend.GetRefreshInventory(binding.Request.WorkspaceId);
                 var capturedInputs = preRefreshInputs
                     ?? throw new InvalidOperationException(
@@ -1845,7 +1856,10 @@ public sealed class SemanticRefreshCoordinator :
                         binding.AppliedVersion,
                         failureKind,
                         safeReason[..Math.Min(safeReason.Length, _resourceLimits.MaximumSafeReasonLength)],
-                        ToElapsedMilliseconds(duration)),
+                        ToElapsedMilliseconds(duration))
+                    {
+                        TriggerPaths = CaptureTriggerPaths(binding, sequence),
+                    },
                     CancellationToken.None);
             }
 
@@ -2191,6 +2205,27 @@ public sealed class SemanticRefreshCoordinator :
         }
     }
 
+    private static IReadOnlyList<string> CaptureTriggerPaths(WorkspaceBinding binding, RefreshSequence sequence)
+    {
+        // Paths have already passed binding confinement and prohibited-path admission.
+        // Retain names, never file contents or absolute machine paths, in the lifecycle.
+        var paths = new List<string>();
+        var characters = 0;
+        foreach (var path in sequence.ChangedPaths.Order(PathComparer))
+        {
+            var relative = Path.GetRelativePath(binding.Request.RepositoryPath, path).Replace('\\', '/');
+            if (paths.Count == 16 || characters + relative.Length > 4096)
+            {
+                break;
+            }
+
+            paths.Add(relative);
+            characters += relative.Length;
+        }
+
+        return paths.ToArray();
+    }
+
     private async Task<AuthoritativeInputSnapshot> CaptureAuthoritativeInputSnapshotAsync(
         WorkspaceBinding binding,
         SemanticRefreshInventory inventory,
@@ -2407,6 +2442,11 @@ public sealed class SemanticRefreshCoordinator :
         SemanticRefreshInventory inventory,
         string repositoryPath)
     {
+        if (SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(repositoryPath, change.Path))
+        {
+            return SemanticChangeClassification.Irrelevant;
+        }
+
         if (change.Kind == SemanticFileChangeKind.Uncertain)
         {
             return SemanticChangeClassification.Full;
@@ -3123,6 +3163,11 @@ public sealed class SemanticRefreshCoordinator :
 
             foreach (var path in AppliedIdentities.Keys)
             {
+                if (SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(Request.RepositoryPath, path))
+                {
+                    continue;
+                }
+
                 var directory = Path.GetDirectoryName(path);
                 if (directory is null
                     || scheduled.Contains(directory)

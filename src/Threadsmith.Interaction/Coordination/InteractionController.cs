@@ -161,7 +161,16 @@ public class InteractionController
             }
         }
 
-        var runId = await _presenter.SubmitAsync(sessionId, text, cancellationToken);
+        var submission = _presenter.SubmitAsync(sessionId, text, cancellationToken);
+        if (_presentProgressAsync is not null && !submission.IsCompleted)
+        {
+            await _presentProgressAsync(
+                "Preparing request — waiting for semantic freshness / admission...",
+                submission,
+                cancellationToken);
+        }
+
+        var runId = await submission;
         lock (_gate)
         {
             _activeRunId = runId;

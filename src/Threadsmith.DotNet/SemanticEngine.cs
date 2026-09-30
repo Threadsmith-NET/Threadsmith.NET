@@ -434,7 +434,9 @@ public sealed partial class SemanticEngine : ISemanticEngine
         measurement.ConfinementDuration = Stopwatch.GetElapsedTime(confinementStarted);
 
         var compilationStarted = Stopwatch.GetTimestamp();
-        var staged = publishLoadCompleted || !publishConfidenceChanged;
+
+        // Refresh admission needs a current usable generation, just like startup. Remaining
+        // projects use the same bounded demand preparation and background warming path.
         var loadedProjects = load.Solution.Projects.Select(project =>
         {
             var info = metadata.FirstOrDefault(item => string.Equals(item.FilePath, project.FilePath, PathComparison));
@@ -494,7 +496,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     _preparationSlowSamples.Clear();
                     _preparationHasWorkspaceFailures = measurement.WorkspaceFailureCount > 0;
                     _expectedPreparationPaths = metadata.Select(info => info.FilePath).ToArray();
-                    _initialPublication = staged ? new(TaskCreationOptions.RunContinuationsAsynchronously) : CompletedPublication();
+                    _initialPublication = new(TaskCreationOptions.RunContinuationsAsynchronously);
                     _allowPreparationEvents = false;
                     _pendingInitialResult = null;
                     _generation++;
@@ -507,29 +509,21 @@ public sealed partial class SemanticEngine : ISemanticEngine
             }
 
             var ranked = RankReadinessProjects(load.Solution, solutionPath);
-            if (staged)
+            var pending = new List<Task<SemanticPreparationOutcome>>();
+            var next = 0;
+            while (next < ranked.Length || pending.Count > 0)
             {
-                var pending = new List<Task<SemanticPreparationOutcome>>();
-                var next = 0;
-                while (next < ranked.Length || pending.Count > 0)
+                while (pending.Count < _preparationLimits.Frontier && next < ranked.Length)
                 {
-                    while (pending.Count < _preparationLimits.Frontier && next < ranked.Length)
-                    {
-                        pending.Add(preparation.PrepareAsync(ranked[next++], demand: true, cancellationToken));
-                    }
-
-                    var completed = await Task.WhenAny(pending);
-                    pending.Remove(completed);
-                    if ((await completed).Succeeded)
-                    {
-                        break;
-                    }
+                    pending.Add(preparation.PrepareAsync(ranked[next++], demand: true, cancellationToken));
                 }
-            }
-            else
-            {
-                preparation.Warm(ranked);
-                await preparation.Completion.WaitAsync(cancellationToken);
+
+                var completed = await Task.WhenAny(pending);
+                pending.Remove(completed);
+                if ((await completed).Succeeded)
+                {
+                    break;
+                }
             }
 
             lock (_gate)
@@ -560,18 +554,15 @@ public sealed partial class SemanticEngine : ISemanticEngine
             aggregate,
             Projects,
             diagnostics.Concat(_preparationDiagnostics).ToArray());
-        if (staged)
+        lock (_gate)
         {
-            lock (_gate)
+            if (ownership != _preparationOwnership)
             {
-                if (ownership != _preparationOwnership)
-                {
-                    throw new InvalidOperationException("The semantic preparation owner changed before initial publication.");
-                }
-
-                _pendingInitialResult = result;
-                _pendingInitialOwnership = ownership;
+                throw new InvalidOperationException("The semantic preparation owner changed before initial publication.");
             }
+
+            _pendingInitialResult = result;
+            _pendingInitialOwnership = ownership;
         }
 
         try
@@ -584,6 +575,12 @@ public sealed partial class SemanticEngine : ISemanticEngine
             if (publishLoadCompleted)
             {
                 await _events.PublishAsync(new SemanticLoadCompleted(request.SessionId, DateTimeOffset.UtcNow, request.WorkspaceId, aggregate.ToString()), cancellationToken);
+                await CompleteInitialPublicationAsync(result, succeeded: true, cancellationToken);
+            }
+            else if (publishConfidenceChanged)
+            {
+                // A full refresh owns its confidence publication rather than an initial-load
+                // lifecycle pair. Release preparation after that publication succeeds.
                 await CompleteInitialPublicationAsync(result, succeeded: true, cancellationToken);
             }
         }
@@ -1185,13 +1182,13 @@ public sealed partial class SemanticEngine : ISemanticEngine
             }
 
             return new SemanticRefreshInventory(
-                GetRefreshSourceDocumentPaths(
+                GetRefreshDocumentPaths(
                     _solution.Projects.SelectMany(project => project.Documents),
                     _lastRequest),
-                GetTextDocumentPaths(
+                GetRefreshDocumentPaths(
                     _solution.Projects.SelectMany(project => project.AdditionalDocuments),
                     _lastRequest),
-                GetTextDocumentPaths(
+                GetRefreshDocumentPaths(
                     _solution.Projects.SelectMany(project => project.AnalyzerConfigDocuments),
                     _lastRequest),
                 GetReferencePaths(_solution, _lastRequest));
@@ -1218,12 +1215,12 @@ public sealed partial class SemanticEngine : ISemanticEngine
         var documents = new List<SemanticDocumentRefresh>();
         foreach (var document in solution.Projects
             .SelectMany(project => project.Documents
-                .Where(document => IsSemanticSourceRefreshPathAllowed(document.FilePath, request))
+                .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request))
                 .Cast<TextDocument>()
                 .Concat(project.AdditionalDocuments
-                    .Where(document => IsSemanticInputPathAllowed(document.FilePath, request)))
+                    .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request)))
                 .Concat(project.AnalyzerConfigDocuments
-                    .Where(document => IsSemanticInputPathAllowed(document.FilePath, request))))
+                    .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request))))
             .GroupBy(
                 document => Path.GetFullPath(document.FilePath ?? string.Empty),
                 StringComparerForCurrentPlatform())
@@ -1842,13 +1839,13 @@ public sealed partial class SemanticEngine : ISemanticEngine
             .ToHashSet(StringComparerForCurrentPlatform());
     }
 
-    private static IReadOnlySet<string> GetRefreshSourceDocumentPaths(
+    private static IReadOnlySet<string> GetRefreshDocumentPaths(
         IEnumerable<TextDocument> documents,
         SemanticLoadRequest request)
     {
         return documents
             .Select(document => document.FilePath)
-            .Where(path => IsSemanticSourceRefreshPathAllowed(path, request))
+            .Where(path => IsSemanticRefreshInputPathAllowed(path, request))
             .Select(path => Path.GetFullPath(path ?? string.Empty))
             .ToHashSet(StringComparerForCurrentPlatform());
     }
@@ -2237,7 +2234,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             request.ProhibitedPaths ?? []);
     }
 
-    private static bool IsSemanticSourceRefreshPathAllowed(
+    private static bool IsSemanticRefreshInputPathAllowed(
         string? path,
         SemanticLoadRequest request)
     {
@@ -2246,7 +2243,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             return false;
         }
 
-        return !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
+        return !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(
             request.RepositoryPath,
             Path.GetFullPath(path ?? string.Empty));
     }

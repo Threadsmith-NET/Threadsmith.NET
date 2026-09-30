@@ -936,6 +936,13 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private string ActivityText()
     {
+        if (_toolActivities.FirstOrDefault(activity => activity.SemanticWorkspaceId is not null) is { } refresh)
+        {
+            const string refreshFrames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+            var refreshFrame = (int)((Environment.TickCount64 / 250) % refreshFrames.Length);
+            return $"{refreshFrames[refreshFrame]} {refresh.Format()}";
+        }
+
         if (_agents.Selected.Snapshot is { } child)
         {
             return PrependUnseenOutput(child.Activity ?? child.State.ToString());

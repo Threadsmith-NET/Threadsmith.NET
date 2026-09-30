@@ -6,13 +6,13 @@ using Threadsmith.Core;
 /// <summary>Bounded engine-to-UI dispatcher with redraw coalescing.</summary>
 public sealed class InteractionEventDispatcher
 {
-    private readonly Channel<IDomainEvent> _channel;
+    private readonly Channel<DispatchItem> _channel;
 
     /// <summary>Initializes a new instance of the <see cref="InteractionEventDispatcher"/> class.</summary>
     public InteractionEventDispatcher(int capacity = 256)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(capacity);
-        _channel = Channel.CreateBounded<IDomainEvent>(new BoundedChannelOptions(capacity)
+        _channel = Channel.CreateBounded<DispatchItem>(new BoundedChannelOptions(capacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
             SingleReader = true,
@@ -28,7 +28,7 @@ public sealed class InteractionEventDispatcher
         ArgumentNullException.ThrowIfNull(domainEvent);
         try
         {
-            await _channel.Writer.WriteAsync(domainEvent, cancellationToken);
+            await _channel.Writer.WriteAsync(new DispatchItem(domainEvent, null), cancellationToken);
         }
         catch (ChannelClosedException)
         {
@@ -52,12 +52,19 @@ public sealed class InteractionEventDispatcher
         var batch = new List<IDomainEvent>(64);
         try
         {
-            await foreach (var domainEvent in _channel.Reader.ReadAllAsync(cancellationToken))
+            await foreach (var item in _channel.Reader.ReadAllAsync(cancellationToken))
             {
-                batch.Add(domainEvent);
-                while (batch.Count < 64 && _channel.Reader.TryRead(out var next))
+                if (item.Work is { } work)
                 {
-                    batch.Add(next);
+                    await work(cancellationToken);
+                    continue;
+                }
+
+                batch.Add(item.Event ?? throw new InvalidOperationException("A dispatch item has no operation."));
+                while (batch.Count < 64 && _channel.Reader.TryPeek(out var next) && next.Work is null
+                    && _channel.Reader.TryRead(out next))
+                {
+                    batch.Add(next.Event ?? throw new InvalidOperationException("A dispatch item has no event."));
                 }
 
                 await renderAsync(batch.ToArray(), cancellationToken);
@@ -70,4 +77,20 @@ public sealed class InteractionEventDispatcher
             Complete();
         }
     }
+
+    /// <summary>Serializes frontend state restoration with queued engine events.</summary>
+    internal async Task QueueWorkAsync(Func<CancellationToken, Task> work, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        try
+        {
+            await _channel.Writer.WriteAsync(new DispatchItem(null, work), cancellationToken);
+        }
+        catch (ChannelClosedException)
+        {
+            // The drain owns terminal failure, exactly as for domain-event admission.
+        }
+    }
+
+    private sealed record DispatchItem(IDomainEvent? Event, Func<CancellationToken, Task>? Work);
 }

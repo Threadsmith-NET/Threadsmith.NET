@@ -11,6 +11,9 @@ public sealed record InteractionActivity(
     bool ShowDuration,
     TimeProvider TimeProvider)
 {
+    /// <summary>Gets the workspace owning persistent semantic-refresh activity, when applicable.</summary>
+    public Threadsmith.Core.WorkspaceId? SemanticWorkspaceId { get; init; }
+
     /// <summary>Gets the detail for a live tool block, or null for an ordinary status activity.</summary>
     public string? ToolDetail { get; init; }
 

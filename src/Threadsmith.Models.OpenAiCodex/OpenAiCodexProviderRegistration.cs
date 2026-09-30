@@ -16,6 +16,9 @@ public sealed record OpenAiCodexModelConfiguration : ModelConfiguration
 /// <summary>Registers native Codex Responses models discovered after authentication.</summary>
 public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
 {
+    /// <summary>Default total deadline for one native Codex model request, in seconds.</summary>
+    public const int DefaultTimeoutSeconds = 600;
+
     /// <summary>Logical Threadsmith-owned OAuth credential reference.</summary>
     public const string OAuthSecretReference = "secrets:openai-codex:oauth";
 

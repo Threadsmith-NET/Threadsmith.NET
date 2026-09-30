@@ -457,8 +457,29 @@ public sealed partial class InteractionCoordinator
                 var toolActivitiesChanged = false;
                 var nextActivity = currentActivity;
                 var nextSemanticActivityKey = currentSemanticActivityKey;
-                foreach (var domainEvent in batch.Where(item => item.SessionId == sessionId))
+                foreach (var domainEvent in batch)
                 {
+                    var refreshWorkspace = domainEvent switch
+                    {
+                        SemanticRefreshStarted started => (WorkspaceId?)started.WorkspaceId,
+                        SemanticRefreshCompleted refreshCompleted => refreshCompleted.WorkspaceId,
+                        SemanticRefreshFailed failed => failed.WorkspaceId,
+                        _ => null,
+                    };
+                    if (refreshWorkspace is { } workspace
+                        && (workspace == activeRepository?.Repository?.WorkspaceId
+                            || domainEvent is SemanticRefreshCompleted or SemanticRefreshFailed))
+                    {
+                        // Refresh ownership is the workspace, not the conversation session. A /new
+                        // must not hide a refresh that began while the previous session was active.
+                        toolActivitiesChanged |= operationActivities.Observe(domainEvent);
+                    }
+
+                    if (domainEvent.SessionId != sessionId)
+                    {
+                        continue;
+                    }
+
                     delegations.Observe(domainEvent);
                     if (agents is not null && await agents.ObserveAsync(domainEvent, token))
                     {
@@ -466,7 +487,10 @@ public sealed partial class InteractionCoordinator
                         continue;
                     }
 
-                    toolActivitiesChanged |= operationActivities.Observe(domainEvent);
+                    if (refreshWorkspace is null)
+                    {
+                        toolActivitiesChanged |= operationActivities.Observe(domainEvent);
+                    }
 
                     var occurredDuringStartup = domainEvent.OccurredAt <= startupCompletedAt;
                     if (occurredDuringStartup
@@ -778,7 +802,10 @@ public sealed partial class InteractionCoordinator
                         }
                     }
 
-                    await toolSurface.PresentToolActivitiesAsync(operationActivities.Activities, token);
+                    await toolSurface.PresentToolActivitiesAsync(
+                        operationActivities.Activities.Where(activity => activity.SemanticWorkspaceId is null
+                            || activity.SemanticWorkspaceId == activeRepository?.Repository?.WorkspaceId).ToArray(),
+                        token);
                 }
 
                 if (output.Count > 0)
@@ -1039,6 +1066,12 @@ public sealed partial class InteractionCoordinator
                     if (agents is not null)
                     {
                         await agents.AttachAsync(sessionId, lifetime.Token);
+                        await dispatcher.QueueWorkAsync(
+                            restoreToken => toolSurface is null ? Task.CompletedTask : toolSurface.PresentToolActivitiesAsync(
+                                operationActivities.Activities.Where(activity => activity.SemanticWorkspaceId is not null
+                                    && activity.SemanticWorkspaceId == activeRepository?.Repository?.WorkspaceId).ToArray(),
+                                restoreToken),
+                            lifetime.Token);
                     }
 
                     latestContextInspection = null;
@@ -1072,6 +1105,12 @@ public sealed partial class InteractionCoordinator
                     if (agents is not null)
                     {
                         await agents.AttachAsync(sessionId, lifetime.Token);
+                        await dispatcher.QueueWorkAsync(
+                            restoreToken => toolSurface is null ? Task.CompletedTask : toolSurface.PresentToolActivitiesAsync(
+                                operationActivities.Activities.Where(activity => activity.SemanticWorkspaceId is not null
+                                    && activity.SemanticWorkspaceId == activeRepository?.Repository?.WorkspaceId).ToArray(),
+                                restoreToken),
+                            lifetime.Token);
                     }
 
                     latestContextInspection = null;
@@ -1139,6 +1178,12 @@ public sealed partial class InteractionCoordinator
                     if (agents is not null)
                     {
                         await agents.AttachAsync(sessionId, lifetime.Token);
+                        await dispatcher.QueueWorkAsync(
+                            restoreToken => toolSurface is null ? Task.CompletedTask : toolSurface.PresentToolActivitiesAsync(
+                                operationActivities.Activities.Where(activity => activity.SemanticWorkspaceId is not null
+                                    && activity.SemanticWorkspaceId == activeRepository?.Repository?.WorkspaceId).ToArray(),
+                                restoreToken),
+                            lifetime.Token);
                     }
 
                     latestContextInspection = null;
@@ -1424,6 +1469,12 @@ public sealed partial class InteractionCoordinator
                             if (agents is not null)
                             {
                                 await agents.AttachAsync(sessionId, lifetime.Token);
+                                await dispatcher.QueueWorkAsync(
+                                    restoreToken => toolSurface is null ? Task.CompletedTask : toolSurface.PresentToolActivitiesAsync(
+                                        operationActivities.Activities.Where(activity => activity.SemanticWorkspaceId is not null
+                                            && activity.SemanticWorkspaceId == activeRepository?.Repository?.WorkspaceId).ToArray(),
+                                        restoreToken),
+                                    lifetime.Token);
                             }
 
                             await SetRepositoryPromptAsync(

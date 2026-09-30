@@ -11,6 +11,34 @@ using Xunit;
 /// <summary>Proves preparation ownership, ordering, cancellation, and the real lifecycle barrier.</summary>
 public static class SemanticCompilationCoordinatorTests
 {
+    /// <summary>Full refresh returns usable current coverage and releases ordinary background warming.</summary>
+    [Fact]
+    public static async Task FullRefreshUsesStartupReadinessAndWarmsRemainingProjects()
+    {
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = events.Subscribe((domainEvent, _) =>
+        {
+            observed.Enqueue(domainEvent);
+            return Task.CompletedTask;
+        });
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
+        await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
+        var generation = engine.CaptureAdvancedSnapshot().Generation;
+        observed.Clear();
+
+        var refreshed = await engine.RefreshFullAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, refreshed.Confidence);
+        Assert.True(engine.CaptureAdvancedSnapshot().Generation > generation);
+        Assert.DoesNotContain(observed, item => item is SemanticLoadCompleted);
+        await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(SemanticConfidenceLevel.FullSemantic, engine.Confidence);
+        Assert.Equal(engine.Projects.Count, engine.CaptureAdvancedSnapshot().CompiledProjects.Count);
+    }
+
     /// <summary>Production admits one operation while test bounds reject unreviewed fan-out.</summary>
     [Fact]
     public static void ProductionLimitsAreConservativeAndRejectFanOut()

@@ -1,14 +1,16 @@
 namespace Threadsmith.Interaction.Presentation;
 
 using Threadsmith.Core;
+using Threadsmith.Interaction.Markdown;
 
-/// <summary>Projects tool, MCP, and skill events into the existing shared operation activity surface.</summary>
+/// <summary>Projects tool, MCP, skill, and refresh events into the shared operation activity surface.</summary>
 internal sealed class InteractionOperationActivities
 {
     private readonly TimeProvider _timeProvider;
     private readonly bool _showDurations;
     private readonly Dictionary<object, Entry> _entries = [];
     private readonly Dictionary<SkillInvocationId, SkillWorkflowCheckpointWritten> _skills = [];
+    private IReadOnlyList<InteractionActivity> _snapshot = [];
 
     /// <summary>Initializes a new instance of the <see cref="InteractionOperationActivities"/> class.</summary>
     internal InteractionOperationActivities(TimeProvider timeProvider, bool showDurations)
@@ -18,7 +20,7 @@ internal sealed class InteractionOperationActivities
     }
 
     /// <summary>Gets all active operations for the existing retained surface.</summary>
-    internal IReadOnlyList<InteractionActivity> Activities => _entries.Values.Select(item => item.Activity).ToArray();
+    internal IReadOnlyList<InteractionActivity> Activities => Volatile.Read(ref _snapshot);
 
     /// <summary>Gets tool identities with ordinary agent progress.</summary>
     internal IEnumerable<ToolInvocationId> ToolIds => _entries.Keys.OfType<ToolInvocationId>();
@@ -31,6 +33,7 @@ internal sealed class InteractionOperationActivities
             ToolInvocationStarted started => started.ToolInvocationId,
             SkillWorkflowCheckpointWritten skill => Owner(skill),
             SkillInvocationProgressObserved progress when _skills.TryGetValue(progress.InvocationId, out var skill) => Owner(skill),
+            SemanticRefreshStarted started => started.RefreshId,
             _ => null,
         };
         return key is not null && _entries.TryGetValue(key, out var entry) ? entry.Activity : null;
@@ -39,8 +42,59 @@ internal sealed class InteractionOperationActivities
     /// <summary>Applies one lifecycle or progress event without introducing another display owner.</summary>
     internal bool Observe(IDomainEvent domainEvent)
     {
+        var changed = ObserveCore(domainEvent);
+        if (changed)
+        {
+            Volatile.Write(ref _snapshot, _entries.Values.Select(item => item.Activity).ToArray());
+        }
+
+        return changed;
+    }
+
+    /// <summary>Combines existing delegation progress with host preparation progress.</summary>
+    internal void SetToolProgress(ToolInvocationId id, IReadOnlyList<PresentationTextSegment> progress)
+    {
+        if (_entries.TryGetValue(id, out var entry))
+        {
+            entry.AgentProgress = progress;
+            entry.Refresh();
+            Volatile.Write(ref _snapshot, _entries.Values.Select(item => item.Activity).ToArray());
+        }
+    }
+
+    /// <summary>Recognizes an invocation's terminal or suspended boundary.</summary>
+    internal static bool EndsSkillActivity(SkillInvocationStatus status)
+    {
+        return status is
+        SkillInvocationStatus.Completed or SkillInvocationStatus.Failed or SkillInvocationStatus.Cancelled or SkillInvocationStatus.AwaitingHost;
+    }
+
+    private bool ObserveCore(IDomainEvent domainEvent)
+    {
         switch (domainEvent)
         {
+            case SemanticRefreshStarted started:
+                if (_entries.ContainsKey(started.RefreshId))
+                {
+                    return false;
+                }
+
+                _entries[started.RefreshId] = new(null, new InteractionActivity(
+                    "SEMANTIC REFRESH — new requests blocked",
+                    _timeProvider.GetTimestamp(),
+                    true,
+                    _timeProvider)
+                {
+                    SemanticWorkspaceId = started.WorkspaceId,
+                    ToolDetail = $"{started.Reason}; {started.Mode} refresh; {started.ChangedFileCount} changed file(s)",
+                    ToolProgress = started.TriggerPaths.Take(16)
+                        .Select(path => new PresentationTextSegment($"Triggered by: {TerminalControlEncoder.Encode(path)}", PresentationTextRole.Muted)).ToArray(),
+                });
+                return true;
+            case SemanticRefreshCompleted completed:
+                return _entries.Remove(completed.RefreshId);
+            case SemanticRefreshFailed failed:
+                return _entries.Remove(failed.RefreshId);
             case ToolInvocationStarted started:
                 _entries[started.ToolInvocationId] = new(
                     started.RunId,
@@ -101,23 +155,6 @@ internal sealed class InteractionOperationActivities
             default:
                 return false;
         }
-    }
-
-    /// <summary>Combines existing delegation progress with host preparation progress.</summary>
-    internal void SetToolProgress(ToolInvocationId id, IReadOnlyList<PresentationTextSegment> progress)
-    {
-        if (_entries.TryGetValue(id, out var entry))
-        {
-            entry.AgentProgress = progress;
-            entry.Refresh();
-        }
-    }
-
-    /// <summary>Recognizes an invocation's terminal or suspended boundary.</summary>
-    internal static bool EndsSkillActivity(SkillInvocationStatus status)
-    {
-        return status is
-        SkillInvocationStatus.Completed or SkillInvocationStatus.Failed or SkillInvocationStatus.Cancelled or SkillInvocationStatus.AwaitingHost;
     }
 
     private static object Owner(SkillWorkflowCheckpointWritten skill)

@@ -423,6 +423,9 @@ public sealed class Plan81CodeExploreToolTests
     public async Task CodeExplore_NaturalLanguageQuery_UsesAllowedEntriesForRankingStatistics()
     {
         await using var fixture = await CodeExploreFixture.CreateAsync();
+
+        // Compare policy filtering over identical coverage, independent of background warming.
+        await fixture.Registry.FindSymbolsAsync(fixture.WorkspaceId, "SecretType", TestContext.Current.CancellationToken);
         var request = new CodeExploreRequest
         {
             Query = "secret temporal transparency",

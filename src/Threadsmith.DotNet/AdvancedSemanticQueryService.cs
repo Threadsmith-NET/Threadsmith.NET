@@ -7804,8 +7804,19 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ICodeExploreSourceReader sourceReader,
         CancellationToken cancellationToken)
     {
-        var candidates = await DiscoverCodeExploreCandidatesAsync(readiness, request, sourceReader, cancellationToken);
         var solution = readiness.Solution ?? throw new InvalidOperationException("Code exploration requires a solution.");
+
+        // Exact identities need complete coverage to prove absence or distinguish collisions,
+        // including generated declarations that ordinary syntax discovery cannot see.
+        var anchors = BuildCodeExploreAnchors(request, InterpretCodeExploreQuery(request.Query));
+        if (anchors.Any(anchor => !IsCodeExplorePathAnchor(anchor)))
+        {
+            var required = solution.ProjectIds.ToHashSet();
+            await engine.EnsureProjectsPreparedAsync(solution, required, "code-explore-exact", requireSuccess: true, cancellationToken);
+            return required;
+        }
+
+        var candidates = await DiscoverCodeExploreCandidatesAsync(readiness, request, sourceReader, cancellationToken);
         await engine.EnsureProjectsPreparedAsync(solution, candidates, "code-explore", requireSuccess: true, cancellationToken);
         return candidates;
     }

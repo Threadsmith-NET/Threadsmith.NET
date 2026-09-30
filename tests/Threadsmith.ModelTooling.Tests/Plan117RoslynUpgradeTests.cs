@@ -146,7 +146,7 @@ public static class Plan117RoslynUpgradeTests
         var analyzerPath = Path.Combine(analyzerDirectory, "Threadsmith.SemanticFixtures.Roslyn59.dll");
         File.Copy(Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"), analyzerPath);
         var markerPath = analyzerPath + ".block-generator";
-        var pipeName = "threadsmith-plan118-" + Guid.NewGuid().ToString("N");
+        var pipeName = Guid.NewGuid().ToString("N")[..16];
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var events = new DomainEventStream();
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
@@ -187,9 +187,13 @@ public static class Plan117RoslynUpgradeTests
                 ExactSymbolAnchors = symbolId ? [] : [anchor],
                 Limits = new CodeExploreLimits { MaximumAnchors = 1 },
             };
-            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), TestContext.Current.CancellationToken));
-            var matchesRetainedOwner = anchor is "Owner" or "T:Decoy.Owner";
-            Assert.Contains(matchesRetainedOwner ? "Exact symbol ownership cannot be established" : "Exact symbol absence cannot be established", exception.Message, StringComparison.Ordinal);
+            using var queryCancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            var pendingQuery = queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), queryCancellation.Token);
+            Assert.False(pendingQuery.IsCompleted);
+            await queryCancellation.CancelAsync();
+#pragma warning disable VSTHRD003 // The test owns the query task and joins its explicitly cancelled waiter.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pendingQuery);
+#pragma warning restore VSTHRD003
             await ReleaseGeneratorAsync();
             await registry.GetEngine(load.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
             var afterWarm = registry.GetEngine(load.WorkspaceId).CaptureCodeExploreReadinessSnapshot();
@@ -433,7 +437,7 @@ public static class Plan117RoslynUpgradeTests
         bool retireOwner)
     {
         var temporaryRoot = CopyFixtureToTemporaryRoot();
-        var pipeName = "threadsmith-plan117-" + Guid.NewGuid().ToString("N");
+        var pipeName = Guid.NewGuid().ToString("N")[..16];
         await using var pipe = new NamedPipeServerStream(
             pipeName,
             PipeDirection.InOut,

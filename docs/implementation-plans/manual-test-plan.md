@@ -1,5 +1,21 @@
 # Threadsmith.NET Manual Test Plan
 
+## MTP-275 — Progressive semantic readiness on a large solution
+
+**Prerequisites:** A disposable trusted multi-project repository, an available .NET SDK, interactive and headless surfaces, a reproducible broken project, and a controlled provider for fixed requests. Save source changes before editing during preparation.
+
+1. Open a representative trusted multi-project solution interactively. Record selection-to-composer time and initial confidence. Confirm the composer opens at usable `PartialCompilation` and exactly one initial load completion is observed.
+2. Observe warming to full or honest degraded terminal coverage. Confirm confidence/status updates without duplicate startup output or per-project transcript messages.
+3. Immediately ask about an exact C# path and a natural-language code question. Confirm ordinary tool activity includes any demand wait, relevant source is correct, candidate dependencies are prepared, and excluded projects/generated declarations are disclosed.
+4. Immediately run a global symbol/reference query for a declaration outside initial coverage. Confirm it waits for required coverage, finds the declaration, and does not report authoritative absence from a warming/failed subset.
+5. Edit source during warming and run `/semantic_refresh`. Confirm current generation/source identity, complete refresh attempt, and no obsolete confidence or diagnostics. Repeat with invalid incremental input and cancellation during replacement.
+6. Repeat headlessly with a fixed request, direct `.csproj` selection, a broken project, and cancellation. Confirm partial admission, fail-closed unavailable coverage, existing timeout/exit behavior, and one final output.
+7. Share the workspace with another session/delegated reader. Confirm both receive terminal confidence; detaching one preserves the other's shared work. Switch the last session to another repository and exit during warming. Confirm obsolete work stops, no late status reaches the new binding, and teardown is bounded.
+
+**Expected:** one evaluated workspace and bounded shared compiler preparation serve startup, demand, warming, validation, and refresh. Confidence remains truthful and source generation fences remain effective. Record timings separately from correctness; do not infer native platform coverage from cross-publishing.
+
+**Limitations:** A real terminal is required to assess composer responsiveness and teardown presentation. Use a controlled provider or separately authorized live profile for requests. Native Windows, Linux, and macOS execution must be recorded separately.
+
 ## MTP-255 — Deployed prompt catalog, restart, and authority isolation
 
 1. Create a temporary self-contained publish of Threadsmith and use a deterministic/fake provider capture. Compare the flat `prompts/` directory with the catalog in `docs/operations/prompts.md`; confirm every documented filename appears once, no undeclared Markdown file appears, matching is case-insensitive for collisions, and the published files are identical to their owning source assets.

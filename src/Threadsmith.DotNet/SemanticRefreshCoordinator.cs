@@ -94,6 +94,7 @@ public sealed class SemanticRefreshCoordinator :
             pathSafetyValidator: null,
             resourceLimits: resourceLimits)
     {
+        semanticEngines.SetConfidencePublisher(PublishWorkspaceConfidenceAsync);
     }
 
     /// <inheritdoc />
@@ -292,7 +293,8 @@ public sealed class SemanticRefreshCoordinator :
                     _watcherFactory);
                 if (_workspaceBindings.Remove(request.WorkspaceId, out var replacedWorkspace))
                 {
-                    MarkBindingObsolete(replacedWorkspace);
+                    // Direct binding adopts the engine's already-loaded preparation and retires older operations.
+                    MarkBindingObsolete(replacedWorkspace, retainCurrentPreparation: true);
                     foreach (var alias in replacedWorkspace.SessionIds)
                     {
                         _bindings[alias] = binding;
@@ -387,11 +389,12 @@ public sealed class SemanticRefreshCoordinator :
                     if (_workspaceBindings.TryGetValue(request.WorkspaceId, out var currentWorkspace)
                         && ReferenceEquals(currentWorkspace, binding))
                     {
+                        MarkBindingObsolete(binding);
                         _workspaceBindings.Remove(request.WorkspaceId);
                     }
                 }
 
-                await DisposeBindingAsync(binding, CancellationToken.None);
+                await DisposeBindingAsync(binding);
             }
 
             throw;
@@ -452,6 +455,7 @@ public sealed class SemanticRefreshCoordinator :
         SessionId sessionId,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         var bindingsToDispose = new HashSet<WorkspaceBinding>();
         lock (_gate)
         {
@@ -460,7 +464,7 @@ public sealed class SemanticRefreshCoordinator :
 
         foreach (var binding in bindingsToDispose)
         {
-            await DisposeBindingAsync(binding, cancellationToken);
+            await DisposeBindingAsync(binding);
         }
     }
 
@@ -829,7 +833,7 @@ public sealed class SemanticRefreshCoordinator :
 
         foreach (var binding in bindings)
         {
-            await DisposeBindingAsync(binding, CancellationToken.None);
+            await DisposeBindingAsync(binding);
         }
 
         _lifetimeCancellation.Dispose();
@@ -858,6 +862,19 @@ public sealed class SemanticRefreshCoordinator :
                 request.WorkspaceId,
                 publication,
                 cancellationToken);
+    }
+
+    /// <summary>Publishes a reused binding's current confidence in order with workspace preparation.</summary>
+    internal async Task PublishReusedBindingAsync(
+        SemanticLoadRequest request,
+        Func<SemanticConfidenceLevel, CancellationToken, Task> publication,
+        CancellationToken cancellationToken)
+    {
+        var binding = GetBinding(request.SessionId, required: true)
+            ?? throw new InvalidOperationException("No semantic workspace binding is available.");
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, binding.LifetimeCancellation.Token);
+        await EnsureCurrentAsync(request.SessionId, SemanticRefreshReason.UserAdmission, lifetime.Token);
+        await _backend.PublishCurrentConfidenceAsync(request.WorkspaceId, publication, lifetime.Token);
     }
 
     /// <summary>Queues a deterministic watcher recovery signal for focused verification.</summary>
@@ -1045,7 +1062,7 @@ public sealed class SemanticRefreshCoordinator :
     {
         foreach (var binding in bindings)
         {
-            await DisposeBindingAsync(binding, CancellationToken.None);
+            await DisposeBindingAsync(binding);
         }
     }
 
@@ -1100,6 +1117,46 @@ public sealed class SemanticRefreshCoordinator :
         return null;
     }
 
+    private async Task PublishWorkspaceConfidenceAsync(
+        SemanticLoadRequest request,
+        SemanticConfidenceLevel confidence,
+        CancellationToken cancellationToken)
+    {
+        WorkspaceBinding? binding;
+        lock (_gate)
+        {
+            _workspaceBindings.TryGetValue(request.WorkspaceId, out binding);
+        }
+
+        if (binding is null)
+        {
+            return;
+        }
+
+        lock (binding.Gate)
+        {
+            if (binding.IsObsolete || !AreEquivalentBindings(binding.Request, request))
+            {
+                return;
+            }
+        }
+
+        using var publicationLifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, binding.LifetimeCancellation.Token);
+        foreach (var sessionId in GetBindingSessionIds(binding))
+        {
+            lock (_gate)
+            {
+                if (!_bindings.TryGetValue(sessionId, out var current) || !ReferenceEquals(current, binding))
+                {
+                    continue;
+                }
+            }
+
+            publicationLifetime.Token.ThrowIfCancellationRequested();
+            await _events.PublishAsync(new SemanticConfidenceChanged(sessionId, _timeProvider.GetUtcNow(), confidence.ToString()), publicationLifetime.Token);
+        }
+    }
+
     private SessionId[] GetBindingSessionIds(WorkspaceBinding binding)
     {
         lock (_gate)
@@ -1108,7 +1165,7 @@ public sealed class SemanticRefreshCoordinator :
         }
     }
 
-    private static void MarkBindingObsolete(WorkspaceBinding binding)
+    private void MarkBindingObsolete(WorkspaceBinding binding, bool retainCurrentPreparation = false)
     {
         lock (binding.Gate)
         {
@@ -1118,6 +1175,9 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             binding.IsObsolete = true;
+
+            // Called under the binding-map gate: capture/fence this owner before a replacement can be installed.
+            binding.PreparationRetirement = _backend.RetirePreparationAsync(binding.Request.WorkspaceId, retainCurrentPreparation, CancellationToken.None);
             if (binding.IsLoading)
             {
                 binding.InitialLoadCompletion.TrySetException(
@@ -2709,9 +2769,7 @@ public sealed class SemanticRefreshCoordinator :
         SemanticRefreshMetrics.Duration.Record(duration.TotalMilliseconds, modeTag, outcomeTag);
     }
 
-    private async Task DisposeBindingAsync(
-        WorkspaceBinding binding,
-        CancellationToken cancellationToken)
+    private async Task DisposeBindingAsync(WorkspaceBinding binding)
     {
         Task? worker;
         lock (binding.Gate)
@@ -2744,7 +2802,9 @@ public sealed class SemanticRefreshCoordinator :
         {
             try
             {
-                await worker.WaitAsync(cancellationToken);
+#pragma warning disable VSTHRD003 // Detached binding cleanup joins its owned worker independently of the former waiter.
+                await worker;
+#pragma warning restore VSTHRD003
             }
             catch (OperationCanceledException) when (binding.LifetimeCancellation.IsCancellationRequested)
             {
@@ -2761,6 +2821,9 @@ public sealed class SemanticRefreshCoordinator :
             }
         }
 
+#pragma warning disable VSTHRD003 // This task captured the retired preparation before the binding-map gate was released.
+        await binding.PreparationRetirement;
+#pragma warning restore VSTHRD003
         binding.LifetimeCancellation.Dispose();
     }
 
@@ -2811,6 +2874,8 @@ public sealed class SemanticRefreshCoordinator :
         public long DirtyVersion { get; set; }
 
         public bool DisposalStarted { get; set; }
+
+        public Task PreparationRetirement { get; set; } = Task.CompletedTask;
 
         public long ForceAppliedVersion { get; set; }
 
@@ -3278,8 +3343,17 @@ internal sealed record SemanticBindingBeginResult(
 /// <summary>Test seam for semantic refresh execution without filesystem timing.</summary>
 internal interface ISemanticRefreshBackend
 {
+    /// <summary>Stops preparation after the last workspace binding owner detaches.</summary>
+    Task RetirePreparationAsync(WorkspaceId workspaceId, bool retainCurrentPreparation, CancellationToken cancellationToken) => Task.CompletedTask;
+
     /// <summary>Gets current workspace confidence.</summary>
     SemanticConfidenceLevel GetConfidence(WorkspaceId workspaceId);
+
+    /// <summary>Captures confidence and publishes it under the preparation publication boundary.</summary>
+    Task PublishCurrentConfidenceAsync(
+        WorkspaceId workspaceId,
+        Func<SemanticConfidenceLevel, CancellationToken, Task> publication,
+        CancellationToken cancellationToken) => publication(GetConfidence(workspaceId), cancellationToken);
 
     /// <summary>Gets exact loaded semantic document membership by Roslyn document kind.</summary>
     SemanticRefreshInventory GetRefreshInventory(WorkspaceId workspaceId);
@@ -3338,9 +3412,24 @@ internal sealed class RegistrySemanticRefreshBackend : ISemanticRefreshBackend
     }
 
     /// <inheritdoc />
+    public Task RetirePreparationAsync(WorkspaceId workspaceId, bool retainCurrentPreparation, CancellationToken cancellationToken)
+    {
+        return _semanticEngines.GetEngine(workspaceId).RetirePreparationAsync(retainCurrentPreparation, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public SemanticConfidenceLevel GetConfidence(WorkspaceId workspaceId)
     {
         return _semanticEngines.GetConfidence(workspaceId);
+    }
+
+    /// <inheritdoc />
+    public Task PublishCurrentConfidenceAsync(
+        WorkspaceId workspaceId,
+        Func<SemanticConfidenceLevel, CancellationToken, Task> publication,
+        CancellationToken cancellationToken)
+    {
+        return _semanticEngines.GetEngine(workspaceId).PublishCurrentConfidenceAsync(publication, cancellationToken);
     }
 
     /// <inheritdoc />

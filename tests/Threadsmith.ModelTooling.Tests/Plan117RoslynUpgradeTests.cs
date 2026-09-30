@@ -1,6 +1,7 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Text;
@@ -56,7 +57,7 @@ public static class Plan117RoslynUpgradeTests
             new FixtureSourceReader(root),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, load.Confidence);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
         Assert.Contains(load.Projects, project => project.Name == "Contracts"
             && project.TargetFrameworks.Contains("net10.0", StringComparer.Ordinal)
             && project.TargetFrameworks.Contains("net9.0", StringComparer.Ordinal));
@@ -101,6 +102,7 @@ public static class Plan117RoslynUpgradeTests
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
         var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         await registry.LoadAsync(request, TestContext.Current.CancellationToken);
+        await registry.GetEngine(request.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
 
         var result = await queries.QueryCodeExploreAsync(
             request.WorkspaceId,
@@ -128,6 +130,124 @@ public static class Plan117RoslynUpgradeTests
         Assert.DoesNotContain(result.ContinuationTargets, target => target.Kind == CodeExploreAnchorKind.Path);
     }
 
+    /// <summary>Omitted projects prevent claims of exact absence or unique ownership while warming is blocked.</summary>
+    [Theory]
+    [InlineData("M:Wanted.Owner.Calculate", true)]
+    [InlineData("Wanted.Owner.Calculate", false)]
+    [InlineData("P:SmallSolution.Contracts.GeneratedByRoslyn59.Value", true)]
+    [InlineData("T:Wanted.CS", true)]
+    [InlineData("Owner", false)]
+    [InlineData("T:Decoy.Owner", true)]
+    public static async Task CodeExplore_ExactIdentityCannotClaimAbsenceFromOmittedCandidateProjects(string anchor, bool symbolId)
+    {
+        var root = CopyFixtureToTemporaryRoot();
+        var analyzerDirectory = Path.Combine(AppContext.BaseDirectory, "plan118", "exact-anchors", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(analyzerDirectory);
+        var analyzerPath = Path.Combine(analyzerDirectory, "Threadsmith.SemanticFixtures.Roslyn59.dll");
+        File.Copy(Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"), analyzerPath);
+        var markerPath = analyzerPath + ".block-generator";
+        var pipeName = "threadsmith-plan118-" + Guid.NewGuid().ToString("N");
+        await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        await using var events = new DomainEventStream();
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        var released = false;
+        try
+        {
+            var contractsPath = Path.Combine(root, "Contracts", "Contracts.csproj");
+            var contracts = XDocument.Load(contractsPath);
+            contracts.Descendants("Analyzer").Remove();
+            contracts.Save(contractsPath);
+            var appPath = Path.Combine(root, "App", "App.csproj");
+            var app = XDocument.Load(appPath);
+            app.Root!.Add(new XElement("ItemGroup", new XElement("Analyzer", new XAttribute("Include", analyzerPath))));
+            app.Save(appPath);
+            await File.WriteAllTextAsync(Path.Combine(root, "Contracts", "Decoy.cs"), "namespace Decoy; public class Owner { public void Calculate() {} } public class GeneratedByRoslyn59 { public int Value => 1; } public class CS {}", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(root, "App", "Program.cs"), "namespace Wanted; public class Owner { public void Calculate() {} } public class CS {}", TestContext.Current.CancellationToken);
+            await File.WriteAllTextAsync(markerPath, pipeName, TestContext.Current.CancellationToken);
+            var load = await registry.LoadForBindingAsync(CreateLoadRequest(root), TestContext.Current.CancellationToken);
+            await registry.CompleteInitialPublicationAsync(load, true, TestContext.Current.CancellationToken);
+            await pipe.WaitForConnectionAsync(TestContext.Current.CancellationToken);
+            var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+            var beforeWarm = registry.GetEngine(load.WorkspaceId).CaptureCodeExploreReadinessSnapshot();
+            var truncated = await queries.QueryCodeExploreAsync(
+                load.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = "Contracts/Decoy.cs",
+                    PathAnchors = [new CodeExplorePathAnchor { Path = "Contracts/Decoy.cs", SelectionMode = CodeExplorePathSelectionMode.WholeFile }],
+                    Limits = new CodeExploreLimits { MaximumSourceCharacters = 1, MaximumPerFileSourceCharacters = 1 },
+                },
+                new FixtureSourceReader(root),
+                TestContext.Current.CancellationToken);
+            var continuation = Assert.Single(truncated.ContinuationTargets);
+            var request = new CodeExploreRequest
+            {
+                Query = "explain exact declaration",
+                SymbolIds = symbolId ? [anchor] : [],
+                ExactSymbolAnchors = symbolId ? [] : [anchor],
+                Limits = new CodeExploreLimits { MaximumAnchors = 1 },
+            };
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), TestContext.Current.CancellationToken));
+            var matchesRetainedOwner = anchor is "Owner" or "T:Decoy.Owner";
+            Assert.Contains(matchesRetainedOwner ? "Exact symbol ownership cannot be established" : "Exact symbol absence cannot be established", exception.Message, StringComparison.Ordinal);
+            await ReleaseGeneratorAsync();
+            await registry.GetEngine(load.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
+            var afterWarm = registry.GetEngine(load.WorkspaceId).CaptureCodeExploreReadinessSnapshot();
+            Assert.True(afterWarm.Generation > beforeWarm.Generation);
+            Assert.Equal(beforeWarm.SourceGeneration, afterWarm.SourceGeneration);
+            var replayed = await queries.QueryCodeExploreAsync(
+                load.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = continuation.Anchor,
+                    PathAnchors =
+                    [
+                        new CodeExplorePathAnchor
+                        {
+                            Path = continuation.FilePath ?? continuation.Anchor,
+                            Line = continuation.StartLine,
+                            EndLine = continuation.EndLine,
+                            SelectionMode = continuation.SelectionMode ?? CodeExplorePathSelectionMode.ExactLineRange,
+                            ExpectedFileSha256 = continuation.ExpectedFileSha256,
+                            ExpectedWorkspaceGeneration = continuation.WorkspaceGeneration,
+                        },
+                    ],
+                },
+                new FixtureSourceReader(root),
+                TestContext.Current.CancellationToken);
+            Assert.Equal(truncated.WorkspaceGeneration, replayed.WorkspaceGeneration);
+            Assert.NotEmpty(replayed.FileSections);
+            Assert.All(replayed.FileSections, section => Assert.Equal(CodeExploreSourceCompleteness.Complete, section.Source.Completeness));
+            var result = await queries.QueryCodeExploreAsync(load.WorkspaceId, request, new FixtureSourceReader(root), TestContext.Current.CancellationToken);
+            Assert.Contains(result.ResolvedAnchors, resolution => resolution.Outcome == (anchor == "Owner" ? CodeExploreResolutionOutcome.Ambiguous : CodeExploreResolutionOutcome.Resolved));
+            Assert.NotEmpty(result.FileSections);
+        }
+        finally
+        {
+            await ReleaseGeneratorAsync();
+            await registry.DisposeAsync();
+            DeleteOwnedTemporaryRoot(root);
+        }
+
+        async Task ReleaseGeneratorAsync()
+        {
+            if (released)
+            {
+                return;
+            }
+
+            File.Delete(markerPath);
+            if (pipe.IsConnected)
+            {
+                await pipe.WriteAsync(new byte[] { 1 }, CancellationToken.None);
+                var acknowledgement = new byte[1];
+                Assert.Equal(1, await pipe.ReadAsync(acknowledgement, CancellationToken.None));
+            }
+
+            released = true;
+        }
+    }
+
     /// <summary>A physical generated-looking source file retains ordinary path and drift enforcement.</summary>
     [Fact]
     public static async Task CodeExplore_PhysicalGeneratedLookingFile_DetectsDiskDrift()
@@ -146,7 +266,8 @@ public static class Plan117RoslynUpgradeTests
             await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
             var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
             var load = await registry.LoadAsync(request, TestContext.Current.CancellationToken);
-            Assert.Equal(SemanticConfidenceLevel.FullSemantic, load.Confidence);
+            Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
+            await registry.GetEngine(request.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
 
             await File.WriteAllTextAsync(
                 sourcePath,
@@ -191,7 +312,7 @@ public static class Plan117RoslynUpgradeTests
             TestContext.Current.CancellationToken);
 
         Assert.True(
-            load.Confidence == SemanticConfidenceLevel.FullSemantic,
+            load.Confidence >= SemanticConfidenceLevel.PartialCompilation,
             string.Join(Environment.NewLine, logger.Messages.Select(message => message.Text)));
         var measurement = Assert.Single(
             logger.Messages,
@@ -259,11 +380,8 @@ public static class Plan117RoslynUpgradeTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             engine.LoadAsync(CreateLoadRequest(FixtureRoot), TestContext.Current.CancellationToken));
 
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, engine.Confidence);
-        var symbols = await engine.FindSymbolsAsync(
-            "UpperValue",
-            TestContext.Current.CancellationToken);
-        Assert.NotEmpty(symbols);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, engine.Confidence);
+        Assert.NotEmpty(engine.CaptureAdvancedSnapshot().CompiledProjects);
     }
 
     /// <summary>A valid target analyzer assembly whose analyzer cannot be created cannot retain full confidence.</summary>
@@ -303,13 +421,16 @@ public static class Plan117RoslynUpgradeTests
 
     /// <summary>Blocked analyzer and generator construction cannot prevent load or full-refresh cancellation.</summary>
     [Theory]
-    [InlineData("analyzer", false)]
-    [InlineData("generator", false)]
-    [InlineData("analyzer", true)]
-    [InlineData("generator", true)]
+    [InlineData("analyzer", false, false)]
+    [InlineData("generator", false, false)]
+    [InlineData("analyzer", true, false)]
+    [InlineData("generator", true, false)]
+    [InlineData("generator", false, true)]
+    [InlineData("generator", true, true)]
     public static async Task SemanticEngine_BlockedAnalyzerConstruction_CancelsWithoutPublishingState(
         string component,
-        bool refresh)
+        bool refresh,
+        bool retireOwner)
     {
         var temporaryRoot = CopyFixtureToTemporaryRoot();
         var pipeName = "threadsmith-plan117-" + Guid.NewGuid().ToString("N");
@@ -334,7 +455,7 @@ public static class Plan117RoslynUpgradeTests
         var analyzerPath = Path.Combine(
             AppContext.BaseDirectory,
             "plan117",
-            $"analyzer-blocking-{component}-{refresh}",
+            $"analyzer-blocking-{component}-{refresh}-{retireOwner}",
             "Threadsmith.SemanticFixtures.Roslyn59.dll");
         var markerPath = analyzerPath + ".block-" + component;
         try
@@ -344,7 +465,8 @@ public static class Plan117RoslynUpgradeTests
             {
                 SetFixtureAnalyzerPath(temporaryRoot, Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"));
                 var initialLoad = await engine.LoadAsync(request, TestContext.Current.CancellationToken);
-                Assert.Equal(SemanticConfidenceLevel.FullSemantic, initialLoad.Confidence);
+                Assert.Equal(SemanticConfidenceLevel.PartialCompilation, initialLoad.Confidence);
+                await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
                 publishedEvents.Clear();
             }
 
@@ -359,17 +481,27 @@ public static class Plan117RoslynUpgradeTests
                 ? engine.RefreshFullAsync(cancellation.Token)
                 : engine.LoadAsync(request, cancellation.Token);
             await pipe.WaitForConnectionAsync(TestContext.Current.CancellationToken);
-            await cancellation.CancelAsync();
-            var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-                operation.WaitAsync(TestContext.Current.CancellationToken));
+            if (retireOwner)
+            {
+                var retirement = engine.RetirePreparationAsync(retainCurrentPreparation: false, TestContext.Current.CancellationToken);
+                var exception = await Assert.ThrowsAnyAsync<Exception>(() => operation.WaitAsync(TestContext.Current.CancellationToken));
+                Assert.True(exception is InvalidOperationException or OperationCanceledException);
+                await retirement;
+            }
+            else
+            {
+                await cancellation.CancelAsync();
+                var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation.WaitAsync(TestContext.Current.CancellationToken));
+                Assert.Equal(cancellation.Token, exception.CancellationToken);
+            }
 
             // Assert: cancellation completes while construction is blocked, without publishing replacement state.
-            Assert.Equal(cancellation.Token, exception.CancellationToken);
             Assert.Empty(publishedEvents);
             Assert.Equal(
                 refresh ? SemanticConfidenceLevel.FullSemantic : SemanticConfidenceLevel.None,
                 engine.Confidence);
-            Assert.Single(logger.Messages, message => message.Text.StartsWith("Semantic load cancelled:", StringComparison.Ordinal));
+            Assert.Single(logger.Messages, message => message.Text.StartsWith("Semantic load cancelled:", StringComparison.Ordinal)
+                || (retireOwner && message.Text.StartsWith("Semantic load failed:", StringComparison.Ordinal)));
             if (refresh)
             {
                 Assert.NotEmpty(await engine.FindSymbolsAsync("UpperValue", TestContext.Current.CancellationToken));
@@ -474,7 +606,9 @@ public static class Plan117RoslynUpgradeTests
                 CreateLoadRequest(temporaryRoot),
                 TestContext.Current.CancellationToken);
 
-            Assert.Equal(SemanticConfidenceLevel.FullSemantic, load.Confidence);
+            Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
+            await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(SemanticConfidenceLevel.FullSemantic, engine.Confidence);
             Assert.Empty(load.Diagnostics);
         }
         finally
@@ -496,19 +630,34 @@ public static class Plan117RoslynUpgradeTests
         }
 
         var normalizedRepositoryRoot = Path.GetFullPath(repositoryRoot);
+        var temporaryRoot = target is "generator" or "broken" ? CopyFixtureToTemporaryRoot() : null;
+        using var temporaryInputs = temporaryRoot is null ? null : new OwnedMeasurementInputs(temporaryRoot);
+        if (temporaryRoot is not null)
+        {
+            SetFixtureAnalyzerPath(temporaryRoot, target == "broken"
+                ? Path.Combine(temporaryRoot, "MissingGenerator.dll")
+                : Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"));
+            if (target == "generator")
+            {
+                AddGeneratorMeasurementProjects(temporaryRoot);
+            }
+        }
+
         (var loadRoot, var selection) = target switch
         {
             "fixture" => (FixtureRoot, Path.Combine(FixtureRoot, "SmallDotNetSolution.sln")),
             "app" => (normalizedRepositoryRoot, Path.Combine(normalizedRepositoryRoot, "src", "Threadsmith.App", "Threadsmith.App.csproj")),
             "solution" => (normalizedRepositoryRoot, Path.Combine(normalizedRepositoryRoot, "src", "Threadsmith.sln")),
+            "generator" or "broken" => (temporaryRoot ?? throw new InvalidOperationException("Missing measurement inputs."), Path.Combine(temporaryRoot ?? string.Empty, "SmallDotNetSolution.sln")),
             _ => throw new InvalidOperationException("Unknown Plan 117 performance target."),
         };
 
         for (var iteration = 1; iteration <= 3; iteration++)
         {
+            var workers = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_WORKERS") == "2" ? 2 : 1;
             var logger = new RecordingLogger<SemanticEngine>();
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, logger);
+            await using var engine = new SemanticEngine(events, logger, new SemanticPreparationLimits { Workers = workers, Frontier = workers });
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -516,24 +665,151 @@ public static class Plan117RoslynUpgradeTests
                 selection,
                 RepositoryTrustLevel.TrustedBuild);
 
-            var load = await engine.LoadAsync(request, TestContext.Current.CancellationToken);
+            using var process = Process.GetCurrentProcess();
+            var cpuStarted = process.TotalProcessorTime;
+            var started = Stopwatch.GetTimestamp();
+            var load = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_BASELINE") == "1"
+                ? await engine.LoadCoreAsync(request, publishLoadCompleted: false, publishConfidenceChanged: true, allowTextFallback: false, TestContext.Current.CancellationToken)
+                : await engine.LoadAsync(request, TestContext.Current.CancellationToken);
 
-            var measurement = Assert.Single(
-                logger.Messages,
-                message => message.Level == LogLevel.Information
-                    && message.Text.StartsWith("Semantic load ", StringComparison.Ordinal));
+            var usableMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+
+            var measurement = logger.Messages.Last(message => message.Level == LogLevel.Information
+                && message.Text.StartsWith("Semantic load ", StringComparison.Ordinal));
             TestContext.Current.TestOutputHelper?.WriteLine(
                 $"P117 target={target} iteration={iteration} {measurement.Text}");
-            var expectedConfidence = target == "solution"
+            var scopedProjectPath = target switch
+            {
+                "solution" => Path.Combine(loadRoot, "src", "Threadsmith.Core", "Threadsmith.Core.csproj"),
+                "app" => selection,
+                _ => Path.Combine(loadRoot, "Contracts", "Contracts.csproj"),
+            };
+            var scopedStarted = Stopwatch.GetTimestamp();
+            if (target == "broken")
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => engine.GetDiagnosticsAsync([scopedProjectPath], [], TestContext.Current.CancellationToken));
+            }
+            else
+            {
+                await engine.GetDiagnosticsAsync([scopedProjectPath], [], TestContext.Current.CancellationToken);
+            }
+
+            var scopedMs = Stopwatch.GetElapsedTime(scopedStarted).TotalMilliseconds;
+            await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
+            var warmMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            var globalStarted = Stopwatch.GetTimestamp();
+            if (target == "broken")
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => engine.FindSymbolsAsync("MessageService", TestContext.Current.CancellationToken));
+            }
+            else
+            {
+                await engine.FindSymbolsAsync("MessageService", TestContext.Current.CancellationToken);
+            }
+
+            var globalMs = Stopwatch.GetElapsedTime(globalStarted).TotalMilliseconds;
+            var snapshot = engine.CaptureAdvancedSnapshot();
+            if (target != "broken")
+            {
+                Assert.Equal(snapshot.Solution.ProjectIds.Count, snapshot.CompiledProjects.Count);
+            }
+
+            var generatedCount = 0;
+            foreach (var project in snapshot.Solution.Projects.Where(project => snapshot.CompiledProjects.Contains(project.Id)))
+            {
+                var generated = (await project.GetSourceGeneratedDocumentsAsync(TestContext.Current.CancellationToken)).ToArray();
+                generatedCount += generated.Length;
+                if (target == "generator" && project.AnalyzerReferences.Any(reference => Path.GetFileName(reference.FullPath) == "Threadsmith.SemanticFixtures.Roslyn59.dll"))
+                {
+                    var declaration = Assert.Single(generated, document => document.Name == "GeneratedByRoslyn59.g.cs");
+                    Assert.Contains("public sealed class GeneratedByRoslyn59", (await declaration.GetTextAsync(TestContext.Current.CancellationToken)).ToString(), StringComparison.Ordinal);
+                }
+            }
+
+            if (target == "generator")
+            {
+                Assert.True(generatedCount >= 11, "Every independent generator project must retain its generated declaration.");
+            }
+
+            process.Refresh();
+            TestContext.Current.TestOutputHelper?.WriteLine(
+                $"P118 target={target} iteration={iteration} workers={workers} frontier={workers} diagnosticProject={Path.GetFileName(scopedProjectPath)} usableMs={usableMs:F1} warmMs={warmMs:F1} scopedDiagnosticsMs={scopedMs:F1} globalSymbolsMs={globalMs:F1} cpuMs={(process.TotalProcessorTime - cpuStarted).TotalMilliseconds:F1} peakWorkingSetBytes={process.PeakWorkingSet64} workingSetBytes={process.WorkingSet64} generatedDocuments={generatedCount} projects={snapshot.Solution.ProjectIds.Count} compiled={snapshot.CompiledProjects.Count} initial={load.Confidence} final={engine.Confidence}");
+            foreach (var warmMeasurement in logger.Messages.Where(message => message.Text.StartsWith("Semantic warm completed:", StringComparison.Ordinal)))
+            {
+                TestContext.Current.TestOutputHelper?.WriteLine($"P118-queue iteration={iteration} {warmMeasurement.Text}");
+            }
+
+            var expectedConfidence = target is "solution" or "broken"
                 ? SemanticConfidenceLevel.PartialCompilation
                 : SemanticConfidenceLevel.FullSemantic;
             Assert.True(
-                load.Confidence == expectedConfidence,
+                engine.Confidence == expectedConfidence,
                 string.Join(Environment.NewLine, load.Diagnostics.Concat(logger.Messages.Select(message => message.Text))));
-            if (target != "solution")
+            if (target is not "solution" and not "broken")
             {
                 Assert.Empty(load.Diagnostics);
             }
+        }
+    }
+
+    /// <summary>Measures an immediately submitted code-explore question through the shared registry/tool path.</summary>
+    [Fact]
+    [Trait("Category", "Performance")]
+    public static async Task StagedCodeExplorePerformanceEvidenceUsesProductionQueryPath()
+    {
+        var target = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_QUERY_PERFORMANCE_TARGET");
+        var repositoryRoot = Environment.GetEnvironmentVariable("THREADSMITH_PLAN117_REPOSITORY_ROOT");
+        if (string.IsNullOrWhiteSpace(target) || string.IsNullOrWhiteSpace(repositoryRoot))
+        {
+            Assert.Skip("Set the Plan 118 query performance target and repository root for first-query evidence.");
+        }
+
+        var root = target == "fixture" ? FixtureRoot : Path.GetFullPath(repositoryRoot);
+        var selection = target switch
+        {
+            "fixture" => Path.Combine(root, "SmallDotNetSolution.sln"),
+            "app" => Path.Combine(root, "src", "Threadsmith.App", "Threadsmith.App.csproj"),
+            "solution" => Path.Combine(root, "src", "Threadsmith.sln"),
+            _ => throw new InvalidOperationException("Unknown first-query measurement target."),
+        };
+        var path = target switch
+        {
+            "fixture" => "App/Program.cs",
+            "app" => "src/Threadsmith.App/Program.cs",
+            _ => "src/Threadsmith.DotNet/SemanticEngine.cs",
+        };
+        for (var iteration = 1; iteration <= 3; iteration++)
+        {
+            await using var events = new DomainEventStream();
+            await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, selection, RepositoryTrustLevel.TrustedBuild);
+            var started = Stopwatch.GetTimestamp();
+            if (Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_BASELINE") == "1")
+            {
+                await registry.GetEngine(request.WorkspaceId).LoadCoreAsync(request, publishLoadCompleted: false, publishConfidenceChanged: true, allowTextFallback: false, TestContext.Current.CancellationToken);
+            }
+            else
+            {
+                await registry.LoadAsync(request, TestContext.Current.CancellationToken);
+            }
+
+            var queryStarted = Stopwatch.GetTimestamp();
+            var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
+            var result = await queries.QueryCodeExploreAsync(
+                request.WorkspaceId,
+                new CodeExploreRequest
+                {
+                    Query = "Explain the selected implementation",
+                    PathAnchors = [new CodeExplorePathAnchor { Path = path }],
+                    Limits = new CodeExploreLimits { TimeoutMilliseconds = 60000 },
+                },
+                new FixtureSourceReader(root),
+                TestContext.Current.CancellationToken);
+            var queryMs = Stopwatch.GetElapsedTime(queryStarted).TotalMilliseconds;
+            var selectionToResultMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            Assert.NotEmpty(result.FileSections);
+            await registry.GetEngine(request.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
+            TestContext.Current.TestOutputHelper?.WriteLine($"P118-query target={target} iteration={iteration} firstCodeExploreMs={queryMs:F1} selectionToQueryResultMs={selectionToResultMs:F1} sections={result.FileSections.Count} confidence={result.Confidence}");
         }
     }
 
@@ -542,6 +818,28 @@ public static class Plan117RoslynUpgradeTests
         "fixtures",
         "semantic",
         "SmallDotNetSolution");
+
+    private static void AddGeneratorMeasurementProjects(string root)
+    {
+        var solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
+        var solutionText = File.ReadAllText(solutionPath);
+        var entries = new StringBuilder();
+        for (var index = 0; index < 10; index++)
+        {
+            var name = "Generator" + index;
+            var directory = Path.Combine(root, name);
+            Directory.CreateDirectory(directory);
+            var propertyGroup = new XElement("PropertyGroup", new XElement("TargetFramework", "net10.0"));
+            var analyzer = new XElement("Analyzer", new XAttribute("Include", Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll")));
+            var project = new XDocument(new XElement("Project", new XAttribute("Sdk", "Microsoft.NET.Sdk"), propertyGroup, new XElement("ItemGroup", analyzer)));
+            project.Save(Path.Combine(directory, name + ".csproj"));
+            File.WriteAllText(Path.Combine(directory, "Source.cs"), "public class " + name + " {}");
+            entries.AppendLine($"Project(\"{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}\") = \"{name}\", \"{name}\\{name}.csproj\", \"{{00000000-0000-0000-0000-{index + 1:D12}}}\"");
+            entries.AppendLine("EndProject");
+        }
+
+        File.WriteAllText(solutionPath, solutionText.Insert(solutionText.IndexOf("Global", StringComparison.Ordinal), entries.ToString()));
+    }
 
     private static SemanticLoadRequest CreateLoadRequest(string root)
     {
@@ -616,6 +914,21 @@ public static class Plan117RoslynUpgradeTests
         }
 
         Directory.Delete(ownedRoot, recursive: true);
+    }
+
+    private sealed class OwnedMeasurementInputs : IDisposable
+    {
+        private readonly string _root;
+
+        public OwnedMeasurementInputs(string root)
+        {
+            _root = root;
+        }
+
+        public void Dispose()
+        {
+            DeleteOwnedTemporaryRoot(_root);
+        }
     }
 
     private sealed class RecordingLogger<TCategory> : ILogger<TCategory>

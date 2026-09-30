@@ -99,6 +99,8 @@ A headless request can also open a specific repository and solution before submi
 dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --trust TrustedBuild --solution src\MyRepo.sln "explain the request pipeline"
 ```
 
+Trusted-build startup becomes usable when the first project has compiler coverage. The interactive composer and headless request can proceed at `PartialCompilation` while the remaining projects warm; status may later become `FullSemantic` without another startup message. A semantic tool may wait for the projects it needs. Global searches and validation require their full scope, and code exploration discloses omitted projects. Select a supported `.csproj` with `--solution` when its reference closure is sufficient to reduce evaluation scope. `/semantic_refresh` still waits for a complete refresh attempt.
+
 When repository options and a request are supplied together, Threadsmith opens the repository, selects the solution, records the baseline, waits briefly for `PartialCompilation` semantic readiness, and fails closed without submitting the request if semantic tools would be unusable. With no request, Threadsmith performs repository discovery without granting file-read trust:
 
 ```powershell

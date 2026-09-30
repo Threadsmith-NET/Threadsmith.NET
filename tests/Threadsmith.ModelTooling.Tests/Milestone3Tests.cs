@@ -49,7 +49,8 @@ public static class Milestone3Tests
         var generated = await engine.FindSymbolsAsync("GeneratedMarker");
         var linked = await engine.FindSymbolsAsync("LinkedMarker");
 
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, loaded.Confidence);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, loaded.Confidence);
+        Assert.Equal(SemanticConfidenceLevel.FullSemantic, engine.Confidence);
         Assert.Equal(2, loaded.Projects.Count);
         Assert.All(loaded.Projects, project => Assert.Contains("net10.0", project.TargetFrameworks));
         Assert.Contains(generated, item => item.Location.IsGenerated);
@@ -135,7 +136,7 @@ public static class Milestone3Tests
             SemanticConfidenceLevel.ProjectGraphOnly,
             await engine.ApplyInvalidationsAsync());
         Assert.Equal(
-            SemanticConfidenceLevel.FullSemantic,
+            SemanticConfidenceLevel.PartialCompilation,
             (await engine.PromoteAsync()).Confidence);
         Assert.Contains(observed, item => item is SemanticConfidenceChanged
         {
@@ -147,7 +148,7 @@ public static class Milestone3Tests
             SolutionPath = Path.Combine(root, "App", "App.csproj"),
         });
 
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, directProject.Confidence);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, directProject.Confidence);
         Assert.NotEmpty(await engine.FindSymbolsAsync("IService"));
     }
 
@@ -777,8 +778,9 @@ public static class Milestone3Tests
 
         var confidence = await confidenceObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
         var completion = await completionObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, confidence);
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic.ToString(), completion.Confidence);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, confidence);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation.ToString(), completion.Confidence);
+        await engines.GetEngine(workspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
         Assert.Equal(SemanticConfidenceLevel.FullSemantic, engines.GetConfidence(workspaceId));
     }
 
@@ -868,9 +870,8 @@ public static class Milestone3Tests
             solutionPath,
             RepositoryTrustLevel.TrustedRead));
 
-        Assert.Equal(
-            SemanticConfidenceLevel.FullSemantic,
-            engines.GetConfidence(compiledWorkspace));
+        await engines.GetEngine(compiledWorkspace).WaitForWarmAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(SemanticConfidenceLevel.FullSemantic, engines.GetConfidence(compiledWorkspace));
         Assert.Equal(SemanticConfidenceLevel.TextOnly, engines.GetConfidence(textWorkspace));
         Assert.NotEmpty(await engines.FindSymbolsAsync(compiledWorkspace, "IService"));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>

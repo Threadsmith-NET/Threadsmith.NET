@@ -2079,6 +2079,48 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Empty(observed.OfType<SemanticRefreshFailed>());
     }
 
+    /// <summary>Last-owner cleanup captures its preparation before another binding adopts the same workspace.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task UnbindAsync_OverlappingRebindCannotRetireReplacementPreparation(bool cancelWaiter)
+    {
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var barrier = backend.BlockNextRefresh(honorCancellation: false);
+        await using var coordinator = CreateCoordinator(backend, events);
+        await coordinator.BindAsync(repository.CreateRequest());
+        await File.WriteAllTextAsync(repository.SourcePath, "public class Retiring { }");
+        await coordinator.ObserveChangeAsync(repository.CreateChange());
+        var ensure = coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission);
+        await barrier.Started.Task.WaitAsync(TestContext.Current.CancellationToken);
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var unbind = coordinator.UnbindAsync(repository.SessionId, cancellation.Token);
+        try
+        {
+            Assert.False(unbind.IsCompleted);
+            if (cancelWaiter)
+            {
+                await cancellation.CancelAsync();
+            }
+
+            backend.PreparationOwnerVersion = 2;
+            var replacement = repository.CreateRequest() with { SessionId = SessionId.New() };
+            await coordinator.BeginBindingAsync(replacement, TestContext.Current.CancellationToken);
+            barrier.Release.TrySetResult();
+            await unbind;
+#pragma warning disable VSTHRD003 // The assertion observes the refresh operation started above.
+            await Assert.ThrowsAnyAsync<Exception>(() => ensure);
+#pragma warning restore VSTHRD003
+            Assert.Equal(new[] { 1 }, backend.RetiredPreparationOwners);
+        }
+        finally
+        {
+            barrier.Release.TrySetResult();
+        }
+    }
+
     /// <summary>Coordinator shutdown detaches every alias before a non-cooperative refresh can finish.</summary>
     [Fact]
     public static async Task DisposeAsync_ActiveRefreshSuppressesObsoleteTerminalEvents()
@@ -2250,6 +2292,7 @@ public static class SemanticRefreshCoordinatorTests
         private readonly Queue<RefreshBarrier> _barriers = [];
         private readonly Dictionary<WorkspaceId, Dictionary<string, string>> _loadedTexts = [];
         private readonly Dictionary<WorkspaceId, HashSet<string>> _fullReloadInputPaths = [];
+        private readonly ConcurrentQueue<int> _retiredPreparationOwners = new();
         private InventoryBarrier? _inventoryBarrier;
         private int _refreshCount;
 
@@ -2261,6 +2304,21 @@ public static class SemanticRefreshCoordinatorTests
         public bool FailRefreshes { get; set; }
 
         public bool InventoryAvailable { get; set; } = true;
+
+        public int PreparationOwnerVersion { get; set; } = 1;
+
+        public IReadOnlyList<int> RetiredPreparationOwners => _retiredPreparationOwners.ToArray();
+
+        public Task RetirePreparationAsync(WorkspaceId workspaceId, bool retainCurrentPreparation, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!retainCurrentPreparation)
+            {
+                _retiredPreparationOwners.Enqueue(PreparationOwnerVersion);
+            }
+
+            return Task.CompletedTask;
+        }
 
         public IReadOnlyList<SemanticRefreshMode> Modes
         {

@@ -12,6 +12,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
     private readonly IDomainEventStream _events;
     private readonly ILoggerFactory _loggerFactory;
+    private Func<SemanticLoadRequest, SemanticConfidenceLevel, CancellationToken, Task>? _confidencePublisher;
     private int _disposed;
 
     /// <summary>Initializes a new instance of the <see cref="SemanticEngineRegistry"/> class.</summary>
@@ -143,6 +144,22 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
                 cancellationToken);
     }
 
+    /// <summary>Acknowledges the observer's exact initial result before background coverage can publish.</summary>
+    internal Task CompleteInitialPublicationAsync(SemanticLoadResult result, bool succeeded, CancellationToken cancellationToken)
+    {
+        return GetEngine(result.WorkspaceId).CompleteInitialPublicationAsync(result, succeeded, cancellationToken);
+    }
+
+    /// <summary>Connects progressive coverage to the authoritative workspace binding fan-out.</summary>
+    internal void SetConfidencePublisher(Func<SemanticLoadRequest, SemanticConfidenceLevel, CancellationToken, Task> publisher)
+    {
+        _confidencePublisher = publisher;
+        foreach (var engine in _engines.Values)
+        {
+            engine.SetConfidencePublisher(publisher);
+        }
+    }
+
     /// <summary>Gets the concrete engine for an internal serialized semantic mutation.</summary>
     internal SemanticEngine GetEngine(WorkspaceId workspaceId)
     {
@@ -152,10 +169,16 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
             throw new ArgumentException("A semantic query requires a workspace identity.", nameof(workspaceId));
         }
 
-        return _engines.GetOrAdd(workspaceId, _ => new SemanticEngine(
+        var engine = _engines.GetOrAdd(workspaceId, _ => new SemanticEngine(
             _events,
             _loggerFactory.CreateLogger<SemanticEngine>(),
             _cancellationBackstop,
             _resourceLimits));
+        if (_confidencePublisher is { } publisher)
+        {
+            engine.SetConfidencePublisher(publisher);
+        }
+
+        return engine;
     }
 }

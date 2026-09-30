@@ -149,7 +149,7 @@ public sealed class ProcessManager : IProcessManager
         }
 
         if (request.EnvironmentVariables.Count > _limits.MaximumEnvironmentVariables
-            || request.EnvironmentVariables.Any(item => (item.Key.Length < 1 || item.Key.Length > _limits.MaximumEnvironmentNameCharacters)
+            || request.EnvironmentVariables.Any(item => item.Key.Length < 1 || item.Key.Length > _limits.MaximumEnvironmentNameCharacters
                 || item.Value.Length > _limits.MaximumEnvironmentValueCharacters
                 || item.Key.Contains('=')
                 || item.Key.Contains('\0')

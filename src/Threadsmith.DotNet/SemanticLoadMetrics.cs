@@ -46,6 +46,18 @@ internal static class SemanticLoadMetrics
         "threadsmith.semantic.load.working_set",
         "By");
 
+    /// <summary>Gets generation warming and demand wait durations through the existing load meter.</summary>
+    internal static Histogram<double> PreparationDuration { get; } = _meter.CreateHistogram<double>("threadsmith.semantic.preparation.duration", "ms");
+
+    /// <summary>Gets bounded preparation count observations.</summary>
+    internal static Histogram<long> PreparationCount { get; } = _meter.CreateHistogram<long>("threadsmith.semantic.preparation.count");
+
+    /// <summary>Gets cancellation counts by lifetime owner.</summary>
+    internal static Counter<long> PreparationCancellations { get; } = _meter.CreateCounter<long>("threadsmith.semantic.preparation.cancellations");
+
+    /// <summary>Gets actual late compiler results discarded after cancellation.</summary>
+    internal static Counter<long> PreparationDiscarded { get; } = _meter.CreateCounter<long>("threadsmith.semantic.preparation.discarded");
+
     /// <summary>Records one terminal semantic load without repository-specific tags.</summary>
     public static void Record(
         string mode,

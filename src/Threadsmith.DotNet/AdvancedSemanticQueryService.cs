@@ -271,17 +271,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
         var engine = _registry.GetEngine(workspaceId);
-        var snapshot = engine.CaptureAdvancedSnapshot();
-        var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
-        var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
+        var snapshot = engine.CaptureAdvancedSnapshot();
         var nodes = new Dictionary<string, CallHierarchyNode>(StringComparer.Ordinal);
         var edges = new List<CallHierarchyEdge>();
         var pending = new Queue<(ISymbol Symbol, int Depth)>();
         var expanded = new HashSet<string>(StringComparer.Ordinal);
-
-        AddNode(nodes, root, 0, snapshot, projection);
-        pending.Enqueue((root, 0));
 
         var depthReached = false;
         var nodeReached = false;
@@ -290,6 +285,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         try
         {
+            var preparedSolution = await engine.EnsurePreparedAsync(null, "call-hierarchy", requireSuccess: true, timeout.Token);
+            snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
+            var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, timeout.Token);
+            var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
+            AddNode(nodes, root, 0, snapshot, projection);
+            pending.Enqueue((root, 0));
             while (pending.Count > 0)
             {
                 timeout.Token.ThrowIfCancellationRequested();
@@ -416,15 +417,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         ValidateSymbolId(request.SymbolId);
         ValidateLimits(request.Limits);
         var engine = _registry.GetEngine(workspaceId);
-        var snapshot = engine.CaptureAdvancedSnapshot();
-        var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, cancellationToken);
-        var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
-        var rootIdentity = CreateIdentity(root);
-        var nodes = new Dictionary<string, ImpactNode>(StringComparer.Ordinal)
-        {
-            [rootIdentity.Id] = new(rootIdentity.Id, rootIdentity.DisplayName, ImpactKind.RootSymbol, null, null),
-        };
+        var snapshot = engine.CaptureAdvancedSnapshot();
+        var nodes = new Dictionary<string, ImpactNode>(StringComparer.Ordinal);
         var edges = new List<ImpactEdge>();
         var omissions = new List<string>();
         var depthReached = false;
@@ -434,6 +429,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         try
         {
+            var preparedSolution = await engine.EnsurePreparedAsync(null, "symbol-impact", requireSuccess: true, timeout.Token);
+            snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
+            var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, timeout.Token);
+            var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
+            var rootIdentity = CreateIdentity(root);
+            nodes.Add(rootIdentity.Id, new(rootIdentity.Id, rootIdentity.DisplayName, ImpactKind.RootSymbol, null, null));
             var references = await SymbolFinder.FindReferencesAsync(root, snapshot.Solution, timeout.Token);
             foreach (var reference in references.SelectMany(item => item.Locations))
             {
@@ -711,14 +712,23 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         var engine = _registry.GetEngine(workspaceId);
-        var snapshot = engine.CaptureAdvancedSnapshot();
+        var preparedSolution = await engine.EnsurePreparedAsync(request.Path, "generated-code", requireSuccess: true, cancellationToken);
+        var snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
         var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
         var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
+        var ordinaryScope = normalizedScope is not null && snapshot.Solution.Projects.Any(project => IsInScope(project.FilePath, normalizedScope)
+            || project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope)));
         var documents = new List<GeneratedDocumentInfo>();
         var truncated = false;
         foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!snapshot.CompiledProjects.Contains(project.Id) || (ordinaryScope && !IsInScope(project.FilePath, normalizedScope)
+                && !project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope))))
+            {
+                continue;
+            }
+
             var projectFileScoped = normalizedScope is not null
                 && project.FilePath is not null
                 && Path.GetFullPath(project.FilePath).Equals(normalizedScope, PathComparison);
@@ -811,6 +821,26 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 unavailableBudget);
         }
 
+        var admittedSolution = readiness.Solution;
+        var admittedGeneration = readiness.Generation;
+        IReadOnlySet<ProjectId> candidateProjects;
+        try
+        {
+            candidateProjects = await PrepareCodeExploreCandidatesAsync(engine, readiness, request, sourceReader, timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+        {
+            readiness = engine.CaptureCodeExploreReadinessSnapshot();
+            request = ApplyCodeExploreAdaptiveDefaults(request, CreateUnknownCodeExploreRepositoryScale(request.AssociatedArtifactPathAnchors.Count), out var timedOutBudget);
+            return CreateUnavailableCodeExploreResult(readiness, request, queryInterpretation, CreateInitialTimeoutCodeExploreAvailability(readiness), timedOutBudget);
+        }
+
+        readiness = engine.CaptureCodeExploreReadinessSnapshot();
+        if (!ReferenceEquals(admittedSolution, readiness.Solution) || !engine.IsCurrentGeneration(admittedGeneration))
+        {
+            throw new InvalidOperationException("The semantic solution changed during candidate preparation; retry code exploration.");
+        }
+
         var solution = readiness.Solution
             ?? throw new InvalidOperationException("Code exploration requires a captured semantic solution.");
         var repositoryPath = readiness.RepositoryPath
@@ -818,12 +848,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var workspacePath = readiness.WorkspacePath
             ?? throw new InvalidOperationException("Code exploration requires an opened project or solution path.");
         var snapshot = new AdvancedSemanticSnapshot(
-            solution,
+            RestrictCodeExploreSolution(solution, candidateProjects, readiness.CompiledProjects),
             readiness.CompiledProjects,
             readiness.Confidence,
             repositoryPath,
             workspacePath,
-            readiness.Generation);
+            readiness.SourceGeneration);
         CodeExploreRepositoryScale repositoryScale;
         try
         {
@@ -852,12 +882,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
         request = ApplyCodeExploreAdaptiveDefaults(request, repositoryScale, out var adaptiveBudget);
         var anchors = BuildCodeExploreAnchors(request, queryInterpretation).ToList();
+        var requiredSymbolAnchors = anchors.Where(anchor => !IsCodeExplorePathAnchor(anchor))
+            .Select(anchor => (anchor.Kind, anchor.Value))
+            .ToHashSet();
         var omittedNamedFiles = request.PathAnchors.Count + request.SymbolIds.Count + request.ExactSymbolAnchors.Count == 0
             ? Math.Max(0, queryInterpretation.PathLikeSpans.Count - anchors.Count)
             : 0;
         var resolutions = new List<CodeExploreAnchorResolution>();
         var candidates = new List<CodeExploreSectionCandidate>();
         var omissions = new List<string>();
+        if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count)
+        {
+            omissions.Add(ModelVisibleStructuredFact.Exact("Code exploration used bounded candidate project coverage; other projects and their generated declarations were omitted."));
+        }
+
         if (omittedNamedFiles > 0)
         {
             omissions.Add(ModelVisibleStructuredFact.Exact(
@@ -931,7 +969,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     continue;
                 }
 
-                if (anchor.Kind == CodeExploreAnchorKind.Path || QueryLooksLikePath(anchor.Value))
+                if (IsCodeExplorePathAnchor(anchor))
                 {
                     var pathResult = await ResolveCodeExplorePathAsync(
                         snapshot,
@@ -956,6 +994,21 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                     candidates,
                     timeout.Token);
                 alternativesCapped |= result.AlternativesCapped;
+            }
+
+            if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
+                && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
+                    && resolution.Outcome == CodeExploreResolutionOutcome.NotFound))
+            {
+                throw new InvalidOperationException("Exact symbol absence cannot be established while semantic candidate projects are omitted; retry after preparation or supply an owning path.");
+            }
+
+            // A retained match cannot prove uniqueness: omitted ordinary or generated declarations may share its anchor.
+            if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
+                && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
+                    && resolution.Outcome == CodeExploreResolutionOutcome.Resolved))
+            {
+                throw new InvalidOperationException("Exact symbol ownership cannot be established while semantic candidate projects are omitted; retry after preparation.");
             }
 
             for (var companionIndex = 0; companionIndex < naturalLanguageSourceCompanions.Count; companionIndex++)
@@ -1033,6 +1086,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 {
                     blastRadius = await BuildCodeExploreBlastRadiusAsync(
                         snapshot,
+                        solution,
                         projection,
                         sourceReader,
                         request,
@@ -1529,6 +1583,136 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         };
     }
 
+    /// <summary>Discovers bounded syntax/path ownership without preparing compilations or generated documents.</summary>
+    internal async Task<IReadOnlySet<ProjectId>> DiscoverCodeExploreCandidatesAsync(
+        CodeExploreReadinessSnapshot readiness,
+        CodeExploreRequest request,
+        ICodeExploreSourceReader sourceReader,
+        CancellationToken cancellationToken)
+    {
+        var solution = readiness.Solution ?? throw new InvalidOperationException("Code exploration requires a solution.");
+        var repository = readiness.RepositoryPath ?? throw new InvalidOperationException("Code exploration requires a repository.");
+        if (readiness.CompiledProjects.Count == solution.ProjectIds.Count)
+        {
+            return readiness.CompiledProjects;
+        }
+
+        var interpretation = InterpretCodeExploreQuery(request.Query);
+        var anchors = BuildCodeExploreAnchors(request, interpretation);
+        var candidates = new HashSet<ProjectId>();
+        string[] symbols = anchors.Count == 0
+            ? [.. interpretation.ExactIdentifiers.Concat(interpretation.QualifiedNames).Distinct(StringComparer.Ordinal)]
+            : [.. anchors.Where(anchor => !IsCodeExplorePathAnchor(anchor)).Select(anchor => anchor.Value)];
+        foreach (var anchor in anchors.Where(IsCodeExplorePathAnchor))
+        {
+            string? path;
+            try
+            {
+                path = NormalizeScope(anchor.Value, repository);
+            }
+            catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            if (path is not null && sourceReader.IsPathAllowed(path))
+            {
+                candidates.UnionWith(FindDocumentsByPath(solution, path).Select(document => document.Project.Id));
+            }
+
+            if (!anchor.Value.Contains('/') && !anchor.Value.Contains('\\'))
+            {
+                candidates.UnionWith(solution.Projects.Where(project => project.Documents.Any(document => document.FilePath is { } documentPath
+                    && Path.GetFileName(documentPath).Equals(Path.GetFileName(path), PathComparison)
+                    && sourceReader.IsPathAllowed(documentPath))).Select(project => project.Id));
+            }
+        }
+
+        if (symbols.Length > 0 || anchors.Count == 0)
+        {
+            var scores = new Dictionary<ProjectId, int>();
+            var inspected = 0;
+            var maximumDocuments = Math.Max(64, Math.Min(4096, _options.MaximumNaturalLanguageCandidateSummaries * 16));
+            foreach (var project in solution.Projects)
+            {
+                var score = 0;
+                foreach (var document in project.Documents)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (inspected++ >= maximumDocuments)
+                    {
+                        break;
+                    }
+
+                    if (document.FilePath is not { } path || !sourceReader.IsPathAllowed(path))
+                    {
+                        continue;
+                    }
+
+                    var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Path.GetFileNameWithoutExtension(path) };
+                    var root = await document.GetSyntaxRootAsync(cancellationToken);
+                    if (root is not null)
+                    {
+                        foreach (var declaration in EnumerateCodeExploreCatalogDeclarations(root))
+                        {
+                            foreach (var token in declaration.ChildTokens().Where(token => token.IsKind(SyntaxKind.IdentifierToken)))
+                            {
+                                names.Add(token.ValueText);
+                            }
+                        }
+                    }
+
+                    if (symbols.Any(symbol => names.Contains(ExtractSymbolSearchTerm(LooksLikeDocumentationId(symbol) ? symbol[2..] : symbol))))
+                    {
+                        score += 1000;
+                    }
+
+                    var terms = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var name in names)
+                    {
+                        AddCodeExploreTerms(terms, new HashSet<string>(StringComparer.OrdinalIgnoreCase), name);
+                    }
+
+                    score += GetCodeExploreTermCoverage(terms.ToArray(), interpretation.Terms).Length;
+                }
+
+                if (score > 0)
+                {
+                    scores[project.Id] = score;
+                }
+
+                if (inspected >= maximumDocuments)
+                {
+                    break;
+                }
+            }
+
+            var declaredOrder = solution.ProjectIds.Select((id, index) => (id, index)).ToDictionary(item => item.id, item => item.index);
+            candidates.UnionWith(scores.OrderByDescending(pair => pair.Value).ThenBy(pair => declaredOrder[pair.Key])
+                .Take(Math.Max(1, request.Limits.MaximumAnchors)).Select(pair => pair.Key));
+
+            // Generated declarations have no ordinary syntax candidate. Exact absence needs the remaining scope.
+            if (anchors.Any(anchor => !IsCodeExplorePathAnchor(anchor))
+                && scores.Count == 0)
+            {
+                candidates.UnionWith(solution.ProjectIds);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            candidates.UnionWith(readiness.CompiledProjects);
+        }
+
+        var graph = solution.GetProjectDependencyGraph();
+        foreach (var id in candidates.ToArray())
+        {
+            candidates.UnionWith(graph.GetProjectsThatThisProjectTransitivelyDependsOn(id));
+        }
+
+        return candidates;
+    }
+
     private CodeExploreAvailability? CreateInitialCodeExploreAvailability(
         CodeExploreReadinessSnapshot snapshot)
     {
@@ -1626,7 +1810,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             null,
             adaptiveBudget.PresentationVerbosity);
         return new CodeExploreResult(
-            snapshot.Generation,
+            snapshot.SourceGeneration,
             snapshot.Confidence,
             [],
             [],
@@ -6508,6 +6692,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private async Task<CodeExploreBlastRadius> BuildCodeExploreBlastRadiusAsync(
         AdvancedSemanticSnapshot snapshot,
+        Solution evaluatedSolution,
         SemanticSourceProjection projection,
         ICodeExploreSourceReader sourceReader,
         CodeExploreRequest request,
@@ -6599,6 +6784,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
             var projects = FindDependentProjects(
                 snapshot,
+                evaluatedSolution,
                 anchor.Symbol,
                 request.Limits.MaximumFlowDepth,
                 cancellationToken);
@@ -6728,6 +6914,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private static IReadOnlyList<Project> FindDependentProjects(
         AdvancedSemanticSnapshot snapshot,
+        Solution evaluatedSolution,
         ISymbol symbol,
         int maximumDepth,
         CancellationToken cancellationToken)
@@ -6748,7 +6935,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             }
         }
 
-        var projects = snapshot.Solution.Projects
+        var projects = evaluatedSolution.Projects
             .OrderBy(project => project.Name, StringComparer.Ordinal)
             .ToArray();
         var seen = new HashSet<ProjectId>(rootProjectIds);
@@ -7408,7 +7595,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         SemanticSourceProjection projection,
         CancellationToken cancellationToken)
     {
-        var key = CreateCodeExploreCatalogKey(workspaceId, snapshot.Generation);
+        var key = CreateCodeExploreCatalogKey(workspaceId, snapshot);
         CodeExploreDeclarationCatalog? cachedCatalog = null;
         SharedCodeExploreBuild<CodeExploreDeclarationCatalog>? build = null;
         List<ISharedCodeExploreBuild> supersededBuilds = [];
@@ -7608,6 +7795,34 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         {
             _naturalLanguageGraphNeighbors.Remove(graphKey);
         }
+    }
+
+    private async Task<IReadOnlySet<ProjectId>> PrepareCodeExploreCandidatesAsync(
+        SemanticEngine engine,
+        CodeExploreReadinessSnapshot readiness,
+        CodeExploreRequest request,
+        ICodeExploreSourceReader sourceReader,
+        CancellationToken cancellationToken)
+    {
+        var candidates = await DiscoverCodeExploreCandidatesAsync(readiness, request, sourceReader, cancellationToken);
+        var solution = readiness.Solution ?? throw new InvalidOperationException("Code exploration requires a solution.");
+        await engine.EnsureProjectsPreparedAsync(solution, candidates, "code-explore", requireSuccess: true, cancellationToken);
+        return candidates;
+    }
+
+    private static Solution RestrictCodeExploreSolution(Solution solution, IReadOnlySet<ProjectId> candidates, IReadOnlySet<ProjectId> prepared)
+    {
+        if (prepared.Count == solution.ProjectIds.Count)
+        {
+            return solution;
+        }
+
+        foreach (var id in solution.ProjectIds.Where(id => !candidates.Contains(id) || !prepared.Contains(id)).ToArray())
+        {
+            solution = solution.RemoveProject(id);
+        }
+
+        return solution;
     }
 
     private async Task<CodeExploreDeclarationCatalog> BuildCodeExploreCatalogAsync(
@@ -8832,7 +9047,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         IReadOnlyDictionary<string, CodeExploreDeclarationCatalogEntry[]> allowedById,
         CancellationToken cancellationToken)
     {
-        var catalogKey = CreateCodeExploreCatalogKey(workspaceId, snapshot.Generation);
+        var catalogKey = CreateCodeExploreCatalogKey(workspaceId, snapshot);
         var cacheKey = $"{catalogKey}:{identity}";
         IReadOnlyList<string>? cachedResult = null;
         SharedCodeExploreBuild<IReadOnlyList<string>>? build = null;
@@ -11188,9 +11403,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             && normalized.Split('.', StringSplitOptions.RemoveEmptyEntries).All(part => SyntaxFacts.IsValidIdentifier(part));
     }
 
-    private static string CreateCodeExploreCatalogKey(WorkspaceId workspaceId, long generation)
+    private static string CreateCodeExploreCatalogKey(WorkspaceId workspaceId, AdvancedSemanticSnapshot snapshot)
     {
-        return $"{workspaceId.Value:D}:{generation}";
+        var scope = string.Join(',', snapshot.Solution.ProjectIds.Select(id => id.Id.ToString("N")).Order(StringComparer.Ordinal));
+        return $"{workspaceId.Value:D}:{snapshot.Generation}:{ComputeSha256(scope)}";
     }
 
     private static string NormalizeComparableName(string value)
@@ -13648,6 +13864,12 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             || CSharpPatternConstraints.IsValidDottedIdentifierName(StripParameters(query));
     }
 
+    private static bool IsCodeExplorePathAnchor(CodeExploreAnchor anchor)
+    {
+        return anchor.Kind != CodeExploreAnchorKind.SymbolId
+            && (anchor.Kind == CodeExploreAnchorKind.Path || QueryLooksLikePath(anchor.Value));
+    }
+
     private static bool QueryLooksLikePath(string query)
     {
         var trimmed = query.Trim();
@@ -14458,7 +14680,8 @@ internal sealed record CodeExploreReadinessSnapshot(
     SemanticConfidenceLevel Confidence,
     string? RepositoryPath,
     string? WorkspacePath,
-    long Generation);
+    long Generation,
+    long SourceGeneration);
 
 /// <summary>Immutable compiler-aware state captured for one advanced query.</summary>
 internal sealed record AdvancedSemanticSnapshot(

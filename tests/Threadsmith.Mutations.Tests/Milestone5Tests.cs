@@ -2826,7 +2826,7 @@ public static partial class Milestone5Tests
             repository.Root,
             repository.PathOf("SmallDotNetSolution.sln"),
             RepositoryTrustLevel.TrustedBuild));
-        Assert.Equal(SemanticConfidenceLevel.FullSemantic, load.Confidence);
+        Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
         var symbol = Assert.Single(
             await engines.FindSymbolsAsync(repository.WorkspaceId, "IService"),
             item => item.Symbol.DisplayName.EndsWith("IService", StringComparison.Ordinal)

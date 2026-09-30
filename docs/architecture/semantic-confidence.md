@@ -2,6 +2,14 @@
 
 Threadsmith.NET reports how much compiler-backed knowledge supports every semantic result. Confidence is host-owned state; it is never inferred by a model.
 
+Trusted-build startup has three milestones: evaluated graph, usable compilation, and terminal warm coverage. After evaluation and confinement, one deterministic project is prepared at a time until a usable compilation exists or every project has failed. The selected project comes first for a direct project selection; solution selections rank dependency centrality, direct dependents, and declared order. Initial load completes at honest partial/full readiness. Remaining projects warm through the same generation-owned preparation queue with one production worker. Demand preparation outranks queued warming and joins the same project task; cancelling a waiter does not cancel shared preparation.
+
+Exact paths and affected-project checks demand owning projects and dependencies before recapturing their immutable snapshot. Global symbol/reference/implementation, call hierarchy, symbol impact, and rename operations require their complete project scope. Code exploration discovers bounded syntax/path candidates, prepares their dependency closure, and explicitly discloses excluded projects. Its compact project/test dependency summaries retain the evaluated graph without compiling every downstream project. Failed required coverage is an unavailable operation, not proof of absence. Generated-document enumeration requires successful preparation of its relevant scope. Overlay diagnostic compilations use the same bounded foreground queue.
+
+Coverage promotion advances inventory/query coverage generation without changing immutable source. Code-explore source evidence, continuations, and visible-source back-references use the source generation, which advances on replacement, invalidation, or ownership retirement. Warming alone therefore preserves unchanged evidence; candidate project scope remains part of catalog cache identity. Internal hierarchy/impact timeouts include demand preparation and return bounded partial evidence with a time-limit omission; caller cancellation propagates.
+
+Initial confidence and the single `SemanticLoadCompleted` event must be delivered before additional warm coverage can publish. Warming emits confidence transitions without another load completion, including every session sharing the workspace binding. Full/manual refresh awaits terminal preparation for the whole evaluated graph; incremental refresh reproves affected compiled projects and retains unaffected coverage. Source replacement fences old snapshots and results; the last binding owner detaching stops preparation. Shutdown cancels and joins workers through the existing bounded non-cooperative backstop.
+
 | Level | Available knowledge | Semantic tool behavior |
 |---|---|---|
 | `None` | No usable project state | Semantic tools are unavailable. |

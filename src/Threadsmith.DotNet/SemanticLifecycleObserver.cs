@@ -159,6 +159,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
         await foreach (var workItem in _requests.Reader.ReadAllAsync(_lifetimeCancellation.Token))
         {
             var request = workItem.Request;
+            SemanticLoadResult? initialResult = null;
             var failureReason = "Semantic solution loading failed. Check the solution and SDK installation, then reopen the repository.";
             try
             {
@@ -170,35 +171,33 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
                 SemanticLoadResult result;
                 if (workItem.ReusedWorkspaceBinding)
                 {
-                    var refresh = await (_refreshCoordinator
+                    var reusedLoad = TrackLoad(request, () => IsCurrent(workItem), _lifetimeCancellation.Token);
+                    await (_refreshCoordinator
                         ?? throw new InvalidOperationException(
                             "A reused semantic binding requires a refresh coordinator."))
-                        .EnsureCurrentAsync(
-                            request.SessionId,
-                            SemanticRefreshReason.UserAdmission,
-                            _lifetimeCancellation.Token);
-                    result = new SemanticLoadResult(
-                        request.WorkspaceId,
-                        refresh.Confidence,
-                        [],
-                        []);
+                        .PublishReusedBindingAsync(
+                            request,
+                            (confidence, token) => PublishLifecyclePairAsync(workItem, confidence, token),
+                            reusedLoad.Cancellation.Token);
+                    continue;
                 }
                 else
                 {
                     result = _refreshCoordinator is null
                         ? await LoadWithTrackedCancellationAsync(
                             request,
-                            _lifetimeCancellation.Token,
-                            () => IsCurrent(workItem))
+                            () => IsCurrent(workItem),
+                            _lifetimeCancellation.Token)
                         : await _refreshCoordinator.PublishLifecycleBindingAsync(
                             request,
                             publicationToken => LoadWithTrackedCancellationAsync(
                                 request,
-                                publicationToken,
-                                () => IsCurrent(workItem)),
+                                () => IsCurrent(workItem),
+                                publicationToken),
                             _lifetimeCancellation.Token);
                 }
 
+                initialResult = result;
                 if (!IsCurrent(workItem))
                 {
                     continue;
@@ -218,19 +217,12 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
                     continue;
                 }
 
-                await _events.PublishAsync(
-                    new SemanticConfidenceChanged(
-                        request.SessionId,
-                        DateTimeOffset.UtcNow,
-                        result.Confidence.ToString()),
-                    _lifetimeCancellation.Token);
-                await _events.PublishAsync(
-                    new SemanticLoadCompleted(
-                        request.SessionId,
-                        DateTimeOffset.UtcNow,
-                        request.WorkspaceId,
-                        result.Confidence.ToString()),
-                    _lifetimeCancellation.Token);
+                var publicationToken = _activeLoads.TryGetValue(request.SessionId, out var activeLoad)
+                    ? activeLoad.Cancellation.Token : _lifetimeCancellation.Token;
+                publicationToken.ThrowIfCancellationRequested();
+                await PublishLifecyclePairAsync(workItem, result.Confidence, publicationToken);
+                publicationToken.ThrowIfCancellationRequested();
+                await _semanticLoader.CompletePublicationAsync(result, IsCurrent(workItem), publicationToken);
             }
             catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
             {
@@ -275,15 +267,46 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
             }
             finally
             {
+                if (initialResult is not null && !workItem.ReusedWorkspaceBinding)
+                {
+                    await _semanticLoader.CompletePublicationAsync(initialResult, succeeded: false, CancellationToken.None);
+                }
+
                 CompleteTrackedLoad(request.SessionId);
             }
         }
     }
 
+    private async Task PublishLifecyclePairAsync(
+        SemanticLoadWorkItem workItem,
+        SemanticConfidenceLevel confidence,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsCurrent(workItem))
+        {
+            throw new OperationCanceledException("The semantic lifecycle binding was superseded.", cancellationToken);
+        }
+
+        var request = workItem.Request;
+        await _events.PublishAsync(
+            new SemanticConfidenceChanged(request.SessionId, DateTimeOffset.UtcNow, confidence.ToString()),
+            cancellationToken);
+        await _events.PublishAsync(
+            new SemanticLoadCompleted(request.SessionId, DateTimeOffset.UtcNow, request.WorkspaceId, confidence.ToString()),
+            cancellationToken);
+    }
+
     private async Task<SemanticLoadResult> LoadWithTrackedCancellationAsync(
         SemanticLoadRequest request,
-        CancellationToken cancellationToken,
-        Func<bool> isCurrent)
+        Func<bool> isCurrent,
+        CancellationToken cancellationToken)
+    {
+        var activeLoad = TrackLoad(request, isCurrent, cancellationToken);
+        return await _semanticLoader.LoadForBindingAsync(request, activeLoad.Cancellation.Token);
+    }
+
+    private ActiveLoad TrackLoad(SemanticLoadRequest request, Func<bool> isCurrent, CancellationToken cancellationToken)
     {
         var activeLoad = new ActiveLoad(
             request,
@@ -304,7 +327,7 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
                 activeLoad.Cancellation.Token);
         }
 
-        return await _semanticLoader.LoadForBindingAsync(request, activeLoad.Cancellation.Token);
+        return activeLoad;
     }
 
     private void CompleteTrackedLoad(SessionId sessionId)
@@ -374,7 +397,8 @@ public sealed class SemanticLifecycleObserver : IAsyncDisposable
     private bool IsCurrent(SemanticLoadWorkItem workItem)
     {
         return _bindingGenerations.TryGetValue(workItem.Request.SessionId, out var generation)
-            && generation == workItem.BindingGeneration;
+            && generation == workItem.BindingGeneration
+            && (!_activeLoads.TryGetValue(workItem.Request.SessionId, out var active) || !active.Cancellation.IsCancellationRequested);
     }
 
     private sealed record SemanticLoadWorkItem(
@@ -405,6 +429,10 @@ internal interface ISemanticLifecycleLoader
     Task<SemanticLoadResult> LoadForBindingAsync(
         SemanticLoadRequest request,
         CancellationToken cancellationToken);
+
+    /// <summary>Releases or aborts the exact binding's background publication barrier.</summary>
+    Task CompletePublicationAsync(SemanticLoadResult result, bool succeeded, CancellationToken cancellationToken)
+        => Task.CompletedTask;
 }
 
 /// <summary>Adapts the engine registry to lifecycle candidate loading.</summary>
@@ -425,5 +453,11 @@ internal sealed class RegistrySemanticLifecycleLoader : ISemanticLifecycleLoader
         CancellationToken cancellationToken)
     {
         return _semanticEngines.LoadForBindingAsync(request, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task CompletePublicationAsync(SemanticLoadResult result, bool succeeded, CancellationToken cancellationToken)
+    {
+        return _semanticEngines.CompleteInitialPublicationAsync(result, succeeded, cancellationToken);
     }
 }

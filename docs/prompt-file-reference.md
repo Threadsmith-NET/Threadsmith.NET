@@ -85,11 +85,11 @@ System policy, governed phase instructions, request envelopes, and required-outp
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-Phase-AwaitingMutationApproval.md` | System guidance for the `AwaitingMutationApproval` phase. | `None` |
-| `System-Phase-ChangePlanning.md` | System guidance for the `ChangePlanning` phase. | `None` |
+| `System-Phase-ChangePlanning.md` | Planning guidance requiring compilable boundaries for every validated step and mutation batch, with required API migrations kept atomic. | `None` |
 | `System-Phase-Compilation.md` | System guidance for the `Compilation` phase. | `None` |
 | `System-Phase-Default.md` | System guidance for the `Default` phase. | `None` |
 | `System-Phase-EvidenceCollection.md` | System guidance for the `EvidenceCollection` phase. | `None` |
-| `System-Phase-MutationProposal.md` | Active-step guidance for incremental mutation proposals or an advertised exclusive replan request. The host scope's `CanCompleteWithoutChanges` records same-step validation eligibility; it grants no mutation authority. | `None` |
+| `System-Phase-MutationProposal.md` | Active-step mutation guidance requiring every batch to preserve compilation, including incomplete steps; replan before breaking edits when required migrations exceed approved scope or hard limits. The host scope's `CanCompleteWithoutChanges` grants no mutation authority. | `None` |
 | `System-Phase-Validation.md` | System guidance for the `Validation` phase. | `None` |
 
 #### `RepositoryInstructions` family
@@ -133,7 +133,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
-| `Context-IncrementalPlanning.md` | Plans used including interrupted plans, soft tranche targets, explicit completion when available, and resumable blockers; no plan-count limit. | [`PlansUsed`](#placeholder-plansused), [`TargetSteps`](#placeholder-targetsteps), [`TargetFiles`](#placeholder-targetfiles) |
+| `Context-IncrementalPlanning.md` | Plans used, soft tranche targets, compilable step and batch boundaries, atomic API migrations, explicit completion, and resumable blockers; no plan-count limit. | [`PlansUsed`](#placeholder-plansused), [`TargetSteps`](#placeholder-targetsteps), [`TargetFiles`](#placeholder-targetfiles) |
 | `Context-Replanning.md` | Carries unfinished-plan investigation, retained applied work/failures, replacement scope, and unavailable completion into ordinary planning. | `None` |
 
 #### `ActiveTurnCompaction` family
@@ -643,14 +643,14 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-propose_mutations-Description.md` | Incremental active-step mutation guidance, completion hints, advertised replanning, and host-owned identity/policy boundaries. | `None` |
+| `Tool-propose_mutations-Description.md` | Active-step mutation guidance requiring compilable batches, atomic required API migrations, and replanning for inadequate scope or hard limits; retains completion hints and host-owned identity/policy boundaries. | `None` |
 | `Tool-request_replan-Description.md` | Exclusive implementation/correction decision returning to the existing evidence/planning/approval cycle without writes or completion. | `None` |
 
 #### `propose_plan` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-propose_plan-Description.md` | Advertised complete plan-tranche proposal; the host owns version, revision and step identity. | `None` |
+| `Tool-propose_plan-Description.md` | Advertised plan proposal requiring compilable step and batch boundaries and atomic required API migrations; the host owns version, revision and step identity. | `None` |
 | `Tool-complete_objective-Description.md` | Explicit no-argument completion decision after validated plan execution; questions and blockers remain resumable. | `None` |
 
 #### `read_file` family

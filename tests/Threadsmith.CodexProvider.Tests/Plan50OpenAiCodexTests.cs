@@ -909,6 +909,108 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(1, handler.RequestCount);
     }
 
+    /// <summary>Transport failures before a response use the configured attempt limit.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ConnectionFailureBeforeHeaders_UsesBoundedRetry(bool exhaustRetries)
+    {
+        var attempts = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            if (++attempts == 1 || exhaustRetries)
+            {
+                throw new HttpRequestException(HttpRequestError.ConnectionError, "connection lost");
+            }
+
+            return StreamingResponse();
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+        if (exhaustRetries)
+        {
+            var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
+                await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken)
+                    .ToListAsync(TestContext.Current.CancellationToken));
+            Assert.IsType<HttpRequestException>(exception.InnerException);
+            Assert.Equal(RetryClassification.TransientProvider, ModelFailureClassifier.Classify(exception));
+        }
+        else
+        {
+            var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken)
+                .ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ModelFinishReason.Stop, Assert.Single(chunks).FinishReason);
+        }
+
+        Assert.Equal(2, handler.RequestCount);
+    }
+
+    /// <summary>A partial response cannot be accepted or replayed into the same consumer.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_IncompleteResponse_IsTransientWithoutReplayingPartialOutput(bool transportThrows)
+    {
+        const string partial = "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"partial proposal\"}\n\n"
+            + "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"propose_mutations\",\"arguments\":\"{}\"}}\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = transportThrows
+                ? new StreamContent(new InterruptedResponseStream(Encoding.UTF8.GetBytes(partial)))
+                : new StringContent(partial, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+        var observed = new List<ModelChunk>();
+        var exception = await Assert.ThrowsAsync<TransientModelException>(async () =>
+        {
+            await foreach (var chunk in provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken))
+            {
+                observed.Add(chunk);
+            }
+        });
+
+        Assert.Equal("partial proposal", Assert.Single(observed).Reasoning);
+        Assert.DoesNotContain(observed, chunk => chunk.Output is not null || chunk.FinishReason is not null);
+        Assert.Equal(RetryClassification.TransientProvider, ModelFailureClassifier.Classify(exception));
+        if (transportThrows)
+        {
+            Assert.IsType<HttpIOException>(exception.InnerException);
+        }
+
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    /// <summary>Provider completion is terminal even if the connection subsequently breaks.</summary>
+    [Fact]
+    public async Task Provider_CompletedResponse_DoesNotWaitForConnectionClose()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StreamContent(new InterruptedResponseStream(
+                Encoding.UTF8.GetBytes("data: {\"type\":\"response.completed\",\"response\":{}}\n\n"))),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+
+        var chunks = await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken)
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ModelFinishReason.Stop, Assert.Single(chunks).FinishReason);
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    private sealed class InterruptedResponseStream(byte[] content) : MemoryStream(content)
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Position == Length)
+            {
+                throw new HttpIOException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+            }
+
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
     private static HttpResponseMessage JsonResponse(string value)
     {
         return new(HttpStatusCode.OK)

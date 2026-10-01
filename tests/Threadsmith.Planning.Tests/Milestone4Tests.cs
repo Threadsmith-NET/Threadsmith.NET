@@ -2861,7 +2861,8 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(events, sanitizer);
             var budget = new ExecutionBudget(new BudgetDimensions(100000, 100, TimeSpan.FromMinutes(1)));
-            const int inputBudget = 3000;
+            // Admit current fixed framing while keeping the first tool result larger than capacity.
+            const int inputBudget = 3500;
             var registry = new ToolRegistry(
                 [new TestDeterministicOutputTool("oversized-result:" + new string('x', inputBudget * 4), maximumOutputBytes: 16384)]);
             var pipeline = new ToolInvocationPipeline(

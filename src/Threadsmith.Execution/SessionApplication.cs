@@ -122,12 +122,26 @@ public sealed partial class SessionApplication :
     {
         var orchestrator = _executionOrchestrator
             ?? throw new InvalidOperationException("The execution orchestrator is unavailable.");
-        _ = await GetResumeRegistrationAsync(command, cancellationToken);
+        var registration = await GetResumeRegistrationAsync(command, cancellationToken);
 
         var request = await orchestrator.GetResumeRequestAsync(
             command.SessionId,
             command.RunId,
             cancellationToken);
+        if (registration is not null && !registration.Completion.Task.IsCompleted)
+        {
+            if (registration.WorkspaceId != request.Baseline.WorkspaceId)
+            {
+                throw new InvalidOperationException("The active execution workspace no longer matches its resume request.");
+            }
+
+            // This run already owns admission. Its post-apply validation must finish before
+            // refresh publication can drain active runs; re-entering admission would wait on itself.
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, registration.Cancellation.Token);
+            return await orchestrator.ResumeAsync(command.SessionId, command.RunId, lifetime.Token);
+        }
+
         if (_semanticRefreshCoordinator is null)
         {
             return await ResumeWithAdmissionAsync(

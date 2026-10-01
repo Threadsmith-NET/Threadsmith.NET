@@ -2473,6 +2473,13 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 {
                     foreach (var documentId in documentIds)
                     {
+                        var document = refreshed.GetDocument(documentId);
+                        if (document is not null
+                            && (await document.GetTextAsync(cancellationToken)).ContentEquals(sourceText))
+                        {
+                            continue;
+                        }
+
                         refreshed = refreshed.WithDocumentText(
                             documentId,
                             sourceText,

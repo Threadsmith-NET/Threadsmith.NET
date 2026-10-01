@@ -146,18 +146,18 @@ public static class Plan113ActiveTurnSourceProjectionTests
             Assert.True(inspection.SummaryAvoidedBySourceProjection);
             Assert.Equal(1, inspection.SourceRemovedRangeCount);
             Assert.Equal(36_615, inspection.SourceReclaimedCharacters);
-            Assert.Equal(22_161, inspection.BeforeInputTokens);
-            Assert.Equal(13_098, inspection.AfterInputTokens);
-            Assert.Equal(3_141, model.Requests[0].WireEstimate?.WireInputTokens);
-            Assert.Equal(12_628, model.Requests[1].WireEstimate?.WireInputTokens);
-            Assert.Equal(13_098, projectedRequest.WireEstimate?.WireInputTokens);
+            Assert.Equal(22_295, inspection.BeforeInputTokens);
+            Assert.Equal(13_233, inspection.AfterInputTokens);
+            Assert.Equal(3_275, model.Requests[0].WireEstimate?.WireInputTokens);
+            Assert.Equal(12_762, model.Requests[1].WireEstimate?.WireInputTokens);
+            Assert.Equal(13_233, projectedRequest.WireEstimate?.WireInputTokens);
             Assert.Equal(
-                37_930,
+                38_332,
                 model.Requests[0].WireEstimate?.WireInputTokens
                     + model.Requests[1].WireEstimate?.WireInputTokens
                     + inspection.BeforeInputTokens);
             Assert.Equal(
-                28_867,
+                29_270,
                 model.Requests.Sum(request => request.WireEstimate?.WireInputTokens));
             Assert.Equal(0, summaryProvider.PrepareCalls);
             Assert.Collection(

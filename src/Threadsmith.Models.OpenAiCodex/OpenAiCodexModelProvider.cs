@@ -56,10 +56,10 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 + $"{profileOutputLimit} tokens.");
         }
 
-        return ClassifyStreamTimeoutAsync(StreamCoreAsync(request, profileOutputLimit, cancellationToken), cancellationToken);
+        return ClassifyStreamFailureAsync(StreamCoreAsync(request, profileOutputLimit, cancellationToken), cancellationToken);
     }
 
-    private static async IAsyncEnumerable<ModelChunk> ClassifyStreamTimeoutAsync(
+    private static async IAsyncEnumerable<ModelChunk> ClassifyStreamFailureAsync(
         IAsyncEnumerable<ModelChunk> source,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -75,6 +75,14 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             {
                 throw new ModelProviderTimeoutException("The Codex Responses stream timed out.", exception);
             }
+            catch (Exception exception) when (exception is IOException
+                || (exception is HttpRequestException transport && IsTransientTransportFailure(transport)))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                // Never replay consumed output: callers may already have observed a tool or text chunk.
+                throw new TransientModelException("The Codex Responses connection ended before completion.", exception);
+            }
 
             if (!hasNext)
             {
@@ -83,6 +91,14 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
             yield return enumerator.Current;
         }
+    }
+
+    private static bool IsTransientTransportFailure(HttpRequestException exception)
+    {
+        return exception.HttpRequestError is HttpRequestError.NameResolutionError
+            or HttpRequestError.ConnectionError
+            or HttpRequestError.HttpProtocolError
+            or HttpRequestError.ResponseEnded;
     }
 
     private async IAsyncEnumerable<ModelChunk> StreamCoreAsync(
@@ -128,6 +144,12 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
             {
                 throw new ModelProviderTimeoutException("The Codex Responses request timed out.", exception);
+            }
+            catch (HttpRequestException exception) when (IsTransientTransportFailure(exception)
+                && attempt < _profile.RetryPolicy.MaxAttempts)
+            {
+                await Task.Delay(_profile.RetryPolicy.Delay, timeout.Token).ConfigureAwait(false);
+                continue;
             }
 
             using (response)
@@ -495,13 +517,14 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     {
                         FinishReason = toolOutputs.Count > 0 ? ModelFinishReason.ToolCalls : ModelFinishReason.Stop,
                     };
-                    pendingToolCalls.Clear();
-                    break;
+                    yield break;
                 case "response.failed":
                 case "error":
                     throw new ModelProviderException("The Codex Responses stream reported a provider error.");
             }
         }
+
+        throw new TransientModelException("The Codex Responses connection ended without a completed response.");
 
         void AddStreamedOutput(string? value)
         {

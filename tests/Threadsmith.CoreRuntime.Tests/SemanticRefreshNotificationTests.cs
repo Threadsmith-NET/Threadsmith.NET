@@ -60,7 +60,7 @@ public static class SemanticRefreshNotificationTests
             backend.FeedInput("draft");
             await surface.PresentAsync(new PresentationBatch([]), token);
             _ = backend.TakeOutput();
-            var activity = new InteractionActivity("SEMANTIC REFRESH — new requests blocked", TimeProvider.System.GetTimestamp(), true, TimeProvider.System)
+            var activity = new InteractionActivity("SEMANTIC REFRESH â€” new requests blocked", TimeProvider.System.GetTimestamp(), true, TimeProvider.System)
             {
                 SemanticWorkspaceId = WorkspaceId.New(),
             };

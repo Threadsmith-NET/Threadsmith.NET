@@ -1,6 +1,7 @@
 namespace Threadsmith.DotNet;
 
 using System.Collections.Concurrent;
+using System.Collections.Frozen;
 using System.Diagnostics;
 using System.Reflection;
 using System.Security.Cryptography;
@@ -21,21 +22,28 @@ public sealed partial class SemanticEngine : ISemanticEngine
 {
     private const int MaximumSlowProjectSamples = 3;
     private static readonly Lock _msBuildGate = new();
-    private static VisualStudioInstance? _registeredMsBuildInstance;
-    private static int _semanticLoadSequence;
-    private static int _versionFactsLogged;
+    private static readonly SemanticRefreshInventory EmptyRefreshInventory = new(
+        FrozenSet<string>.Empty,
+        FrozenSet<string>.Empty,
+        FrozenSet<string>.Empty,
+        FrozenSet<string>.Empty);
+
     private readonly TimeSpan _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly IDomainEventStream _events;
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<string> _invalidations = new();
     private readonly ILogger<SemanticEngine> _logger;
+    private static VisualStudioInstance? _registeredMsBuildInstance;
+    private static int _semanticLoadSequence;
+    private static int _versionFactsLogged;
     private HashSet<ProjectId> _compiledProjects = [];
     private SemanticConfidenceLevel _confidence;
     private SemanticLoadRequest? _lastRequest;
     private IReadOnlyList<SemanticProjectInfo> _projects = [];
     private long _generation;
     private Solution? _solution;
+    private SemanticRefreshInventory _refreshInventory = EmptyRefreshInventory;
     private MSBuildWorkspace? _workspace;
 
     /// <summary>Initializes a new instance of the <see cref="SemanticEngine"/> class.</summary>
@@ -452,6 +460,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         }).ToList();
         var loadedPaths = loadedProjects.Select(project => project.FilePath).ToHashSet(StringComparerForCurrentPlatform());
         loadedProjects.AddRange(metadata.Where(info => !loadedPaths.Contains(info.FilePath)));
+        var refreshInventory = CreateRefreshInventory(load.Solution, normalizedRequest, cancellationToken);
         SemanticCompilationCoordinator? previousPreparation;
         lock (_gate)
         {
@@ -486,6 +495,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
                     _workspace = load.Workspace;
                     _solution = load.Solution;
+                    _refreshInventory = refreshInventory;
                     _compiledProjects = [];
                     _projects = loadedProjects;
                     _confidence = SemanticConfidenceLevel.ProjectGraphOnly;
@@ -1111,6 +1121,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 }
 
                 // Incremental replacement retains the lifecycle owner's outstanding publication barrier.
+                // Only document text changes, so immutable refresh membership remains valid.
                 _solution = replacement;
                 _preparation = preparation;
                 _generation++;
@@ -1171,27 +1182,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
     {
         lock (_gate)
         {
-            if (_solution is null || _lastRequest is null)
-            {
-                var comparer = StringComparerForCurrentPlatform();
-                return new SemanticRefreshInventory(
-                    new HashSet<string>(comparer),
-                    new HashSet<string>(comparer),
-                    new HashSet<string>(comparer),
-                    new HashSet<string>(comparer));
-            }
-
-            return new SemanticRefreshInventory(
-                GetRefreshDocumentPaths(
-                    _solution.Projects.SelectMany(project => project.Documents),
-                    _lastRequest),
-                GetRefreshDocumentPaths(
-                    _solution.Projects.SelectMany(project => project.AdditionalDocuments),
-                    _lastRequest),
-                GetRefreshDocumentPaths(
-                    _solution.Projects.SelectMany(project => project.AnalyzerConfigDocuments),
-                    _lastRequest),
-                GetReferencePaths(_solution, _lastRequest));
+            return _refreshInventory;
         }
     }
 
@@ -1692,6 +1683,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             workspace = _workspace;
             _workspace = null;
             _solution = null;
+            _refreshInventory = EmptyRefreshInventory;
             _compiledProjects = [];
         }
 
@@ -1839,30 +1831,64 @@ public sealed partial class SemanticEngine : ISemanticEngine
             .ToHashSet(StringComparerForCurrentPlatform());
     }
 
+    private static SemanticRefreshInventory CreateRefreshInventory(
+        Solution? solution,
+        SemanticLoadRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (solution is null)
+        {
+            return EmptyRefreshInventory;
+        }
+
+        // Membership belongs to this solution publication. Callbacks only look up paths;
+        // filesystem safety is revalidated at the boundary that actually reads an input.
+        return new SemanticRefreshInventory(
+            GetRefreshDocumentPaths(solution.Projects.SelectMany(project => project.Documents), request, cancellationToken),
+            GetRefreshDocumentPaths(solution.Projects.SelectMany(project => project.AdditionalDocuments), request, cancellationToken),
+            GetRefreshDocumentPaths(solution.Projects.SelectMany(project => project.AnalyzerConfigDocuments), request, cancellationToken),
+            GetReferencePaths(solution, request, cancellationToken));
+    }
+
     private static IReadOnlySet<string> GetRefreshDocumentPaths(
         IEnumerable<TextDocument> documents,
-        SemanticLoadRequest request)
+        SemanticLoadRequest request,
+        CancellationToken cancellationToken)
     {
-        return documents
-            .Select(document => document.FilePath)
-            .Where(path => IsSemanticRefreshInputPathAllowed(path, request))
-            .Select(path => Path.GetFullPath(path ?? string.Empty))
-            .ToHashSet(StringComparerForCurrentPlatform());
+        var paths = new HashSet<string>(StringComparerForCurrentPlatform());
+        foreach (var document in documents)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsSemanticRefreshInputPathAllowed(document.FilePath, request))
+            {
+                paths.Add(Path.GetFullPath(document.FilePath ?? string.Empty));
+            }
+        }
+
+        return paths.ToFrozenSet(StringComparerForCurrentPlatform());
     }
 
     private static IReadOnlySet<string> GetReferencePaths(
         Solution solution,
-        SemanticLoadRequest request)
+        SemanticLoadRequest request,
+        CancellationToken cancellationToken)
     {
-        return solution.Projects
+        var paths = new HashSet<string>(StringComparerForCurrentPlatform());
+        foreach (var path in solution.Projects
             .SelectMany(project => project.AnalyzerReferences
                 .Select(reference => reference.FullPath)
                 .Concat(project.MetadataReferences
                     .OfType<PortableExecutableReference>()
-                    .Select(reference => reference.FilePath)))
-            .Where(path => IsSemanticInputPathAllowed(path, request))
-            .Select(path => Path.GetFullPath(path ?? string.Empty))
-            .ToHashSet(StringComparerForCurrentPlatform());
+                    .Select(reference => reference.FilePath))))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (IsSemanticInputPathAllowed(path, request))
+            {
+                paths.Add(Path.GetFullPath(path ?? string.Empty));
+            }
+        }
+
+        return paths.ToFrozenSet(StringComparerForCurrentPlatform());
     }
 
     private static long? ToElapsedMilliseconds(TimeSpan elapsed)
@@ -2582,6 +2608,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         Action? stateCommitted = null)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var refreshInventory = CreateRefreshInventory(solution, request, cancellationToken);
         MSBuildWorkspace? previousWorkspace;
         SemanticCompilationCoordinator? previousPreparation;
         SemanticConfidenceLevel previousConfidence;
@@ -2604,6 +2631,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 previousConfidence = _confidence;
                 _workspace = workspace;
                 _solution = solution;
+                _refreshInventory = refreshInventory;
                 _compiledProjects = compiledProjects;
                 _projects = projects;
                 _confidence = confidence;

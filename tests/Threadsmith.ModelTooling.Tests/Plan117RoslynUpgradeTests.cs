@@ -474,6 +474,8 @@ public static class Plan117RoslynUpgradeTests
                 publishedEvents.Clear();
             }
 
+            var originalInventory = engine.GetRefreshInventory();
+
             // Loaded analyzer assemblies stay locked on Windows; keep them in test output, outside disposable inputs.
             Directory.CreateDirectory(Path.GetDirectoryName(analyzerPath)!);
             File.Copy(Path.Combine(FixtureRoot, "Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"), analyzerPath, overwrite: true);
@@ -501,6 +503,7 @@ public static class Plan117RoslynUpgradeTests
 
             // Assert: cancellation completes while construction is blocked, without publishing replacement state.
             Assert.Empty(publishedEvents);
+            Assert.Same(originalInventory, engine.GetRefreshInventory());
             Assert.Equal(
                 refresh ? SemanticConfidenceLevel.FullSemantic : SemanticConfidenceLevel.None,
                 engine.Confidence);

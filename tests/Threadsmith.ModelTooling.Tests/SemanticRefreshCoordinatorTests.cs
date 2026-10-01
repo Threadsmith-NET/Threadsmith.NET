@@ -326,8 +326,18 @@ public static class SemanticRefreshCoordinatorTests
     [Fact]
     public static async Task ForceRefreshAsync_ReconcilesExplicitIgnoredDirectoryWatcherRoots()
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
+        var activeWatchers = new ConcurrentDictionary<FileSystemWatcher, string>();
+        FileSystemWatcher CreateWatcher(string path)
+        {
+            var watcher = new FileSystemWatcher(path);
+            activeWatchers.TryAdd(watcher, path);
+            watcher.Disposed += (_, _) => activeWatchers.TryRemove(watcher, out _);
+            return watcher;
+        }
+
         var externalCompletion = new TaskCompletionSource<SemanticRefreshCompleted>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -341,27 +351,30 @@ public static class SemanticRefreshCoordinatorTests
             return Task.CompletedTask;
         });
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
-        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true);
-        await coordinator.BindAsync(repository.CreateRequest());
+        await using var coordinator = CreateCoordinator(
+            backend,
+            events,
+            watchFileSystem: true,
+            watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), cancellationToken);
         var ignoredDirectory = Path.Combine(repository.Root, "obj");
         Directory.CreateDirectory(ignoredDirectory);
         var additionalPath = Path.Combine(ignoredDirectory, "loaded.json");
-        await File.WriteAllTextAsync(additionalPath, "initial");
+        await File.WriteAllTextAsync(additionalPath, "initial", cancellationToken);
         backend.AddAdditionalDocument(repository.WorkspaceId, additionalPath);
 
-        await coordinator.ForceRefreshAsync(repository.SessionId);
-        await File.WriteAllTextAsync(additionalPath, "changed");
-        var external = await externalCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await coordinator.ForceRefreshAsync(repository.SessionId, cancellationToken);
+        var explicitWatcher = Assert.Single(activeWatchers, pair => pair.Value == ignoredDirectory).Key;
+        Assert.True(explicitWatcher.EnableRaisingEvents);
+        await File.WriteAllTextAsync(additionalPath, "changed", cancellationToken);
+        var external = await externalCompletion.Task.WaitAsync(cancellationToken);
         Assert.Equal(SemanticRefreshMode.Full, external.Mode);
 
         backend.RemoveAdditionalDocument(repository.WorkspaceId, additionalPath);
-        await coordinator.ForceRefreshAsync(repository.SessionId);
-        var refreshCount = backend.RefreshCount;
-        await File.WriteAllTextAsync(additionalPath, "ignored again");
-        await Task.Delay(TimeSpan.FromMilliseconds(200));
+        await coordinator.ForceRefreshAsync(repository.SessionId, cancellationToken);
 
         Assert.True(coordinator.IsCurrent(repository.SessionId));
-        Assert.Equal(refreshCount, backend.RefreshCount);
+        Assert.DoesNotContain(ignoredDirectory, activeWatchers.Values);
     }
 
     /// <summary>Generated C# source beneath build-output directories does not cause semantic refresh churn.</summary>
@@ -1267,6 +1280,80 @@ public static class SemanticRefreshCoordinatorTests
         Assert.True(result.WasRefreshed);
     }
 
+    /// <summary>New source membership missed by initial evaluation fences admission on full recovery.</summary>
+    [Theory]
+    [InlineData("Added.cs")]
+    [InlineData("new/nested/Added.CS")]
+    public static async Task BeginBindingAsync_SourceAddedDuringInitialLoadRequiresFullRecovery(string relativePath)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath)
+        {
+            InventoryAvailable = false,
+        };
+        await using var coordinator = CreateCoordinator(backend, events);
+        var request = repository.CreateRequest();
+        var generation = await coordinator.BeginBindingAsync(request, cancellationToken);
+
+        // Simulate a compile item appearing after evaluation, with no watcher notification.
+        var addedPath = Path.Combine(repository.Root, relativePath);
+        Directory.CreateDirectory(Path.GetDirectoryName(addedPath)!);
+        await File.WriteAllTextAsync(addedPath, "public class Added { }", cancellationToken);
+        backend.InventoryAvailable = true;
+        var barrier = backend.BlockNextRefresh();
+        await coordinator.CompleteBindingAsync(request, generation, cancellationToken);
+        var admission = coordinator.EnsureCurrentAsync(
+            repository.SessionId,
+            SemanticRefreshReason.UserAdmission,
+            cancellationToken);
+        await barrier.Started.Task.WaitAsync(cancellationToken);
+
+        Assert.False(admission.IsCompleted);
+        Assert.False(coordinator.IsCurrent(repository.SessionId));
+        Assert.Equal(SemanticRefreshMode.Full, Assert.Single(backend.Modes));
+        barrier.Release.TrySetResult();
+        var result = await admission;
+        Assert.True(result.WasRefreshed);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+        Assert.Equal(1, backend.RefreshCount);
+    }
+
+    /// <summary>Unchanged membership and ignored build output do not request startup recovery.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("obj/Generated.g.cs")]
+    [InlineData("bin/Generated.cs")]
+    [InlineData(".git/Excluded.cs")]
+    [InlineData("notes.txt")]
+    public static async Task BeginBindingAsync_UnchangedSourceMembershipDoesNotRefresh(string? relativePath)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        await using var coordinator = CreateCoordinator(backend, events);
+        var request = repository.CreateRequest();
+        var generation = await coordinator.BeginBindingAsync(request, cancellationToken);
+        if (relativePath is not null)
+        {
+            var path = Path.Combine(repository.Root, relativePath);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(path, "ignored", cancellationToken);
+        }
+
+        await coordinator.CompleteBindingAsync(request, generation, cancellationToken);
+        var result = await coordinator.EnsureCurrentAsync(
+            repository.SessionId,
+            SemanticRefreshReason.UserAdmission,
+            cancellationToken);
+
+        Assert.False(result.WasRefreshed);
+        Assert.Equal(0, backend.RefreshCount);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+    }
+
     /// <summary>A reference change during initial loading is detected without a watcher hint.</summary>
     [Fact]
     public static async Task BeginBindingAsync_ReferenceChangeDuringInitialLoadIsRetainedForFullRefresh()
@@ -1510,6 +1597,80 @@ public static class SemanticRefreshCoordinatorTests
         Assert.True(reverted.WasRefreshed);
         Assert.Equal(SemanticRefreshMode.Full, reverted.Mode);
         Assert.Equal(3, backend.RefreshCount);
+    }
+
+    /// <summary>Changes completed while publication waits are included in the first reload's baseline.</summary>
+    [Fact]
+    public static async Task ForceRefreshAsync_CapturesBaselineAfterPublicationAdmission()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var publicationGate = new TestSemanticRefreshPublicationGate();
+        await using var coordinator = CreateCoordinator(backend, events, publicationGate: publicationGate);
+        await coordinator.BindAsync(repository.CreateRequest(), cancellationToken);
+
+        var force = coordinator.ForceRefreshAsync(repository.SessionId, cancellationToken);
+        await publicationGate.Entered.Task.WaitAsync(cancellationToken);
+        await File.WriteAllTextAsync(repository.SolutionPath, "updated during active run", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(repository.Root, "Added.cs"), "class Added { }", cancellationToken);
+        publicationGate.Release.TrySetResult();
+        var result = await force;
+
+        Assert.True(result.WasRefreshed);
+        Assert.Equal(result.DirtyVersion, result.AppliedVersion);
+        Assert.Equal(1, backend.RefreshCount);
+    }
+
+    /// <summary>Real sharing failures use the bounded retry delay for both text and binary inputs.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public static async Task BeginBindingAsync_RetriesSharingFailures(bool binary, bool releaseLock)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var path = binary ? Path.Combine(repository.Root, "Library.dll") : repository.SolutionPath;
+        if (binary)
+        {
+            await File.WriteAllBytesAsync(path, [1, 2, 3], cancellationToken);
+            backend.AddFullReloadInput(repository.WorkspaceId, path);
+        }
+
+        await using var exclusiveLock = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var delays = 0;
+        var timeProvider = new CallbackTimeProvider(() =>
+        {
+            delays++;
+            if (releaseLock)
+            {
+                exclusiveLock.Dispose();
+            }
+        });
+        await using var coordinator = CreateCoordinator(
+            backend,
+            events,
+            resourceLimits: new SemanticRefreshResourceLimits(maximumStableFileReadAttempts: 3),
+            timeProvider: timeProvider);
+
+        if (releaseLock)
+        {
+            await coordinator.BindAsync(repository.CreateRequest(), cancellationToken);
+            Assert.True(coordinator.IsCurrent(repository.SessionId));
+            Assert.Equal(1, delays);
+        }
+        else
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                coordinator.BeginBindingAsync(repository.CreateRequest(), cancellationToken));
+            Assert.Equal(2, delays);
+            Assert.Equal(0, backend.RefreshCount);
+        }
     }
 
     /// <summary>Post-full reconciliation detects a disk change even when no second watcher hint arrives.</summary>
@@ -2805,6 +2966,22 @@ public static class SemanticRefreshCoordinatorTests
                 static _ => new TaskCompletionSource<LoadBarrier>(
                     TaskCreationOptions.RunContinuationsAsynchronously));
             return started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    private sealed class CallbackTimeProvider : TimeProvider
+    {
+        private readonly Action _onDelay;
+
+        public CallbackTimeProvider(Action onDelay)
+        {
+            _onDelay = onDelay;
+        }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            _onDelay();
+            return base.CreateTimer(callback, state, dueTime, period);
         }
     }
 

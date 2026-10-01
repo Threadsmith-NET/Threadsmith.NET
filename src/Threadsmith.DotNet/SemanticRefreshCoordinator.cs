@@ -1678,27 +1678,22 @@ public sealed class SemanticRefreshCoordinator :
                     () => QueueRecovery(binding, restartWatcher: true));
             }
 
-            var preRefreshInputs = mode == SemanticRefreshMode.Full
-                ? await CaptureAuthoritativeInputSnapshotAsync(
-                    binding,
-                    _backend.GetRefreshInventory(binding.Request.WorkspaceId),
-                    additionalPaths: [],
-                    binaryAdditionalPaths: [],
-                    includePotentialBinaryInputs: false,
-                    cancellationToken)
-                : null;
-            if (preRefreshInputs is not null
-                && (!preRefreshInputs.IsComplete
-                    || preRefreshInputs.Contents.Values.Any(content => !content.IsStable)))
-            {
-                throw new InvalidDataException(
-                    "Semantic refresh inputs could not be captured as stable, accessible files.");
-            }
-
+            AuthoritativeInputSnapshot? preRefreshInputs = null;
             async Task<SemanticLoadResult> PublishAsync(CancellationToken publicationToken)
             {
                 if (mode == SemanticRefreshMode.Full)
                 {
+                    // An active run can change inputs while publication is waiting for admission.
+                    preRefreshInputs = await CaptureAuthoritativeInputSnapshotAsync(
+                        binding,
+                        _backend.GetRefreshInventory(binding.Request.WorkspaceId),
+                        additionalPaths: [],
+                        binaryAdditionalPaths: [],
+                        includePotentialBinaryInputs: false,
+                        publicationToken);
+                    EnsureCompleteAuthoritativeSnapshot(
+                        preRefreshInputs,
+                        "Semantic refresh inputs could not be captured as stable, accessible files.");
                     return await _backend.RefreshFullAsync(
                         binding.Request.WorkspaceId,
                         publicationToken);
@@ -2124,6 +2119,11 @@ public sealed class SemanticRefreshCoordinator :
             currentSnapshot,
             "Semantic refresh inputs changed outside safe snapshot constraints.");
 
+        if (!beforeSnapshot.SourcePaths.SetEquals(currentSnapshot.SourcePaths))
+        {
+            QueueRecovery(binding);
+        }
+
         var confirmed = new Dictionary<string, StableFileContent>(PathComparer);
         var paths = new HashSet<string>(beforeSnapshot.Contents.Keys, PathComparer);
         paths.UnionWith(currentSnapshot.Contents.Keys);
@@ -2237,17 +2237,19 @@ public sealed class SemanticRefreshCoordinator :
         var paths = new HashSet<string>(PathComparer);
         var currentPaths = new HashSet<string>(PathComparer);
         var binaryPaths = new HashSet<string>(PathComparer);
+        var sourcePaths = new HashSet<string>(PathComparer);
         var isComplete = AddCurrentFullReloadInputs(
             binding,
             inventory.FullReloadInputs,
             paths,
             currentPaths,
             binaryPaths);
-        AddCurrentGraphControlInputs(
+        AddCurrentRepositoryInputs(
             binding,
             paths,
             currentPaths,
             binaryPaths,
+            sourcePaths,
             includePotentialBinaryInputs,
             cancellationToken);
 
@@ -2291,6 +2293,7 @@ public sealed class SemanticRefreshCoordinator :
             contents,
             currentPaths,
             binaryPaths,
+            sourcePaths,
             isComplete);
     }
 
@@ -2324,11 +2327,12 @@ public sealed class SemanticRefreshCoordinator :
         return isComplete;
     }
 
-    private static void AddCurrentGraphControlInputs(
+    private static void AddCurrentRepositoryInputs(
         WorkspaceBinding binding,
         HashSet<string> paths,
         HashSet<string> currentPaths,
         HashSet<string> binaryPaths,
+        HashSet<string> sourcePaths,
         bool includePotentialBinaryInputs,
         CancellationToken cancellationToken)
     {
@@ -2371,9 +2375,10 @@ public sealed class SemanticRefreshCoordinator :
                     }
 
                     var isGraphControl = IsGraphControlPath(entry);
+                    var isSource = entry.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
                     var isPotentialBinaryInput = includePotentialBinaryInputs
                         && IsPotentialBinaryInputPath(entry);
-                    if (!isGraphControl && !isPotentialBinaryInput)
+                    if (!isGraphControl && !isPotentialBinaryInput && !isSource)
                     {
                         continue;
                     }
@@ -2384,7 +2389,18 @@ public sealed class SemanticRefreshCoordinator :
                         continue;
                     }
 
-                    paths.Add(normalized);
+                    if (isSource)
+                    {
+                        // Membership catches compile-item changes before monitoring starts without
+                        // reading source contents; loaded document reconciliation owns text changes.
+                        sourcePaths.Add(normalized);
+                    }
+
+                    if (isGraphControl || isPotentialBinaryInput)
+                    {
+                        paths.Add(normalized);
+                    }
+
                     if (isGraphControl)
                     {
                         currentPaths.Add(normalized);
@@ -2666,9 +2682,20 @@ public sealed class SemanticRefreshCoordinator :
             }
             catch (FileNotFoundException)
             {
+                await Task.Delay(TimeSpan.FromMilliseconds(20), _timeProvider, cancellationToken);
                 continue;
             }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            catch (IOException)
+            {
+                if (attempt + 1 == _resourceLimits.MaximumStableFileReadAttempts)
+                {
+                    return new StableFileContent(File.Exists(path), false, null, "unreadable");
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(20), _timeProvider, cancellationToken);
+                continue;
+            }
+            catch (UnauthorizedAccessException)
             {
                 return new StableFileContent(File.Exists(path), false, null, "unreadable");
             }
@@ -3287,6 +3314,7 @@ public sealed class SemanticRefreshCoordinator :
         IReadOnlyDictionary<string, StableFileContent> Contents,
         IReadOnlySet<string> CurrentPaths,
         IReadOnlySet<string> BinaryPaths,
+        IReadOnlySet<string> SourcePaths,
         bool IsComplete);
 
     private sealed class RefreshSequence

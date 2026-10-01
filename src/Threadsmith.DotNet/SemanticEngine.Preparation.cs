@@ -575,6 +575,7 @@ public sealed partial class SemanticEngine
         {
             return new(
                 _solution,
+                _refreshInventory,
                 _workspace,
                 _compiledProjects,
                 _projects,
@@ -601,6 +602,7 @@ public sealed partial class SemanticEngine
             recovered = ownership == _preparationOwnership && previous.Solution is not null && previous.Published
                 ? CreatePreparationCoordinator(previous.Solution, previous.Compiled) : null;
             _solution = previous.Solution;
+            _refreshInventory = previous.RefreshInventory;
             _workspace = previous.Workspace;
             _compiledProjects = previous.Compiled;
             _projects = previous.Projects;
@@ -623,7 +625,7 @@ public sealed partial class SemanticEngine
         }
     }
 
-    private sealed record ReplacementState(Solution? Solution, Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace? Workspace,
+    private sealed record ReplacementState(Solution? Solution, SemanticRefreshInventory RefreshInventory, Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace? Workspace,
         HashSet<ProjectId> Compiled, IReadOnlyList<SemanticProjectInfo> Projects, SemanticConfidenceLevel Confidence, SemanticLoadRequest? Request, SemanticCompilationCoordinator? Preparation,
         IReadOnlyList<string> ExpectedPaths, bool WorkspaceFailures, bool Published);
 }

@@ -1265,11 +1265,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Select(Path.GetFullPath),
             pathComparer);
-        string[] refreshPaths =
-        [
-            .. changedFiles.Concat(GetDiagnosticRefreshPaths(solution, compiledProjects, requestedPaths))
-                .Distinct(pathComparer),
-        ];
+        var refreshPaths = changedFiles.Concat(GetDiagnosticRefreshPaths(solution, compiledProjects, requestedPaths));
         solution = await RefreshChangedDocumentsAsync(solution, refreshPaths, repositoryPath, cancellationToken);
         var diagnostics = new List<Threadsmith.Core.Diagnostic>();
         foreach (var project in solution.Projects)
@@ -2424,7 +2420,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         }
     }
 
-    private static IReadOnlyList<string> GetDiagnosticRefreshPaths(
+    private static IEnumerable<string> GetDiagnosticRefreshPaths(
         Solution solution,
         IReadOnlySet<ProjectId> compiledProjects,
         IReadOnlySet<string> requestedProjectPaths)
@@ -2432,28 +2428,22 @@ public sealed partial class SemanticEngine : ISemanticEngine
         ArgumentNullException.ThrowIfNull(solution);
         ArgumentNullException.ThrowIfNull(compiledProjects);
         ArgumentNullException.ThrowIfNull(requestedProjectPaths);
-        return [.. solution.Projects
-            .Where(project => compiledProjects.Contains(project.Id))
-            .Where(project => requestedProjectPaths.Count == 0
+        return solution.Projects
+            .Where(project => compiledProjects.Contains(project.Id) && (requestedProjectPaths.Count == 0
                 || (project.FilePath is not null
-                    && requestedProjectPaths.Contains(Path.GetFullPath(project.FilePath))))
+                    && requestedProjectPaths.Contains(Path.GetFullPath(project.FilePath)))))
             .SelectMany(project => project.Documents)
             .Select(document => document.FilePath)
             .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => Path.GetFullPath(path ?? string.Empty))];
+            .Select(path => Path.GetFullPath(path ?? string.Empty));
     }
 
     private static async Task<Solution> RefreshChangedDocumentsAsync(
         Solution solution,
-        IReadOnlyList<string> changedFiles,
+        IEnumerable<string> changedFiles,
         string repositoryPath,
         CancellationToken cancellationToken)
     {
-        if (changedFiles.Count == 0)
-        {
-            return solution;
-        }
-
         var comparer = StringComparerForCurrentPlatform();
         string[] normalizedPaths = [.. changedFiles
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -2467,35 +2457,24 @@ public sealed partial class SemanticEngine : ISemanticEngine
             return solution;
         }
 
-        var sourceByPath = new Dictionary<string, SourceText>(comparer);
-        foreach (var changedPath in normalizedPaths)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!File.Exists(changedPath) || !IsCSharpSourcePath(changedPath))
-            {
-                continue;
-            }
-
-            var content = await File.ReadAllTextAsync(changedPath, cancellationToken);
-            sourceByPath[changedPath] = SourceText.From(content, Encoding.UTF8);
-        }
-
-        var documentsByPath = solution.Projects
-            .SelectMany(project => project.Documents)
-            .Where(document => !string.IsNullOrWhiteSpace(document.FilePath))
-            .GroupBy(document => Path.GetFullPath(document.FilePath ?? string.Empty), comparer)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(document => document.Id).ToArray(),
-                comparer);
+        var documentsByPath = CreateDocumentsByPath(solution);
 
         var refreshed = solution;
         foreach (var changedPath in normalizedPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (documentsByPath.TryGetValue(changedPath, out var documentIds))
+            documentsByPath.TryGetValue(changedPath, out var documentIds);
+            SourceText? sourceText = null;
+            if (File.Exists(changedPath) && IsCSharpSourcePath(changedPath))
             {
-                if (sourceByPath.TryGetValue(changedPath, out var sourceText))
+                var existingDocument = documentIds is { Length: > 0 } ? solution.GetDocument(documentIds[0]) : null;
+                var existingText = existingDocument is null ? null : await existingDocument.GetTextAsync(cancellationToken);
+                sourceText = await SemanticDiagnosticTextReader.ReadAsync(changedPath, existingText, cancellationToken);
+            }
+
+            if (documentIds is not null)
+            {
+                if (sourceText is not null)
                 {
                     foreach (var documentId in documentIds)
                     {
@@ -2523,7 +2502,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            if (!sourceByPath.TryGetValue(changedPath, out var newSourceText))
+            if (sourceText is null)
             {
                 continue;
             }
@@ -2534,7 +2513,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 refreshed = refreshed.AddDocument(
                     DocumentId.CreateNewId(project.Id),
                     Path.GetFileName(changedPath),
-                    newSourceText,
+                    sourceText,
                     GetDocumentFolders(project.FilePath, changedPath),
                     changedPath);
             }

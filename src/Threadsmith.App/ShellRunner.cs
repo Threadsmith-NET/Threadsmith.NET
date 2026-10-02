@@ -88,11 +88,26 @@ internal static class ShellRunner
                 context.Projections,
                 Console.Out,
                 context.WebFetchAuthorization,
-                context.Paths.RepositoryRoot);
+                context.Paths.RepositoryRoot,
+                semanticReadinessTimeout: TimeSpan.FromSeconds(
+                    context.Configuration.GetValue("headless:semanticReadinessTimeoutSeconds", 30)));
             var request = string.Join(' ', context.CommandLine.RequestArguments);
             var catalogArguments = request.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-            if (catalogArguments.Length > 0
-                && string.Equals(catalogArguments[0], "/models", StringComparison.OrdinalIgnoreCase))
+            var isCatalogCommand = catalogArguments.Length > 0
+                && string.Equals(catalogArguments[0], "/models", StringComparison.OrdinalIgnoreCase);
+            var preflightOnly = isCatalogCommand && catalogArguments.Length == 2
+                && string.Equals(catalogArguments[1], "preflight", StringComparison.OrdinalIgnoreCase);
+            if (preflightOnly || (!isCatalogCommand && EffectiveConfigurationPreflight.IsRequested(context.Configuration)))
+            {
+                var preflightResult = await context.Applications.ConfigurationPreflight.RunAsync(
+                    context.Configuration, Console.Out, processCancellation.Token);
+                if (preflightOnly || preflightResult != 0)
+                {
+                    return preflightResult;
+                }
+            }
+
+            if (isCatalogCommand)
             {
                 return await RunModelCatalogCommandAsync(
                     headlessShell,
@@ -198,7 +213,7 @@ internal static class ShellRunner
             return 0;
         }
 
-        await error.WriteLineAsync("Usage: /models [status|refresh <provider-id>]".AsMemory(), cancellationToken);
+        await error.WriteLineAsync("Usage: /models [preflight|status <provider-id>|refresh <provider-id>]".AsMemory(), cancellationToken);
         return 2;
     }
 

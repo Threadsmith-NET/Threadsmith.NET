@@ -105,9 +105,10 @@ Expected: source suppression occurs only when exact unchanged ranges are demonst
 2. Ask an ordinary natural-language question such as how default temporal filtering reaches response transparency, without supplying stable symbol IDs or exact method names.
 3. Confirm `code_explore` resolves candidate identifiers and paths deterministically, reports each resolved/ambiguous term, and ranks exact names, qualified names, co-located terms, semantic connectivity, explicit paths, and production flow ahead of isolated lexical collisions.
 4. Confirm the result allocates usable line-numbered bodies or call-site windows to named and flow-spine files, returns compact pointers for relevant material that did not fit, and does not fill the budget merely because many files contain one common word.
-5. Repeat with CamelCase/snake_case terms, namespace-qualified names, overloads, a test-focused query, generated-code focus, a large repository, reduced output budget, partial compilation, timeout, and cancellation.
+5. Repeat with CamelCase/snake_case terms, namespace-qualified names, short `Type.Member` anchors, overload signatures, duplicate type names, path disambiguation, a test-focused query, generated-code focus, a large repository, reduced output budget, partial compilation, timeout, and cancellation. Short exact names must resolve the same identities as full names, or report ambiguity when several declarations match.
 6. Run the same fixed question several times with the same repository generation and configuration. Compare selected anchors, order, source allocation, rounds, follow-up reads/searches, duration, and answer correctness.
 7. Run a headless fixed question with explicit repository, trust, and solution arguments, for example `Threadsmith.App --repository <repo> --trust TrustedBuild --solution <solution> "<fixed natural-language C# question>"`. Confirm setup records a baseline, reaches at least `PartialCompilation` before the request is submitted, advertises `code_explore`, and fails closed without model submission if semantic readiness remains below `PartialCompilation`.
+8. For a slower solution, repeat with `--set:headless:semanticReadinessTimeoutSeconds=120`. Confirm periodic waiting status and admission if partial compilation becomes available within that limit. A timeout must identify pending loading and the retry setting; a completed load with insufficient confidence must report completion separately. Cancel during loading and confirm exit 130 without model submission.
 
 Expected: natural-language exploration remains deterministic, Roslyn-backed, bounded, and explainable. Structural evidence governs ranking, source allocation remains useful under pressure, ambiguity and omissions are explicit, headless repository requests do not advertise unusable semantic tools, and repeated fixed inputs do not produce arbitrary retrieval order.
 
@@ -2234,3 +2235,11 @@ Expected: all outcomes use shared host commands and existing trust rules; failed
 **Expected:** Scratchpad storage is disabled by default, transient at every lifecycle boundary, and never broadens general repository trust. Only the three compiled file tools receive its scoped authority, only `write_file` mutates it, activation warnings are visible, and repository/configuration transitions cannot retain stale paths or contents.
 
 **Limitations:** Symbolic-link and junction cases require an operating system and account permitted to create them. Abrupt power loss cannot be synchronized deterministically; process termination followed by startup covers recovery behavior without claiming crash-atomic deletion.
+
+### MTP-275 - Effective configuration preflight
+
+1. Run headless `/models preflight` with `--set:headless:preflight:roles=explorer,bugReviewer`; inspect the JSON identities, reasoning, sources, and trusted-catalog flags against the active repository preference and trusted role mappings.
+2. Add `--set:headless:preflight:expect:parent:reasoningLevel=<different-supported-level>` to a normal live request. Verify exit 2 and no provider request. Repeat with a mismatched child provider and an unknown assertion field.
+3. Supply matching expectations and verify a single preflight report precedes the normal request. Confirm the check does not rewrite repository preferences. Cancel startup and verify exit 130.
+
+**Expected:** effective values are reported through shared selection policy, and failed assertions prevent request submission.

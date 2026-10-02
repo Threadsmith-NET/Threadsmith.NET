@@ -145,6 +145,7 @@ internal static class ConfigurationBootstrap
     {
         return new Dictionary<string, string?>
         {
+            ["headless:semanticReadinessTimeoutSeconds"] = "30",
             ["tools:config:memories:MaxNumberOfRepoMemories"] = "20",
             ["tools:config:memories:MaxRepoMemoriesInContext"] = "3",
             ["tools:config:memories:SemanticMinimum"] = RepositoryMemoryOptions.DefaultSemanticMinimum.ToString(CultureInfo.InvariantCulture),

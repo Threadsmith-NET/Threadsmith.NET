@@ -101,11 +101,21 @@ dotnet run --project src\Threadsmith.App -- --repository C:\source\my-repo --tru
 
 Trusted-build startup becomes usable when the first project has compiler coverage. The interactive composer and headless request can proceed at `PartialCompilation` while the remaining projects warm; status may later become `FullSemantic` without another startup message. A semantic tool may wait for the projects it needs. Global searches and validation require their full scope, and code exploration discloses omitted projects. Select a supported `.csproj` with `--solution` when its reference closure is sufficient to reduce evaluation scope. `/semantic_refresh` still waits for a complete refresh attempt.
 
-When repository options and a request are supplied together, Threadsmith opens the repository, selects the solution, records the baseline, waits briefly for `PartialCompilation` semantic readiness, and fails closed without submitting the request if semantic tools would be unusable. With no request, Threadsmith performs repository discovery without granting file-read trust:
+When repository options and a request are supplied together, Threadsmith opens the repository, selects the solution, records the baseline, and waits for `PartialCompilation` semantic readiness. The headless wait reports progress and defaults to 30 seconds. For a slower solution, pass `--set:headless:semanticReadinessTimeoutSeconds=120` (a positive integer in seconds), or increase it further as needed. A timeout reports that loading was still pending; a completed load below the required confidence is reported separately. Both fail closed without submitting the request, and Ctrl+C cancels the wait. With no request, Threadsmith performs repository discovery without granting file-read trust:
 
 ```powershell
 dotnet run --project src\Threadsmith.App
 ```
+
+### Effective configuration preflight
+
+For reproducible live runs, use headless `/models preflight`. It emits one JSON report (`Schema: effective-configuration/1`) and exits without submitting a request. Add `--set:headless:preflight:roles=explorer,bugReviewer` to include requested child roles. The report includes effective provider/profile IDs, reasoning, selection authority, trusted-catalog use, and any compatibility fallback. It excludes credentials and endpoints.
+
+The same preflight gates a normal headless request whenever `headless:preflight` settings are present. Assertions under `headless:preflight:expect:<parent-or-role>` accept `providerId`, `profileId` (GUID), `reasoningLevel`, and `source`. For example, add `--set:headless:preflight:expect:parent:reasoningLevel=High` and `--set:headless:preflight:expect:explorer:source=RoleConfiguration` to your usual live command. An expectation also requests that child's report. A mismatch, unknown field/role, or unavailable model exits with code 2 before request submission; cancellation exits with 130. A passing report allows the request to continue. Assertions check effective values; they do not change selection or save preferences.
+
+Normal configuration layers increase in priority from compiled defaults through machine, user, repository, session JSON, CLI `--set`, then `THREADSMITH_` environment variables. Active model selection has its own authority: the selection service reads persisted repository `model:providerId`, `model:profileId`, and `model:reasoningLevel` over the startup default. A generic reasoning configuration override does not replace that persisted active preference. Use the existing `/models` and `/reasoning` selection commands to change it. For children, an application pin takes precedence over a trusted `agents:roleModels` mapping, then parent inheritance, then host defaults. Role mappings use the repository-excluding trusted configuration; changing the parent does not override them.
+
+The preflight describes startup routing for ordinary tool-using children with the configured delegation budget. Actual request size, sensitivity, tool requirements, application pins, or later model switches can change routing; normal request admission and provenance remain authoritative. No provider completion is needed for this check, though normal startup catalog/authentication initialization still occurs.
 
 ### Compiled application
 

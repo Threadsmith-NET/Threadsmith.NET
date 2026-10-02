@@ -441,11 +441,13 @@ public static partial class AppBootstrapTests
         var paths = CreatePaths(temporary.Root);
 
         var configuration = ConfigurationBootstrap.Build(
-            ["--set:model:http:maxConnectionsPerServer=24"],
+            ["--set:model:http:maxConnectionsPerServer=24", "--set:headless:semanticReadinessTimeoutSeconds=120"],
             paths);
 
         Assert.Equal(24, configuration.GetValue("model:http:maxConnectionsPerServer", 0));
         Assert.Equal(900, configuration.GetValue("model:http:pooledConnectionLifetimeSeconds", 0));
+        Assert.Equal(120, configuration.GetValue("headless:semanticReadinessTimeoutSeconds", 0));
+        Assert.Equal(30, ConfigurationBootstrap.Build([], paths).GetValue("headless:semanticReadinessTimeoutSeconds", 0));
     }
 
     /// <summary>Plan-49 duration display defaults on and repository configuration overrides user configuration.</summary>

@@ -524,7 +524,8 @@ public sealed class RepositoryLifecycle :
         }
 
         var stopwatch = Stopwatch.StartNew();
-        var candidates = new HashSet<string>(PathComparer);
+        var candidates = new Dictionary<string, long>(PathComparer);
+        long totalBytes = 0;
         foreach (var approvedRoot in session.Configuration.ApprovedRoots)
         {
             var root = NormalizeUnderRoot(session.RepositoryPath, approvedRoot);
@@ -539,12 +540,28 @@ public sealed class RepositoryLifecycle :
                 if ((_baselineExtensions.Contains(extension) || _baselineFileNames.Contains(Path.GetFileName(path)))
                     && !IsProhibited(session.RepositoryPath, path, session.Configuration.ProhibitedPaths))
                 {
-                    candidates.Add(path);
+                    var info = new FileInfo(path);
+                    if ((info.Attributes & FileAttributes.ReparsePoint) != 0 || candidates.ContainsKey(path))
+                    {
+                        continue;
+                    }
+
+                    var length = info.Length;
+                    if (length > _resourceLimits.MaximumBaselineContentBytes - totalBytes)
+                    {
+                        throw new InvalidOperationException("Workspace baseline content exceeds the configured baseline-byte limit.");
+                    }
+
+                    candidates.Add(path, length);
+                    totalBytes += length;
                 }
             }
         }
 
         var hashes = new ConcurrentBag<WorkspaceFileHash>();
+        var capturedFiles = _mutationCoordinator is null
+            ? null
+            : new ConcurrentDictionary<string, BaselineFileSnapshot>(PathComparer);
         await Parallel.ForEachAsync(
             candidates,
             new ParallelOptions
@@ -552,11 +569,21 @@ public sealed class RepositoryLifecycle :
                 CancellationToken = cancellationToken,
                 MaxDegreeOfParallelism = Math.Max(1, Math.Min(Environment.ProcessorCount, _resourceLimits.MaximumConcurrentBaselineHashes)),
             },
-            async (path, token) =>
+            async (candidate, token) =>
             {
+                var (path, length) = candidate;
                 var info = new FileInfo(path);
                 if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
                 {
+                    return;
+                }
+
+                var relativePath = Path.GetRelativePath(session.RepositoryPath, path).Replace('\\', '/');
+                if (capturedFiles is not null)
+                {
+                    var snapshot = await BaselineFileSnapshot.CaptureAsync(path, length, token);
+                    capturedFiles[relativePath] = snapshot;
+                    hashes.Add(new WorkspaceFileHash(relativePath, snapshot.Sha256, snapshot.Bytes.LongLength));
                     return;
                 }
 
@@ -567,9 +594,18 @@ public sealed class RepositoryLifecycle :
                     FileShare.Read,
                     81920,
                     FileOptions.Asynchronous | FileOptions.SequentialScan);
+                if (stream.Length != length)
+                {
+                    throw new InvalidOperationException($"Workspace baseline file '{relativePath}' changed before capture completed.");
+                }
+
                 var hash = await SHA256.HashDataAsync(stream, token);
-                var relativePath = Path.GetRelativePath(session.RepositoryPath, path).Replace('\\', '/');
-                hashes.Add(new WorkspaceFileHash(relativePath, Convert.ToHexStringLower(hash), info.Length));
+                if (stream.Length != length)
+                {
+                    throw new InvalidOperationException($"Workspace baseline file '{relativePath}' changed before capture completed.");
+                }
+
+                hashes.Add(new WorkspaceFileHash(relativePath, Convert.ToHexStringLower(hash), length));
             });
         WorkspaceFileHash[] files = [.. hashes.OrderBy(item => item.RelativePath, StringComparer.Ordinal)];
         stopwatch.Stop();
@@ -604,6 +640,8 @@ public sealed class RepositoryLifecycle :
         {
             await _mutationCoordinator.RegisterBaselineAsync(
                 baseline,
+                isolation: null,
+                capturedFiles: capturedFiles,
                 cancellationToken: cancellationToken);
         }
 

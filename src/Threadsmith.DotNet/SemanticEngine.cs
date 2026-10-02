@@ -1268,6 +1268,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         var refreshPaths = changedFiles.Concat(GetDiagnosticRefreshPaths(solution, compiledProjects, requestedPaths));
         solution = await RefreshChangedDocumentsAsync(solution, refreshPaths, repositoryPath, cancellationToken);
         var diagnostics = new List<Threadsmith.Core.Diagnostic>();
+        SemanticLocationContext? context = null;
         foreach (var project in solution.Projects)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1292,10 +1293,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            var targetFramework = projectPath is null || !File.Exists(projectPath)
-                ? string.Empty
-                : ReadProjectInfo(projectPath).TargetFrameworks.FirstOrDefault() ?? string.Empty;
-            var context = CreateLocationContext(solution);
+            context ??= CreateLocationContext(solution);
+            var targetFramework = project.FilePath is { } filePath
+                && context.TargetFrameworks.TryGetValue(filePath, out var framework)
+                    ? framework
+                    : string.Empty;
             foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken))
             {
                 var location = diagnostic.Location == Location.None
@@ -1488,7 +1490,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     sourceByFullPath,
                     documentsByPath,
                     semanticRepository);
-                var context = CreateLocationContext(overlaySolution);
+                SemanticLocationContext? context = null;
+                SemanticLocationContext? baselineContext = null;
                 var affectedProjects = new HashSet<ProjectId>();
                 foreach (var fullPath in sourceByFullPath.Keys)
                 {
@@ -1524,14 +1527,18 @@ public sealed partial class SemanticEngine : ISemanticEngine
                         continue;
                     }
 
-                    var targetFramework = project.FilePath is null || !File.Exists(project.FilePath)
-                        ? string.Empty
-                        : ReadProjectInfo(project.FilePath).TargetFrameworks.FirstOrDefault() ?? string.Empty;
+                    context ??= CreateLocationContext(overlaySolution);
+                    baselineContext ??= CreateLocationContext(solution);
+                    var targetFramework = project.FilePath is { } projectPath
+                        && context.TargetFrameworks.TryGetValue(projectPath, out var framework)
+                            ? framework
+                            : string.Empty;
                     var baselineDiagnostics = await GetBaselineCompilationDiagnosticFingerprintsAsync(
                         solution,
                         preparationReceipt,
                         project.Id,
                         repositoryPath,
+                        baselineContext,
                         cancellationToken);
                     foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken)
                         .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
@@ -1539,7 +1546,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
                         var diagnosticFingerprint = CreateCompilationDiagnosticFingerprint(
                             overlaySolution,
                             diagnostic,
-                            repositoryPath);
+                            repositoryPath,
+                            context);
                         if (baselineDiagnostics.TryGetValue(diagnosticFingerprint, out var baselineCount)
                             && baselineCount > 0)
                         {
@@ -1914,6 +1922,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         SemanticPreparationReceipt? preparationReceipt,
         ProjectId projectId,
         string repositoryPath,
+        SemanticLocationContext context,
         CancellationToken cancellationToken)
     {
         var baselineProject = solution.GetProject(projectId);
@@ -1936,7 +1945,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
             .Select(diagnostic => CreateCompilationDiagnosticFingerprint(
                 solution,
                 diagnostic,
-                repositoryPath))
+                repositoryPath,
+                context))
             .GroupBy(fingerprint => fingerprint, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
@@ -1947,7 +1957,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
     private static string CreateCompilationDiagnosticFingerprint(
         Solution solution,
         Microsoft.CodeAnalysis.Diagnostic diagnostic,
-        string repositoryPath)
+        string repositoryPath,
+        SemanticLocationContext context)
     {
         var file = string.Empty;
         if (diagnostic.Location != Location.None)
@@ -1955,7 +1966,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             var location = CreateLocation(
                 solution,
                 diagnostic.Location,
-                CreateLocationContext(solution));
+                context);
             if (location?.FilePath is not null)
             {
                 file = ToRepositoryRelativePath(repositoryPath, Path.GetFullPath(location.FilePath));

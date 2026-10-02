@@ -59,6 +59,17 @@ internal sealed class ConversationTranscript
     /// <summary>Gets the complete conversation text.</summary>
     internal string Text => _text.ToString();
 
+    /// <summary>Gets the character count without materializing the conversation text.</summary>
+    internal int Length => _text.Length;
+
+    /// <summary>Copies only the text appended since a previously observed character offset.</summary>
+    internal string GetTextSince(int startIndex)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(startIndex);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(startIndex, _text.Length);
+        return _text.ToString(startIndex, _text.Length - startIndex);
+    }
+
     /// <summary>Applies one event through the single conversation-append boundary.</summary>
     /// <param name="domainEvent">Event to project into the conversation.</param>
     /// <param name="toolProgress">Final progress entries for a completed tool invocation.</param>

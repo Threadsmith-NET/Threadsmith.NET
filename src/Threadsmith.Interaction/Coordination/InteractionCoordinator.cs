@@ -584,9 +584,9 @@ public sealed partial class InteractionCoordinator
 
                     var toolProgress = domainEvent is ToolInvocationCompleted completedTool && agents is not null
                         ? await agents.GetToolProgressAsync(completedTool.ToolInvocationId, true, token) : null;
-                    var previousLength = transcript.Text.Length;
+                    var previousLength = transcript.Length;
                     var transcriptDelta = transcript.Apply(domainEvent, toolProgress)
-                        ? transcript.Text[previousLength..]
+                        ? transcript.GetTextSince(previousLength)
                         : string.Empty;
                     if (domainEvent is RunSteeringPauseRequested)
                     {
@@ -716,7 +716,7 @@ public sealed partial class InteractionCoordinator
                     }
                     else if (PresentationActivityRules.EndsTransientActivity(domainEvent, false) && toolSurface is null && operationActivities.Activities.Count > 0)
                     {
-                        nextActivity = operationActivities.Activities.Last();
+                        nextActivity = operationActivities.Activities[^1];
                         nextSemanticActivityKey = null;
                     }
                     else if ((domainEvent is ToolInvocationCompleted or ActiveTurnCompactionCompleted)

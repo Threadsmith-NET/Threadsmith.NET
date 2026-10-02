@@ -25,11 +25,10 @@ public sealed class InMemoryProjectionStore : IProjectionStore
         lock (_gate)
         {
             _sessions.TryGetValue(key, out var existing);
-            var activity = existing?.Activity.ToList() ?? [];
-            var toolActivity = existing?.ToolActivity.ToList() ?? [];
-            var diagnostics = existing?.Diagnostics.ToList() ?? [];
-            var approvals = existing?.PendingApprovals.ToList() ?? [];
-            var pendingPlans = existing?.PendingPlans.ToList() ?? [];
+            var toolActivity = existing?.ToolActivity ?? [];
+            var diagnostics = existing?.Diagnostics ?? [];
+            var approvals = existing?.PendingApprovals ?? [];
+            var pendingPlans = existing?.PendingPlans ?? [];
             var resultPreview = domainEvent is ToolInvocationCompleted { ResultJson: { } resultJson }
                 ? resultJson[..Math.Min(resultJson.Length, _maximumToolResultPreviewCharacters)]
                 : null;
@@ -72,15 +71,13 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 },
                 ModelOutputObserved output when existing is not null => existing with
                 {
-                    Activity = [.. activity, output.Text],
+                    Activity = AppendActivity(existing.Activity, output.Text),
                 },
                 ModelCorrectionAttempted correction when existing is not null => existing with
                 {
-                    Activity =
-                    [
-                        .. activity,
-                        $"Model correction ({correction.Category}) {correction.AttemptNumber}/{correction.MaximumAttempts}: {correction.SafeReason}",
-                    ],
+                    Activity = AppendActivity(
+                        existing.Activity,
+                        $"Model correction ({correction.Category}) {correction.AttemptNumber}/{correction.MaximumAttempts}: {correction.SafeReason}"),
                 },
                 ContextAssembled assembled when existing is not null => existing with
                 {
@@ -90,11 +87,9 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     && proposed.Plan is not null => ApplyPlanProposal(existing, pendingPlans, proposed),
                 SemanticMutationWarningObserved warning when existing is not null => existing with
                 {
-                    Activity =
-                    [
-                        .. activity,
-                        $"Semantic rename warning ({warning.Confidence}): {warning.Message}",
-                    ],
+                    Activity = AppendActivity(
+                        existing.Activity,
+                        $"Semantic rename warning ({warning.Confidence}): {warning.Message}"),
                 },
                 MutationSetProposed proposed when existing is not null
                     && proposed.Preview is not null => existing with
@@ -356,6 +351,14 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 _sessions[key] = _sessions[key] with { ContextInspection = null };
             }
         }
+    }
+
+    /// <summary>Appends under the store lock; activity is store-owned and copied at every snapshot boundary.</summary>
+    private static List<string> AppendActivity(IReadOnlyList<string> activity, string text)
+    {
+        var items = activity as List<string> ?? [.. activity];
+        items.Add(text);
+        return items;
     }
 
     private static ContextInspectionProjection CopyInspection(

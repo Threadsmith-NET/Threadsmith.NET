@@ -168,6 +168,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-retire-original-tui.md` | Retire the original scrollback frontend and its product dependencies |
 | Maintenance | `maintenance-semantic-refresh-readiness-and-visibility.md` | Share startup readiness and retain visible refresh activity with trigger files |
 | Maintenance | `maintenance-semantic-refresh-generated-build-input-churn.md` | Ignore derived MSBuild editor-config churn without weakening semantic freshness |
+| Maintenance | `maintenance-model-output-coalescing.md` | Bound main-chat text batching through the shared durable event stream |
 
 ## Update discipline
 

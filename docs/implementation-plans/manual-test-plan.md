@@ -848,6 +848,7 @@ Expected:
 4. Repeat the same on/off transitions with `Ctrl+T` on an empty composer and with `/thinking` without arguments.
 5. Repeat with reasoning-only completion and with mutation reasoning followed by valid mutation JSON.
 6. In the default TUIKit frontend, enable `/thinking on` and use a controlled provider that pauses after its last reasoning chunk, then pauses again after sending buffered answer text. Confirm the `THINKING` row stays visible throughout both pauses and clears before the completed answer appears. Repeat after a tool call completes, and cancel a paused turn to confirm the row clears.
+7. Use a controlled provider that emits many small answer fragments and then pauses with a partial batch. Repeat in headless mode and with `execution:maxModelOutputBatchCharacters=64` and `execution:modelOutputFlushIntervalMilliseconds=100`. Confirm the first fragment appears promptly and later text flushes during the pause. Follow buffered text with reasoning and a tool call, then repeat with completion, provider failure, and cancellation. Restore the session and compare answer text for omission, duplication, and ordering.
 
 Expected:
 
@@ -857,6 +858,7 @@ Expected:
 - The TUIKit activity row remains active alongside visible reasoning until the answer is displayed or a completion, cancellation, review, or steering boundary ends the activity.
 - Reasoning-only completion emits no empty `Threadsmith:` label.
 - Mutation reasoning remains sanitized and separated from structured JSON, which stages normally.
+- Main-chat answer batching preserves exact sanitized text and flushes before subsequent reasoning, tools, and termination. Pending text appears without another provider chunk; timer latency excludes subscriber delivery time. Restored text matches delivered durable output, and reasoning remains absent from persistence.
 
 ### MTP-049A - Conversational turn versus governed planning (positive and negative)
 

@@ -612,7 +612,9 @@ public sealed partial class SessionApplication
                 {
                     loopState.TransientState.ValidateHistory(round.ModelRequest);
                     streamState.BudgetUsage.Start(round.Registration.Budget, round.ModelRequest);
-                    await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, cancellationToken))
+                    await using var output = new ModelOutputCoalescer(
+                        _events, round.Registration.SessionId, _limits, TimeProvider.System, cancellationToken);
+                    await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, output.Token))
                     {
                         await ProcessModelChunkAsync(
                             chunk,
@@ -621,7 +623,8 @@ public sealed partial class SessionApplication
                             streamState,
                             maximumModelRounds,
                             correctiveTurns,
-                            cancellationToken);
+                            output,
+                            output.Token);
                     }
                 }
                 catch (MalformedInvocationException exception)
@@ -784,8 +787,15 @@ public sealed partial class SessionApplication
         ModelRoundStreamState streamState,
         int maximumModelRounds,
         CorrectiveTurnState correctiveTurns,
+        ModelOutputCoalescer output,
         CancellationToken cancellationToken)
     {
+        if (chunk.Reasoning is not null || chunk.Output is not null || chunk.Usage is not null
+            || chunk.ResponseEnvelope is not null || chunk.FinishReason is not null)
+        {
+            await output.FlushAsync(cancellationToken);
+        }
+
         ProcessUsageChunk(chunk, round, streamState);
         if (chunk.ResponseEnvelope is { } envelope)
         {
@@ -813,12 +823,12 @@ public sealed partial class SessionApplication
         {
             loopState.AddRetainedOutputCharacters(chunk.Text.Length);
             streamState.TextOutput.Append(chunk.Text);
-            await _events.PublishAsync(
-                new ModelOutputObserved(
-                    round.Registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    _sanitizer.Sanitize(chunk.Text)),
-                cancellationToken);
+            await output.AppendAsync(_sanitizer.Sanitize(chunk.Text), cancellationToken);
+        }
+
+        if (chunk.Output is not null || chunk.FinishReason is not null)
+        {
+            await output.FlushAsync(cancellationToken);
         }
 
         if (chunk.Output is PlanModelOutput planOutput)

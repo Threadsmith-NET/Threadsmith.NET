@@ -211,7 +211,7 @@ public sealed class RepositoryLifecycle :
             configuredSolution,
             approvedRoots,
             prohibitedPaths);
-        string[] discovered = [.. EnumerateSafeFiles(repositoryPath, cancellationToken)
+        string[] discovered = [.. EnumerateSafeFiles(repositoryPath, requireComplete: false, cancellationToken)
             .Where(path => _solutionExtensions.Contains(Path.GetExtension(path)) && !IsProhibited(repositoryPath, path, prohibitedPaths))
             .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)];
         var solutionFiles = discovered
@@ -526,36 +526,27 @@ public sealed class RepositoryLifecycle :
         var stopwatch = Stopwatch.StartNew();
         var candidates = new Dictionary<string, long>(PathComparer);
         long totalBytes = 0;
-        foreach (var approvedRoot in session.Configuration.ApprovedRoots)
+        foreach (var path in EnumerateBaselineFiles(
+            session.RepositoryPath,
+            session.Configuration.ApprovedRoots,
+            session.Configuration.ProhibitedPaths,
+            requireComplete: false,
+            cancellationToken))
         {
-            var root = NormalizeUnderRoot(session.RepositoryPath, approvedRoot);
-            if (!Directory.Exists(root))
+            var info = new FileInfo(path);
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0 || candidates.ContainsKey(path))
             {
                 continue;
             }
 
-            foreach (var path in EnumerateSafeFiles(root, cancellationToken))
+            var length = info.Length;
+            if (length > _resourceLimits.MaximumBaselineContentBytes - totalBytes)
             {
-                var extension = Path.GetExtension(path);
-                if ((_baselineExtensions.Contains(extension) || _baselineFileNames.Contains(Path.GetFileName(path)))
-                    && !IsProhibited(session.RepositoryPath, path, session.Configuration.ProhibitedPaths))
-                {
-                    var info = new FileInfo(path);
-                    if ((info.Attributes & FileAttributes.ReparsePoint) != 0 || candidates.ContainsKey(path))
-                    {
-                        continue;
-                    }
-
-                    var length = info.Length;
-                    if (length > _resourceLimits.MaximumBaselineContentBytes - totalBytes)
-                    {
-                        throw new InvalidOperationException("Workspace baseline content exceeds the configured baseline-byte limit.");
-                    }
-
-                    candidates.Add(path, length);
-                    totalBytes += length;
-                }
+                throw new InvalidOperationException("Workspace baseline content exceeds the configured baseline-byte limit.");
             }
+
+            candidates.Add(path, length);
+            totalBytes += length;
         }
 
         var hashes = new ConcurrentBag<WorkspaceFileHash>();
@@ -648,9 +639,38 @@ public sealed class RepositoryLifecycle :
         return baseline;
     }
 
-    /// <summary>Enumerates regular repository files while skipping inaccessible and linked subtrees.</summary>
+    /// <summary>Shares baseline input membership policy between capture and evidence verification.</summary>
+    internal static IEnumerable<string> EnumerateBaselineFiles(
+        string repositoryPath,
+        IReadOnlyList<string> approvedRoots,
+        IReadOnlyList<string> prohibitedPaths,
+        bool requireComplete,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (var approvedRoot in approvedRoots)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var root = NormalizeUnderRoot(repositoryPath, approvedRoot);
+            if (!Directory.Exists(root))
+            {
+                continue;
+            }
+
+            foreach (var path in EnumerateSafeFiles(root, requireComplete, cancellationToken))
+            {
+                if ((_baselineExtensions.Contains(Path.GetExtension(path)) || _baselineFileNames.Contains(Path.GetFileName(path)))
+                    && !IsProhibited(repositoryPath, path, prohibitedPaths))
+                {
+                    yield return path;
+                }
+            }
+        }
+    }
+
+    /// <summary>Enumerates regular repository files, optionally rejecting incomplete enumeration.</summary>
     internal static IEnumerable<string> EnumerateSafeFiles(
         string root,
+        bool requireComplete,
         CancellationToken cancellationToken = default)
     {
         var pending = new Stack<string>();
@@ -664,7 +684,7 @@ public sealed class RepositoryLifecycle :
             {
                 entries = Directory.GetFileSystemEntries(directory);
             }
-            catch (Exception exception) when (exception is IOException
+            catch (Exception exception) when (!requireComplete && exception is IOException
                 or UnauthorizedAccessException
                 or System.Security.SecurityException)
             {
@@ -682,7 +702,7 @@ public sealed class RepositoryLifecycle :
                 {
                     attributes = File.GetAttributes(entry);
                 }
-                catch (Exception exception) when (exception is IOException
+                catch (Exception exception) when (!requireComplete && exception is IOException
                     or UnauthorizedAccessException
                     or System.Security.SecurityException)
                 {

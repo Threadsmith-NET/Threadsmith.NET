@@ -54,7 +54,7 @@ flowchart TD
         ACTIVE_STEP --> IMPLEMENTATION_CONTEXT["Assemble active-step context<br/>current bytes, progress, evidence, and soft batch targets"]
         IMPLEMENTATION_CONTEXT --> BEFORE_MODEL
         RESPONSE -- "propose_mutations" --> PROPOSAL_VALIDATION["Proposal validation<br/>schema, active scope, paths, trust, budgets, current baseline"]
-        PROPOSAL_VALIDATION -- "passes" --> ROSLYN["In-memory C# overlay<br/>syntax and fast semantic screening"]
+        PROPOSAL_VALIDATION -- "passes" --> ROSLYN["In-memory C# overlay<br/>syntax screening without compilation"]
         PROPOSAL_VALIDATION -- "repairable rejection" --> MUTATION_FEEDBACK["CorrectionStarted hook<br/>actionable mutation feedback"]
         ROSLYN -- "blocking diagnostics" --> MUTATION_FEEDBACK
         MUTATION_FEEDBACK --> IMPLEMENTATION_CONTEXT
@@ -64,16 +64,17 @@ flowchart TD
         MUTATION_APPROVAL -- "not authorized" --> PAUSED
         MUTATION_APPROVAL -- "authorized" --> BASELINE["Capture authoritative pre-write<br/>diagnostic baseline"]
         BASELINE --> APPLY["Write-ahead transactional apply<br/>promote current-byte baseline<br/>MutationApplied hook boundary"]
-        APPLY --> VALIDATE["Configured semantic, compile,<br/>diagnostic, and affected-test validation<br/>BeforeValidation / AfterValidation hooks"]
-        VALIDATE -- "introduced failure" --> MUTATION_FEEDBACK
-        VALIDATE -- "passes" --> FULL_BATCH{"Full mutation batch<br/>authorized and applied?"}
-        FULL_BATCH -- "no" --> CONTINUATION_PENDING["ContinuationPending<br/>validated partial authorization"]
+        APPLY --> FULL_BATCH{"Full mutation batch<br/>authorized and applied?"}
+        VALIDATE["One cumulative semantic, compile,<br/>diagnostic, and affected-test validation<br/>BeforeValidation / AfterValidation hooks"]
+        VALIDATE -- "introduced failure: reopen affected step" --> MUTATION_FEEDBACK
+        FULL_BATCH -- "no" --> CONTINUATION_PENDING["ContinuationPending<br/>partial authorization; validation deferred"]
         CONTINUATION_PENDING -- "explicit /validation retry" --> IMPLEMENTATION_CONTEXT
         FULL_BATCH -- "yes" --> STEP_COMPLETE{"Active step complete<br/>with supporting evidence?"}
         STEP_COMPLETE -- "no: another coherent batch" --> IMPLEMENTATION_CONTEXT
         STEP_COMPLETE -- "yes" --> MORE_STEPS{"More approved steps<br/>in this tranche?"}
         MORE_STEPS -- "yes" --> ACTIVE_STEP
-        MORE_STEPS -- "no" --> PLAN_BOUNDARY["PlanContinuationPending<br/>persist cumulative progress and receipt"]
+        MORE_STEPS -- "no" --> VALIDATE
+        VALIDATE -- "passes" --> PLAN_BOUNDARY["PlanContinuationPending<br/>persist cumulative progress and receipt"]
         PLAN_BOUNDARY --> CONTEXT
     end
 
@@ -81,7 +82,7 @@ flowchart TD
     REPLAN --> PRESERVE["Preserve applied bytes, completed work,<br/>unresolved validation, budgets, scope,<br/>original-file evidence, and net diff"]
     PRESERVE --> CONTEXT
 
-    RESPONSE -- "complete_objective {}<br/>only at a finished plan boundary" --> FINAL_VALIDATION["Final validation over cumulative<br/>affected paths, projects, and requirements"]
+    RESPONSE -- "complete_objective {}<br/>only at a finished plan boundary" --> FINAL_VALIDATION["Verify durable cumulative validation,<br/>workspace identity, input membership,<br/>and live file hashes"]
     FINAL_VALIDATION -- "passes" --> COMPLETED["Terminal success<br/>RunCompleted hook"]
     FINAL_VALIDATION -- "fails" --> FAILED["Accurate terminal failure<br/>RunFailed hook"]
     PAUSED --> USER
@@ -97,7 +98,7 @@ flowchart TD
 
 The two backward paths have different meanings:
 
-- **Mutation retry:** proposal or post-mutation validation feedback returns to the implementation request for the same active approved step. A corrected batch repeats proposal validation, in-memory screening, exact-diff approval, transaction, and post-mutation validation. The configured corrective-turn budget remains authoritative.
+- **Mutation retry:** proposal feedback returns to the active approved step; final validation can reopen an earlier affected step. A corrected batch repeats proposal validation, syntax screening, exact-diff approval, and transaction; cumulative validation runs when the plan is applied. The configured corrective-turn budget remains authoritative.
 - **Plan rework:** `request_replan` is an exclusive implementation decision made only between settled transactions. It records `PlanReplanningPending` and returns the same run to ordinary evidence collection and planning. The replacement is a complete new tranche with fresh plan approval and fresh exact-diff authorization; there is no separate correction loop and no plan-count cap.
 
 Skills, extensions, MCP tools, hooks, and memories do not gain authority from appearing in model context. Skills are verified declarative workflows, extension and MCP capabilities enter the central registry, hooks observe or advise at stable boundaries, and memories are bounded repository context managed through the ordinary tool policy. Every path rejoins the same host-owned planning, mutation, validation, persistence, cancellation, and completion machinery.

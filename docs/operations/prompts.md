@@ -1,5 +1,7 @@
 # Deployed prompt assets
 
+Planning and mutation prompt assets describe syntax-only batch screening and one cumulative compilation/test validation after all approved plan steps are applied. Intermediate steps may contain incomplete API migrations; the complete plan must restore compilation. Completion-only proposals refer to applied work, not an intermediate compiler result. These assets do not change host-owned approval or scope enforcement.
+
 `Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-Phase-EvidenceCollection.md` route report/data saves through the direct allowlisted writer. `useLastResponse:true` copies the previous archived answer without regeneration. These assets describe existing authority; only code and `tools.writeFile.allowedFolders` control writable locations.
 
 Threadsmith ships its host-authored, model-facing prose as UTF-8 Markdown files. Source assets stay under the owning project's `Prompts/` directory and every build, publish, archive, and installer flattens the declared catalog into `<application-directory>/prompts/`. The application loads the complete catalog once during startup and then serves an immutable in-memory snapshot; it does not stat, reread, watch, or hot-reload these files.

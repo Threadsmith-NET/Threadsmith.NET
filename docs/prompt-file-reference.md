@@ -1,5 +1,7 @@
 # Prompt File Reference
 
+Planning and mutation prompt assets describe syntax-only batch screening and one cumulative compilation/test validation after all approved plan steps are applied. Intermediate steps may contain incomplete API migrations; the complete plan must restore compilation. Completion-only proposals refer to applied work, not an intermediate compiler result. These assets do not change host-owned approval or scope enforcement.
+
 `Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-Phase-EvidenceCollection.md` route report/data saves through the direct allowlisted writer. `useLastResponse:true` copies the previous archived answer without regeneration. These assets describe existing authority; only code and `tools.writeFile.allowedFolders` control writable locations.
 
 This guide explains how Threadsmith uses the editable Markdown files in the deployed `prompts/` directory. It lists the complete shipped catalog by category and defines every case-sensitive `{{Placeholder}}` that Threadsmith may substitute.

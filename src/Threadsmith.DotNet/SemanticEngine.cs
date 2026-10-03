@@ -1031,17 +1031,12 @@ public sealed partial class SemanticEngine : ISemanticEngine
         {
             solution = _solution
                 ?? throw new InvalidOperationException("No compiler-aware semantic solution has been loaded.");
-            compiledProjects = [.. _compiledProjects];
-            projects = _projects.ToArray();
             request = _lastRequest
                 ?? throw new InvalidOperationException("No semantic solution has been loaded.");
-            confidence = _confidence;
-            generation = _generation;
         }
 
         var documentsByPath = CreateDocumentsByPath(solution);
         var replacement = solution;
-        var affectedProjects = new HashSet<ProjectId>();
         foreach (var document in documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1060,7 +1055,6 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     documentId,
                     SourceText.From(document.Text, Encoding.UTF8),
                     PreservationMode.PreserveIdentity);
-                affectedProjects.Add(documentId.ProjectId);
             }
         }
 
@@ -1093,26 +1087,13 @@ public sealed partial class SemanticEngine : ISemanticEngine
             generation = _generation;
         }
 
-        var graph = replacement.GetProjectDependencyGraph();
-        foreach (var id in affectedProjects.ToArray())
-        {
-            affectedProjects.UnionWith(graph.GetProjectsThatTransitivelyDependOnThisProject(id));
-        }
-
-        var required = affectedProjects.Where(compiledProjects.Contains).ToHashSet();
-        var retained = compiledProjects.Except(affectedProjects).ToHashSet();
-        var preparation = CreatePreparationCoordinator(replacement, retained);
+        // Text replacement preserves evaluated project coverage. Roslyn invalidates dependent
+        // compilations in the immutable solution and materializes them when a query or explicit
+        // validation needs them; publishing source must not compile the downstream graph.
+        var preparation = CreatePreparationCoordinator(replacement, compiledProjects);
         try
         {
-            foreach (var id in required)
-            {
-                var outcome = await preparation.PrepareAsync(id, demand: true, cancellationToken);
-                if (!outcome.Succeeded || outcome.Obsolete)
-                {
-                    throw new InvalidOperationException("Incremental semantic refresh could not prepare required affected coverage.");
-                }
-            }
-
+            cancellationToken.ThrowIfCancellationRequested();
             lock (_gate)
             {
                 if (ownership != _preparationOwnership || _generation != generation || !ReferenceEquals(_solution, solution))
@@ -1380,7 +1361,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             sourceFiles,
             repositoryPath);
         SemanticPreparationReceipt? preparationReceipt = null;
-        if (solution is not null && confidence >= SemanticConfidenceLevel.PartialCompilation)
+        if (request.IncludeCompilation && solution is not null && confidence >= SemanticConfidenceLevel.PartialCompilation)
         {
             var owners = solution.Projects.Where(project => project.Documents.Any(document => document.FilePath is not null
                 && sourceByFullPath.ContainsKey(Path.GetFullPath(document.FilePath)))).Select(project => project.Id).ToHashSet();
@@ -1471,6 +1452,26 @@ public sealed partial class SemanticEngine : ISemanticEngine
             syntaxBlocking > 0 ? SemanticCheckOutcome.Failed : SemanticCheckOutcome.Completed,
             syntaxStarted,
             FormatPreMutationCheckDetail(sourceFiles.Length, syntaxDiagnostics, syntaxBlocking, omissionCount: 0));
+
+        if (!request.IncludeCompilation)
+        {
+            // Proposal screening remains local to the supplied text. In particular, do not
+            // demand compiler preparation or consult a snapshot awaiting run-terminal refresh.
+            return new PreMutationAnalysisResult
+            {
+                Decision = syntaxBlocking > 0
+                    ? PreMutationGateDecision.RepairableDiagnostics
+                    : PreMutationGateDecision.PassedCheapGates,
+                Diagnostics = diagnostics.ToArray(),
+                Omissions = ["Compilation and analyzer diagnostics are deferred to final validation."],
+                Confidence = confidence,
+                Score = new MutationCandidateScore
+                {
+                    SyntaxClean = syntaxBlocking == 0,
+                    BlockingDiagnosticCount = syntaxBlocking,
+                },
+            };
+        }
 
         var syntaxBlocks = syntaxBlocking > 0;
         var compilationCheckId = SemanticCheckId.New();

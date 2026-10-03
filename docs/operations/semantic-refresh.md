@@ -8,6 +8,14 @@ The repository monitor treats filesystem notifications as untrusted hints. It no
 
 An ordinary edit to an existing loaded C# document is eligible for incremental replacement. This includes an editor's atomic save when create/delete/rename hints settle to the same existing loaded path. The host reads the stable confined file, verifies its loaded document identity, builds one immutable replacement solution, and publishes one new semantic generation. Actual document membership changes, solution/project changes, build property/target changes, package, SDK, reference, analyzer/configuration, and uncertain changes use the existing complete-load path. A completed load with compiler diagnostics may publish reduced confidence; only infrastructure or currentness failure leaves the workspace dirty.
 
+Incremental text publication does not compile affected projects or their downstream dependents. Roslyn keeps the replacement solution immutable and materializes updated compilations when a semantic query or final validation requests them. Project coverage is retained across text replacement. Refresh start and duration begin after active-run publication admission, so a queued refresh is not displayed as minutes of compiler activity.
+
+Governed mutation proposals screen syntax without waiting for refresh or consulting a stale compilation. Compilation and tests run after all approved plan steps have been applied, using cumulative affected paths. The original pre-write diagnostic baseline is captured once and retained across batches.
+
+Objective completion reuses final validation only after checking registered workspace identity, current baseline input membership, and hashes of all captured baseline files, including untouched dependencies. Membership uses the same approved roots, input types, and exclusions as baseline capture; incomplete enumeration rejects reuse. Previously affected paths that are absent from the baseline must remain absent. A new input or content mismatch rejects completion with a fresh-validation-required error; unchanged contents and membership do not trigger another compilation.
+
+Final validation can reopen an earlier step when compiler diagnostics identify one repair scope. Test-project selection alone does not identify the responsible implementation step. Ambiguous failures across a multi-step plan return to the existing replanning boundary with validation evidence and applied changes preserved; uncertain steps remain unfinished so the replacement plan can revisit them. If plan continuation is disabled, execution fails without proposing a correction in an unrelated scope.
+
 ## External edits: refresh or ignore
 
 Threadsmith applies these rules after it confines a notification to the active repository and lets the file settle:

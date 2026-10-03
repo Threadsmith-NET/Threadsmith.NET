@@ -635,6 +635,75 @@ public static class SemanticCompilationCoordinatorTests
         Assert.Equal(snapshot.Solution.ProjectIds.Count, snapshot.CompiledProjects.Count);
     }
 
+    /// <summary>Source publication leaves affected compilations lazy until requested.</summary>
+    [Fact]
+    public static async Task IncrementalRefreshPublishesTextWithoutCompilingAffectedProjects()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
+        await registry.LoadAsync(request, cancellationToken);
+        var engine = registry.GetEngine(request.WorkspaceId);
+        await engine.WaitForWarmAsync(cancellationToken);
+        var before = engine.CaptureAdvancedSnapshot();
+        var document = before.Solution.Projects.SelectMany(project => project.Documents)
+            .First(document => document.FilePath is not null && !document.FilePath.Contains("obj", StringComparison.Ordinal));
+        var updatedText = (await document.GetTextAsync(cancellationToken)) + "\npublic class RefreshAddedType { }\n";
+
+        await engine.RefreshDocumentsAsync([new(document.FilePath!, updatedText, "updated")], cancellationToken);
+
+        var after = engine.CaptureAdvancedSnapshot();
+        Assert.Equal(updatedText, (await after.Solution.GetDocument(document.Id)!.GetTextAsync(cancellationToken)).ToString());
+        Assert.False(after.Solution.GetProject(document.Project.Id)!.TryGetCompilation(out _));
+        Assert.Equal(before.CompiledProjects.Count, after.CompiledProjects.Count);
+        var compilation = await after.Solution.GetProject(document.Project.Id)!.GetCompilationAsync(cancellationToken);
+        Assert.Single(compilation!.GetSymbolsWithName("RefreshAddedType"));
+    }
+
+    /// <summary>Batch screening parses proposed text without joining compiler readiness.</summary>
+    [Theory]
+    [InlineData("public class Proposal { public void M() { Missing.NewApi(); } }", false)]
+    [InlineData("public class Proposal { public void M( { }", true)]
+    public static async Task SyntaxScreeningDoesNotWaitForCompilerPublication(string text, bool hasSyntaxError)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Enqueue(item);
+            return Task.CompletedTask;
+        });
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
+        var loaded = await registry.LoadForBindingAsync(request, cancellationToken);
+        var engine = registry.GetEngine(request.WorkspaceId);
+        var baseline = new WorkspaceBaseline(request.WorkspaceId, root, DateTimeOffset.UtcNow, []);
+        var mutations = new MutationSet
+        {
+            MutationSetId = MutationSetId.New(), SessionId = request.SessionId, RunId = RunId.New(),
+            WorkspaceId = request.WorkspaceId, BaselineCapturedAt = baseline.CapturedAt,
+            Rationale = "Screen a batch without joining deferred compilation.", Mutations = [],
+        };
+
+        var result = await engine.AnalyzePreMutationAsync(
+            new()
+            {
+                SessionId = request.SessionId, WorkspaceId = request.WorkspaceId,
+                Baseline = baseline, MutationSet = mutations, IncludeCompilation = false,
+                OverlayFiles = [new() { RelativePath = "Proposal.cs", Text = text }],
+            },
+            cancellationToken);
+
+        Assert.Equal(hasSyntaxError ? PreMutationGateDecision.RepairableDiagnostics : PreMutationGateDecision.PassedCheapGates, result.Decision);
+        Assert.All(result.Diagnostics, diagnostic => Assert.Equal(PreMutationDiagnosticSource.Syntax, diagnostic.Source));
+        Assert.Single(observed.OfType<SemanticCheckStarted>());
+        await registry.CompleteInitialPublicationAsync(loaded, false, cancellationToken);
+    }
+
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private static Solution CreateSolution(AdhocWorkspace workspace, int count)

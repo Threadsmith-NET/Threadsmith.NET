@@ -51,7 +51,7 @@ public static class RepositoryInitializer
         }
 
         var hasSolutionCandidates = RepositoryLifecycle
-            .EnumerateSafeFiles(normalizedRoot, cancellationToken)
+            .EnumerateSafeFiles(normalizedRoot, requireComplete: false, cancellationToken)
             .Any(path => _solutionExtensions.Contains(Path.GetExtension(path)));
         return Task.FromResult(new RepositoryInitializationStatus(
             normalizedRoot,

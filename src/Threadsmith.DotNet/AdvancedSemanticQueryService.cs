@@ -13775,13 +13775,20 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             var signatureAnchor = NormalizeSymbolAnchorPreservingParameters(anchor);
             return GetSymbolComparableNames(symbol)
                 .Select(NormalizeSymbolAnchorPreservingParameters)
-                .Any(name => string.Equals(name, signatureAnchor, StringComparison.Ordinal));
+                .Any(name => MatchesQualifiedSymbolName(name, signatureAnchor));
         }
 
         var normalizedAnchor = NormalizeSymbolAnchor(anchor);
         return GetSymbolComparableNames(symbol)
             .Select(NormalizeSymbolAnchor)
-            .Any(name => string.Equals(name, normalizedAnchor, StringComparison.Ordinal));
+            .Any(name => MatchesQualifiedSymbolName(name, normalizedAnchor));
+    }
+
+    private static bool MatchesQualifiedSymbolName(string name, string anchor)
+    {
+        return string.Equals(name, anchor, StringComparison.Ordinal)
+            || (StripParameters(anchor).Contains('.')
+                && name.EndsWith('.' + anchor, StringComparison.Ordinal));
     }
 
     private static IEnumerable<string> GetSymbolComparableNames(ISymbol symbol)

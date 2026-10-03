@@ -15,6 +15,68 @@ using Xunit;
 /// <summary>Verifies Plan-81 exact code exploration source, bounds, policy, and tool-adapter contracts.</summary>
 public sealed class Plan81CodeExploreToolTests
 {
+    /// <summary>Short qualified anchors resolve exact declarations while retaining signature and ambiguity checks.</summary>
+    [Theory]
+    [InlineData("Worker.Run", CodeExploreResolutionOutcome.Resolved, "M:Example.Worker.Run")]
+    [InlineData("Example.Worker.Run", CodeExploreResolutionOutcome.Resolved, "M:Example.Worker.Run")]
+    [InlineData("Worker.Run()", CodeExploreResolutionOutcome.Resolved, "M:Example.Worker.Run")]
+    [InlineData("Overloads.Handle(int, string)", CodeExploreResolutionOutcome.Resolved, "M:Example.Overloads.Handle(System.Int32,System.String)")]
+    [InlineData("Overloads.Handle(System.Int32, System.String)", CodeExploreResolutionOutcome.Resolved, "M:Example.Overloads.Handle(System.Int32,System.String)")]
+    [InlineData("Overloads.Handle(ref int, out string)", CodeExploreResolutionOutcome.Resolved, "M:Example.Overloads.Handle(System.Int32@,System.String@)")]
+    [InlineData("Overloads.Handle", CodeExploreResolutionOutcome.Ambiguous, null)]
+    [InlineData("Duplicate.Run", CodeExploreResolutionOutcome.Ambiguous, null)]
+    [InlineData("One.Duplicate.Run", CodeExploreResolutionOutcome.Resolved, "M:One.Duplicate.Run")]
+    [InlineData("orker.Run", CodeExploreResolutionOutcome.NotFound, null)]
+    [InlineData("worker.Run", CodeExploreResolutionOutcome.NotFound, null)]
+    [InlineData("Worker.Run(int)", CodeExploreResolutionOutcome.NotFound, null)]
+    public async Task CodeExplore_QualifiedMemberAnchors_PreserveIdentityAndAmbiguity(
+        string anchor,
+        CodeExploreResolutionOutcome expected,
+        string? identity)
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest { Query = anchor, ExactSymbolAnchors = [anchor], Limits = CreateWideLimits() },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        var resolution = Assert.Single(result.ResolvedAnchors);
+        Assert.Equal(expected, resolution.Outcome);
+        if (identity is not null)
+        {
+            Assert.Equal(identity, resolution.SelectedSymbol?.Id);
+            Assert.NotEmpty(result.FileSections);
+        }
+
+        if (expected == CodeExploreResolutionOutcome.Ambiguous)
+        {
+            Assert.Equal(2, resolution.Alternatives.Count);
+        }
+    }
+
+    /// <summary>Path restrictions disambiguate short qualified anchors through the existing exact lookup path.</summary>
+    [Fact]
+    public async Task CodeExplore_ShortQualifiedMember_WithPath_SelectsMatchingDeclaration()
+    {
+        await using var fixture = await CodeExploreFixture.CreateAsync();
+        var result = await fixture.Service.QueryCodeExploreAsync(
+            fixture.WorkspaceId,
+            new CodeExploreRequest
+            {
+                Query = "Duplicate.Run",
+                ExactSymbolAnchors = ["Duplicate.Run"],
+                PathAnchors = [new CodeExplorePathAnchor { Path = "src/Library/Two.cs" }],
+                Limits = CreateWideLimits(),
+            },
+            fixture.CreateSourceReader(),
+            TestContext.Current.CancellationToken);
+
+        var resolution = Assert.Single(result.ResolvedAnchors, anchor => anchor.Input == "Duplicate.Run");
+        Assert.Equal(CodeExploreResolutionOutcome.Resolved, resolution.Outcome);
+        Assert.Equal("M:Two.Duplicate.Run", resolution.SelectedSymbol?.Id);
+    }
+
     /// <summary>Exact symbol anchors return current line-numbered source and content digests.</summary>
     [Fact]
     public async Task CodeExplore_ExactSymbolAnchor_ReturnsNumberedSourceAndDigests()
@@ -1317,6 +1379,12 @@ public sealed class Plan81CodeExploreToolTests
                 {
                     public string Hidden() => "hidden";
                 }
+                """);
+            Write(repositoryPath, "src/Library/One.cs", """
+                namespace One { public class Duplicate { public void Run() { } } }
+                """);
+            Write(repositoryPath, "src/Library/Two.cs", """
+                namespace Two { public class Duplicate { public void Run() { } } }
                 """);
             Write(repositoryPath, "shared/Linked.cs", """
                 namespace Linked;

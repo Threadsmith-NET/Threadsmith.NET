@@ -27,6 +27,8 @@ public static class AgentModelSelectorTests
         var assignment = CreateAssignment(role);
 
         var policy = selector.FreezePolicy(assignment);
+        var preview = selector.Preview(role, assignment.Policy.ModelProfileId, ReasoningLevel.Low, assignment.Budget);
+        Assert.Equal(selector.FreezePolicy(assignment, requireToolCalls: true).ModelSelection, preview.Provenance);
 
         var provenance = Assert.IsType<AgentModelProvenance>(policy.ModelSelection);
         Assert.Equal(SmallId, policy.ModelProfileId);

@@ -671,6 +671,8 @@
     "maxStructuredOutputCharacters": 8388608,
     // Maximum characters of a tool result preview retained in session projections.
     "toolResultPreviewCharacters": 4096,
+    "maxModelOutputBatchCharacters": 4096,
+    "modelOutputFlushIntervalMilliseconds": 50,
     // Soft proposal targets for incremental approved-plan execution. Existing
     // workspace limits remain the hard admission ceilings.
     "mutationBatching": {

@@ -145,6 +145,7 @@ internal static class ConfigurationBootstrap
     {
         return new Dictionary<string, string?>
         {
+            ["headless:semanticReadinessTimeoutSeconds"] = "30",
             ["tools:config:memories:MaxNumberOfRepoMemories"] = "20",
             ["tools:config:memories:MaxRepoMemoriesInContext"] = "3",
             ["tools:config:memories:SemanticMinimum"] = RepositoryMemoryOptions.DefaultSemanticMinimum.ToString(CultureInfo.InvariantCulture),
@@ -178,6 +179,8 @@ internal static class ConfigurationBootstrap
             ["execution:maxCorrectiveTurns"] = "3",
             ["execution:maxStructuredOutputCharacters"] = (8 * 1024 * 1024).ToString(CultureInfo.InvariantCulture),
             ["execution:toolResultPreviewCharacters"] = "4096",
+            ["execution:maxModelOutputBatchCharacters"] = "4096",
+            ["execution:modelOutputFlushIntervalMilliseconds"] = "50",
             ["execution:mutationBatching:targetMutations"] = "8",
             ["execution:mutationBatching:targetFiles"] = "3",
             ["execution:mutationBatching:targetMutationCharacters"] = "24000",

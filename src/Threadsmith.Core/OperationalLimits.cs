@@ -51,7 +51,7 @@ public sealed record WorkspaceResourceLimits
     /// <summary>Maximum global.json SDK metadata bytes.</summary>
     public int MaximumSdkConfigurationBytes { get; init; } = 1024 * 1024;
 
-    /// <summary>Maximum aggregate baseline content retained in bytes.</summary>
+    /// <summary>Maximum aggregate raw baseline content bytes; excludes decoded text and other memory overhead.</summary>
     public long MaximumBaselineContentBytes { get; init; } = 256L * 1024 * 1024;
 
     /// <summary>Maximum mutations admitted in one batch.</summary>

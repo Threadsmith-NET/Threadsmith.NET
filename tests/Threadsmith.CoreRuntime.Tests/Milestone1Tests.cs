@@ -4786,6 +4786,8 @@ public static partial class Milestone1Tests
         Assert.Equal(2, exitCode);
         Assert.False(dispatcher.SubmitRequestObserved);
         Assert.Contains("Semantic tools require PartialCompilation", writer.ToString(), StringComparison.Ordinal);
+        Assert.Contains("Semantic loading completed below the required confidence", writer.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("timed out", writer.ToString(), StringComparison.Ordinal);
     }
 
     /// <summary>Headless direct-authorization exit status ignores failures from earlier runs.</summary>
@@ -6808,6 +6810,7 @@ public static partial class Milestone1Tests
                     DateTimeOffset.UtcNow,
                     []),
                 SubmitRequestCommand => ObserveUnexpectedSubmitRequest(),
+                WaitForRunCommand => (object)true,
                 _ => throw new InvalidOperationException($"Unexpected command {command.GetType().Name}."),
             };
             return Task.FromResult((TResponse)response);

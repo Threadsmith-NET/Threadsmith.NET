@@ -17,6 +17,8 @@ public sealed class HeadlessShell
     private readonly IProjectionStore _projections;
     private readonly WebFetchAuthorizationAuthority? _webFetchAuthorization;
     private readonly string? _repositoryRoot;
+    private readonly TimeSpan _semanticReadinessTimeout;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="HeadlessShell"/> class.</summary>
     public HeadlessShell(
@@ -24,7 +26,9 @@ public sealed class HeadlessShell
         IProjectionStore projections,
         TextWriter output,
         WebFetchAuthorizationAuthority? webFetchAuthorization = null,
-        string? repositoryRoot = null)
+        string? repositoryRoot = null,
+        TimeSpan? semanticReadinessTimeout = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(dispatcher);
         ArgumentNullException.ThrowIfNull(projections);
@@ -34,6 +38,9 @@ public sealed class HeadlessShell
         _output = output;
         _webFetchAuthorization = webFetchAuthorization;
         _repositoryRoot = repositoryRoot;
+        _semanticReadinessTimeout = semanticReadinessTimeout ?? TimeSpan.FromSeconds(30);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(_semanticReadinessTimeout, TimeSpan.Zero, nameof(semanticReadinessTimeout));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>Authorizes one exact direct URL for one fetch in the specified active session.</summary>
@@ -1135,24 +1142,52 @@ public sealed class HeadlessShell
         CancellationToken cancellationToken)
     {
         var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        var started = _timeProvider.GetTimestamp();
+        var nextProgress = TimeSpan.Zero;
         var confidence = SemanticConfidenceLevel.None;
-        while (DateTimeOffset.UtcNow < deadline)
+        while (true)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var state = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
             if (state is not null)
             {
                 confidence = state.SemanticConfidence;
-                if (confidence >= SemanticConfidenceLevel.PartialCompilation
-                    || state.IsSemanticLoadComplete)
+                if (confidence >= SemanticConfidenceLevel.PartialCompilation)
                 {
+                    return confidence;
+                }
+
+                if (state.IsSemanticLoadComplete)
+                {
+                    await _output.WriteLineAsync(
+                        $"Semantic loading completed below the required confidence ({confidence}).".AsMemory(),
+                        cancellationToken);
                     return confidence;
                 }
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
-        }
+            var elapsed = _timeProvider.GetElapsedTime(started);
+            if (elapsed >= _semanticReadinessTimeout)
+            {
+                await _output.WriteLineAsync(
+                    $"Semantic readiness timed out after {_semanticReadinessTimeout.TotalSeconds:g} seconds while loading was still pending (confidence: {confidence}). Retry with --set:headless:semanticReadinessTimeoutSeconds=120 or a larger value.".AsMemory(),
+                    cancellationToken);
+                return confidence;
+            }
 
-        return confidence;
+            if (elapsed >= nextProgress)
+            {
+                await _output.WriteLineAsync(
+                    $"Waiting for semantic readiness: {confidence}; {elapsed.TotalSeconds:F0}s elapsed, {_semanticReadinessTimeout.TotalSeconds:g}s limit.".AsMemory(),
+                    cancellationToken);
+                nextProgress = elapsed + TimeSpan.FromSeconds(5);
+            }
+
+            var remaining = _semanticReadinessTimeout - elapsed;
+            await Task.Delay(
+                remaining < TimeSpan.FromMilliseconds(100) ? remaining : TimeSpan.FromMilliseconds(100),
+                _timeProvider,
+                cancellationToken);
+        }
     }
 }

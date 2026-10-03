@@ -58,6 +58,15 @@ internal static class SemanticLoadMetrics
     /// <summary>Gets actual late compiler results discarded after cancellation.</summary>
     internal static Counter<long> PreparationDiscarded { get; } = _meter.CreateCounter<long>("threadsmith.semantic.preparation.discarded");
 
+    /// <summary>Gets source file reads performed by diagnostic reconciliation.</summary>
+    internal static Counter<long> DiagnosticFileReads { get; } = _meter.CreateCounter<long>("threadsmith.semantic.diagnostics.file_reads");
+
+    /// <summary>Gets decoded source characters read by diagnostic reconciliation.</summary>
+    internal static Counter<long> DiagnosticCharactersRead { get; } = _meter.CreateCounter<long>("threadsmith.semantic.diagnostics.characters_read");
+
+    /// <summary>Gets replacement source texts materialized by diagnostic reconciliation.</summary>
+    internal static Counter<long> DiagnosticTextsCreated { get; } = _meter.CreateCounter<long>("threadsmith.semantic.diagnostics.texts_created");
+
     /// <summary>Records one terminal semantic load without repository-specific tags.</summary>
     public static void Record(
         string mode,

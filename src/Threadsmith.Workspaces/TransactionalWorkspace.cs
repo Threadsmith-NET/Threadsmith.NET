@@ -21,7 +21,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     private static readonly Counter<long> _rollbacks = WorkspaceMutationMetrics.Meter.CreateCounter<long>(
         "threadsmith.workspace.mutation.rollbacks");
 
-    private readonly Dictionary<string, FileSnapshot> _baselineFiles;
+    private readonly Dictionary<string, BaselineFileSnapshot> _baselineFiles;
     private readonly IDomainEventStream _events;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ILogger<TransactionalWorkspace> _logger;
@@ -78,11 +78,11 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             WorkspaceIsolationMode.TrackedInPlace,
             baseline.RepositoryPath,
             baseline.GitRevision);
-        _baselineFiles = new Dictionary<string, FileSnapshot>(_pathComparer);
+        _baselineFiles = new Dictionary<string, BaselineFileSnapshot>(_pathComparer);
     }
 
     /// <summary>Captures immutable baseline content without blocking a caller thread.</summary>
-    public static async Task<TransactionalWorkspace> CreateAsync(
+    public static Task<TransactionalWorkspace> CreateAsync(
         WorkspaceBaseline baseline,
         IDomainEventStream events,
         WorkspaceIsolation? isolation = null,
@@ -93,17 +93,17 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         WorkspaceResourceLimits? resourceLimits = null,
         CancellationToken cancellationToken = default)
     {
-        var workspace = new TransactionalWorkspace(
+        return CreateAsync(
             baseline,
             events,
             isolation,
             logger,
             maximumBaselineContentBytes,
             mutationApprovalPolicy,
-            semanticMutationAttribution: semanticMutationAttribution,
-            resourceLimits: resourceLimits);
-        await workspace.CaptureBaselineAsync(cancellationToken);
-        return workspace;
+            semanticMutationAttribution,
+            resourceLimits,
+            capturedFiles: null,
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -744,6 +744,32 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         }
     }
 
+    /// <summary>Uses the same capture admission for repository-owned snapshots and metadata-only callers.</summary>
+    internal static async Task<TransactionalWorkspace> CreateAsync(
+        WorkspaceBaseline baseline,
+        IDomainEventStream events,
+        WorkspaceIsolation? isolation,
+        ILogger<TransactionalWorkspace>? logger,
+        long maximumBaselineContentBytes,
+        IMutationApprovalPolicy? mutationApprovalPolicy,
+        ISemanticHostMutationAttribution? semanticMutationAttribution,
+        WorkspaceResourceLimits? resourceLimits,
+        IReadOnlyDictionary<string, BaselineFileSnapshot>? capturedFiles,
+        CancellationToken cancellationToken)
+    {
+        var workspace = new TransactionalWorkspace(
+            baseline,
+            events,
+            isolation,
+            logger,
+            maximumBaselineContentBytes,
+            mutationApprovalPolicy,
+            semanticMutationAttribution: semanticMutationAttribution,
+            resourceLimits: resourceLimits);
+        await workspace.CaptureBaselineAsync(capturedFiles, cancellationToken);
+        return workspace;
+    }
+
     /// <summary>Creates a workspace with an internal deterministic transaction observer.</summary>
     internal static async Task<TransactionalWorkspace> CreateObservedAsync(
         WorkspaceBaseline baseline,
@@ -764,7 +790,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             maximumBaselineContentBytes,
             mutationApprovalPolicy,
             transactionObserver);
-        await workspace.CaptureBaselineAsync(cancellationToken);
+        await workspace.CaptureBaselineAsync(null, cancellationToken);
         return workspace;
     }
 
@@ -777,7 +803,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var snapshots = new Dictionary<string, FileSnapshot>(_baselineFiles, _pathComparer);
+            var snapshots = new Dictionary<string, BaselineFileSnapshot>(_baselineFiles, _pathComparer);
             var totalBytes = snapshots.Values.Sum(snapshot => snapshot.Bytes.LongLength);
             var paths = changedFiles.Select(NormalizeRelativePath).Distinct(_pathComparer).ToArray();
             foreach (var path in paths)
@@ -810,7 +836,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     throw new InvalidOperationException("Promoted workspace content exceeds the configured baseline-byte limit.");
                 }
 
-                snapshots[path] = FileSnapshot.FromBytes(bytes, Hash(bytes));
+                snapshots[path] = BaselineFileSnapshot.FromBytes(bytes, Hash(bytes));
             }
 
             var baseline = Baseline with
@@ -832,7 +858,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 _resourceLimits);
             foreach (var (path, snapshot) in snapshots)
             {
-                // FileSnapshot byte arrays are private immutable captured content.
+                // BaselineFileSnapshot byte arrays are private immutable captured content.
                 promoted._baselineFiles.Add(path, snapshot);
             }
 
@@ -1022,7 +1048,9 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         }
     }
 
-    private async Task CaptureBaselineAsync(CancellationToken cancellationToken)
+    private async Task CaptureBaselineAsync(
+        IReadOnlyDictionary<string, BaselineFileSnapshot>? capturedFiles,
+        CancellationToken cancellationToken)
     {
         var totalBytes = Baseline.Files.Sum(file => file.Length);
         if (totalBytes > _maximumBaselineContentBytes)
@@ -1036,15 +1064,17 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             cancellationToken.ThrowIfCancellationRequested();
             var relativePath = NormalizeRelativePath(file.RelativePath);
             var fullPath = ResolveConfinedPath(relativePath, mustExist: true);
-            var bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken);
-            var actualHash = Hash(bytes);
-            if (!string.Equals(actualHash, file.Sha256, StringComparison.OrdinalIgnoreCase))
+            var snapshot = capturedFiles is null
+                ? await BaselineFileSnapshot.CaptureAsync(fullPath, file.Length, cancellationToken)
+                : capturedFiles[file.RelativePath];
+            if (snapshot.Bytes.LongLength != file.Length
+                || !string.Equals(snapshot.Sha256, file.Sha256, StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
                     $"Workspace baseline file '{relativePath}' changed before transactional capture completed.");
             }
 
-            _baselineFiles[relativePath] = FileSnapshot.FromBytes(bytes, actualHash);
+            _baselineFiles[relativePath] = snapshot;
         }
     }
 
@@ -1808,10 +1838,10 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     {
         public StagedFile(
             string relativePath,
-            FileSnapshot? original,
+            BaselineFileSnapshot? original,
             string? finalText,
             FileContentDescriptor? content = null,
-            FileSnapshot? encodingSource = null,
+            BaselineFileSnapshot? encodingSource = null,
             byte[]? exactFinalBytes = null)
         {
             RelativePath = relativePath;
@@ -1824,7 +1854,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
         public FileContentDescriptor? Content { get; set; }
 
-        public FileSnapshot? EncodingSource { get; }
+        public BaselineFileSnapshot? EncodingSource { get; }
 
         public byte[]? ExactFinalBytes { get; }
 
@@ -1832,7 +1862,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
         public string? FinalText { get; set; }
 
-        public FileSnapshot? Original { get; }
+        public BaselineFileSnapshot? Original { get; }
 
         public string RelativePath { get; }
 
@@ -1871,44 +1901,6 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
             var preamble = encoding.GetPreamble();
             return [.. preamble, .. content];
-        }
-    }
-
-    private sealed record FileSnapshot(
-        byte[] Bytes,
-        string Text,
-        Encoding Encoding,
-        bool HasPreamble,
-        string Sha256)
-    {
-        public static FileSnapshot FromBytes(byte[] bytes, string sha256)
-        {
-            Encoding encoding;
-            var preambleLength = 0;
-            if (bytes.AsSpan().StartsWith(Encoding.UTF8.GetPreamble()))
-            {
-                encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
-                preambleLength = Encoding.UTF8.GetPreamble().Length;
-            }
-            else if (bytes.AsSpan().StartsWith(Encoding.Unicode.GetPreamble()))
-            {
-                encoding = Encoding.Unicode;
-                preambleLength = Encoding.Unicode.GetPreamble().Length;
-            }
-            else if (bytes.AsSpan().StartsWith(Encoding.BigEndianUnicode.GetPreamble()))
-            {
-                encoding = Encoding.BigEndianUnicode;
-                preambleLength = Encoding.BigEndianUnicode.GetPreamble().Length;
-            }
-            else
-            {
-                encoding = new UTF8Encoding(
-                    encoderShouldEmitUTF8Identifier: false,
-                    throwOnInvalidBytes: true);
-            }
-
-            var text = encoding.GetString(bytes, preambleLength, bytes.Length - preambleLength);
-            return new FileSnapshot(bytes, text, encoding, preambleLength > 0, sha256);
         }
     }
 
@@ -1998,39 +1990,12 @@ public sealed class TransactionalWorkspaceCoordinator :
     }
 
     /// <summary>Registers a newly captured immutable baseline for mutation staging.</summary>
-    public async Task RegisterBaselineAsync(
+    public Task RegisterBaselineAsync(
         WorkspaceBaseline baseline,
         WorkspaceIsolation? isolation = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(baseline);
-        cancellationToken.ThrowIfCancellationRequested();
-        var workspace = await TransactionalWorkspace.CreateAsync(
-            baseline,
-            _events,
-            isolation,
-            maximumBaselineContentBytes: _maximumBaselineContentBytes,
-            mutationApprovalPolicy: _mutationApprovalPolicy,
-            semanticMutationAttribution: _semanticMutationAttribution,
-            resourceLimits: _resourceLimits,
-            cancellationToken: cancellationToken);
-        TransactionalWorkspace? previous;
-        lock (_registrationGate)
-        {
-            _workspaces.TryGetValue(baseline.WorkspaceId, out previous);
-            _workspaces[baseline.WorkspaceId] = workspace;
-            foreach (var mutationSetId in _mutationWorkspaces
-                .Where(item => item.Value.WorkspaceId == baseline.WorkspaceId)
-                .Select(item => item.Key))
-            {
-                _mutationWorkspaces.TryRemove(mutationSetId, out _);
-            }
-        }
-
-        if (previous is not null)
-        {
-            await previous.DisposeAsync();
-        }
+        return RegisterBaselineAsync(baseline, isolation, capturedFiles: null, cancellationToken);
     }
 
     /// <summary>Gets the transactional workspace registered for one baseline.</summary>
@@ -2195,6 +2160,45 @@ public sealed class TransactionalWorkspaceCoordinator :
 
         _workspaces.Clear();
         _mutationWorkspaces.Clear();
+    }
+
+    /// <summary>Registers captured content through the ordinary transactional admission and replacement path.</summary>
+    internal async Task RegisterBaselineAsync(
+        WorkspaceBaseline baseline,
+        WorkspaceIsolation? isolation,
+        IReadOnlyDictionary<string, BaselineFileSnapshot>? capturedFiles,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(baseline);
+        cancellationToken.ThrowIfCancellationRequested();
+        var workspace = await TransactionalWorkspace.CreateAsync(
+            baseline,
+            _events,
+            isolation,
+            logger: null,
+            maximumBaselineContentBytes: _maximumBaselineContentBytes,
+            mutationApprovalPolicy: _mutationApprovalPolicy,
+            semanticMutationAttribution: _semanticMutationAttribution,
+            resourceLimits: _resourceLimits,
+            capturedFiles: capturedFiles,
+            cancellationToken: cancellationToken);
+        TransactionalWorkspace? previous;
+        lock (_registrationGate)
+        {
+            _workspaces.TryGetValue(baseline.WorkspaceId, out previous);
+            _workspaces[baseline.WorkspaceId] = workspace;
+            foreach (var mutationSetId in _mutationWorkspaces
+                .Where(item => item.Value.WorkspaceId == baseline.WorkspaceId)
+                .Select(item => item.Key))
+            {
+                _mutationWorkspaces.TryRemove(mutationSetId, out _);
+            }
+        }
+
+        if (previous is not null)
+        {
+            await previous.DisposeAsync();
+        }
     }
 
     private TransactionalWorkspace GetOwnedWorkspace(

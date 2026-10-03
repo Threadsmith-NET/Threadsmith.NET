@@ -57,10 +57,14 @@ Each table gives fields beneath the named configuration section. Defaults below 
 
 Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
 
+Baseline admission counts raw file bytes, not total process memory. Repository opening captures each eligible file once and shares that immutable content with the transactional workspace. Text is validated during capture and decoded and cached only when requested; inspecting every file can still retain both raw bytes and decoded strings (roughly three times the raw byte count for ASCII UTF-8), plus metadata and other subsystem allocations.
+
+Published hashes identify the captured bytes. Registration adopts that capture without rereading disk; later external edits are detected by the ordinary staging and commit conflict checks. Metadata-only callers still read and verify files against their supplied hashes. Capture rejects lengths changed since byte admission instead of allocating beyond the admitted size.
+
 | Field | Default | Purpose |
 |---|---:|---|
 | `maximumSdkConfigurationBytes` | `1048576` | Maximum global.json SDK metadata bytes. |
-| `maximumBaselineContentBytes` | `268435456` | Maximum aggregate baseline content retained in bytes. |
+| `maximumBaselineContentBytes` | `268435456` | Maximum aggregate raw baseline content bytes; excludes decoded text and other memory overhead. |
 | `maximumMutations` | `100` | Maximum mutations admitted in one batch. |
 | `maximumMutationCharacters` | `4194304` | Maximum aggregate replacement/content characters in one batch. |
 | `maximumRationaleCharacters` | `8192` | Maximum characters in the batch rationale. |

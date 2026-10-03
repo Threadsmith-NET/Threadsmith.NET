@@ -990,7 +990,9 @@ internal static class ApplicationComposition
                 memoryOptions,
                 startupDisplayWarnings,
                 agentDisplay,
-                scratchpad);
+                scratchpad,
+                new EffectiveConfigurationPreflight(
+                    integration.Models.ActiveModels, childModelSelection, delegateAgentsOptions.EffectiveChildBudget));
         }
         catch
         {
@@ -1478,6 +1480,9 @@ internal sealed class RepositoryScopedBindingCoordinator
 /// <summary>Owns composed command applications and their shared transactional coordinator.</summary>
 internal sealed class ApplicationServices : IAsyncDisposable
 {
+    /// <summary>Gets the preflight sharing the live parent and child routing authorities.</summary>
+    internal EffectiveConfigurationPreflight ConfigurationPreflight { get; }
+
     private readonly AgentRunScheduler _agentScheduler;
     private readonly LocalTextEmbeddingGenerator _embeddings;
     private readonly LocalTextCrossEncoder _reranker;
@@ -1518,8 +1523,11 @@ internal sealed class ApplicationServices : IAsyncDisposable
         RepositoryMemoryConfiguration memoryOptions,
         IReadOnlyList<string> startupDisplayWarnings,
         AgentDisplayStream agentDisplay,
-        ScratchpadLifecycle scratchpad)
+        ScratchpadLifecycle scratchpad,
+        EffectiveConfigurationPreflight configurationPreflight)
     {
+        ArgumentNullException.ThrowIfNull(configurationPreflight);
+        ConfigurationPreflight = configurationPreflight;
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);
         ArgumentNullException.ThrowIfNull(validationStages);

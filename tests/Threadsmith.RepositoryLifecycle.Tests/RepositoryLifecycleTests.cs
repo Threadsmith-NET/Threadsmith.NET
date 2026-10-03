@@ -168,6 +168,57 @@ public static class RepositoryLifecycleTests
         }
     }
 
+    /// <summary>Repository opening registers content whose bytes match the published baseline hashes.</summary>
+    [Fact]
+    public static async Task RecordBaseline_RegistersCapturedContentWithMatchingIdentities()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var repository = await TemporaryRepository.CreateAsync();
+        await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
+        await using var coordinator = new TransactionalWorkspaceCoordinator(harness.Events);
+        var lifecycle = new RepositoryLifecycle(harness.Events, harness.Facts, new DotNetEnvironmentResolver(), coordinator);
+        var sessionId = SessionId.New();
+        var opened = await lifecycle.HandleAsync(
+            new OpenRepositoryCommand(sessionId, repository.RootPath, RepositoryTrustLevel.TrustedRead),
+            cancellationToken);
+
+        var baseline = await lifecycle.HandleAsync(new RecordBaselineCommand(sessionId, opened.WorkspaceId), cancellationToken);
+        var workspace = coordinator.GetWorkspace(opened.WorkspaceId);
+        Assert.Same(baseline, workspace.Baseline);
+        Assert.NotEmpty(baseline.Files);
+        foreach (var file in baseline.Files)
+        {
+            var path = Path.Combine(repository.RootPath, file.RelativePath);
+            var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
+            Assert.Equal(bytes.LongLength, file.Length);
+            Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)), file.Sha256);
+            Assert.Equal(await File.ReadAllTextAsync(path, cancellationToken), await workspace.ReadBaselineTextAsync(file.RelativePath, cancellationToken));
+        }
+    }
+
+    /// <summary>Oversized repositories fail byte admission before any payload is opened.</summary>
+    [Fact]
+    public static async Task RecordBaseline_RejectsOversizedContentBeforeOpeningFiles()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var repository = await TemporaryRepository.CreateAsync();
+        await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
+        var limits = new WorkspaceResourceLimits { MaximumBaselineContentBytes = 1 };
+        await using var coordinator = new TransactionalWorkspaceCoordinator(harness.Events, resourceLimits: limits);
+        var lifecycle = new RepositoryLifecycle(harness.Events, harness.Facts, new DotNetEnvironmentResolver(), coordinator, resourceLimits: limits);
+        var sessionId = SessionId.New();
+        var opened = await lifecycle.HandleAsync(
+            new OpenRepositoryCommand(sessionId, repository.RootPath, RepositoryTrustLevel.TrustedRead),
+            cancellationToken);
+        await using var heldFile = new FileStream(Path.Combine(repository.RootPath, "src/App/Program.cs"), FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => lifecycle.HandleAsync(
+            new RecordBaselineCommand(sessionId, opened.WorkspaceId), cancellationToken));
+
+        Assert.Contains("baseline-byte limit", exception.Message, StringComparison.Ordinal);
+        Assert.Throws<KeyNotFoundException>(() => coordinator.GetWorkspace(opened.WorkspaceId));
+    }
+
     /// <summary>Trusted read selects a solution, inventories TFMs, captures a safe baseline, and persists facts.</summary>
     [Fact]
     public static async Task RepositoryLifecycle_TrustedRead_ProducesDurableFactsAndBaseline()

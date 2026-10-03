@@ -51,6 +51,12 @@ public sealed record ExecutionLimits
     /// </summary>
     public int MaxToolResultPreviewCharacters { get; init; } = 4096;
 
+    /// <summary>Maximum sanitized characters buffered in a model-output event. Default: 4096.</summary>
+    public int MaxModelOutputBatchCharacters { get; init; } = 4096;
+
+    /// <summary>Maximum timer interval before buffered model output is published. Default: 50 ms.</summary>
+    public int ModelOutputFlushIntervalMilliseconds { get; init; } = 50;
+
     /// <summary>Soft targets used to encourage incremental approved-plan mutation proposals.</summary>
     public MutationBatchingOptions MutationBatching { get; init; } = new();
 
@@ -81,6 +87,8 @@ public sealed record ExecutionLimits
     /// <summary>Validates positive buffer limits and structured-plan limits.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(MaxModelOutputBatchCharacters, 2);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ModelOutputFlushIntervalMilliseconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxSourceFrontierEntries);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPlanSanityIssues);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxSteeringCharacters);

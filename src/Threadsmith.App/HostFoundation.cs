@@ -347,6 +347,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             MaxToolResultPreviewCharacters = configuration.GetValue(
                 "execution:toolResultPreviewCharacters",
                 4096),
+            MaxModelOutputBatchCharacters = configuration.GetValue("execution:maxModelOutputBatchCharacters", 4096),
+            ModelOutputFlushIntervalMilliseconds = configuration.GetValue("execution:modelOutputFlushIntervalMilliseconds", 50),
             MutationBatching = new MutationBatchingOptions
             {
                 TargetMutations = configuration.GetValue("execution:mutationBatching:targetMutations", 8),

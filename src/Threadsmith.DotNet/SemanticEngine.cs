@@ -1265,13 +1265,10 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Select(Path.GetFullPath),
             pathComparer);
-        string[] refreshPaths =
-        [
-            .. changedFiles.Concat(GetDiagnosticRefreshPaths(solution, compiledProjects, requestedPaths))
-                .Distinct(pathComparer),
-        ];
+        var refreshPaths = changedFiles.Concat(GetDiagnosticRefreshPaths(solution, compiledProjects, requestedPaths));
         solution = await RefreshChangedDocumentsAsync(solution, refreshPaths, repositoryPath, cancellationToken);
         var diagnostics = new List<Threadsmith.Core.Diagnostic>();
+        SemanticLocationContext? context = null;
         foreach (var project in solution.Projects)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1296,10 +1293,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            var targetFramework = projectPath is null || !File.Exists(projectPath)
-                ? string.Empty
-                : ReadProjectInfo(projectPath).TargetFrameworks.FirstOrDefault() ?? string.Empty;
-            var context = CreateLocationContext(solution);
+            context ??= CreateLocationContext(solution);
+            var targetFramework = project.FilePath is { } filePath
+                && context.TargetFrameworks.TryGetValue(filePath, out var framework)
+                    ? framework
+                    : string.Empty;
             foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken))
             {
                 var location = diagnostic.Location == Location.None
@@ -1492,7 +1490,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     sourceByFullPath,
                     documentsByPath,
                     semanticRepository);
-                var context = CreateLocationContext(overlaySolution);
+                SemanticLocationContext? context = null;
+                SemanticLocationContext? baselineContext = null;
                 var affectedProjects = new HashSet<ProjectId>();
                 foreach (var fullPath in sourceByFullPath.Keys)
                 {
@@ -1528,14 +1527,18 @@ public sealed partial class SemanticEngine : ISemanticEngine
                         continue;
                     }
 
-                    var targetFramework = project.FilePath is null || !File.Exists(project.FilePath)
-                        ? string.Empty
-                        : ReadProjectInfo(project.FilePath).TargetFrameworks.FirstOrDefault() ?? string.Empty;
+                    context ??= CreateLocationContext(overlaySolution);
+                    baselineContext ??= CreateLocationContext(solution);
+                    var targetFramework = project.FilePath is { } projectPath
+                        && context.TargetFrameworks.TryGetValue(projectPath, out var framework)
+                            ? framework
+                            : string.Empty;
                     var baselineDiagnostics = await GetBaselineCompilationDiagnosticFingerprintsAsync(
                         solution,
                         preparationReceipt,
                         project.Id,
                         repositoryPath,
+                        baselineContext,
                         cancellationToken);
                     foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken)
                         .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
@@ -1543,7 +1546,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
                         var diagnosticFingerprint = CreateCompilationDiagnosticFingerprint(
                             overlaySolution,
                             diagnostic,
-                            repositoryPath);
+                            repositoryPath,
+                            context);
                         if (baselineDiagnostics.TryGetValue(diagnosticFingerprint, out var baselineCount)
                             && baselineCount > 0)
                         {
@@ -1918,6 +1922,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         SemanticPreparationReceipt? preparationReceipt,
         ProjectId projectId,
         string repositoryPath,
+        SemanticLocationContext context,
         CancellationToken cancellationToken)
     {
         var baselineProject = solution.GetProject(projectId);
@@ -1940,7 +1945,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
             .Select(diagnostic => CreateCompilationDiagnosticFingerprint(
                 solution,
                 diagnostic,
-                repositoryPath))
+                repositoryPath,
+                context))
             .GroupBy(fingerprint => fingerprint, StringComparer.Ordinal)
             .ToDictionary(
                 group => group.Key,
@@ -1951,7 +1957,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
     private static string CreateCompilationDiagnosticFingerprint(
         Solution solution,
         Microsoft.CodeAnalysis.Diagnostic diagnostic,
-        string repositoryPath)
+        string repositoryPath,
+        SemanticLocationContext context)
     {
         var file = string.Empty;
         if (diagnostic.Location != Location.None)
@@ -1959,7 +1966,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             var location = CreateLocation(
                 solution,
                 diagnostic.Location,
-                CreateLocationContext(solution));
+                context);
             if (location?.FilePath is not null)
             {
                 file = ToRepositoryRelativePath(repositoryPath, Path.GetFullPath(location.FilePath));
@@ -2424,7 +2431,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         }
     }
 
-    private static IReadOnlyList<string> GetDiagnosticRefreshPaths(
+    private static IEnumerable<string> GetDiagnosticRefreshPaths(
         Solution solution,
         IReadOnlySet<ProjectId> compiledProjects,
         IReadOnlySet<string> requestedProjectPaths)
@@ -2432,28 +2439,22 @@ public sealed partial class SemanticEngine : ISemanticEngine
         ArgumentNullException.ThrowIfNull(solution);
         ArgumentNullException.ThrowIfNull(compiledProjects);
         ArgumentNullException.ThrowIfNull(requestedProjectPaths);
-        return [.. solution.Projects
-            .Where(project => compiledProjects.Contains(project.Id))
-            .Where(project => requestedProjectPaths.Count == 0
+        return solution.Projects
+            .Where(project => compiledProjects.Contains(project.Id) && (requestedProjectPaths.Count == 0
                 || (project.FilePath is not null
-                    && requestedProjectPaths.Contains(Path.GetFullPath(project.FilePath))))
+                    && requestedProjectPaths.Contains(Path.GetFullPath(project.FilePath)))))
             .SelectMany(project => project.Documents)
             .Select(document => document.FilePath)
             .Where(path => !string.IsNullOrWhiteSpace(path))
-            .Select(path => Path.GetFullPath(path ?? string.Empty))];
+            .Select(path => Path.GetFullPath(path ?? string.Empty));
     }
 
     private static async Task<Solution> RefreshChangedDocumentsAsync(
         Solution solution,
-        IReadOnlyList<string> changedFiles,
+        IEnumerable<string> changedFiles,
         string repositoryPath,
         CancellationToken cancellationToken)
     {
-        if (changedFiles.Count == 0)
-        {
-            return solution;
-        }
-
         var comparer = StringComparerForCurrentPlatform();
         string[] normalizedPaths = [.. changedFiles
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -2467,35 +2468,24 @@ public sealed partial class SemanticEngine : ISemanticEngine
             return solution;
         }
 
-        var sourceByPath = new Dictionary<string, SourceText>(comparer);
-        foreach (var changedPath in normalizedPaths)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!File.Exists(changedPath) || !IsCSharpSourcePath(changedPath))
-            {
-                continue;
-            }
-
-            var content = await File.ReadAllTextAsync(changedPath, cancellationToken);
-            sourceByPath[changedPath] = SourceText.From(content, Encoding.UTF8);
-        }
-
-        var documentsByPath = solution.Projects
-            .SelectMany(project => project.Documents)
-            .Where(document => !string.IsNullOrWhiteSpace(document.FilePath))
-            .GroupBy(document => Path.GetFullPath(document.FilePath ?? string.Empty), comparer)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(document => document.Id).ToArray(),
-                comparer);
+        var documentsByPath = CreateDocumentsByPath(solution);
 
         var refreshed = solution;
         foreach (var changedPath in normalizedPaths)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (documentsByPath.TryGetValue(changedPath, out var documentIds))
+            documentsByPath.TryGetValue(changedPath, out var documentIds);
+            SourceText? sourceText = null;
+            if (File.Exists(changedPath) && IsCSharpSourcePath(changedPath))
             {
-                if (sourceByPath.TryGetValue(changedPath, out var sourceText))
+                var existingDocument = documentIds is { Length: > 0 } ? solution.GetDocument(documentIds[0]) : null;
+                var existingText = existingDocument is null ? null : await existingDocument.GetTextAsync(cancellationToken);
+                sourceText = await SemanticDiagnosticTextReader.ReadAsync(changedPath, existingText, cancellationToken);
+            }
+
+            if (documentIds is not null)
+            {
+                if (sourceText is not null)
                 {
                     foreach (var documentId in documentIds)
                     {
@@ -2523,7 +2513,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 continue;
             }
 
-            if (!sourceByPath.TryGetValue(changedPath, out var newSourceText))
+            if (sourceText is null)
             {
                 continue;
             }
@@ -2534,7 +2524,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 refreshed = refreshed.AddDocument(
                     DocumentId.CreateNewId(project.Id),
                     Path.GetFileName(changedPath),
-                    newSourceText,
+                    sourceText,
                     GetDocumentFolders(project.FilePath, changedPath),
                     changedPath);
             }

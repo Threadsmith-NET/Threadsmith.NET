@@ -267,6 +267,8 @@ public static class RepoConfigTests
         Assert.Equal("example-advisory-check", config["hooks:repositoryHandlers:0:id"]);
         Assert.Equal(8_388_608, config.GetValue("execution:maxStructuredOutputCharacters", 0));
         Assert.Equal(4096, config.GetValue("execution:toolResultPreviewCharacters", 0));
+        Assert.Equal(4096, config.GetValue("execution:maxModelOutputBatchCharacters", 0));
+        Assert.Equal(50, config.GetValue("execution:modelOutputFlushIntervalMilliseconds", 0));
         Assert.Equal(8, config.GetValue("execution:mutationBatching:targetMutations", 0));
         Assert.Equal(3, config.GetValue("execution:mutationBatching:targetFiles", 0));
         Assert.Equal(24_000L, config.GetValue<long>("execution:mutationBatching:targetMutationCharacters", 0));

@@ -1687,6 +1687,65 @@ public static partial class Milestone5Tests
         Assert.Equal("// header\r\nLEFT\r\nRIGHT\r\n", await File.ReadAllTextAsync(Path.Combine(repository.Root, "second.txt")));
     }
 
+    /// <summary>Registration adopts captured bytes without rereading and rejects subsequent external changes.</summary>
+    [Fact]
+    public static async Task TransactionalWorkspace_RegisterCapturedBaseline_DoesNotRereadAndRetainsConflicts()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string> { ["file.txt"] = "before" });
+        await using var events = new DomainEventStream();
+        await using var coordinator = new TransactionalWorkspaceCoordinator(events);
+        var path = repository.PathOf("file.txt");
+        var snapshot = await BaselineFileSnapshot.CaptureAsync(path, 6, cancellationToken);
+        var captured = new Dictionary<string, BaselineFileSnapshot> { ["file.txt"] = snapshot };
+        await File.WriteAllTextAsync(path, "external", cancellationToken);
+
+        // Registration must adopt captured bytes even when another reader cannot open the file.
+        await using (var heldFile = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            await coordinator.RegisterBaselineAsync(repository.Baseline, null, captured, cancellationToken);
+        }
+
+        var workspace = coordinator.GetWorkspace(repository.WorkspaceId);
+        Assert.Equal("before", await workspace.ReadBaselineTextAsync("file.txt", cancellationToken));
+        var mutations = new MutationSet
+        {
+            MutationSetId = MutationSetId.New(),
+            SessionId = repository.SessionId,
+            RunId = RunId.New(),
+            WorkspaceId = repository.WorkspaceId,
+            BaselineCapturedAt = repository.Baseline.CapturedAt,
+            Mutations = [new Mutation { MutationId = MutationId.New(), Type = MutationType.ReplaceText, RelativePath = "file.txt", StartOffset = 0, Length = 6, ExpectedText = "before", ReplacementText = "after" }],
+            Rationale = "Update captured content.",
+            Risk = MutationRisk.Low,
+        };
+        var staged = await coordinator.StageAsync(mutations, cancellationToken);
+        Assert.True(staged.Conflicts.HasConflicts);
+        await Assert.ThrowsAsync<WorkspaceConflictException>(() => workspace.CommitAsync(
+            mutations.MutationSetId,
+            new MutationApproval { Level = MutationApprovalLevel.EntireSet, ApprovalId = staged.ApprovalId },
+            cancellationToken));
+        Assert.Equal("external", await File.ReadAllTextAsync(path, cancellationToken));
+    }
+
+    /// <summary>Metadata-only registration rejects stale hashes and lengths without replacing the current workspace.</summary>
+    [Fact]
+    public static async Task TransactionalWorkspace_RegisterBaseline_RejectsChangedBytesAndLength()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string> { ["file.txt"] = "before" });
+        await using var events = new DomainEventStream();
+        await using var coordinator = new TransactionalWorkspaceCoordinator(events);
+        await coordinator.RegisterBaselineAsync(repository.Baseline, cancellationToken: cancellationToken);
+        foreach (var replacement in new[] { "edited", "longer content" })
+        {
+            await File.WriteAllTextAsync(repository.PathOf("file.txt"), replacement, cancellationToken);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.RegisterBaselineAsync(
+                repository.Baseline, cancellationToken: cancellationToken));
+            Assert.Equal("before", await coordinator.GetWorkspace(repository.WorkspaceId).ReadBaselineTextAsync("file.txt", cancellationToken));
+        }
+    }
+
     /// <summary>Promoting one changed file reuses untouched snapshots without rereading them or hiding later external conflicts.</summary>
     [Fact]
     public static async Task TransactionalWorkspace_PromoteBaseline_ReusesUnchangedContentAndRetainsConflicts()

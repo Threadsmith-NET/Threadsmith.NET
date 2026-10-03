@@ -8,13 +8,14 @@ public sealed class DomainEventStream : IDomainEventStream
 {
     private static readonly TimeSpan DefaultCommittedDeliveryTimeout = TimeSpan.FromSeconds(5);
     private readonly TimeSpan _committedDeliveryTimeout;
+    private readonly TimeProvider _timeProvider;
     private readonly Lock _gate = new();
     private readonly Dictionary<long, Subscription> _subscriptions = [];
     private bool _disposed;
     private long _nextId;
 
     /// <summary>Initializes a new instance of the <see cref="DomainEventStream"/> class.</summary>
-    public DomainEventStream(TimeSpan? committedDeliveryTimeout = null)
+    public DomainEventStream(TimeSpan? committedDeliveryTimeout = null, TimeProvider? timeProvider = null)
     {
         var effectiveTimeout = committedDeliveryTimeout ?? DefaultCommittedDeliveryTimeout;
         if (effectiveTimeout <= TimeSpan.Zero)
@@ -23,6 +24,7 @@ public sealed class DomainEventStream : IDomainEventStream
         }
 
         _committedDeliveryTimeout = effectiveTimeout;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -268,7 +270,7 @@ public sealed class DomainEventStream : IDomainEventStream
                     }
 
                     using var timeout = delivery.Timeout is { } duration
-                        ? new CancellationTokenSource(duration)
+                        ? new CancellationTokenSource(duration, _owner._timeProvider)
                         : null;
                     var handlerCancellationToken = timeout?.Token
                         ?? delivery.CancellationToken;

@@ -69,6 +69,20 @@ public sealed class AgentModelSelector
         return Resolve(assignment.Role, preference, request);
     }
 
+    /// <summary>Previews ordinary child routing using the same preference and compatibility policy as assignment admission.</summary>
+    /// <remarks>Actual request capacity and sensitivity may require a later compatible fallback.</remarks>
+    public AgentModelSelection Preview(
+        AgentRole role,
+        ModelProfileId parentProfileId,
+        ReasoningLevel parentReasoning,
+        AgentResourceBudget budget)
+    {
+        ArgumentNullException.ThrowIfNull(budget);
+        var preference = CreatePreference(role, parentProfileId, parentReasoning.ToString());
+        return Resolve(role, preference, CreateRequest(
+            role, budget, ConversationSensitivity.None, true, preference.EffectiveProfileId));
+    }
+
     /// <summary>Freezes precedence and initial compatible selection before persisting an assignment.</summary>
     /// <remarks>Existing provenance is retained unchanged across restore and process configuration changes.</remarks>
     public AgentPolicySnapshot FreezePolicy(
@@ -241,7 +255,26 @@ public sealed class AgentModelSelector
         bool inheritModelPreference = true,
         bool inheritTrustedModelCatalog = false)
     {
-        var route = _roleModels.Get(assignment.Role);
+        return CreatePreference(
+            assignment.Role,
+            assignment.Policy.ModelProfileId,
+            assignment.Policy.ReasoningLevel,
+            applicationProfileId,
+            applicationReasoningLevel,
+            inheritModelPreference,
+            inheritTrustedModelCatalog);
+    }
+
+    private AgentModelProvenance CreatePreference(
+        AgentRole role,
+        ModelProfileId inheritedProfileId,
+        string inheritedReasoning,
+        ModelProfileId? applicationProfileId = null,
+        ReasoningLevel? applicationReasoningLevel = null,
+        bool inheritModelPreference = true,
+        bool inheritTrustedModelCatalog = false)
+    {
+        var route = _roleModels.Get(role);
         var source = AgentModelSelectionSource.Default;
         ModelProfileId? profileId = null;
         string? reasoning = null;
@@ -257,11 +290,11 @@ public sealed class AgentModelSelector
             profileId = route.ProfileId;
             reasoning = route.ReasoningLevel.ToString();
         }
-        else if (inheritModelPreference && assignment.Policy.ModelProfileId != default)
+        else if (inheritModelPreference && inheritedProfileId != default)
         {
             source = AgentModelSelectionSource.Inherited;
-            profileId = assignment.Policy.ModelProfileId;
-            reasoning = assignment.Policy.ReasoningLevel;
+            profileId = inheritedProfileId;
+            reasoning = inheritedReasoning;
         }
 
         var trusted = source == AgentModelSelectionSource.RoleConfiguration

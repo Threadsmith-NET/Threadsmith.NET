@@ -280,13 +280,20 @@ public static class SemanticRefreshCoordinatorTests
     [Fact]
     public static async Task ObserveFileSystemWatcherError_RebuildFailurePublishesLifecycleFailure()
     {
+        var cancellationToken = TestContext.Current.CancellationToken;
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<IDomainEvent>();
-        await using var subscription = events.Subscribe((domainEvent, _) =>
+        var recoveryStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRecovery = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = events.Subscribe(async (domainEvent, token) =>
         {
             observed.Enqueue(domainEvent);
-            return Task.CompletedTask;
+            if (domainEvent is SemanticRefreshStarted)
+            {
+                recoveryStarted.TrySetResult();
+                await releaseRecovery.Task.WaitAsync(token);
+            }
         });
         var watcherCreationCount = 0;
         FileSystemWatcher CreateWatcher(string path)
@@ -305,13 +312,28 @@ public static class SemanticRefreshCoordinatorTests
             events,
             watchFileSystem: true,
             watcherFactory: CreateWatcher);
-        await coordinator.BindAsync(repository.CreateRequest());
+        await coordinator.BindAsync(repository.CreateRequest(), cancellationToken);
 
         coordinator.ObserveFileSystemWatcherError(repository.SessionId);
+        Task<SemanticRefreshResult> admission;
+        try
+        {
+            await recoveryStarted.Task.WaitAsync(cancellationToken);
+            // Join the active recovery before allowing watcher creation to fail. A later
+            // admission intentionally retries failed work and would emit a second lifecycle.
+            admission = coordinator.EnsureCurrentAsync(
+                repository.SessionId,
+                SemanticRefreshReason.UserAdmission,
+                cancellationToken);
+            Assert.False(admission.IsCompleted);
+        }
+        finally
+        {
+            releaseRecovery.TrySetResult();
+        }
+
 #pragma warning disable VSTHRD003 // The assertion intentionally observes the shared refresh task.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.EnsureCurrentAsync(
-            repository.SessionId,
-            SemanticRefreshReason.UserAdmission));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => admission);
 #pragma warning restore VSTHRD003
 
         var started = Assert.Single(observed.OfType<SemanticRefreshStarted>());

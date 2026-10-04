@@ -391,13 +391,12 @@ public sealed class ExecutionOrchestrator :
             or ExecutionCheckpointPhase.ContinuationPending
             || (checkpoint.Phase == ExecutionCheckpointPhase.Cancelled && checkpoint.MutationSetId is null))
         {
-            var validation = active.Validation
-                ?? throw new InvalidDataException("The next batch has no prior validation result.");
-            var validationArtifact = checkpoint.ValidationArtifact
-                ?? throw new InvalidDataException("The next batch has no validation artifact.");
+            var validation = active.Validation;
+            var validationArtifact = checkpoint.ValidationArtifact;
             if (checkpoint.Phase == ExecutionCheckpointPhase.ContinuationPending
-                && validation.Gate.Status != AcceptanceGateStatus.Passed)
+                && validation is not null && validation.Gate.Status != AcceptanceGateStatus.Passed)
             {
+                ArgumentNullException.ThrowIfNull(validationArtifact);
                 if (checkpoint.CorrectionAttempts < checkpoint.CorrectionBudget)
                 {
                     _ = await PrepareValidationCorrectionAsync(
@@ -427,11 +426,22 @@ public sealed class ExecutionOrchestrator :
                 if (next is null)
                 {
                     active = _runs[runId];
-                    _ = await CompleteAsync(
+                    _ = await ValidateAndCompleteAsync(
+                        new ContinueExecutionRequest
+                        {
+                            SessionId = sessionId,
+                            RunId = runId,
+                            ApprovalProvenance = checkpoint.PolicyIdentity ?? "resumed execution authorization",
+                            Approval = new MutationApproval
+                            {
+                                Level = MutationApprovalLevel.EntireSet,
+                                ApprovalId = active.RequiredStaged.ApprovalId,
+                            },
+                        },
                         active,
                         checkpoint,
-                        validation,
-                        validationArtifact,
+                        active.BaselineCapture ?? throw new InvalidDataException("Applied execution has no diagnostic baseline."),
+                        checkpoint.BaselineArtifact,
                         checkpoint.PolicyIdentity ?? "resumed execution authorization",
                         cancellationToken);
                 }
@@ -694,18 +704,15 @@ public sealed class ExecutionOrchestrator :
             throw new InvalidDataException("The objective boundary does not contain a completed current plan.");
         }
 
-        var baseline = active.BaselineCapture
-            ?? throw new InvalidDataException("The completed objective has no validation baseline.");
-        var validated = await ValidateExecutionAsync(
-            active,
-            baseline,
-            active.AccumulatedResidualRisks
-                .Concat(active.Request.ApprovedPlan.Risks)
-                .Distinct(StringComparer.Ordinal)
-                .ToArray(),
-            cancellationToken);
-        active = validated.Active;
-        var validation = validated.Validation;
+        // Host writes are fenced at this boundary, but external writers are not. Check
+        // live bytes before reusing durable evidence without compiling the same edits twice.
+        ValidateLiveWorkspace(checkpoint, active.Request.Baseline);
+        await _workspaces.GetWorkspace(checkpoint.WorkspaceId)
+            .VerifyBaselineAsync(active.AppliedFiles, cancellationToken);
+        var validation = active.Validation
+            ?? throw new InvalidDataException("The completed objective has no validation result.");
+        var validationArtifact = checkpoint.ValidationArtifact
+            ?? throw new InvalidDataException("The completed objective has no validation artifact.");
         var status = validation.Gate.Status == AcceptanceGateStatus.Passed
             ? ExecutionCheckpointPhase.Completed
             : ExecutionCheckpointPhase.Failed;
@@ -719,7 +726,7 @@ public sealed class ExecutionOrchestrator :
                 Phase = status,
                 CompletedStepIds = active.CompletedPlanStepIds,
                 DiffArtifact = finalDiff,
-                ValidationArtifact = validated.Artifact,
+                ValidationArtifact = validationArtifact,
                 StateArtifact = await PublishStateAsync(active, cancellationToken),
                 NextAction = status == ExecutionCheckpointPhase.Completed
                     ? "terminal objective outcome recorded after cumulative validation"
@@ -1024,10 +1031,61 @@ public sealed class ExecutionOrchestrator :
         string provenance,
         CancellationToken cancellationToken)
     {
+        if (!active.CurrentBatchFullyApplied)
+        {
+            active = active with { Validation = null };
+            _runs[request.RunId] = active;
+            await SaveCheckpointAsync(
+                applied with
+                {
+                    Phase = ExecutionCheckpointPhase.ContinuationPending,
+                    MutationSetId = null,
+                    PendingStepComplete = null,
+                    CompletedStepIds = active.AppliedPlanStepIds,
+                    ValidationArtifact = null,
+                    StateArtifact = await PublishStateAsync(active, cancellationToken),
+                    NextAction = "explicitly resume remaining approved work after partial mutation authorization",
+                    RecordedAt = DateTimeOffset.UtcNow,
+                },
+                cancellationToken);
+            var progress = CreateOutcomeProjection(
+                active, null, provenance, null, ExecutionCheckpointPhase.ContinuationPending);
+            return progress with
+            {
+                BehaviorSummary = [.. progress.BehaviorSummary, "Partial changes applied; validation is deferred until all planned edits are applied."],
+            };
+        }
+
+        // A batch is a transport/approval boundary, not a compiler boundary. Keep the
+        // original diagnostic baseline and validate cumulative work once the plan is applied.
+        if (active.PendingStepComplete != true
+            || active.AppliedPlanStepIds.Append(active.CurrentStepId).Distinct().Count()
+                < active.Request.ApprovedPlan.Steps.Count)
+        {
+            if (active.PendingStepComplete == true)
+            {
+                active = active with
+                {
+                    AppliedPlanStepIds = active.AppliedPlanStepIds.Append(active.CurrentStepId).Distinct().ToArray(),
+                };
+            }
+
+            active = active with { Validation = null };
+            _runs[request.RunId] = active;
+            var next = await PrepareNextProposalAsync(active, applied, baselineArtifact, null, cancellationToken);
+            if (next is not null)
+            {
+                return CreateOutcomeProjection(
+                    next.Value.Active, null, provenance, null, next.Value.Continuation.Phase);
+            }
+
+            active = _runs[request.RunId];
+        }
+
         var validated = await ValidateExecutionAsync(
             active,
             baseline,
-            active.Request.ApprovedPlan.Risks,
+            active.AccumulatedResidualRisks.Concat(active.Request.ApprovedPlan.Risks).Distinct(StringComparer.Ordinal).ToArray(),
             cancellationToken);
         active = validated.Active;
         var validation = validated.Validation;
@@ -1037,35 +1095,6 @@ public sealed class ExecutionOrchestrator :
         if (succeeded)
         {
             applied = applied with { CorrectionAttempts = 0 };
-        }
-
-        if (!active.CurrentBatchFullyApplied)
-        {
-            var nextAction = succeeded
-                ? "explicitly resume remaining approved work after partial mutation authorization"
-                : "explicitly resume validation correction after partial mutation authorization";
-            var summary = succeeded
-                ? "Partial changes applied; explicit continuation is required before proposing remaining work."
-                : "Partial changes failed validation; explicit continuation is required before staging a correction.";
-            await SaveCheckpointAsync(
-                applied with
-                {
-                    Phase = ExecutionCheckpointPhase.ContinuationPending,
-                    MutationSetId = null,
-                    PendingStepComplete = null,
-                    CompletedStepIds = active.AppliedPlanStepIds,
-                    ValidationArtifact = validationArtifact,
-                    StateArtifact = await PublishStateAsync(active, cancellationToken),
-                    NextAction = nextAction,
-                    RecordedAt = DateTimeOffset.UtcNow,
-                },
-                cancellationToken);
-            var progress = CreateOutcomeProjection(
-                active, validation, provenance, null, ExecutionCheckpointPhase.ContinuationPending);
-            return progress with
-            {
-                BehaviorSummary = [.. progress.BehaviorSummary, summary],
-            };
         }
 
         if (!succeeded && applied.CorrectionAttempts < applied.CorrectionBudget)
@@ -1360,7 +1389,7 @@ public sealed class ExecutionOrchestrator :
         ActiveExecution active,
         ExecutionContinuation checkpoint,
         ExecutionArtifactReference? baselineArtifact,
-        ExecutionArtifactReference validationArtifact,
+        ExecutionArtifactReference? validationArtifact,
         CancellationToken cancellationToken)
     {
         while (active.AppliedPlanStepIds.Count < active.Request.ApprovedPlan.Steps.Count)
@@ -1373,8 +1402,7 @@ public sealed class ExecutionOrchestrator :
                 GetActivatedPaths(active, SelectCurrentStepId(active))) with
             {
                 CanCompleteWithoutChanges = active.CurrentStepId == SelectCurrentStepId(active)
-                    && active.CurrentBatchFullyApplied
-                    && active.Validation?.Gate.Status == AcceptanceGateStatus.Passed,
+                    && active.CurrentBatchFullyApplied,
             };
             var beforeProposalState = await PublishStateAsync(active, cancellationToken);
             var modelTurn = checkpoint with
@@ -1426,7 +1454,7 @@ public sealed class ExecutionOrchestrator :
                 if (!scope.CanCompleteWithoutChanges)
                 {
                     throw new InvalidOperationException(
-                        "The completion-only proposal has no current passing validation evidence for the selected step.");
+                        "The completion-only proposal has no applied batch for the selected step.");
                 }
 
                 active = active with
@@ -1519,6 +1547,66 @@ public sealed class ExecutionOrchestrator :
         CancellationToken cancellationToken)
     {
         var request = active.Request;
+
+        // Cumulative failures are not necessarily caused by the last applied step.
+        // Test-project selection is not causal attribution to an implementation step.
+        var diagnosticPaths = validation.Diagnostics
+            .Where(item => item.Severity == DiagnosticSeverity.Error && !item.IsBaselineDiagnostic)
+            .Select(item => item.File)
+            .OfType<string>()
+            .Select(path => path.Replace('\\', '/'))
+            .ToHashSet(RepositoryPathPolicy.GetPathComparer(request.Baseline.RepositoryPath));
+        var repairSteps = request.ApprovedPlan.Steps.Where(step =>
+            step.GetAffectedPaths().Any(path => diagnosticPaths.Contains(path.Replace('\\', '/')))).ToArray();
+        var repairStep = request.ApprovedPlan.Steps.Count == 1
+            ? request.ApprovedPlan.Steps[0]
+            : repairSteps.Length == 1 && validation.Tests.Results.All(result => result.Outcome != TestOutcome.Failed)
+                ? repairSteps[0]
+                : null;
+        if (repairStep is null)
+        {
+            // Preserve applied bytes, but do not archive unvalidated steps as completed
+            // when the replacement plan must be able to revisit any of their scopes.
+            active = active with { AppliedPlanStepIds = [] };
+            _runs[request.RunId] = active;
+            if (!request.AllowPlanContinuation)
+            {
+                return await CompleteAsync(active, applied, validation, validationArtifact, provenance, cancellationToken);
+            }
+
+            var scope = CreateExecutionScope(
+                request.ApprovedPlan,
+                active.AppliedPlanStepIds,
+                active.BatchOrdinal + 1,
+                MutationBatchPurpose.Correction,
+                GetActivatedPaths(active, request.ApprovedPlan.Steps[0].StepId));
+            var boundary = await PauseForReplanningAsync(
+                active,
+                applied with { BaselineArtifact = baselineArtifact, ValidationArtifact = validationArtifact },
+                scope,
+                new MutationProposalResult
+                {
+                    ReplanRequested = true,
+                    Rationale = "Cumulative validation failed without a unique repair scope. Investigate the validation evidence and approve a replacement plan before further edits.",
+                },
+                cancellationToken);
+            return CreateOutcomeProjection(_runs[request.RunId], validation, provenance, boundary.DiffArtifact, boundary.Phase);
+        }
+
+        var repairStepId = repairStep.StepId;
+        if (repairStepId != active.CurrentStepId || active.AppliedPlanStepIds.Contains(repairStepId))
+        {
+            active = active with
+            {
+                AppliedPlanStepIds = active.AppliedPlanStepIds
+                    .Concat(active.PendingStepComplete == true ? [active.CurrentStepId] : [])
+                    .Where(id => id != repairStepId).Distinct().ToArray(),
+                CurrentStepId = repairStepId,
+                PendingStepComplete = true,
+            };
+            _runs[request.RunId] = active;
+        }
+
         var correctionAttempt = checked(applied.CorrectionAttempts + 1);
         var correctionContext = CreateValidationCorrectionContext(
             validation,

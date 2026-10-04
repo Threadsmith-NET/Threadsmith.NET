@@ -1666,21 +1666,23 @@ public sealed class SemanticRefreshCoordinator :
                     ? SemanticRefreshReason.ExternalChange
                     : SemanticRefreshReason.HostMutation;
         sequence.RecordAttempt(reason, mode, prepared.Changes, batch.TargetDirtyVersion);
-        await EnsureRefreshStartedAsync(binding, sequence, cancellationToken);
         var startedAt = _timeProvider.GetTimestamp();
 
         try
         {
-            if (batch.RestartWatcher)
-            {
-                binding.RestartWatching(
-                    change => QueueChange(binding, change),
-                    () => QueueRecovery(binding, restartWatcher: true));
-            }
-
             AuthoritativeInputSnapshot? preRefreshInputs = null;
             async Task<SemanticLoadResult> PublishAsync(CancellationToken publicationToken)
             {
+                // Waiting for an active run is queued work, not compiler refresh time.
+                startedAt = _timeProvider.GetTimestamp();
+                await EnsureRefreshStartedAsync(binding, sequence, publicationToken);
+                if (batch.RestartWatcher)
+                {
+                    binding.RestartWatching(
+                        change => QueueChange(binding, change),
+                        () => QueueRecovery(binding, restartWatcher: true));
+                }
+
                 if (mode == SemanticRefreshMode.Full)
                 {
                     // An active run can change inputs while publication is waiting for admission.

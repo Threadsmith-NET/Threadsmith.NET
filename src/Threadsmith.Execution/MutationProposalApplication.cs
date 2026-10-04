@@ -1452,6 +1452,7 @@ public sealed class MutationProposalApplication :
                 Baseline = baseline,
                 MutationSet = proposed,
                 OverlayFiles = overlay,
+                IncludeCompilation = false,
             },
             cancellationToken);
         var blockingDiagnostics = result.Diagnostics.Count(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);

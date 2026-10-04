@@ -87,6 +87,8 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, progress.Status);
         Assert.Empty(progress.CompletedStepIds);
         Assert.Single(fixture.CommitHandler.Commands);
+        Assert.Empty(fixture.ValidationHandler.Commands);
+        Assert.Null(progress.Validation);
         Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(fixture.StartRequest.RunId));
         var outcome = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.CorrectionStaged));
 
@@ -94,10 +96,139 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal([fixture.StepId], outcome.CompletedStepIds);
         Assert.Equal(2, fixture.CommitHandler.Commands.Count);
         Assert.Single(fixture.BaselineHandler.Commands);
+        Assert.Single(fixture.ValidationHandler.Commands);
         var diff = await fixture.Artifacts.ReadAsync(outcome.FinalDiff!);
         Assert.Contains("-old", diff, StringComparison.Ordinal);
         Assert.Contains("+fixed", diff, StringComparison.Ordinal);
         Assert.DoesNotContain("new", diff, StringComparison.Ordinal);
+    }
+
+    /// <summary>Completion-only applies no write and cannot skip the deferred final gate.</summary>
+    [Fact]
+    public async Task CompletionOnly_FinalFailureReopensStepForCorrection()
+    {
+        var fixture = CreateFixture(includeCorrection: true);
+        await using var events = fixture.Events;
+        SetProposals(fixture, Proposal(fixture.Staged, false), CompletionOnly(), Proposal(fixture.CorrectionStaged, true));
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+
+        var progress = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
+
+        Assert.Equal(ExecutionCheckpointPhase.CorrectionPending, progress.Status);
+        Assert.Empty(progress.CompletedStepIds);
+        Assert.Single(fixture.ValidationHandler.Commands);
+        Assert.Equal(fixture.StepId, fixture.ProposalHandler.Commands[^1].ExecutionScope!.ActiveStep.StepId);
+        var outcome = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.CorrectionStaged));
+        Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
+        Assert.Equal(2, fixture.ValidationHandler.Commands.Count);
+    }
+
+    /// <summary>Cumulative validation can reopen an earlier applied step without widening approval scope.</summary>
+    [Fact]
+    public async Task FinalValidation_ReopensEarlierStepContainingIntroducedError()
+    {
+        var fixture = CreateFixture(includeSecondPlanStep: true, includeCorrection: true);
+        await using var events = fixture.Events;
+        var second = fixture.CorrectionStaged with { PlanStepIds = [fixture.SecondStepId] };
+        var repairId = MutationSetId.New();
+        var repair = fixture.Staged with
+        {
+            MutationSet = fixture.Staged.MutationSet with { MutationSetId = repairId },
+            Preview = fixture.Staged.Preview with { MutationSetId = repairId },
+            Conflicts = fixture.Staged.Conflicts with { MutationSetId = repairId },
+            ApprovalId = ApprovalId.New(),
+        };
+        SetProposals(fixture, Proposal(fixture.Staged, true), Proposal(second, true), Proposal(repair, true));
+        fixture.ValidationHandler.NextDiagnostics =
+        [
+            new Diagnostic
+            {
+                Id = "introduced", Code = "CS0117", Severity = DiagnosticSeverity.Error,
+                Project = "Example", TargetFramework = "net10.0", File = "src/Example.cs",
+                Message = "A required member is missing.", Confidence = SemanticConfidenceLevel.FullSemantic,
+                Classification = DiagnosticClassification.Introduced,
+            },
+        ];
+        await fixture.Orchestrator.StartAsync(fixture.StartRequest);
+        await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
+        Assert.Empty(fixture.ValidationHandler.Commands);
+
+        var progress = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, second));
+
+        Assert.Equal(ExecutionCheckpointPhase.CorrectionPending, progress.Status);
+        Assert.Equal([fixture.SecondStepId], progress.CompletedStepIds);
+        Assert.Equal(fixture.StepId, fixture.ProposalHandler.Commands[^1].ExecutionScope!.ActiveStep.StepId);
+        Assert.Single(fixture.ValidationHandler.Commands);
+    }
+
+    /// <summary>Test-only regressions cannot force a repair into an unrelated last step.</summary>
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public async Task FinalValidation_TestFailureWithoutRepairScopeRequiresReplanning(bool allowReplanning, bool restart)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var fixture = CreateFixture(includeSecondPlanStep: true, includeCorrection: true);
+        await using var events = fixture.Events;
+        var second = fixture.CorrectionStaged with { PlanStepIds = [fixture.SecondStepId] };
+        SetProposals(fixture, Proposal(fixture.Staged, true), Proposal(second, true));
+        fixture.ValidationHandler.NextTests = new TestValidationResult
+        {
+            Selection = new TestSelection(),
+            Completed = true,
+            Results =
+            [
+                new Threadsmith.Core.TestResult
+                {
+                    Project = new TestProject
+                    {
+                        Name = "Example.Tests", FilePath = "C:/repo/tests/Example.Tests.csproj", Framework = TestFramework.XUnit,
+                    },
+                    Outcome = TestOutcome.Failed,
+                    ProcessCompleted = true,
+                    Failed = 1,
+                    Output = "Behavior introduced by the first step regressed.",
+                },
+            ],
+        };
+        var request = fixture.StartRequest with { AllowPlanContinuation = allowReplanning };
+        await fixture.Orchestrator.StartAsync(request, cancellationToken);
+        await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged), cancellationToken);
+        Assert.Empty(fixture.ValidationHandler.Commands);
+        var orchestrator = restart ? RecreateOrchestrator(fixture) : fixture.Orchestrator;
+
+        var progress = await orchestrator.ContinueAsync(CreateContinuation(fixture, second), cancellationToken);
+
+        Assert.Equal(allowReplanning ? ExecutionCheckpointPhase.PlanReplanningPending : ExecutionCheckpointPhase.Failed, progress.Status);
+        Assert.Empty(progress.CompletedStepIds);
+        Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
+        Assert.Equal(2, fixture.CommitHandler.Commands.Count);
+        Assert.Single(fixture.ValidationHandler.Commands);
+        Assert.True(fixture.ValidationHandler.LastResult.Build.Succeeded);
+        Assert.Empty(fixture.ValidationHandler.LastResult.Diagnostics);
+        if (allowReplanning)
+        {
+            var restored = RecreateOrchestrator(fixture);
+            var resumed = await restored.ResumeAsync(request.SessionId, request.RunId, cancellationToken);
+            Assert.Equal(ExecutionCheckpointPhase.PlanReplanningPending, resumed.Phase);
+            Assert.NotNull(resumed.ValidationArtifact);
+            Assert.Equal(0, resumed.CorrectionAttempts);
+            var boundary = await restored.WaitForPlanCompletionAsync(request.RunId, 0, cancellationToken);
+            Assert.NotNull(boundary.PlanUnderRevision);
+            Assert.Equal(2, boundary.Progress.UncompletedStepIds.Count);
+            Assert.Null(await restored.HandleAsync(new GetExecutionMutationCommand(request.SessionId, request.RunId), cancellationToken));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => restored.CompleteObjectiveAsync(request.SessionId, request.RunId, cancellationToken));
+
+            // A separately approved replacement can revisit the earlier step, retaining
+            // the original diagnostic baseline and cumulative validation scope.
+            SetProposals(fixture, Proposal(fixture.CorrectionStaged, true));
+            var replacement = ReplacementRequest(fixture, request);
+            var pending = await restored.ContinueWithPlanAsync(replacement, cancellationToken);
+            Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, pending.Phase);
+            Assert.Empty(pending.CompletedStepIds);
+            Assert.Equal(3, fixture.ProposalHandler.Commands.Count);
+        }
     }
 
     /// <summary>A later step cannot inherit lifecycle paths activated by an earlier step.</summary>
@@ -136,29 +267,24 @@ public sealed partial class ExecutionOrchestratorTests
 
     /// <summary>Correction hints cannot overwrite the original implementation intent.</summary>
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(null, true)]
-    public async Task Correction_RetainsOriginalCompletionIntent(bool? originalHint, bool correctionHint)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Correction_RetainsOriginalCompletionIntent(bool correctionHint)
     {
         var fixture = CreateFixture(includeCorrection: true);
         await using var events = fixture.Events;
-        SetProposals(fixture, Proposal(fixture.Staged, originalHint), Proposal(fixture.CorrectionStaged, correctionHint));
-        if (originalHint != true)
-        {
-            fixture.ProposalHandler.Results.Enqueue(CompletionOnly());
-        }
+        SetProposals(fixture, Proposal(fixture.Staged, true), Proposal(fixture.CorrectionStaged, correctionHint));
 
         await fixture.Orchestrator.StartAsync(fixture.StartRequest);
         await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
         var checkpoint = await fixture.Checkpoints.GetCheckpointAsync(fixture.StartRequest.RunId);
-        Assert.Equal(originalHint, checkpoint!.PendingStepComplete);
+        Assert.True(checkpoint!.PendingStepComplete);
         Assert.Equal(MutationBatchPurpose.Correction, checkpoint.BatchPurpose);
 
         var outcome = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.CorrectionStaged));
 
         Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);
-        Assert.Equal(originalHint == true ? 2 : 3, fixture.ProposalHandler.Commands.Count);
+        Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
     }
 
     /// <summary>Restart resumes proposal generation without replaying accepted mutations.</summary>
@@ -189,7 +315,7 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal([fixture.StepId], resumed.CompletedStepIds);
         Assert.Equal(fixture.SecondStepId, resumed.CurrentPlanStepId);
         Assert.Single(fixture.CommitHandler.Commands);
-        Assert.Single(fixture.ValidationHandler.Commands);
+        Assert.Empty(fixture.ValidationHandler.Commands);
         Assert.Equal(interrupted.MutationBaselineIdentity, resumed.MutationBaselineIdentity);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => restartedHost.ContinueAsync(
             CreateContinuation(fixture, fixture.Staged)));
@@ -254,10 +380,8 @@ public sealed partial class ExecutionOrchestratorTests
         await fixture.Orchestrator.StartAsync(request);
         var pending = await fixture.Orchestrator.ContinueAsync(
             CreateContinuation(fixture, fixture.Staged));
-        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult with
-        {
-            Gate = new AcceptanceGateResult(AcceptanceGateStatus.Failed, ["Second step failed."]),
-        });
+        Assert.Empty(fixture.ValidationHandler.Commands);
+        fixture.ValidationHandler.FailAll();
 
         var outcome = await fixture.Orchestrator.ContinueAsync(
             CreateContinuation(fixture, secondStaged));
@@ -302,9 +426,9 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Single(fixture.CommitHandler.Commands);
     }
 
-    /// <summary>Failed partial authorization resumes through validation correction before ordinary remaining work.</summary>
+    /// <summary>Partial authorization resumes ordinary work without running final validation early.</summary>
     [Fact]
-    public async Task PartialApproval_FailedValidationResumesThroughCorrection()
+    public async Task PartialApproval_DefersValidationAndResumesRemainingWork()
     {
         var fixture = CreateFixture(includeCorrection: true, includeRejectedLifecycleMutation: true);
         await using var events = fixture.Events;
@@ -325,19 +449,20 @@ public sealed partial class ExecutionOrchestratorTests
             fixture.StartRequest.RunId);
 
         Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, progress.Status);
-        Assert.Equal(AcceptanceGateStatus.Failed, progress.Validation!.Gate.Status);
+        Assert.Null(progress.Validation);
+        Assert.Empty(fixture.ValidationHandler.Commands);
         Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
-        Assert.Equal(MutationBatchPurpose.Correction, resumed.BatchPurpose);
+        Assert.Equal(MutationBatchPurpose.Implementation, resumed.BatchPurpose);
         Assert.Equal(fixture.CorrectionStaged.MutationSet.MutationSetId, resumed.MutationSetId);
-        Assert.NotNull(fixture.ProposalHandler.Commands[^1].Correction);
-        Assert.Equal(RunPhase.CorrectionModelTurn, fixture.ProposalHandler.Commands[^1].Phase);
+        Assert.Null(fixture.ProposalHandler.Commands[^1].Correction);
+        Assert.Equal(RunPhase.ImplementationModelTurn, fixture.ProposalHandler.Commands[^1].Phase);
         Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
         Assert.Single(fixture.CommitHandler.Commands);
     }
 
-    /// <summary>A failed partial authorization cannot create a correction when its budget is exhausted.</summary>
+    /// <summary>A correction budget does not prevent resuming unvalidated remaining work.</summary>
     [Fact]
-    public async Task PartialApproval_ExhaustedCorrectionBudgetTerminatesWithoutProposal()
+    public async Task PartialApproval_ZeroCorrectionBudgetStillResumesRemainingWork()
     {
         var fixture = CreateFixture(includeCorrection: true, includeRejectedLifecycleMutation: true);
         await using var events = fixture.Events;
@@ -359,10 +484,10 @@ public sealed partial class ExecutionOrchestratorTests
             request.RunId);
         var outcome = await fixture.Checkpoints.GetOutcomeAsync(request.RunId);
 
-        Assert.Equal(ExecutionCheckpointPhase.Failed, resumed.Phase);
-        Assert.NotNull(outcome);
-        Assert.Equal(0, outcome.CorrectionAttempts);
-        Assert.Single(fixture.ProposalHandler.Commands);
+        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, resumed.Phase);
+        Assert.Null(outcome);
+        Assert.Empty(fixture.ValidationHandler.Commands);
+        Assert.Equal(2, fixture.ProposalHandler.Commands.Count);
     }
 
     /// <summary>Migrated progress is saved once and can be restored by a fresh host.</summary>

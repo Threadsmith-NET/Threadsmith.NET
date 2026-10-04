@@ -803,6 +803,7 @@ public static partial class Milestone5Tests
         Assert.Equal(declaration.Length, move.ExpectedIdentity?.ByteLength);
         Assert.Contains("IRetrieval", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         var preMutationRequest = Assert.Single(preMutationAnalyzer.Requests);
+        Assert.False(preMutationRequest.IncludeCompilation);
         Assert.Contains(preMutationRequest.OverlayFiles, file => file.RelativePath == "Contracts/IRetrieval.cs"
             && file.Text?.Contains("interface IRetrieval", StringComparison.Ordinal) == true);
         Assert.Contains(preMutationRequest.OverlayFiles, file => file.RelativePath == "Services/RetrieverConsumer.cs"
@@ -4290,6 +4291,9 @@ public static partial class Milestone5Tests
         public WorkspaceBaseline Baseline { get; } = baseline;
 
         public WorkspaceIsolation Isolation { get; } = isolation;
+
+        public Task VerifyBaselineAsync(IReadOnlyList<string> additionalPaths, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
 
         public Task<string?> ReadBaselineTextAsync(
             string relativePath,

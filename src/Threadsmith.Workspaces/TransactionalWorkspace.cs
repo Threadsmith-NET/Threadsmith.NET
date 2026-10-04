@@ -113,6 +113,54 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     public WorkspaceIsolation Isolation { get; }
 
     /// <inheritdoc />
+    public async Task VerifyBaselineAsync(
+        IReadOnlyList<string> additionalPaths,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(additionalPaths);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            foreach (var fullPath in RepositoryLifecycle.EnumerateBaselineFiles(
+                Isolation.RepositoryPath,
+                Baseline.ApprovedRoots ?? ["."],
+                Baseline.ProhibitedPaths ?? [],
+                requireComplete: true,
+                cancellationToken))
+            {
+                var path = Path.GetRelativePath(Isolation.RepositoryPath, fullPath).Replace('\\', '/');
+                if (!_baselineFiles.ContainsKey(path))
+                {
+                    throw new InvalidDataException(
+                        $"Repository input '{path}' was added since the validation baseline. Previous validation evidence cannot be reused; fresh validation is required.");
+                }
+            }
+
+            var paths = _baselineFiles.Keys.Concat(additionalPaths.Select(NormalizeRelativePath))
+                .Distinct(_pathComparer);
+            foreach (var path in paths)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var expected = _baselineFiles.GetValueOrDefault(path)?.Sha256;
+                var fullPath = ResolveConfinedPath(path, mustExist: false);
+                var actual = File.Exists(fullPath)
+                    ? await HashFileAsync(fullPath, cancellationToken)
+                    : null;
+                if (!HashesEqual(expected, actual))
+                {
+                    throw new InvalidDataException(
+                        $"Repository file '{path}' changed since the validation baseline. Previous validation evidence cannot be reused; fresh validation is required.");
+                }
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public Task<string?> ReadBaselineTextAsync(
         string relativePath,
         CancellationToken cancellationToken = default)

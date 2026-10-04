@@ -228,17 +228,6 @@ public sealed partial class ExecutionOrchestratorTests
             firstRequest.SessionId,
             firstRequest.RunId);
 
-        if (failFinalValidation)
-        {
-            Assert.Equal(ExecutionCheckpointPhase.Failed, outcome.Status);
-            Assert.Equal(
-                ["Cumulative validation found a regression."],
-                outcome.Validation?.Gate.Reasons);
-            Assert.Same(outcome, await terminalWait);
-            Assert.Equal(3, fixture.ValidationHandler.Commands.Count);
-            return;
-        }
-
         Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, secondPending.Phase);
         Assert.Equal(2, secondPending.PlanOrdinal);
         Assert.Equal(ExecutionCheckpointPhase.PlanContinuationPending, secondProgress.Status);
@@ -249,7 +238,7 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(["src/Example.cs"], outcome.ChangedFiles);
         Assert.Same(outcome, await terminalWait);
         Assert.Equal(2, fixture.CommitHandler.Commands.Count);
-        Assert.Equal(3, fixture.ValidationHandler.Commands.Count);
+        Assert.Equal(2, fixture.ValidationHandler.Commands.Count);
         var finalValidation = fixture.ValidationHandler.Commands[^1].Request;
         Assert.Contains("src/First.cs", finalValidation.AffectedPaths);
         Assert.Contains("src/Second.cs", finalValidation.AffectedPaths);
@@ -1842,6 +1831,10 @@ public sealed partial class ExecutionOrchestratorTests
 
         public MutationValidationResult LastResult { get; private set; } = null!;
 
+        public IReadOnlyList<Diagnostic> NextDiagnostics { get; set; } = [];
+
+        public TestValidationResult? NextTests { get; set; }
+
         public void Enqueue(MutationValidationResult result)
         {
             _results.Enqueue(result);
@@ -1852,6 +1845,19 @@ public sealed partial class ExecutionOrchestratorTests
             var results = _results.Select(result => result with
             {
                 Gate = new AcceptanceGateResult(AcceptanceGateStatus.Passed, []),
+            }).ToArray();
+            _results.Clear();
+            foreach (var result in results)
+            {
+                _results.Enqueue(result);
+            }
+        }
+
+        public void FailAll()
+        {
+            var results = _results.Select(result => result with
+            {
+                Gate = new AcceptanceGateResult(AcceptanceGateStatus.Failed, ["Final validation failed."]),
             }).ToArray();
             _results.Clear();
             foreach (var result in results)
@@ -1872,6 +1878,18 @@ public sealed partial class ExecutionOrchestratorTests
             }
 
             LastResult = _results.Dequeue();
+            if (NextTests is not null)
+            {
+                LastResult = LastResult with { Tests = NextTests };
+                NextTests = null;
+            }
+
+            if (NextDiagnostics.Count > 0)
+            {
+                LastResult = LastResult with { Diagnostics = NextDiagnostics };
+                NextDiagnostics = [];
+            }
+
             return Task.FromResult(LastResult);
         }
     }
@@ -1935,6 +1953,12 @@ public sealed partial class ExecutionOrchestratorTests
         public WorkspaceBaseline Baseline { get; }
 
         public WorkspaceIsolation Isolation { get; }
+
+        public Task VerifyBaselineAsync(IReadOnlyList<string> additionalPaths, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.CompletedTask;
+        }
 
         public ValueTask DisposeAsync()
         {

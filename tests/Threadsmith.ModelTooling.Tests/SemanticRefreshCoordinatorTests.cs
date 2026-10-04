@@ -1628,6 +1628,12 @@ public static class SemanticRefreshCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Enqueue(item);
+            return Task.CompletedTask;
+        });
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
         var publicationGate = new TestSemanticRefreshPublicationGate();
         await using var coordinator = CreateCoordinator(backend, events, publicationGate: publicationGate);
@@ -1635,6 +1641,8 @@ public static class SemanticRefreshCoordinatorTests
 
         var force = coordinator.ForceRefreshAsync(repository.SessionId, cancellationToken);
         await publicationGate.Entered.Task.WaitAsync(cancellationToken);
+        Assert.Empty(observed.OfType<SemanticRefreshStarted>());
+        Assert.Equal(0, backend.RefreshCount);
         await File.WriteAllTextAsync(repository.SolutionPath, "updated during active run", cancellationToken);
         await File.WriteAllTextAsync(Path.Combine(repository.Root, "Added.cs"), "class Added { }", cancellationToken);
         publicationGate.Release.TrySetResult();
@@ -1643,6 +1651,7 @@ public static class SemanticRefreshCoordinatorTests
         Assert.True(result.WasRefreshed);
         Assert.Equal(result.DirtyVersion, result.AppliedVersion);
         Assert.Equal(1, backend.RefreshCount);
+        Assert.Single(observed.OfType<SemanticRefreshStarted>());
     }
 
     /// <summary>Real sharing failures use the bounded retry delay for both text and binary inputs.</summary>

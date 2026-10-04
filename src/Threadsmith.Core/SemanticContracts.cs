@@ -155,6 +155,9 @@ public sealed record PreMutationAnalysisRequest
 
     /// <summary>In-memory final content for changed source files.</summary>
     public IReadOnlyList<PreMutationOverlayFile> OverlayFiles { get; init; } = [];
+
+    /// <summary>Whether to compile the overlay; governed batches defer compilation to final validation.</summary>
+    public bool IncludeCompilation { get; init; } = true;
 }
 
 /// <summary>Focused host-owned diagnostic for pre-mutation proposal repair.</summary>

@@ -1,5 +1,6 @@
 namespace Threadsmith.ExecutionOrchestration.Tests;
 
+using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
@@ -318,12 +319,16 @@ public sealed partial class ExecutionOrchestratorTests
             fixture.ValidationHandler.PassAll();
         }
 
-        var request = fixture.StartRequest with { AllowPlanContinuation = true };
+        var request = fixture.StartRequest with { AllowPlanContinuation = true, CorrectionBudget = 0 };
         SetProposals(fixture, Proposal(fixture.Staged, completeFirstStep), Replan(), Replan(), Proposal(fixture.CorrectionStaged, true));
         await fixture.Orchestrator.StartAsync(request);
         var progress = await fixture.Orchestrator.ContinueAsync(CreateContinuation(fixture, fixture.Staged));
         var paused = await fixture.Checkpoints.GetCheckpointAsync(request.RunId);
-        var originalCapture = fixture.ValidationHandler.Commands[0].BaselineCapture;
+        Assert.Empty(fixture.ValidationHandler.Commands);
+        var originalCapture = JsonSerializer.Deserialize<BaselineCapture>(
+            (await fixture.Artifacts.ReadAsync(paused!.BaselineArtifact!))!,
+            new JsonSerializerOptions { Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+        Assert.NotNull(originalCapture);
         var restored = RecreateOrchestrator(fixture);
         await restored.ResumeAsync(request.SessionId, request.RunId);
         var boundary = await restored.WaitForPlanCompletionAsync(request.RunId, 0);
@@ -331,7 +336,7 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(ExecutionCheckpointPhase.PlanReplanningPending, progress.Status);
         Assert.Equal(["src/Example.cs"], progress.ChangedFiles);
         Assert.Equal(completeFirstStep ? [fixture.StepId] : Array.Empty<StepId>(), progress.CompletedStepIds);
-        Assert.Equal(validationFails ? AcceptanceGateStatus.Failed : AcceptanceGateStatus.Passed, boundary.Progress.Validation!.Gate.Status);
+        Assert.Null(boundary.Progress.Validation);
         Assert.Contains("Inspect", boundary.Progress.ReplanReason, StringComparison.Ordinal);
         Assert.Single(fixture.CommitHandler.Commands);
         Assert.Null(await fixture.Checkpoints.GetOutcomeAsync(request.RunId));
@@ -349,7 +354,7 @@ public sealed partial class ExecutionOrchestratorTests
         restored = RecreateOrchestrator(fixture);
         await restored.ResumeAsync(request.SessionId, request.RunId);
         var repeatedBoundary = await restored.WaitForPlanCompletionAsync(request.RunId, 1);
-        Assert.Equal(boundary.Progress.Validation.Gate.Status, repeatedBoundary.Progress.Validation!.Gate.Status);
+        Assert.Null(repeatedBoundary.Progress.Validation);
         Assert.Equal(boundary.Progress.CompletedStepIds, repeatedBoundary.Progress.CompletedStepIds);
         replacement = ReplacementRequest(fixture, replacement);
         var pending = await restored.ContinueWithPlanAsync(replacement);
@@ -357,8 +362,15 @@ public sealed partial class ExecutionOrchestratorTests
         Assert.Equal(paused.CorrectionAttempts, pending.CorrectionAttempts);
         Assert.Single(fixture.BaselineHandler.Commands);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => restored.ContinueAsync(CreateContinuation(fixture, fixture.Staged)));
-        await restored.ContinueAsync(CreateContinuation(fixture, fixture.CorrectionStaged));
-        fixture.ValidationHandler.Enqueue(fixture.ValidationHandler.LastResult);
+        var finalProgress = await restored.ContinueAsync(CreateContinuation(fixture, fixture.CorrectionStaged));
+        if (validationFails)
+        {
+            Assert.Equal(ExecutionCheckpointPhase.Failed, finalProgress.Status);
+            Assert.Single(fixture.ValidationHandler.Commands);
+            Assert.Equivalent(originalCapture, fixture.ValidationHandler.Commands[0].BaselineCapture);
+            return;
+        }
+
         var outcome = await restored.CompleteObjectiveAsync(request.SessionId, request.RunId);
 
         Assert.Equal(ExecutionCheckpointPhase.Completed, outcome.Status);

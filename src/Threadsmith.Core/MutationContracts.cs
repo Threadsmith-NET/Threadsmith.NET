@@ -425,6 +425,13 @@ public interface ITransactionalWorkspace : IAsyncDisposable
     /// <summary>Active isolation mode and repository location.</summary>
     WorkspaceIsolation Isolation { get; }
 
+    /// <summary>Rejects changed live file contents before reusing baseline-bound evidence.</summary>
+    /// <param name="additionalPaths">Previously affected paths whose absence must also be verified.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task VerifyBaselineAsync(
+        IReadOnlyList<string> additionalPaths,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Reads content from the immutable baseline, never from private staging.</summary>
     Task<string?> ReadBaselineTextAsync(
         string relativePath,

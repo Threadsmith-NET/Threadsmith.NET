@@ -43,10 +43,11 @@ public sealed partial class SemanticEngine
     internal SemanticEngine(
         IDomainEventStream events,
         ILogger<SemanticEngine> logger,
+        IPromptLoader prompts,
         SemanticPreparationLimits preparationLimits,
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null)
-        : this(events, logger, cancellationBackstop, resourceLimits)
+        : this(events, logger, prompts, cancellationBackstop, resourceLimits)
     {
         preparationLimits.Validate();
         _preparationLimits = preparationLimits;
@@ -279,6 +280,29 @@ public sealed partial class SemanticEngine
         return new(solution, sourceGeneration);
     }
 
+    /// <summary>Runs snapshot-bound mutation work through the existing bounded compiler owner.</summary>
+    internal Task<T> RunMutationOperationAsync<T>(
+        SemanticMutationSnapshot snapshot,
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(operation);
+        SemanticPreparationReceipt receipt;
+        lock (_gate)
+        {
+            EnsureMutationSnapshotCurrent(snapshot);
+            if (!ReferenceEquals(snapshot.Solution, _solution))
+            {
+                throw new InvalidOperationException("The semantic mutation solution was superseded.");
+            }
+
+            receipt = new(snapshot.Solution, _solutionGeneration);
+        }
+
+        return RunPreparedOperationAsync(receipt, operation, cancellationToken);
+    }
+
     private static TaskCompletionSource CompletedPublication()
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -294,7 +318,12 @@ public sealed partial class SemanticEngine
         }
     }
 
-    private async Task<T> RunPreparedOperationAsync<T>(SemanticPreparationReceipt? preparedSolution, Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    private Task<T> RunPreparedOperationAsync<T>(SemanticPreparationReceipt? preparedSolution, Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    {
+        return RunPreparedQueryOperationAsync(preparedSolution, operation, default, cancellationToken);
+    }
+
+    private async Task<T> RunPreparedQueryOperationAsync<T>(SemanticPreparationReceipt? preparedSolution, Func<CancellationToken, Task<T>> operation, CancellationToken queryDeadline, CancellationToken cancellationToken)
     {
         SemanticCompilationCoordinator? preparation;
         lock (_gate)
@@ -306,14 +335,14 @@ public sealed partial class SemanticEngine
         async Task<T> ExecuteAsync(CancellationToken token)
         {
             EnsurePreparedSolutionCurrent(preparedSolution);
-            var value = await RunNonCooperativeAsync(operation, token);
+            var value = await RunNonCooperativeAsync(operation, token, sourceSolution: preparedSolution?.Solution, queryDeadline: queryDeadline);
             EnsurePreparedSolutionCurrent(preparedSolution);
             return value;
         }
 
         return preparation is null
             ? await ExecuteAsync(cancellationToken)
-            : await preparation.RunAsync(ExecuteAsync, cancellationToken);
+            : await preparation.RunQueryAsync(ExecuteAsync, queryDeadline, cancellationToken);
     }
 
     private void EnsurePreparedSolutionCurrent(SemanticPreparationReceipt? preparedSolution)
@@ -361,38 +390,61 @@ public sealed partial class SemanticEngine
                     var analyzerFailed = false;
                     foreach (var reference in project.AnalyzerReferences)
                     {
-                        var ownedValidation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                        var validation = analyzerValidations.GetOrAdd((reference, project.Language), ownedValidation);
-                        if (ReferenceEquals(validation, ownedValidation))
+                        while (true)
                         {
+                            token.ThrowIfCancellationRequested();
+                            var key = (reference, project.Language);
+                            var ownedValidation = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                            var validation = analyzerValidations.GetOrAdd(key, ownedValidation);
+                            if (ReferenceEquals(validation, ownedValidation))
+                            {
+                                try
+                                {
+                                    var valid = await RunNonCooperativeAsync(
+                                        operationToken => Task.FromResult(ValidateAnalyzerReferences(
+                                            project.WithAnalyzerReferences([reference]),
+                                            [],
+                                            operationToken).Count == 0),
+                                        token,
+                                        sourceSolution: solution);
+                                    ownedValidation.TrySetResult(valid);
+                                }
+                                catch (SemanticOperationAbandonedException exception)
+                                {
+                                    // Keep the shared entry until actual completion; another project must not
+                                    // start duplicate analyzer construction while this operation is abandoned.
+                                    _ = CompleteAbandonedValidationAsync(exception.Completion, key, ownedValidation);
+                                    throw;
+                                }
+                                catch (OperationCanceledException)
+                                {
+                                    analyzerValidations.TryRemove(new KeyValuePair<(object Reference, string Language), TaskCompletionSource<bool>>(key, ownedValidation));
+                                    ownedValidation.TrySetCanceled(token);
+                                    throw;
+                                }
+                                catch
+                                {
+                                    ownedValidation.TrySetResult(false);
+                                    throw;
+                                }
+                            }
+
                             try
                             {
-                                var valid = await RunNonCooperativeAsync(
-                                    operationToken => Task.FromResult(ValidateAnalyzerReferences(
-                                        project.WithAnalyzerReferences([reference]),
-                                        [],
-                                        operationToken).Count == 0),
-                                    token);
-                                ownedValidation.TrySetResult(valid);
+#pragma warning disable VSTHRD003 // One engine-generation validation task is shared by all projects using this reference.
+                                analyzerFailed |= !await validation.Task.WaitAsync(token);
+#pragma warning restore VSTHRD003
+                                break;
                             }
-                            catch (OperationCanceledException)
+                            catch (OperationCanceledException) when (!token.IsCancellationRequested)
                             {
-                                ownedValidation.TrySetCanceled(token);
-                                throw;
-                            }
-                            catch
-                            {
-                                ownedValidation.TrySetResult(false);
-                                throw;
+                                // The previous warm owner was interrupted. This demanded project still owns
+                                // its wait and may acquire the replacement entry after cooperative completion.
                             }
                         }
-
-#pragma warning disable VSTHRD003 // One engine-generation validation task is shared by all projects using this reference.
-                        analyzerFailed |= !await validation.Task.WaitAsync(token);
-#pragma warning restore VSTHRD003
                     }
 
-                    var compilation = await RunNonCooperativeAsync<Compilation?>(project.GetCompilationAsync, token);
+                    var compilation = await RunNonCooperativeAsync<Compilation?>(project.GetCompilationAsync, token, sourceSolution: solution);
                     return new SemanticPreparationOutcome(
                         id,
                         compilation is not null && !analyzerFailed,
@@ -414,6 +466,29 @@ public sealed partial class SemanticEngine
                 }
             },
             PublishPreparationAsync);
+
+        async Task CompleteAbandonedValidationAsync(
+            Task completion,
+            (object Reference, string Language) key,
+            TaskCompletionSource<bool> validation)
+        {
+            try
+            {
+#pragma warning disable VSTHRD003 // This continuation owns the shared receipt of actual compiler completion.
+                var valid = await (Task<bool>)completion;
+#pragma warning restore VSTHRD003
+                validation.TrySetResult(valid);
+            }
+            catch (OperationCanceledException)
+            {
+                analyzerValidations.TryRemove(new KeyValuePair<(object Reference, string Language), TaskCompletionSource<bool>>(key, validation));
+                validation.TrySetCanceled();
+            }
+            catch (Exception)
+            {
+                validation.TrySetResult(false);
+            }
+        }
     }
 
     private async Task PublishPreparationAsync(

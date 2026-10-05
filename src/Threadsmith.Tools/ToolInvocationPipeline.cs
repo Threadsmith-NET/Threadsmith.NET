@@ -382,6 +382,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         var executionContext = new ToolExecutionContext(invocationId, request.SessionId, request.RunId, request.Context)
         {
             Phase = request.Phase,
+            InvocationKey = request.InvocationKey,
             MaximumOutputBytes = tool.Definition.MaximumOutputBytes,
         };
         var activityDetail = CreateActivityDetail(tool, input);
@@ -477,7 +478,12 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt);
         }
 
-        if (policyDecision.RequiredApproval != ApprovalLevel.None)
+        var exactMutationAuthorization = ConfiguredTool.Unwrap(tool) is IExactMutationAuthorizationTool;
+        executionContext = executionContext with
+        {
+            RequireExactDiffReview = exactMutationAuthorization && policyDecision.RequiredApproval != ApprovalLevel.None,
+        };
+        if (policyDecision.RequiredApproval != ApprovalLevel.None && !exactMutationAuthorization)
         {
             var approvalId = ApprovalId.New();
             var action = $"Invoke tool '{tool.Definition.Id}'";

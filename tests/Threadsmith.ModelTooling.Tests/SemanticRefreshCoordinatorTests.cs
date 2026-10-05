@@ -2068,7 +2068,8 @@ public static class SemanticRefreshCoordinatorTests
             await using var events = new DomainEventStream();
             await using var engine = new SemanticEngine(
                 events,
-                NullLogger<SemanticEngine>.Instance);
+                NullLogger<SemanticEngine>.Instance,
+                TestPromptLoader.Instance);
             await engine.LoadAsync(new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),

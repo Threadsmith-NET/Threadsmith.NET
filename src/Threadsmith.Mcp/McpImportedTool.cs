@@ -198,7 +198,6 @@ public sealed class McpImportedTool : ITool
             RequiredTrust = MapToolTrust(profile.Trust),
             RequiredApproval = ApprovalLevel.HostPolicy,
             SideEffect = ToolSideEffect.ExecutesCode,
-            ConversationAvailable = true,
             Idempotency = ToolIdempotency.NonIdempotent,
             SupportsCancellation = true,
             Timeout = profile.RequestTimeout,

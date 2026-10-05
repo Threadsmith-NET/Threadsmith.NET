@@ -129,7 +129,7 @@ public sealed partial class Milestone19Tests
         [
             TextMessage(ModelMessageRole.System, "host-policy", "stable"),
             TextMessage(ModelMessageRole.Developer, "repository-instructions", "repository"),
-            TextMessage(ModelMessageRole.System, "phase-policy", "phase"),
+            TextMessage(ModelMessageRole.System, "conversation-policy", "phase"),
             TextMessage(ModelMessageRole.User, "recent-user", "prior question"),
             TextMessage(ModelMessageRole.Assistant, "recent-assistant", "prior answer"),
             TextMessage(ModelMessageRole.HostContext, "repository-memory", "remembered preference"),
@@ -160,7 +160,7 @@ public sealed partial class Milestone19Tests
         Assert.Equal(6, estimate.StablePrefixComponentCount);
         Assert.True(estimate.StablePrefixTokens > estimate.NativeToolTokens);
         Assert.Equal(
-            ["provider-openai-codex-instructions", "System: host-policy", "Developer: repository-instructions", "core:read", "Tool inventory framing", "System: phase-policy", "User: recent-user", "Assistant: recent-assistant", "HostContext: repository-memory", "HostContext: governed-request-state", "User: current-user", "Message / request framing"],
+            ["provider-openai-codex-instructions", "System: host-policy", "Developer: repository-instructions", "core:read", "Tool inventory framing", "System: conversation-policy", "User: recent-user", "Assistant: recent-assistant", "HostContext: repository-memory", "HostContext: governed-request-state", "User: current-user", "Message / request framing"],
             estimate.Components.Select(item => item.Label));
     }
 

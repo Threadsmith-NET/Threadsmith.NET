@@ -16,36 +16,11 @@ using Threadsmith.Interaction.Sessions;
 using Threadsmith.Models;
 using Threadsmith.Tools;
 
-/// <summary>Classifies host approval events for the interactive review queue.</summary>
-internal static class InteractiveDecisionClassifier
-{
-    /// <summary>Returns whether an approval request represents an interactive structured-plan review.</summary>
-    /// <param name="requested">Approval request to classify.</param>
-    /// <returns><see langword="true" /> when the request is a plan-review prompt.</returns>
-    public static bool IsPlanApprovalRequest(ApprovalRequested requested)
-    {
-        ArgumentNullException.ThrowIfNull(requested);
-        return requested.Kind == ApprovalRequestKind.Plan;
-    }
-}
-
-/// <summary>Identifies an interactive host decision requested by a domain event.</summary>
-internal enum InteractiveDecisionKind
-{
-    /// <summary>A structured plan requires review.</summary>
-    Plan,
-
-    /// <summary>A staged mutation requires review.</summary>
-    Mutation,
-}
-
 /// <summary>Represents a pending review transferred from event rendering to the input loop.</summary>
-/// <param name="Kind">Kind of review.</param>
 /// <param name="MutationSetId">Mutation set when the review concerns a mutation.</param>
 /// <param name="ApprovalId">Approval identity when the review concerns a mutation.</param>
 /// <param name="RequiredApproval">Host-classified approval mode for the staged mutation.</param>
 internal sealed record InteractiveDecision(
-    InteractiveDecisionKind Kind,
     MutationSetId? MutationSetId = null,
     ApprovalId? ApprovalId = null,
     MutationApprovalLevel RequiredApproval = MutationApprovalLevel.EntireSet);
@@ -92,14 +67,12 @@ public sealed partial class InteractionCoordinator
     private readonly SessionModelPreferences? _sessionPreferences;
     private readonly IReadOnlyList<string> _displayWarnings;
     private readonly InteractionDisplayOptions _displayOptions;
-    private readonly IReadOnlyList<MutationValidationStage> _validationStages;
     private readonly TimeProvider _timeProvider;
     private readonly SessionUsageProjection? _sessionUsage;
     private readonly bool _showSessionStatus;
     private readonly InteractionSessionSurface _surface;
     private readonly IExtensionManager? _extensionManager;
     private readonly IMutationApprovalPolicy? _mutationApprovalPolicy;
-    private readonly IPlanApprovalPolicy? _planApprovalPolicy;
     private readonly IToolStateManager? _toolStateManager;
     private readonly CodeExploreOutputOptions _codeExploreOutputOptions;
     private readonly int _standingPreferenceWarningThreshold;
@@ -121,7 +94,6 @@ public sealed partial class InteractionCoordinator
     /// <param name="showSessionStatus">Whether status is presented before the ordinary composer.</param>
     /// <param name="toolStateManager">Repository-scoped tool availability state.</param>
     /// <param name="mutationApprovalPolicy">Session mutation approval policy.</param>
-    /// <param name="planApprovalPolicy">Session plan approval policy.</param>
     /// <param name="activeModelSelectionAvailable">Whether active-model commands are composed.</param>
     /// <param name="claudeSkills">Claude-style compatibility catalog, or <see langword="null" />.</param>
     /// <param name="sessionLifecycleAvailable">Whether durable session commands are composed.</param>
@@ -132,7 +104,6 @@ public sealed partial class InteractionCoordinator
     /// <param name="webFetchAuthorization">Transient exact-URL authorization boundary.</param>
     /// <param name="directFetchApprovalPrompt">Serialized inline approval boundary.</param>
     /// <param name="frontendCommands">Fixed presentation-local command contribution.</param>
-    /// <param name="validationStages">Resolved post-apply validation stages.</param>
     /// <param name="codeExploreOutputOptions">Per-session code-explore output state.</param>
     /// <param name="standingPreferenceWarningThreshold">Fallback count above which saved preference advice is shown.</param>
     /// <param name="standingPreferenceWarningThresholdProvider">Live repository-specific preference warning threshold.</param>
@@ -150,7 +121,6 @@ public sealed partial class InteractionCoordinator
         bool showSessionStatus = true,
         IToolStateManager? toolStateManager = null,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
-        IPlanApprovalPolicy? planApprovalPolicy = null,
         bool activeModelSelectionAvailable = false,
         IClaudeSkillCompatibilityCatalog? claudeSkills = null,
         bool sessionLifecycleAvailable = false,
@@ -161,7 +131,6 @@ public sealed partial class InteractionCoordinator
         WebFetchAuthorizationAuthority? webFetchAuthorization = null,
         DirectFetchApprovalPromptRouter? directFetchApprovalPrompt = null,
         IFrontendCommandContribution? frontendCommands = null,
-        IReadOnlyList<MutationValidationStage>? validationStages = null,
         CodeExploreOutputOptions? codeExploreOutputOptions = null,
         int standingPreferenceWarningThreshold = 3,
         Func<string, int>? standingPreferenceWarningThresholdProvider = null,
@@ -185,7 +154,6 @@ public sealed partial class InteractionCoordinator
         _toolStateManager = toolStateManager;
         _codeExploreOutputOptions = codeExploreOutputOptions ?? new CodeExploreOutputOptions();
         _mutationApprovalPolicy = mutationApprovalPolicy;
-        _planApprovalPolicy = planApprovalPolicy;
         _activeModelSelectionAvailable = activeModelSelectionAvailable;
         _claudeSkills = claudeSkills;
         _sessionLifecycleAvailable = sessionLifecycleAvailable;
@@ -196,7 +164,6 @@ public sealed partial class InteractionCoordinator
         _webFetchAuthorization = webFetchAuthorization;
         _directFetchApprovalPrompt = directFetchApprovalPrompt;
         _frontendCommands = frontendCommands;
-        _validationStages = validationStages ?? [];
         _standingPreferenceWarningThreshold = standingPreferenceWarningThreshold;
         _standingPreferenceWarningThresholdProvider = standingPreferenceWarningThresholdProvider;
     }
@@ -749,12 +716,8 @@ public sealed partial class InteractionCoordinator
                         case ContextAssembled assembled:
                             latestContextInspection = assembled.Inspection;
                             break;
-                        case ApprovalRequested requested when InteractiveDecisionClassifier.IsPlanApprovalRequest(requested):
-                            pendingDecisions.Add(new InteractiveDecision(InteractiveDecisionKind.Plan));
-                            break;
-                        case MutationSetProposed proposed:
+                        case MutationSetProposed proposed when proposed.RequiredApproval != MutationApprovalLevel.PolicyAutoApproved:
                             pendingDecisions.Add(new InteractiveDecision(
-                                InteractiveDecisionKind.Mutation,
                                 proposed.MutationSetId,
                                 proposed.ApprovalId,
                                 proposed.RequiredApproval));
@@ -1018,37 +981,6 @@ public sealed partial class InteractionCoordinator
                             lifetime.Token);
                     }
 
-                    continue;
-                }
-
-                if (commandText.StartsWith("/validation", StringComparison.OrdinalIgnoreCase)
-                    && (commandText.Length == 11 || char.IsWhiteSpace(commandText[11])))
-                {
-                    var argument = commandText.Length == 11
-                        ? string.Empty
-                        : commandText[11..].Trim();
-                    if (!string.Equals(argument, "retry", StringComparison.OrdinalIgnoreCase))
-                    {
-                        await _surface.WriteAsync(
-                            "Usage: /validation retry\n",
-                            PresentationTextRole.Error,
-                            lifetime.Token);
-                        continue;
-                    }
-
-                    if (controller.BackgroundValidationRunId is not { } validationRunId)
-                    {
-                        await _surface.WriteAsync(
-                            "No interrupted post-apply validation is awaiting retry.\n",
-                            PresentationTextRole.Status,
-                            lifetime.Token);
-                        continue;
-                    }
-
-                    _ = await StartPostApplyValidationAsync(
-                        controller,
-                        validationRunId,
-                        lifetime.Token);
                     continue;
                 }
 
@@ -1392,13 +1324,6 @@ public sealed partial class InteractionCoordinator
                     && (commandText.Length == 7 || char.IsWhiteSpace(commandText[7])))
                 {
                     await HandlePolicyCommandAsync(commandText, lifetime.Token);
-                    continue;
-                }
-
-                if (commandText.StartsWith("/plan-policy", StringComparison.OrdinalIgnoreCase)
-                    && (commandText.Length == 12 || char.IsWhiteSpace(commandText[12])))
-                {
-                    await HandlePlanPolicyCommandAsync(controller, commandText, lifetime.Token);
                     continue;
                 }
 
@@ -2093,80 +2018,6 @@ public sealed partial class InteractionCoordinator
     {
         ArgumentNullException.ThrowIfNull(collector);
         return collector.Flush(new CancellationToken(canceled: true));
-    }
-
-    /// <summary>Formats the user-visible post-apply validation start when no semantic activity will follow.</summary>
-    /// <param name="stages">Configured validation stages.</param>
-    /// <returns>A shared lifecycle block, or <see langword="null" /> when semantic checks provide activity.</returns>
-    internal static string? FormatPostApplyValidationStart(IReadOnlyList<MutationValidationStage> stages)
-    {
-        ArgumentNullException.ThrowIfNull(stages);
-        return stages.Count > 0 && !stages.Contains(MutationValidationStage.Semantic)
-            ? InteractionPresentationFormatter.FormatMutationValidationStarted(stages)
-            : null;
-    }
-
-    /// <summary>Formats the user-visible post-apply validation start into mixed semantic roles.</summary>
-    /// <param name="stages">Configured validation stages.</param>
-    /// <returns>A shared lifecycle block as semantic segments, or <see langword="null" /> when semantic checks provide activity.</returns>
-    internal static IReadOnlyList<PresentationTextSegment>? FormatPostApplyValidationStartSegments(
-        IReadOnlyList<MutationValidationStage> stages)
-    {
-        ArgumentNullException.ThrowIfNull(stages);
-        var startMessage = FormatPostApplyValidationStart(stages);
-        if (startMessage is null)
-        {
-            return null;
-        }
-
-        var segments = new List<PresentationTextSegment>();
-        InteractionEventSegments.AppendLifecycleBlock(segments, startMessage, PresentationTextRole.Status);
-        return segments;
-    }
-
-    /// <summary>Formats the user-visible post-apply validation outcome.</summary>
-    /// <param name="phase">Execution phase returned by post-apply validation.</param>
-    /// <param name="suffix">Optional formatted duration suffix including leading space.</param>
-    /// <param name="batchPurpose">Typed purpose of a pending next batch.</param>
-    /// <returns>The status line and semantic role to display.</returns>
-    internal static (string Message, PresentationTextRole Role) FormatPostApplyValidationResult(
-        ExecutionCheckpointPhase phase,
-        string suffix,
-        MutationBatchPurpose batchPurpose = MutationBatchPurpose.Correction)
-    {
-        ArgumentNullException.ThrowIfNull(suffix);
-        return phase switch
-        {
-            ExecutionCheckpointPhase.Completed => ($"Validation completed{suffix}.\n", PresentationTextRole.Status),
-            ExecutionCheckpointPhase.ContinuationPending => (
-                $"Partial changes applied{suffix}; execution is paused. Use /validation retry to resume remaining work.\n",
-                PresentationTextRole.Warning),
-            ExecutionCheckpointPhase.PlanContinuationPending => (
-                $"Plan validation completed{suffix}; assessing the remaining objective.\n",
-                PresentationTextRole.Status),
-            ExecutionCheckpointPhase.PlanReplanningPending => (
-                $"Implementation requested replanning{suffix}; applied changes are retained while the remaining work is reassessed.\n",
-                PresentationTextRole.Warning),
-            ExecutionCheckpointPhase.MutationApprovalPending => (
-                batchPurpose == MutationBatchPurpose.Correction
-                    ? $"Validation requires a correction review{suffix}.\n"
-                    : $"Validation passed; the next mutation batch is ready{suffix}.\n",
-                batchPurpose == MutationBatchPurpose.Correction
-                    ? PresentationTextRole.Warning
-                    : PresentationTextRole.Status),
-            ExecutionCheckpointPhase.Failed => (
-                $"Validation failed{suffix}; mutation was not accepted.\n",
-                PresentationTextRole.Error),
-            ExecutionCheckpointPhase.Cancelled => (
-                $"Validation cancelled{suffix}; mutation was not accepted.\n",
-                PresentationTextRole.Warning),
-            ExecutionCheckpointPhase.RolledBack => (
-                $"Validation rolled back the applied mutation{suffix}.\n",
-                PresentationTextRole.Warning),
-            _ => (
-                $"Validation stopped at {phase}{suffix}; mutation acceptance is unresolved.\n",
-                PresentationTextRole.Warning),
-        };
     }
 
     /// <summary>Resolves the current branch for status display, or null when Git is unavailable.</summary>
@@ -4324,7 +4175,7 @@ public sealed partial class InteractionCoordinator
         if (!string.IsNullOrWhiteSpace(argument))
         {
             if (Enum.TryParse(argument, ignoreCase: true, out MutationApprovalPolicy parsed)
-                && Enum.IsDefined(parsed))
+                && Enum.IsDefined(parsed) && parsed != MutationApprovalPolicy.TrustPlan)
             {
                 selectedPolicy = parsed;
             }
@@ -4339,7 +4190,7 @@ public sealed partial class InteractionCoordinator
         }
         else
         {
-            var policies = Enum.GetValues<MutationApprovalPolicy>();
+            var policies = Enum.GetValues<MutationApprovalPolicy>().Where(policy => policy != MutationApprovalPolicy.TrustPlan).ToArray();
             string[] choices =
             [
                 .. policies.Select(policy => FormatPolicyChoice(
@@ -4365,8 +4216,7 @@ public sealed partial class InteractionCoordinator
 
         var policy = selectedPolicy.Value;
         await _mutationApprovalPolicy.SetPolicyAsync(policy, cancellationToken);
-        var warning = policy is MutationApprovalPolicy.TrustPlan
-            or MutationApprovalPolicy.TrustSession
+        var warning = policy is MutationApprovalPolicy.TrustSession
             or MutationApprovalPolicy.AlwaysTrustRepo
             ? " Warning: eligible diffs will apply without a separate mutation prompt; hard guardrails and validation remain active."
             : string.Empty;
@@ -4385,116 +4235,8 @@ public sealed partial class InteractionCoordinator
         {
             MutationApprovalPolicy.ReviewAll => "review every staged diff",
             MutationApprovalPolicy.ReviewRisky => "auto-apply ordinary edits; review risky changes",
-            MutationApprovalPolicy.TrustPlan => "auto-apply changes within the approved plan",
             MutationApprovalPolicy.TrustSession => "auto-apply in-repository changes this session",
             MutationApprovalPolicy.AlwaysTrustRepo => "persistently auto-apply in-repository changes",
-            _ => throw new ArgumentOutOfRangeException(nameof(policy)),
-        };
-        return $"{policy} — {description}{(isCurrent ? " [current]" : string.Empty)}";
-    }
-
-    private async Task HandlePlanPolicyCommandAsync(
-        InteractionController controller,
-        string commandText,
-        CancellationToken cancellationToken)
-    {
-        if (_planApprovalPolicy is null)
-        {
-            await _surface.WriteAsync(
-                "Plan policy management is not available in this session.\n",
-                PresentationTextRole.Status,
-                cancellationToken);
-            return;
-        }
-
-        var argument = commandText.Length == 12 ? string.Empty : commandText[12..].Trim();
-        if (string.Equals(argument, "current", StringComparison.OrdinalIgnoreCase))
-        {
-            var currentPolicy = await controller.GetPlanApprovalPolicyAsync(cancellationToken);
-            await _surface.WriteAsync(
-                $"Current plan policy: {currentPolicy}.{Environment.NewLine}",
-                PresentationTextRole.Status,
-                cancellationToken);
-            return;
-        }
-
-        if (string.Equals(argument, "reset", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(argument, "revoke", StringComparison.OrdinalIgnoreCase))
-        {
-            await controller.SetPlanApprovalPolicyAsync(PlanApprovalPolicy.ReviewAll, cancellationToken);
-            await _surface.WriteAsync(
-                "Plan policy reset to ReviewAll and saved only in repository configuration.\n",
-                PresentationTextRole.Status,
-                cancellationToken);
-            return;
-        }
-
-        PlanApprovalPolicy? selectedPolicy = null;
-        if (!string.IsNullOrWhiteSpace(argument))
-        {
-            if (Enum.TryParse(argument, ignoreCase: true, out PlanApprovalPolicy parsed)
-                && Enum.IsDefined(parsed))
-            {
-                selectedPolicy = parsed;
-            }
-            else
-            {
-                await _surface.WriteAsync(
-                    $"Unknown plan policy '{argument}'. Enter /plan-policy to list policies.{Environment.NewLine}",
-                    PresentationTextRole.Error,
-                    cancellationToken);
-                return;
-            }
-        }
-        else
-        {
-            var currentPolicy = await controller.GetPlanApprovalPolicyAsync(cancellationToken);
-            var policies = Enum.GetValues<PlanApprovalPolicy>();
-            string[] choices =
-            [
-                .. policies.Select(policy => FormatPlanPolicyChoice(
-                    policy,
-                    policy == currentPolicy)),
-                "Cancel",
-            ];
-            var selected = await _surface.SelectAsync(
-                $"Plan policy (current: {currentPolicy}; Up/Down, Enter):",
-                choices,
-                cancellationToken);
-            if (selected < 0 || selected >= policies.Length)
-            {
-                await _surface.WriteAsync("Plan policy unchanged.\n", PresentationTextRole.Status, cancellationToken);
-                return;
-            }
-
-            selectedPolicy = policies[selected];
-        }
-
-        var policy = selectedPolicy.Value;
-        await controller.SetPlanApprovalPolicyAsync(policy, cancellationToken);
-        var warning = policy is PlanApprovalPolicy.TrustSession
-            or PlanApprovalPolicy.AlwaysTrustRepo
-            or PlanApprovalPolicy.AutoApproveAllValid
-            ? " Warning: valid plans may skip manual plan review; exact-diff mutation approval, pre-mutation screening, and validation remain active."
-            : string.Empty;
-        var persistence = policy == PlanApprovalPolicy.TrustSession
-            ? " This choice is session-only; the saved repository policy is unchanged."
-            : " This choice is saved only in repository configuration and persists across restarts.";
-        await _surface.WriteAsync(
-            $"Plan policy changed to {policy}.{warning}{persistence}{Environment.NewLine}",
-            PresentationTextRole.Status,
-            cancellationToken);
-    }
-
-    private static string FormatPlanPolicyChoice(PlanApprovalPolicy policy, bool isCurrent)
-    {
-        var description = policy switch
-        {
-            PlanApprovalPolicy.ReviewAll => "review every valid plan",
-            PlanApprovalPolicy.ReviewRisky => "auto-approve low-risk valid plans",
-            PlanApprovalPolicy.TrustSession => "auto-approve low/moderate valid plans this session",
-            PlanApprovalPolicy.AlwaysTrustRepo => "persistently auto-approve low/moderate valid plans for this repository",
-            PlanApprovalPolicy.AutoApproveAllValid => "auto-approve every valid non-blocked plan",
             _ => throw new ArgumentOutOfRangeException(nameof(policy)),
         };
         return $"{policy} — {description}{(isCurrent ? " [current]" : string.Empty)}";
@@ -4795,90 +4537,25 @@ public sealed partial class InteractionCoordinator
         InteractiveDecision decision,
         CancellationToken cancellationToken)
     {
-        if (decision.Kind == InteractiveDecisionKind.Plan)
-        {
-            var input = await InteractionInputReader.ReadSecondaryAsync(
-                _surface,
-                "Plan review: 1 approve, 2 reject, 3 revise, 4 cancel run\n",
-                PresentationTextRole.Status,
-                ComposerPurpose.Secondary,
-                cancellationToken);
-            switch (input.IsSubmitted ? input.Text.Trim() : "4")
-            {
-                case "1":
-                    return await controller.ApproveActivePlanAndProposeMutationSetAsync(
-                        cancellationToken) is not null
-                            ? InteractiveDecisionResult.AwaitingMutationReview
-                            : InteractiveDecisionResult.ContinueWaiting;
-                case "2":
-                    var reason = await InteractionInputReader.ReadSecondaryAsync(
-                        _surface,
-                        "Rejection reason:\n",
-                        PresentationTextRole.Status,
-                        ComposerPurpose.Secondary,
-                        cancellationToken);
-                    _ = reason.IsSubmitted && !string.IsNullOrWhiteSpace(reason.Text)
-                        ? await controller.RejectActivePlanAsync(reason.Text, cancellationToken)
-                        : await controller.RejectActivePlanAsync(
-                            "Rejected from the interactive plan review.",
-                            cancellationToken);
-                    return InteractiveDecisionResult.ContinueWaiting;
-                case "3":
-                    var revision = await InteractionInputReader.ReadSecondaryAsync(
-                        _surface,
-                        "Revision instructions:\n",
-                        PresentationTextRole.Status,
-                        ComposerPurpose.Secondary,
-                        cancellationToken);
-                    if (revision.IsSubmitted && !string.IsNullOrWhiteSpace(revision.Text))
-                    {
-                        _ = await controller.ReviseActivePlanAsync(
-                            revision.Text,
-                            cancellationToken);
-                        return InteractiveDecisionResult.ContinueWaiting;
-                    }
-
-                    _ = await controller.CancelActiveRunAsync(CancellationToken.None);
-                    return InteractiveDecisionResult.ContinueWaiting;
-                default:
-                    _ = await controller.CancelActiveRunAsync(CancellationToken.None);
-                    return InteractiveDecisionResult.ContinueWaiting;
-            }
-        }
-
         var mutationSetId = decision.MutationSetId
             ?? throw new InvalidOperationException("The mutation review has no mutation set.");
         var approvalId = decision.ApprovalId
             ?? throw new InvalidOperationException("The mutation review has no approval id.");
-        var staged = await controller.LoadMutationReviewAsync(
-            mutationSetId,
-            cancellationToken);
+        StagedMutationSet staged;
+        try
+        {
+            staged = await controller.LoadMutationReviewAsync(mutationSetId, cancellationToken);
+        }
+        catch (SourceEditReviewUnavailableException)
+        {
+            return InteractiveDecisionResult.ContinueWaiting;
+        }
+
         if (staged.ApprovalId != approvalId
             || staged.MutationSet.RequiredApproval != decision.RequiredApproval)
         {
             throw new InvalidDataException(
                 "The staged mutation review does not match its review-ready event.");
-        }
-
-        if (decision.RequiredApproval == MutationApprovalLevel.PolicyAutoApproved)
-        {
-            _ = await controller.CommitMutationSetAsync(
-                mutationSetId,
-                new MutationApproval
-                {
-                    Level = MutationApprovalLevel.PolicyAutoApproved,
-                    ApprovalId = approvalId,
-                },
-                cancellationToken);
-            var validationRunId = controller.BackgroundValidationRunId
-                ?? throw new InvalidOperationException("The applied mutation has no validation run.");
-            var continuation = await StartPostApplyValidationAsync(
-                controller,
-                validationRunId,
-                cancellationToken);
-            return continuation?.Phase == ExecutionCheckpointPhase.MutationApprovalPending
-                ? InteractiveDecisionResult.AwaitingMutationReview
-                : InteractiveDecisionResult.ContinueWaiting;
         }
 
         var mutationInput = await InteractionInputReader.ReadSecondaryAsync(
@@ -4897,78 +4574,11 @@ public sealed partial class InteractionCoordinator
                     ApprovalId = approvalId,
                 },
                 cancellationToken);
-            var validationRunId = controller.BackgroundValidationRunId
-                ?? throw new InvalidOperationException("The applied mutation has no validation run.");
-            var continuation = await StartPostApplyValidationAsync(
-                controller,
-                validationRunId,
-                cancellationToken);
-            return continuation?.Phase == ExecutionCheckpointPhase.MutationApprovalPending
-                ? InteractiveDecisionResult.AwaitingMutationReview
-                : InteractiveDecisionResult.ContinueWaiting;
+            return InteractiveDecisionResult.ContinueWaiting;
         }
 
-        _ = await controller.RollbackMutationSetAsync(mutationSetId, cancellationToken);
-        _ = await controller.CancelActiveRunAsync(CancellationToken.None);
+        _ = await controller.RejectSourceEditAsync(mutationSetId, cancellationToken);
         return InteractiveDecisionResult.ContinueWaiting;
-    }
-
-    private async Task<ExecutionContinuation?> StartPostApplyValidationAsync(
-        InteractionController controller,
-        RunId runId,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(controller);
-        var started = _timeProvider.GetTimestamp();
-        var startSegments = FormatPostApplyValidationStartSegments(_validationStages);
-        if (startSegments is not null)
-        {
-            await _surface.WriteSegmentsAsync(startSegments, cancellationToken);
-        }
-
-        return await ObservePostApplyValidationAsync(controller, runId, started, cancellationToken);
-    }
-
-    private async Task<ExecutionContinuation?> ObservePostApplyValidationAsync(
-        InteractionController controller,
-        RunId runId,
-        long startedTimestamp,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            var continuation = await controller.ResumeAppliedMutationValidationAsync(
-                runId,
-                cancellationToken);
-            var suffix = _displayOptions.ShowOperationDurations
-                && OperationDurationFormatter.FormatElapsed(_timeProvider, startedTimestamp) is { } elapsed
-                    ? $" ({elapsed})"
-                    : string.Empty;
-            (var message, var role) = FormatPostApplyValidationResult(
-                continuation.Phase,
-                suffix,
-                continuation.BatchPurpose);
-            await _surface.WriteAsync(message, role, CancellationToken.None);
-            return continuation;
-        }
-        catch (OperationCanceledException)
-        {
-            await _surface.WriteAsync(
-                "Validation cancelled. Use /validation retry to resume the applied run.\n",
-                PresentationTextRole.Status,
-                CancellationToken.None);
-            return null;
-        }
-        catch (Exception exception)
-        {
-            await _surface.WriteAsync(
-                FormatStatusError(exception)
-                + " Use /validation retry to resume the applied run."
-                + Environment.NewLine,
-                PresentationTextRole.Error,
-                CancellationToken.None);
-            return null;
-        }
     }
 
     private async Task HandleReasoningCommandAsync(

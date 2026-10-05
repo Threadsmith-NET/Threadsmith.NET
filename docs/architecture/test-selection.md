@@ -15,7 +15,7 @@ dotnet test <project> --no-restore --no-build --nologo --list-tests --verbosity:
 Microsoft.Testing.Platform enumeration invokes the already-built project directly so the runner's case list remains visible:
 
 ```text
-dotnet run --project <project> --no-restore --no-build -- --list-tests
+dotnet run --project <project> --no-restore --no-build -- --list-tests json
 ```
 
 Names become stable host-owned `TestCase` records.
@@ -55,3 +55,5 @@ A selected process failure or reported test failure blocks the acceptance gate. 
 ## Deferred refinements
 
 Post-M6 work may add coverage/symbol-to-method selection, flaky-test classification, broader policy-required suites, analyzer stages, and explicit bounded parallel scheduling.
+
+Microsoft.Testing.Platform discovery retains each runner-issued test UID from the JSON inventory. Targeted execution uses `--filter-uid` for that exact case, including parameterized rows; display names are not method filters.

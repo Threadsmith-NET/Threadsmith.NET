@@ -166,7 +166,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         MutationApprovalPolicy policy,
         CancellationToken cancellationToken = default)
     {
-        if (!Enum.IsDefined(policy))
+        if (!Enum.IsDefined(policy) || policy == MutationApprovalPolicy.TrustPlan)
         {
             throw new ArgumentOutOfRangeException(nameof(policy));
         }
@@ -188,14 +188,13 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     }
 
     /// <inheritdoc />
-    public bool RequiresApproval(MutationRiskAssessment risk, bool isWithinPlan)
+    public bool RequiresApproval(MutationRiskAssessment risk)
     {
         ArgumentNullException.ThrowIfNull(risk);
         return _currentPolicy switch
         {
             MutationApprovalPolicy.ReviewAll => true,
             MutationApprovalPolicy.ReviewRisky => risk.IsRisky,
-            MutationApprovalPolicy.TrustPlan => !isWithinPlan,
             MutationApprovalPolicy.TrustSession or MutationApprovalPolicy.AlwaysTrustRepo => false,
             _ => throw new InvalidOperationException($"Unsupported mutation approval policy '{_currentPolicy}'."),
         };
@@ -205,14 +204,19 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     public void Validate(MutationSet mutations, string repositoryRoot)
     {
         ArgumentNullException.ThrowIfNull(mutations);
+        var paths = mutations.Mutations.SelectMany(mutation => mutation.DestinationRelativePath is null
+            ? [mutation.RelativePath] : new[] { mutation.RelativePath, mutation.DestinationRelativePath });
+        ValidatePaths(paths, repositoryRoot);
+    }
+
+    /// <inheritdoc />
+    public void ValidatePaths(IEnumerable<string> relativePaths, string repositoryRoot)
+    {
+        ArgumentNullException.ThrowIfNull(relativePaths);
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         var fullRoot = Path.GetFullPath(repositoryRoot);
         var rootPrefix = Path.TrimEndingDirectorySeparator(fullRoot) + Path.DirectorySeparatorChar;
-        foreach (var relativePath in mutations.Mutations
-            .SelectMany(mutation => mutation.DestinationRelativePath is null
-                ? [mutation.RelativePath]
-                : new[] { mutation.RelativePath, mutation.DestinationRelativePath })
-            .Select(path => path.Replace('\\', '/')))
+        foreach (var relativePath in relativePaths.Select(path => path.Replace('\\', '/')))
         {
             if (Path.IsPathRooted(relativePath))
             {
@@ -239,8 +243,9 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                     "Mutations must stay inside the authorized repository and may not modify Git metadata.");
             }
 
-            var fileName = Path.GetFileName(relativePath);
-            var isSecretPath = relativePath.StartsWith(".threadsmith/secrets/", StringComparison.OrdinalIgnoreCase)
+            var normalizedPath = Path.GetRelativePath(fullRoot, fullPath).Replace('\\', '/');
+            var fileName = Path.GetFileName(normalizedPath);
+            var isSecretPath = normalizedPath.StartsWith(".threadsmith/secrets/", StringComparison.OrdinalIgnoreCase)
                 || fileName.Equals(".env", StringComparison.OrdinalIgnoreCase)
                 || fileName.EndsWith(".snk", StringComparison.OrdinalIgnoreCase)
                 || fileName.EndsWith(".pfx", StringComparison.OrdinalIgnoreCase)
@@ -260,6 +265,11 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
         {
             throw new InvalidOperationException(
                 $"Unknown mutation approval policy '{configured}'.");
+        }
+
+        if (_currentPolicy == MutationApprovalPolicy.TrustPlan)
+        {
+            _currentPolicy = MutationApprovalPolicy.ReviewAll;
         }
 
         var thresholdText = configuration?["mutation:largeDiffThreshold"];
@@ -311,7 +321,6 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                 {
                     MutationApprovalPolicy.ReviewAll => "reviewAll",
                     MutationApprovalPolicy.ReviewRisky => "reviewRisky",
-                    MutationApprovalPolicy.TrustPlan => "trustPlan",
                     MutationApprovalPolicy.AlwaysTrustRepo => "alwaysTrustRepo",
                     _ => throw new ArgumentOutOfRangeException(nameof(policy)),
                 };

@@ -112,6 +112,12 @@ internal static partial class SkillManifestValidator
         var assetPaths = assets.Select(item => item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
         foreach (var step in workflow.Steps)
         {
+            if (step.Kind is SkillWorkflowStepKind.ProposePlan or SkillWorkflowStepKind.AwaitPlanApproval or SkillWorkflowStepKind.ExecuteApprovedPlan
+                || step.HostAction is SkillHostActionKind.ProposePlan or SkillHostActionKind.ExecuteApprovedPlan)
+            {
+                throw new InvalidDataException("Plan approval and approved-plan execution are retired. Return advisory findings to the ordinary conversation.");
+            }
+
             if (string.IsNullOrWhiteSpace(step.StepId)
                 || !steps.TryAdd(step.StepId, step)
                 || step.MaximumIterations < 1
@@ -217,9 +223,7 @@ internal static partial class SkillManifestValidator
 
     private static bool ActionMatchesStepKind(SkillWorkflowStepKind step)
     {
-        return step is SkillWorkflowStepKind.ProposePlan
-            or SkillWorkflowStepKind.ExecuteApprovedPlan
-            or SkillWorkflowStepKind.ProposeDelegation
+        return step is SkillWorkflowStepKind.ProposeDelegation
             or SkillWorkflowStepKind.RequestReviews
             or SkillWorkflowStepKind.Validate
             or SkillWorkflowStepKind.AskUserInput;
@@ -229,8 +233,6 @@ internal static partial class SkillManifestValidator
     {
         return (step, action) switch
         {
-            (SkillWorkflowStepKind.ProposePlan, SkillHostActionKind.ProposePlan) => true,
-            (SkillWorkflowStepKind.ExecuteApprovedPlan, SkillHostActionKind.ExecuteApprovedPlan) => true,
             (SkillWorkflowStepKind.ProposeDelegation, SkillHostActionKind.ProposeDelegation) => true,
             (SkillWorkflowStepKind.Validate, SkillHostActionKind.Validate) => true,
             (SkillWorkflowStepKind.AskUserInput, SkillHostActionKind.AskUserInput) => true,

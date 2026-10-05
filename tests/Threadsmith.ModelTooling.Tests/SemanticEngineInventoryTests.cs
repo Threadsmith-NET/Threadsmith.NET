@@ -46,7 +46,7 @@ public static class SemanticEngineInventoryTests
             await File.WriteAllTextAsync(additionalPath, "{}", cancellationToken);
             await File.WriteAllTextAsync(configPath, "root = true", cancellationToken);
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
             var empty = engine.GetRefreshInventory();
             var request = new SemanticLoadRequest(
                 SessionId.New(), WorkspaceId.New(), root, projectPath, RepositoryTrustLevel.TrustedBuild);

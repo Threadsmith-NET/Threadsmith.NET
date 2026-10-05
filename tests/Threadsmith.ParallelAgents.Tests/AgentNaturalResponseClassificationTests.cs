@@ -146,7 +146,7 @@ public sealed class AgentNaturalResponseClassificationTests
 
     /// <summary>Approved mutation preparation does not replace its real proposal handoff with a textual claim.</summary>
     [Fact]
-    public void ApprovedPreparation_StillRequiresImplementationAndCommonFindings()
+    public void LegacyPreparation_RequiresImplementationAndCommonFindings()
     {
         var (plan, outcome) = CreateCase(AgentRole.Implementer, schema: "approved-implementer-preparation/1");
         plan = plan with
@@ -167,7 +167,7 @@ public sealed class AgentNaturalResponseClassificationTests
 
     /// <summary>Isolated workers retain their completed change-set requirement even if they also return prose.</summary>
     [Fact]
-    public void IsolatedWorker_StillRequiresCompleteChangeSet()
+    public void LegacyIsolatedWorker_RequiresCompleteChangeSet()
     {
         var (plan, outcome) = CreateCase(AgentRole.Implementer);
         plan = plan with

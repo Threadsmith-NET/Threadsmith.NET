@@ -22,7 +22,6 @@ public static partial class PromptAssetArchitectureTests
 
     private static readonly HashSet<string> GovernedModelTextBuilderMethods =
     [
-        "MutationProposalApplication.FormatPreMutationCorrection",
     ];
 
     private static readonly IReadOnlyDictionary<string, HashSet<string>> GovernedStructuredTextProperties =
@@ -121,8 +120,8 @@ public static partial class PromptAssetArchitectureTests
             [
                 "<system_policy>",
                 "</system_policy>",
-                "<phase_instructions>",
-                "</phase_instructions>",
+                "<conversation_instructions>",
+                "</conversation_instructions>",
                 "<task>",
                 "</task>",
                 "<current_turn untrusted=\"true\">",
@@ -279,7 +278,7 @@ public static partial class PromptAssetArchitectureTests
 
         var categoryPrefixes = new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["System and phase prompts"] = "System-",
+            ["System prompts"] = "System-",
             ["Context prompts"] = "Context-",
             ["Correction prompts"] = "Correction-",
             ["Tool prompts"] = "Tool-",

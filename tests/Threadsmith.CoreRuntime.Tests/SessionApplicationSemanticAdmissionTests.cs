@@ -103,9 +103,9 @@ public static class SessionApplicationSemanticAdmissionTests
         Assert.DoesNotContain(observedEvents, item => item is AcceptanceCriteriaRecorded);
     }
 
-    /// <summary>Semantic publication waits for a pre-existing run to reach its terminal boundary.</summary>
+    /// <summary>Semantic publication can advance the source generation while the owning run remains active.</summary>
     [Fact]
-    public static async Task PublishAsync_ActiveRun_WaitsForTerminalState()
+    public static async Task PublishAsync_ActiveRun_PublishesBeforeTerminalState()
     {
         await using var events = new DomainEventStream();
         var provider = new BlockingModelProvider();
@@ -132,17 +132,18 @@ public static class SessionApplicationSemanticAdmissionTests
                 return Task.FromResult(true);
             });
 
-        Assert.False(publication.IsCompleted);
-        Assert.False(published);
+        Assert.True(await publication);
+        Assert.True(published);
+        Assert.True(application.HasActiveWork);
         provider.Release();
         Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
         Assert.True(await publication);
         Assert.True(published);
     }
 
-    /// <summary>A publication through one alias drains active runs admitted through another alias.</summary>
+    /// <summary>A publication through one alias can advance while another alias has an active run.</summary>
     [Fact]
-    public static async Task PublishAsync_SharedWorkspaceAlias_WaitsForActiveRun()
+    public static async Task PublishAsync_SharedWorkspaceAlias_PublishesDuringActiveRun()
     {
         await using var events = new DomainEventStream();
         var provider = new BlockingModelProvider();
@@ -175,149 +176,13 @@ public static class SessionApplicationSemanticAdmissionTests
                 return Task.FromResult(true);
             });
 
-        Assert.False(publication.IsCompleted);
-        Assert.False(published);
+        Assert.True(await publication);
+        Assert.True(published);
+        Assert.True(application.HasActiveWork);
         provider.Release();
         Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
         Assert.True(await publication);
         Assert.True(published);
-    }
-
-    /// <summary>A restored run resumes under the same workspace gate used by semantic publication.</summary>
-    [Fact]
-    public static async Task ResumeRun_WorkspacePublicationWaitsForAdmissionAndAttachment()
-    {
-        await using var events = new DomainEventStream();
-        var refresh = new WorkspaceSemanticRefreshCoordinator();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-        var workspaceId = WorkspaceId.New();
-        var (application, orchestrator) = CreateResumeApplication(
-            events, refresh, sessionId, runId, workspaceId);
-
-        var resume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
-        await orchestrator.ResumeEntered.WaitAsync(TimeSpan.FromSeconds(5));
-        var published = false;
-        var publication = application.PublishAsync(
-            sessionId,
-            workspaceId,
-            _ =>
-            {
-                published = true;
-                return Task.FromResult(true);
-            });
-
-        Assert.False(publication.IsCompleted);
-        Assert.False(published);
-        orchestrator.ReleaseResume();
-        _ = await resume.WaitAsync(TimeSpan.FromSeconds(5));
-        orchestrator.ReleaseOutcome();
-        Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
-        Assert.True(await publication.WaitAsync(TimeSpan.FromSeconds(5)));
-        Assert.True(published);
-    }
-
-    /// <summary>An admitted execution can finish validation while refresh drains that same run.</summary>
-    [Fact]
-    public static async Task ResumeRun_ActiveExecutionAdvancesWhileRefreshWaitsForItsCompletion()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var events = new DomainEventStream();
-        var refresh = new WorkspaceSemanticRefreshCoordinator();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-        var workspaceId = WorkspaceId.New();
-        var (application, orchestrator) = CreateResumeApplication(
-            events, refresh, sessionId, runId, workspaceId);
-        orchestrator.ReleaseResume();
-        _ = await application.HandleAsync(new ResumeRunCommand(sessionId, runId), cancellationToken);
-
-        var publication = application.PublishAsync(
-            sessionId, workspaceId, _ => Task.FromResult(true), cancellationToken);
-        Assert.False(publication.IsCompleted);
-
-        _ = await application.HandleAsync(new ResumeRunCommand(sessionId, runId), cancellationToken);
-        Assert.Equal(2, orchestrator.ResumeCallCount);
-        Assert.Equal(1, refresh.EnsureCount);
-        Assert.Equal(1, orchestrator.WaitForOutcomeCallCount);
-        Assert.False(publication.IsCompleted);
-
-        orchestrator.ReleaseOutcome();
-        Assert.True(await application.HandleAsync(new WaitForRunCommand(runId), cancellationToken));
-        Assert.True(await publication);
-    }
-
-    /// <summary>Continuing an admitted execution retains its run-owned cancellation boundary.</summary>
-    [Fact]
-    public static async Task ResumeRun_ActiveContinuationSharesRunCancellation()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var events = new DomainEventStream();
-        var refresh = new WorkspaceSemanticRefreshCoordinator();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-        var (application, orchestrator) = CreateResumeApplication(
-            events, refresh, sessionId, runId, WorkspaceId.New());
-        var first = application.HandleAsync(new ResumeRunCommand(sessionId, runId), cancellationToken);
-        await orchestrator.ResumeEntered.WaitAsync(cancellationToken);
-        var continuation = application.HandleAsync(new ResumeRunCommand(sessionId, runId), cancellationToken);
-        Assert.Equal(2, orchestrator.ResumeCallCount);
-        Assert.False(continuation.IsCompleted);
-
-        Assert.True(await application.HandleAsync(new CancelRunCommand(sessionId, runId), cancellationToken));
-#pragma warning disable VSTHRD003 // Both deliberately concurrent resume calls observe the cancellation boundary above.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => continuation);
-#pragma warning restore VSTHRD003
-        Assert.False(application.HasActiveWork);
-        Assert.Equal(1, refresh.EnsureCount);
-    }
-
-    /// <summary>A restored run is visible to lifecycle guards and cancellation while resume advances it.</summary>
-    [Fact]
-    public static async Task ResumeRun_BlockedOrchestratorIsActiveAndCancellable()
-    {
-        await using var events = new DomainEventStream();
-        var refresh = new WorkspaceSemanticRefreshCoordinator();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-        var workspaceId = WorkspaceId.New();
-        var (application, orchestrator) = CreateResumeApplication(
-            events, refresh, sessionId, runId, workspaceId);
-
-        var resume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
-        await orchestrator.ResumeEntered.WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.True(application.HasActiveWork);
-        Assert.True(await application.HandleAsync(new CancelRunCommand(sessionId, runId)));
-#pragma warning disable VSTHRD003 // The resume task was deliberately started above to exercise cancellation during admission.
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resume);
-#pragma warning restore VSTHRD003
-        Assert.False(application.HasActiveWork);
-    }
-
-    /// <summary>Concurrent resume requests attach only one completion observer.</summary>
-    [Fact]
-    public static async Task ResumeRun_ConcurrentRequestsAttachOneObserver()
-    {
-        await using var events = new DomainEventStream();
-        var refresh = new WorkspaceSemanticRefreshCoordinator();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-        var workspaceId = WorkspaceId.New();
-        var (application, orchestrator) = CreateResumeApplication(
-            events, refresh, sessionId, runId, workspaceId);
-
-        var firstResume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
-        await orchestrator.ResumeEntered.WaitAsync(TimeSpan.FromSeconds(5));
-        var secondResume = application.HandleAsync(new ResumeRunCommand(sessionId, runId));
-        orchestrator.ReleaseResume();
-
-        _ = await firstResume.WaitAsync(TimeSpan.FromSeconds(5));
-        _ = await secondResume.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(1, orchestrator.WaitForOutcomeCallCount);
-        orchestrator.ReleaseOutcome();
-        Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
     }
 
     /// <summary>Workspace aliases share publication exclusion while unrelated workspaces proceed.</summary>
@@ -501,169 +366,6 @@ public static class SessionApplicationSemanticAdmissionTests
         Assert.Equal(2, refresh.EnsureCount);
         Assert.Equal(1, Volatile.Read(ref budgetFactoryCalls));
         Assert.True(await application.HandleAsync(new WaitForRunCommand(runId)));
-    }
-
-    private static (SessionApplication Application, BlockingResumeOrchestrator Orchestrator) CreateResumeApplication(
-        DomainEventStream events,
-        WorkspaceSemanticRefreshCoordinator refresh,
-        SessionId sessionId,
-        RunId runId,
-        WorkspaceId workspaceId)
-    {
-        var orchestrator = new BlockingResumeOrchestrator(sessionId, runId, workspaceId);
-        var application = new SessionApplication(
-            events,
-            new FakeModelProvider(new ScriptedSession()),
-            new ExecutionBudget(new BudgetDimensions(NonBudgetTestTokenLimit, 10, TimeSpan.FromMinutes(1))),
-            new SecretOutputSanitizer(),
-            NullLogger<SessionApplication>.Instance,
-            executionOrchestrator: orchestrator,
-            executionRequestFactory: (_, _, _, _, _) => Task.FromResult<ExecutionStartRequest?>(null),
-            correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-            prompts: TestPromptLoader.Instance,
-            semanticRefreshCoordinator: refresh);
-        application.RegisterRestoredSession(sessionId);
-        refresh.SetWorkspace(sessionId, workspaceId);
-        return (application, orchestrator);
-    }
-
-    private sealed class BlockingResumeOrchestrator : IExecutionOrchestrator
-    {
-        private readonly TaskCompletionSource _releaseOutcome =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        private readonly TaskCompletionSource _releaseResume =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        private readonly TaskCompletionSource _resumeEntered =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        private readonly ExecutionContinuation _continuation;
-        private readonly ExecutionOutcomeProjection _outcome;
-        private readonly ExecutionStartRequest _request;
-        private int _waitForOutcomeCallCount;
-        private int _resumeCallCount;
-
-        public BlockingResumeOrchestrator(SessionId sessionId, RunId runId, WorkspaceId workspaceId)
-        {
-            var baseline = new WorkspaceBaseline(
-                workspaceId,
-                Path.GetTempPath(),
-                DateTimeOffset.UtcNow,
-                [],
-                ApprovedRoots: ["src"],
-                TrustLevel: RepositoryTrustLevel.TrustedMutation);
-            var step = new ImplementationPlanStep
-            {
-                StepId = StepId.New(),
-                Title = "Restore work",
-                Description = "Restore the interrupted execution.",
-                FileIntents = [new PlanFileIntent { Kind = PlanFileChangeKind.Modify, Path = "src/Example.cs" }],
-                ExpectedOutcome = "Execution resumes.",
-                Validation = ["Validate the restored work."],
-            };
-            var plan = new ImplementationPlan
-            {
-                Summary = "Restore work",
-                Steps = [step],
-            };
-            _request = new ExecutionStartRequest
-            {
-                SessionId = sessionId,
-                RunId = runId,
-                Baseline = baseline,
-                Task = new TaskSpecification("Restore work", []),
-                ApprovedPlan = plan,
-                ValidationRequest = new BuildValidationRequest
-                {
-                    SessionId = sessionId,
-                    RunId = runId,
-                    Baseline = baseline,
-                    Confidence = SemanticConfidenceLevel.FullSemantic,
-                    Stages = [MutationValidationStage.Semantic],
-                },
-            };
-            _continuation = new ExecutionContinuation
-            {
-                SessionId = sessionId,
-                RunId = runId,
-                WorkspaceId = workspaceId,
-                PlanRevision = plan.Revision,
-                PlanHash = "plan",
-                Phase = ExecutionCheckpointPhase.CompletionPending,
-                DiagnosticBaselineIdentity = "baseline",
-                MutationBaselineIdentity = "baseline",
-                NextAction = "observe the terminal outcome",
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
-            _outcome = new ExecutionOutcomeProjection
-            {
-                Key = new ProjectionKey("executionOutcome", runId.Value.ToString("D")),
-                SessionId = sessionId,
-                RunId = runId,
-                Status = ExecutionCheckpointPhase.Completed,
-                CompletedStepIds = [step.StepId],
-                ApprovalProvenance = "restored execution",
-            };
-        }
-
-        public Task ResumeEntered => _resumeEntered.Task;
-
-        public int WaitForOutcomeCallCount => Volatile.Read(ref _waitForOutcomeCallCount);
-
-        public int ResumeCallCount => Volatile.Read(ref _resumeCallCount);
-
-        public void ReleaseOutcome()
-        {
-            _releaseOutcome.TrySetResult();
-        }
-
-        public void ReleaseResume()
-        {
-            _releaseResume.TrySetResult();
-        }
-
-        public Task<ExecutionStartRequest> GetResumeRequestAsync(
-            SessionId sessionId,
-            RunId runId,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(_request);
-        }
-
-        public async Task<ExecutionContinuation> ResumeAsync(
-            SessionId sessionId,
-            RunId runId,
-            CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref _resumeCallCount);
-            _resumeEntered.TrySetResult();
-            await _releaseResume.Task.WaitAsync(cancellationToken);
-            return _continuation;
-        }
-
-        public Task<ExecutionContinuation> StartAsync(
-            ExecutionStartRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public Task<ExecutionOutcomeProjection> ContinueAsync(
-            ContinueExecutionRequest request,
-            CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException();
-        }
-
-        public async Task<ExecutionOutcomeProjection> WaitForOutcomeAsync(
-            RunId runId,
-            CancellationToken cancellationToken = default)
-        {
-            Interlocked.Increment(ref _waitForOutcomeCallCount);
-            await _releaseOutcome.Task.WaitAsync(cancellationToken);
-            return _outcome;
-        }
     }
 
     private sealed class BlockingSemanticRefreshCoordinator : ISemanticRefreshCoordinator

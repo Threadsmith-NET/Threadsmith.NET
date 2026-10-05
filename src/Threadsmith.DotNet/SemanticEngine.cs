@@ -30,6 +30,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
     private readonly TimeSpan _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
+    private readonly IPromptLoader _prompts;
     private readonly IDomainEventStream _events;
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<string> _invalidations = new();
@@ -50,9 +51,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
     public SemanticEngine(
         IDomainEventStream events,
         ILogger<SemanticEngine> logger,
+        IPromptLoader prompts,
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null)
     {
+        ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(logger);
         if (cancellationBackstop <= TimeSpan.Zero)
@@ -62,6 +65,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
         _resourceLimits.Validate();
+        _prompts = prompts;
         _events = events;
         _logger = logger;
         _cancellationBackstop = cancellationBackstop ?? TimeSpan.FromSeconds(2);
@@ -288,6 +292,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         var diagnostics = new ConcurrentQueue<string>();
         var evaluationStarted = Stopwatch.GetTimestamp();
         (MSBuildWorkspace Workspace, Solution Solution) load;
+        MSBuildWorkspace? provisionalWorkspace = null;
         try
         {
             load = await RunNonCooperativeAsync(
@@ -304,6 +309,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     }
 
                     var workspace = MSBuildWorkspace.Create(RoslynWorkspaceHost.Services);
+                    provisionalWorkspace = workspace;
                     workspace.LoadMetadataForReferencedProjects = true;
                     workspace.RegisterWorkspaceFailedHandler(eventArgs =>
                     {
@@ -314,35 +320,34 @@ public sealed partial class SemanticEngine : ISemanticEngine
                             measurement.IncrementWorkspaceFailure();
                         }
                     });
-                    try
+                    Solution solution;
+                    if (isDirectProject)
                     {
-                        Solution solution;
-                        if (isDirectProject)
-                        {
-                            var project = await workspace.OpenProjectAsync(
-                                solutionPath,
-                                measurement.Progress,
-                                operationToken);
-                            solution = project.Solution;
-                        }
-                        else
-                        {
-                            solution = await workspace.OpenSolutionAsync(
-                                solutionPath,
-                                measurement.Progress,
-                                operationToken);
-                        }
+                        var project = await workspace.OpenProjectAsync(
+                            solutionPath,
+                            measurement.Progress,
+                            operationToken);
+                        solution = project.Solution;
+                    }
+                    else
+                    {
+                        solution = await workspace.OpenSolutionAsync(
+                            solutionPath,
+                            measurement.Progress,
+                            operationToken);
+                    }
 
-                        return (Workspace: workspace, Solution: solution);
-                    }
-                    catch
-                    {
-                        workspace.Dispose();
-                        throw;
-                    }
+                    return (Workspace: workspace, Solution: solution);
                 },
                 cancellationToken,
-                static abandoned => abandoned.Workspace.Dispose());
+                abandoned => DisposeCompilerWorkspace(abandoned.Workspace),
+                failedOperationCleanup: () =>
+                {
+                    if (provisionalWorkspace is { } failed)
+                    {
+                        DisposeCompilerWorkspace(failed);
+                    }
+                });
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -388,7 +393,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             measurement.EvaluationDuration = Stopwatch.GetElapsedTime(evaluationStarted);
         }
 
-        using var workspaceLease = new WorkspaceLease(load.Workspace);
+        using var workspaceLease = new WorkspaceLease(load.Workspace, RetireCompilerWorkspace);
         var confinementStarted = Stopwatch.GetTimestamp();
         var confinedSolution = load.Solution;
         foreach (var project in confinedSolution.Projects.ToArray())
@@ -495,6 +500,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
                     _workspace = load.Workspace;
                     _solution = load.Solution;
+                    ResetEditAnalysisInputs();
                     _refreshInventory = refreshInventory;
                     _compiledProjects = [];
                     _projects = loadedProjects;
@@ -554,7 +560,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         workspaceLease.TransferOwnership();
         if (!ReferenceEquals(previousState.Workspace, load.Workspace))
         {
-            previousState.Workspace?.Dispose();
+            RetireCompilerWorkspace(previousState.Workspace);
         }
 
         var aggregate = Confidence;
@@ -622,10 +628,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
         ArgumentException.ThrowIfNullOrWhiteSpace(query);
         var preparedSolution = await EnsurePreparedAsync(null, "symbols", requireSuccess: true, cancellationToken);
         (var solution, var compiledProjects, var confidence, var _) = CaptureSemanticState(preparedSolution);
-        var symbols = await RunNonCooperativeAsync(
+        return await RunPreparedOperationAsync<IReadOnlyList<SymbolResult>>(
+            preparedSolution,
             async operationToken =>
             {
-                var found = new List<ISymbol>();
+                var symbols = new List<ISymbol>();
                 foreach (var project in solution.Projects.Where(project => compiledProjects.Contains(project.Id)))
                 {
                     var declarations = await SymbolFinder.FindDeclarationsAsync(
@@ -634,29 +641,28 @@ public sealed partial class SemanticEngine : ISemanticEngine
                         ignoreCase: true,
                         SymbolFilter.TypeAndMember,
                         operationToken);
-                    found.AddRange(declarations);
+                    symbols.AddRange(declarations);
                 }
 
-                return found;
+                var results = new List<SymbolResult>();
+                var locationContext = CreateLocationContext(solution);
+                foreach (var symbol in symbols.Distinct(SymbolEqualityComparer.Default))
+                {
+                    var identity = CreateIdentity(symbol);
+                    foreach (var location in symbol.Locations.Where(location => location.IsInSource))
+                    {
+                        var source = CreateLocation(solution, location, locationContext);
+                        if (source is not null)
+                        {
+                            results.Add(new SymbolResult(identity, source, confidence));
+                        }
+                    }
+                }
+
+                EnsurePreparedSolutionCurrent(preparedSolution);
+                return results;
             },
             cancellationToken);
-        var results = new List<SymbolResult>();
-        var locationContext = CreateLocationContext(solution);
-        foreach (var symbol in symbols.Distinct(SymbolEqualityComparer.Default))
-        {
-            var identity = CreateIdentity(symbol);
-            foreach (var location in symbol.Locations.Where(location => location.IsInSource))
-            {
-                var source = CreateLocation(solution, location, locationContext);
-                if (source is not null)
-                {
-                    results.Add(new SymbolResult(identity, source, confidence));
-                }
-            }
-        }
-
-        EnsurePreparedSolutionCurrent(preparedSolution);
-        return results;
     }
 
     /// <inheritdoc />
@@ -807,24 +813,28 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         var preparedSolution = await EnsurePreparedAsync(null, "references", requireSuccess: true, cancellationToken);
         (var solution, var _, var currentConfidence, var _) = CaptureSemanticState(preparedSolution);
-        var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
-        var referencedSymbols = await RunNonCooperativeAsync(
-            token => SymbolFinder.FindReferencesAsync(symbol, solution, token),
-            cancellationToken);
-        var results = new List<ReferenceResult>();
-        var identity = CreateIdentity(symbol);
-        var locationContext = CreateLocationContext(solution);
-        foreach (var reference in referencedSymbols.SelectMany(item => item.Locations))
-        {
-            var source = CreateLocation(solution, reference.Location, locationContext);
-            if (source is not null)
+        return await RunPreparedOperationAsync<IReadOnlyList<ReferenceResult>>(
+            preparedSolution,
+            async operationToken =>
             {
-                results.Add(new ReferenceResult(identity, source, currentConfidence));
-            }
-        }
+                var symbol = await ResolveSymbolAsync(solution, symbolId, operationToken);
+                var referencedSymbols = await SymbolFinder.FindReferencesAsync(symbol, solution, operationToken);
+                var results = new List<ReferenceResult>();
+                var identity = CreateIdentity(symbol);
+                var locationContext = CreateLocationContext(solution);
+                foreach (var reference in referencedSymbols.SelectMany(item => item.Locations))
+                {
+                    var source = CreateLocation(solution, reference.Location, locationContext);
+                    if (source is not null)
+                    {
+                        results.Add(new ReferenceResult(identity, source, currentConfidence));
+                    }
+                }
 
-        EnsurePreparedSolutionCurrent(preparedSolution);
-        return results;
+                EnsurePreparedSolutionCurrent(preparedSolution);
+                return results;
+            },
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -835,27 +845,31 @@ public sealed partial class SemanticEngine : ISemanticEngine
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
         var preparedSolution = await EnsurePreparedAsync(null, "implementations", requireSuccess: true, cancellationToken);
         (var solution, var _, var confidence, var _) = CaptureSemanticState(preparedSolution);
-        var symbol = await ResolveSymbolAsync(solution, symbolId, cancellationToken);
-        var implementations = await RunNonCooperativeAsync(
-            token => SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: token),
-            cancellationToken);
-        var results = new List<ImplementationResult>();
-        var locationContext = CreateLocationContext(solution);
-        foreach (var implementation in implementations)
-        {
-            var identity = CreateIdentity(implementation);
-            foreach (var location in implementation.Locations.Where(location => location.IsInSource))
+        return await RunPreparedOperationAsync<IReadOnlyList<ImplementationResult>>(
+            preparedSolution,
+            async operationToken =>
             {
-                var source = CreateLocation(solution, location, locationContext);
-                if (source is not null)
+                var symbol = await ResolveSymbolAsync(solution, symbolId, operationToken);
+                var implementations = await SymbolFinder.FindImplementationsAsync(symbol, solution, cancellationToken: operationToken);
+                var results = new List<ImplementationResult>();
+                var locationContext = CreateLocationContext(solution);
+                foreach (var implementation in implementations)
                 {
-                    results.Add(new ImplementationResult(identity, source, confidence));
+                    var identity = CreateIdentity(implementation);
+                    foreach (var location in implementation.Locations.Where(location => location.IsInSource))
+                    {
+                        var source = CreateLocation(solution, location, locationContext);
+                        if (source is not null)
+                        {
+                            results.Add(new ImplementationResult(identity, source, confidence));
+                        }
+                    }
                 }
-            }
-        }
 
-        EnsurePreparedSolutionCurrent(preparedSolution);
-        return results;
+                EnsurePreparedSolutionCurrent(preparedSolution);
+                return results;
+            },
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -917,6 +931,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 previous = _confidence;
                 _confidence = SemanticConfidenceLevel.ProjectGraphOnly;
                 _compiledProjects = [];
+                ResetEditAnalysisInputs();
                 _generation++;
                 _solutionGeneration = _generation;
             }
@@ -1035,15 +1050,15 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 ?? throw new InvalidOperationException("No semantic solution has been loaded.");
         }
 
-        var documentsByPath = CreateDocumentsByPath(solution);
         var replacement = solution;
         foreach (var document in documents)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var fullPath = Path.GetFullPath(document.Path);
+            var documentIds = solution.GetDocumentIdsWithFilePath(fullPath);
             if (!IsPathWithinRoot(fullPath, request.RepositoryPath)
                 || !IsCSharpSourcePath(fullPath)
-                || !documentsByPath.TryGetValue(fullPath, out var documentIds))
+                || documentIds.Length == 0)
             {
                 throw new InvalidOperationException(
                     "Incremental semantic refresh requires an existing loaded C# document.");
@@ -1064,6 +1079,14 @@ public sealed partial class SemanticEngine : ISemanticEngine
             if (ownership != _preparationOwnership)
             {
                 throw new InvalidOperationException("The semantic preparation owner changed during refresh validation.");
+            }
+
+            if (_editCandidate is { Promotable: true } candidate && ReferenceEquals(candidate.Base, solution)
+                && candidate.Endpoints.Count == documents.Count
+                && documents.All(document => candidate.Endpoints.TryGetValue(Path.GetFullPath(document.Path), out var identity)
+                    && identity.Equals(document.ContentIdentity, StringComparison.OrdinalIgnoreCase)))
+            {
+                replacement = candidate.Solution;
             }
 
             previousPreparation?.Abort();
@@ -1107,6 +1130,21 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 _preparation = preparation;
                 _generation++;
                 _solutionGeneration = _generation;
+                if (_editCandidate is { } candidate)
+                {
+                    if (ReferenceEquals(replacement, candidate.Solution))
+                    {
+                        candidate.Result = candidate.Result with { CommittedGeneration = _solutionGeneration, Revision = candidate.Result.Revision + 1 };
+                        Interlocked.Increment(ref _editCandidatePromotions);
+                        SemanticLoadMetrics.EditCandidatePromotions.Add(1);
+                        candidate.Promotion.TrySetResult();
+                    }
+                    else
+                    {
+                        candidate.Result = candidate.Result with { Obsolete = true, Pending = false, Revision = candidate.Result.Revision + 1 };
+                        candidate.Cancel();
+                    }
+                }
             }
         }
         catch
@@ -1184,31 +1222,37 @@ public sealed partial class SemanticEngine : ISemanticEngine
             return [];
         }
 
-        var documents = new List<SemanticDocumentRefresh>();
-        foreach (var document in solution.Projects
-            .SelectMany(project => project.Documents
-                .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request))
-                .Cast<TextDocument>()
-                .Concat(project.AdditionalDocuments
-                    .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request)))
-                .Concat(project.AnalyzerConfigDocuments
-                    .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request))))
-            .GroupBy(
-                document => Path.GetFullPath(document.FilePath ?? string.Empty),
-                StringComparerForCurrentPlatform())
-            .Select(group => group.First()))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var text = await document.GetTextAsync(cancellationToken);
-            var content = text.ToString();
-            var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
-            documents.Add(new SemanticDocumentRefresh(
-                Path.GetFullPath(document.FilePath ?? string.Empty),
-                content,
-                identity));
-        }
+        return await RunSnapshotOperationAsync<IReadOnlyList<SemanticDocumentRefresh>>(
+            solution,
+            async token =>
+            {
+                var documents = new List<SemanticDocumentRefresh>();
+                foreach (var document in solution.Projects
+                    .SelectMany(project => project.Documents
+                        .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request))
+                        .Cast<TextDocument>()
+                        .Concat(project.AdditionalDocuments
+                            .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request)))
+                        .Concat(project.AnalyzerConfigDocuments
+                            .Where(document => IsSemanticRefreshInputPathAllowed(document.FilePath, request))))
+                    .GroupBy(
+                        document => Path.GetFullPath(document.FilePath ?? string.Empty),
+                        StringComparerForCurrentPlatform())
+                    .Select(group => group.First()))
+                {
+                    token.ThrowIfCancellationRequested();
+                    var text = await document.GetTextAsync(token);
+                    var content = text.ToString();
+                    var identity = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
+                    documents.Add(new SemanticDocumentRefresh(
+                        Path.GetFullPath(document.FilePath ?? string.Empty),
+                        content,
+                        identity));
+                }
 
-        return documents;
+                return documents;
+            },
+            cancellationToken);
     }
 
     /// <summary>Gets fast compiler diagnostics from the loaded Roslyn solution.</summary>
@@ -1247,425 +1291,79 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 .Select(Path.GetFullPath),
             pathComparer);
         var refreshPaths = changedFiles.Concat(GetDiagnosticRefreshPaths(solution, compiledProjects, requestedPaths));
-        solution = await RefreshChangedDocumentsAsync(solution, refreshPaths, repositoryPath, cancellationToken);
-        var diagnostics = new List<Threadsmith.Core.Diagnostic>();
-        SemanticLocationContext? context = null;
-        foreach (var project in solution.Projects)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!compiledProjects.Contains(project.Id))
+        return await RunPreparedOperationAsync<IReadOnlyList<Threadsmith.Core.Diagnostic>>(
+            preparedSolution,
+            async token =>
             {
-                continue;
-            }
-
-            var projectPath = project.FilePath is null ? null : Path.GetFullPath(project.FilePath);
-            if (requestedPaths.Count > 0
-                && (projectPath is null || !requestedPaths.Contains(projectPath)))
-            {
-                continue;
-            }
-
-            var compilation = await RunPreparedOperationAsync<Compilation?>(
-                preparedSolution,
-                project.GetCompilationAsync,
-                cancellationToken);
-            if (compilation is null)
-            {
-                continue;
-            }
-
-            context ??= CreateLocationContext(solution);
-            var targetFramework = project.FilePath is { } filePath
-                && context.TargetFrameworks.TryGetValue(filePath, out var framework)
-                    ? framework
-                    : string.Empty;
-            foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken))
-            {
-                var location = diagnostic.Location == Location.None
-                    ? null
-                    : CreateLocation(solution, diagnostic.Location, context);
-                var relativeFile = location?.FilePath is null
-                    ? null
-                    : Path.GetRelativePath(repositoryPath, location.FilePath).Replace('\\', '/');
-                var range = location?.Range;
-                var message = diagnostic.GetMessage();
-                diagnostics.Add(new Threadsmith.Core.Diagnostic
-                {
-                    Id = string.Join(
-                        ':',
-                        diagnostic.Id,
-                        project.Name,
-                        relativeFile ?? string.Empty,
-                        range?.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-                        range?.StartColumn.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
-                        message),
-                    Code = diagnostic.Id,
-                    Severity = diagnostic.Severity switch
-                    {
-                        Microsoft.CodeAnalysis.DiagnosticSeverity.Error => Threadsmith.Core.DiagnosticSeverity.Error,
-                        Microsoft.CodeAnalysis.DiagnosticSeverity.Warning => Threadsmith.Core.DiagnosticSeverity.Warning,
-                        _ => Threadsmith.Core.DiagnosticSeverity.Info,
-                    },
-                    Project = project.Name,
-                    TargetFramework = targetFramework,
-                    File = relativeFile,
-                    Range = range,
-                    Message = message,
-                    Confidence = confidence,
-                });
-            }
-        }
-
-        EnsurePreparedSolutionCurrent(preparedSolution);
-        return diagnostics;
-    }
-
-    /// <summary>Runs read-only Roslyn diagnostics over proposed in-memory C# mutation content.</summary>
-    public async Task<PreMutationAnalysisResult> AnalyzePreMutationAsync(
-        PreMutationAnalysisRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(request.Baseline);
-        ArgumentNullException.ThrowIfNull(request.MutationSet);
-        var repositoryPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(request.Baseline.RepositoryPath));
-        PreMutationOverlayFile[] sourceFiles = [.. request.OverlayFiles
-            .Where(file => IsCSharpSourcePath(file.RelativePath))];
-        if (sourceFiles.Length == 0)
-        {
-            return new PreMutationAnalysisResult
-            {
-                Decision = PreMutationGateDecision.PassedCheapGates,
-                Omissions = ["No changed C# source files required pre-mutation Roslyn analysis."],
-                Confidence = _confidence,
-                Score = new MutationCandidateScore
-                {
-                    SyntaxClean = true,
-                    SemanticClean = true,
-                    AnalyzerClean = true,
-                },
-            };
-        }
-
-        var diagnostics = new List<PreMutationDiagnostic>();
-        var omissions = new List<string>
-        {
-            "Pre-approval analyzer execution is limited to host-owned allowlisted or isolated analyzers; ordinary repository analyzer/source-generator assemblies were not loaded.",
-        };
-        (var solution, var compiledProjects, var confidence, var loadedRepository) =
-            TryCaptureSemanticState();
-        var semanticRepository = string.IsNullOrWhiteSpace(loadedRepository)
-            ? repositoryPath
-            : loadedRepository;
-        var sourceByFullPath = CreateOverlayMap(
-            sourceFiles,
-            repositoryPath);
-        SemanticPreparationReceipt? preparationReceipt = null;
-        if (request.IncludeCompilation && solution is not null && confidence >= SemanticConfidenceLevel.PartialCompilation)
-        {
-            var owners = solution.Projects.Where(project => project.Documents.Any(document => document.FilePath is not null
-                && sourceByFullPath.ContainsKey(Path.GetFullPath(document.FilePath)))).Select(project => project.Id).ToHashSet();
-            owners.UnionWith(sourceByFullPath.Keys.SelectMany(path => FindContainingProjects(solution, path).Select(project => project.Id)));
-            var dependencyGraph = solution.GetProjectDependencyGraph();
-            foreach (var id in owners.ToArray())
-            {
-                owners.UnionWith(dependencyGraph.GetProjectsThatThisProjectTransitivelyDependsOn(id));
-            }
-
-            preparationReceipt = await EnsureProjectsPreparedAsync(solution, owners, "pre-mutation", requireSuccess: true, cancellationToken);
-            (solution, compiledProjects, confidence, loadedRepository) = TryCaptureSemanticState(preparationReceipt);
-        }
-
-        var documentsByPath = solution is null
-            ? new Dictionary<string, DocumentId[]>(StringComparerForCurrentPlatform())
-            : CreateDocumentsByPath(solution);
-        var parseOptionsByPath = solution is null
-            ? new Dictionary<string, CSharpParseOptions?>(StringComparerForCurrentPlatform())
-            : CreateParseOptionsByPath(solution);
-
-        var syntaxCheckId = SemanticCheckId.New();
-        var syntaxStarted = Stopwatch.GetTimestamp();
-        await PublishSemanticCheckStartedAsync(
-            request,
-            syntaxCheckId,
-            "pre-mutation overlay syntax");
-        try
-        {
-            foreach ((var fullPath, var overlay) in sourceByFullPath)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (overlay.Text is null)
-                {
-                    continue;
-                }
-
-                var parseOptions = GetParseOptions(fullPath, parseOptionsByPath);
-                var tree = CSharpSyntaxTree.ParseText(
-                    SourceText.From(overlay.Text, Encoding.UTF8),
-                    parseOptions,
-                    fullPath,
-                    cancellationToken);
-                foreach (var diagnostic in tree.GetDiagnostics(cancellationToken))
-                {
-                    diagnostics.Add(CreatePreMutationDiagnostic(
-                        PreMutationDiagnosticSource.Syntax,
-                        diagnostic,
-                        repositoryPath,
-                        overlay,
-                        projectName: null,
-                        targetFramework: null,
-                        tree,
-                        overlay.Text));
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            await PublishSemanticCheckCompletedAsync(
-                request,
-                syntaxCheckId,
-                "pre-mutation overlay syntax",
-                SemanticCheckOutcome.Cancelled,
-                syntaxStarted,
-                "cancelled before syntax diagnostics completed");
-            throw;
-        }
-        catch
-        {
-            await PublishSemanticCheckCompletedAsync(
-                request,
-                syntaxCheckId,
-                "pre-mutation overlay syntax",
-                SemanticCheckOutcome.Degraded,
-                syntaxStarted,
-                "syntax diagnostics failed before completion");
-            throw;
-        }
-
-        var syntaxDiagnostics = diagnostics.Count(diagnostic => diagnostic.Source == PreMutationDiagnosticSource.Syntax);
-        var syntaxBlocking = diagnostics.Count(diagnostic => diagnostic.Source == PreMutationDiagnosticSource.Syntax
-            && diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error);
-        await PublishSemanticCheckCompletedAsync(
-            request,
-            syntaxCheckId,
-            "pre-mutation overlay syntax",
-            syntaxBlocking > 0 ? SemanticCheckOutcome.Failed : SemanticCheckOutcome.Completed,
-            syntaxStarted,
-            FormatPreMutationCheckDetail(sourceFiles.Length, syntaxDiagnostics, syntaxBlocking, omissionCount: 0));
-
-        if (!request.IncludeCompilation)
-        {
-            // Proposal screening remains local to the supplied text. In particular, do not
-            // demand compiler preparation or consult a snapshot awaiting run-terminal refresh.
-            return new PreMutationAnalysisResult
-            {
-                Decision = syntaxBlocking > 0
-                    ? PreMutationGateDecision.RepairableDiagnostics
-                    : PreMutationGateDecision.PassedCheapGates,
-                Diagnostics = diagnostics.ToArray(),
-                Omissions = ["Compilation and analyzer diagnostics are deferred to final validation."],
-                Confidence = confidence,
-                Score = new MutationCandidateScore
-                {
-                    SyntaxClean = syntaxBlocking == 0,
-                    BlockingDiagnosticCount = syntaxBlocking,
-                },
-            };
-        }
-
-        var syntaxBlocks = syntaxBlocking > 0;
-        var compilationCheckId = SemanticCheckId.New();
-        var compilationStarted = Stopwatch.GetTimestamp();
-        await PublishSemanticCheckStartedAsync(
-            request,
-            compilationCheckId,
-            "pre-mutation compilation");
-        var omissionCountBeforeCompilation = omissions.Count;
-        var diagnosticCountBeforeCompilation = diagnostics.Count;
-        try
-        {
-            if (!syntaxBlocks && solution is not null && confidence >= SemanticConfidenceLevel.PartialCompilation)
-            {
-                var overlaySolution = ApplyOverlayToSolution(
-                    solution,
-                    sourceByFullPath,
-                    documentsByPath,
-                    semanticRepository);
+                var diagnosticSolution = await RefreshChangedDocumentsAsync(solution, refreshPaths, repositoryPath, token);
+                var diagnostics = new List<Threadsmith.Core.Diagnostic>();
                 SemanticLocationContext? context = null;
-                SemanticLocationContext? baselineContext = null;
-                var affectedProjects = new HashSet<ProjectId>();
-                foreach (var fullPath in sourceByFullPath.Keys)
+                foreach (var project in diagnosticSolution.Projects)
                 {
-                    if (documentsByPath.TryGetValue(fullPath, out var documentIds))
+                    token.ThrowIfCancellationRequested();
+                    if (!compiledProjects.Contains(project.Id))
                     {
-                        foreach (var documentId in documentIds)
-                        {
-                            affectedProjects.Add(documentId.ProjectId);
-                        }
-
                         continue;
                     }
 
-                    foreach (var project in FindContainingProjects(overlaySolution, fullPath))
+                    var projectPath = project.FilePath is null ? null : Path.GetFullPath(project.FilePath);
+                    if (requestedPaths.Count > 0
+                        && (projectPath is null || !requestedPaths.Contains(projectPath)))
                     {
-                        affectedProjects.Add(project.Id);
+                        continue;
                     }
-                }
 
-                foreach (var project in overlaySolution.Projects
-                    .Where(project => affectedProjects.Contains(project.Id) && compiledProjects.Contains(project.Id))
-                    .OrderBy(project => project.Name, StringComparer.Ordinal))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var compilation = await RunPreparedOperationAsync<Compilation?>(
-                        preparationReceipt,
-                        project.GetCompilationAsync,
-                        cancellationToken);
+                    var compilation = await project.GetCompilationAsync(token);
                     if (compilation is null)
                     {
-                        omissions.Add(ModelVisibleStructuredFact.Exact(
-                            $"Compilation diagnostics were unavailable for project '{project.Name}'."));
                         continue;
                     }
 
-                    context ??= CreateLocationContext(overlaySolution);
-                    baselineContext ??= CreateLocationContext(solution);
-                    var targetFramework = project.FilePath is { } projectPath
-                        && context.TargetFrameworks.TryGetValue(projectPath, out var framework)
+                    context ??= CreateLocationContext(diagnosticSolution);
+                    var targetFramework = project.FilePath is { } filePath
+                        && context.TargetFrameworks.TryGetValue(filePath, out var framework)
                             ? framework
                             : string.Empty;
-                    var baselineDiagnostics = await GetBaselineCompilationDiagnosticFingerprintsAsync(
-                        solution,
-                        preparationReceipt,
-                        project.Id,
-                        repositoryPath,
-                        baselineContext,
-                        cancellationToken);
-                    foreach (var diagnostic in compilation.GetDiagnostics(cancellationToken)
-                        .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error))
+                    foreach (var diagnostic in compilation.GetDiagnostics(token))
                     {
-                        var diagnosticFingerprint = CreateCompilationDiagnosticFingerprint(
-                            overlaySolution,
-                            diagnostic,
-                            repositoryPath,
-                            context);
-                        if (baselineDiagnostics.TryGetValue(diagnosticFingerprint, out var baselineCount)
-                            && baselineCount > 0)
-                        {
-                            baselineDiagnostics[diagnosticFingerprint] = baselineCount - 1;
-                            continue;
-                        }
-
                         var location = diagnostic.Location == Location.None
                             ? null
-                            : CreateLocation(overlaySolution, diagnostic.Location, context);
-                        if (location?.FilePath is not { } filePath)
+                            : CreateLocation(diagnosticSolution, diagnostic.Location, context);
+                        var relativeFile = location?.FilePath is null
+                            ? null
+                            : Path.GetRelativePath(repositoryPath, location.FilePath).Replace('\\', '/');
+                        var range = location?.Range;
+                        var message = diagnostic.GetMessage();
+                        diagnostics.Add(new Threadsmith.Core.Diagnostic
                         {
-                            continue;
-                        }
-
-                        var diagnosticFullPath = Path.GetFullPath(filePath);
-                        var overlay = sourceByFullPath.TryGetValue(diagnosticFullPath, out var changedOverlay)
-                            ? changedOverlay
-                            : new PreMutationOverlayFile
+                            Id = string.Join(
+                                ':',
+                                diagnostic.Id,
+                                project.Name,
+                                relativeFile ?? string.Empty,
+                                range?.StartLine.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+                                range?.StartColumn.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+                                message),
+                            Code = diagnostic.Id,
+                            Severity = diagnostic.Severity switch
                             {
-                                RelativePath = ToRepositoryRelativePath(repositoryPath, diagnosticFullPath),
-                            };
-                        diagnostics.Add(CreatePreMutationDiagnostic(
-                            PreMutationDiagnosticSource.Compilation,
-                            diagnostic,
-                            repositoryPath,
-                            overlay,
-                            project.Name,
-                            targetFramework,
-                            diagnostic.Location.SourceTree,
-                            overlay.Text));
+                                Microsoft.CodeAnalysis.DiagnosticSeverity.Error => Threadsmith.Core.DiagnosticSeverity.Error,
+                                Microsoft.CodeAnalysis.DiagnosticSeverity.Warning => Threadsmith.Core.DiagnosticSeverity.Warning,
+                                _ => Threadsmith.Core.DiagnosticSeverity.Info,
+                            },
+                            Project = project.Name,
+                            TargetFramework = targetFramework,
+                            File = relativeFile,
+                            Range = range,
+                            Message = message,
+                            Confidence = confidence,
+                        });
                     }
                 }
-            }
-            else if (syntaxBlocks)
-            {
-                omissions.Add(ModelVisibleStructuredFact.Exact(
-                    "Compilation diagnostics were skipped because syntax diagnostics blocked compilation."));
-            }
-            else
-            {
-                omissions.Add(ModelVisibleStructuredFact.Exact(
-                    $"Semantic and compilation pre-mutation checks require PartialCompilation confidence; current confidence is {confidence}."));
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            await PublishSemanticCheckCompletedAsync(
-                request,
-                compilationCheckId,
-                "pre-mutation compilation",
-                SemanticCheckOutcome.Cancelled,
-                compilationStarted,
-                "cancelled before compilation diagnostics completed");
-            throw;
-        }
-        catch
-        {
-            await PublishSemanticCheckCompletedAsync(
-                request,
-                compilationCheckId,
-                "pre-mutation compilation",
-                SemanticCheckOutcome.Degraded,
-                compilationStarted,
-                "compilation diagnostics failed before completion");
-            throw;
-        }
 
-        var compilationDiagnostics = diagnostics.Count - diagnosticCountBeforeCompilation;
-        var compilationBlocking = diagnostics
-            .Skip(diagnosticCountBeforeCompilation)
-            .Count(diagnostic => diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error);
-        var compilationOmissions = omissions.Count - omissionCountBeforeCompilation;
-        var compilationOutcome = syntaxBlocks
-            ? SemanticCheckOutcome.Skipped
-            : compilationBlocking > 0
-                ? SemanticCheckOutcome.Failed
-                : compilationOmissions > 0
-                    ? SemanticCheckOutcome.Degraded
-                    : SemanticCheckOutcome.Completed;
-        await PublishSemanticCheckCompletedAsync(
-            request,
-            compilationCheckId,
-            "pre-mutation compilation",
-            compilationOutcome,
-            compilationStarted,
-            FormatPreMutationCheckDetail(sourceFiles.Length, compilationDiagnostics, compilationBlocking, compilationOmissions));
-
-        PreMutationDiagnostic[] distinctDiagnostics = [.. diagnostics
-            .DistinctBy(CreatePreMutationFingerprint, StringComparer.Ordinal)
-            .OrderBy(diagnostic => diagnostic.File, StringComparer.Ordinal)
-            .ThenBy(diagnostic => diagnostic.Range?.StartLine ?? 0)
-            .ThenBy(diagnostic => diagnostic.Range?.StartColumn ?? 0)
-            .ThenBy(diagnostic => diagnostic.Code, StringComparer.Ordinal)];
-        var blockingCount = distinctDiagnostics.Count(diagnostic => diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error);
-        EnsurePreparedSolutionCurrent(preparationReceipt);
-        return new PreMutationAnalysisResult
-        {
-            Decision = blockingCount > 0
-                ? PreMutationGateDecision.RepairableDiagnostics
-                : omissions.Count > 0
-                    ? PreMutationGateDecision.DegradedProceedWithWarning
-                    : PreMutationGateDecision.PassedCheapGates,
-            Diagnostics = distinctDiagnostics,
-            Omissions = omissions.Distinct(StringComparer.Ordinal).ToArray(),
-            Confidence = confidence,
-            Score = new MutationCandidateScore
-            {
-                SyntaxClean = !distinctDiagnostics.Any(diagnostic => diagnostic.Source == PreMutationDiagnosticSource.Syntax
-                    && diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error),
-                SemanticClean = !distinctDiagnostics.Any(diagnostic => diagnostic.Source is PreMutationDiagnosticSource.Semantic or PreMutationDiagnosticSource.Compilation
-                    && diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error),
-                AnalyzerClean = !distinctDiagnostics.Any(diagnostic => diagnostic.Source == PreMutationDiagnosticSource.Analyzer
-                    && diagnostic.Severity == Threadsmith.Core.DiagnosticSeverity.Error),
-                BlockingDiagnosticCount = blockingCount,
+                return diagnostics;
             },
-        };
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -1690,6 +1388,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             _solution = null;
             _refreshInventory = EmptyRefreshInventory;
             _compiledProjects = [];
+            _editCandidate?.Cancel();
         }
 
         if (preparation is not null)
@@ -1700,7 +1399,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 #pragma warning disable VSTHRD003 // The engine owns its terminal warming observation.
         await _warmObservation;
 #pragma warning restore VSTHRD003
-        workspace?.Dispose();
+        RetireCompilerWorkspace(workspace);
         _preparationOwnerLifetime.Dispose();
         _transition.Release();
     }
@@ -1751,7 +1450,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
         lock (_gate)
         {
             // Coverage promotion does not change immutable source identity. Source replacements reset the floor.
-            return generation >= _solutionGeneration && generation <= _generation;
+            return _disposed == 0
+                && generation >= _solutionGeneration && generation <= _generation;
         }
     }
 
@@ -1774,55 +1474,19 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 _solution,
                 _compiledProjects.ToHashSet(),
                 _confidence,
-                _lastRequest.RepositoryPath);
+                _lastRequest.RepositoryPath,
+                _generation);
         }
     }
 
-    private async Task PublishSemanticCheckStartedAsync(
-        PreMutationAnalysisRequest request,
-        SemanticCheckId checkId,
-        string checkName)
+    /// <summary>Rejects mutation results computed against superseded or disposed semantic inputs.</summary>
+    internal void EnsureMutationSnapshotCurrent(SemanticMutationSnapshot snapshot)
     {
-        await _events.PublishAsync(
-            new SemanticCheckStarted(
-                request.SessionId,
-                DateTimeOffset.UtcNow,
-                request.RunId,
-                checkId,
-                SemanticCheckPhase.PreMutation,
-                checkName),
-            CancellationToken.None);
-    }
-
-    private async Task PublishSemanticCheckCompletedAsync(
-        PreMutationAnalysisRequest request,
-        SemanticCheckId checkId,
-        string checkName,
-        SemanticCheckOutcome outcome,
-        long started,
-        string detail)
-    {
-        await _events.PublishAsync(
-            new SemanticCheckCompleted(
-                request.SessionId,
-                DateTimeOffset.UtcNow,
-                request.RunId,
-                checkId,
-                SemanticCheckPhase.PreMutation,
-                checkName,
-                outcome,
-                ToElapsedMilliseconds(Stopwatch.GetElapsedTime(started)),
-                detail),
-            CancellationToken.None);
-    }
-
-    private static string FormatPreMutationCheckDetail(
-        int fileCount,
-        int diagnosticCount,
-        int blockingDiagnosticCount,
-        int omissionCount)
-    {
-        return $"{fileCount} files, {diagnosticCount} diagnostics, {blockingDiagnosticCount} blocking, {omissionCount} omissions";
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (!IsCurrentGeneration(snapshot.Generation))
+        {
+            throw new InvalidOperationException("Semantic inputs changed while the mutation was being computed. Read current semantic evidence before retrying.");
+        }
     }
 
     private static IReadOnlySet<string> GetTextDocumentPaths(
@@ -1896,112 +1560,6 @@ public sealed partial class SemanticEngine : ISemanticEngine
         return paths.ToFrozenSet(StringComparerForCurrentPlatform());
     }
 
-    private static long? ToElapsedMilliseconds(TimeSpan elapsed)
-    {
-        if (elapsed < TimeSpan.Zero || elapsed.TotalMilliseconds > long.MaxValue)
-        {
-            return null;
-        }
-
-        return (long)elapsed.TotalMilliseconds;
-    }
-
-    private (Solution? Solution, HashSet<ProjectId> CompiledProjects, SemanticConfidenceLevel Confidence, string RepositoryPath)
-        TryCaptureSemanticState(SemanticPreparationReceipt? preparedSolution = null)
-    {
-        lock (_gate)
-        {
-            CheckPreparedSolution(preparedSolution);
-            return _solution is null || _lastRequest is null
-                ? (null, [], _confidence, string.Empty)
-                : (_solution, [.. _compiledProjects], _confidence, _lastRequest.RepositoryPath);
-        }
-    }
-
-    private async Task<Dictionary<string, int>> GetBaselineCompilationDiagnosticFingerprintsAsync(
-        Solution solution,
-        SemanticPreparationReceipt? preparationReceipt,
-        ProjectId projectId,
-        string repositoryPath,
-        SemanticLocationContext context,
-        CancellationToken cancellationToken)
-    {
-        var baselineProject = solution.GetProject(projectId);
-        if (baselineProject is null)
-        {
-            return [];
-        }
-
-        var baselineCompilation = await RunPreparedOperationAsync<Compilation?>(
-            preparationReceipt,
-            baselineProject.GetCompilationAsync,
-            cancellationToken);
-        if (baselineCompilation is null)
-        {
-            return [];
-        }
-
-        return baselineCompilation.GetDiagnostics(cancellationToken)
-            .Where(diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)
-            .Select(diagnostic => CreateCompilationDiagnosticFingerprint(
-                solution,
-                diagnostic,
-                repositoryPath,
-                context))
-            .GroupBy(fingerprint => fingerprint, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Count(),
-                StringComparer.Ordinal);
-    }
-
-    private static string CreateCompilationDiagnosticFingerprint(
-        Solution solution,
-        Microsoft.CodeAnalysis.Diagnostic diagnostic,
-        string repositoryPath,
-        SemanticLocationContext context)
-    {
-        var file = string.Empty;
-        if (diagnostic.Location != Location.None)
-        {
-            var location = CreateLocation(
-                solution,
-                diagnostic.Location,
-                context);
-            if (location?.FilePath is not null)
-            {
-                file = ToRepositoryRelativePath(repositoryPath, Path.GetFullPath(location.FilePath));
-            }
-        }
-
-        return string.Join(
-            '|',
-            diagnostic.Id,
-            file,
-            diagnostic.GetMessage());
-    }
-
-    private static Dictionary<string, PreMutationOverlayFile> CreateOverlayMap(
-        IReadOnlyList<PreMutationOverlayFile> files,
-        string repositoryPath)
-    {
-        var sourceByFullPath = new Dictionary<string, PreMutationOverlayFile>(StringComparerForCurrentPlatform());
-        foreach (var file in files)
-        {
-            var fullPath = Path.GetFullPath(
-                file.RelativePath.Replace('/', Path.DirectorySeparatorChar),
-                repositoryPath);
-            if (!IsPathWithinRoot(fullPath, repositoryPath))
-            {
-                continue;
-            }
-
-            sourceByFullPath[fullPath] = file;
-        }
-
-        return sourceByFullPath;
-    }
-
     private static Dictionary<string, DocumentId[]> CreateDocumentsByPath(Solution solution)
     {
         var comparer = StringComparerForCurrentPlatform();
@@ -2015,75 +1573,6 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 comparer);
     }
 
-    private static Dictionary<string, CSharpParseOptions?> CreateParseOptionsByPath(Solution solution)
-    {
-        var comparer = StringComparerForCurrentPlatform();
-        return solution.Projects
-            .SelectMany(project => project.Documents.Select(document => new
-            {
-                document.FilePath,
-                ParseOptions = project.ParseOptions as CSharpParseOptions,
-            }))
-            .Where(item => !string.IsNullOrWhiteSpace(item.FilePath))
-            .GroupBy(item => Path.GetFullPath(item.FilePath ?? string.Empty), comparer)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(item => item.ParseOptions).FirstOrDefault(),
-                comparer);
-    }
-
-    private static CSharpParseOptions GetParseOptions(
-        string fullPath,
-        IReadOnlyDictionary<string, CSharpParseOptions?> parseOptionsByPath)
-    {
-        return parseOptionsByPath.TryGetValue(fullPath, out var options) && options is not null
-            ? options
-            : CSharpParseOptions.Default.WithLanguageVersion(LanguageVersion.Preview);
-    }
-
-    private static Solution ApplyOverlayToSolution(
-        Solution solution,
-        IReadOnlyDictionary<string, PreMutationOverlayFile> sourceByFullPath,
-        IReadOnlyDictionary<string, DocumentId[]> documentsByPath,
-        string repositoryPath)
-    {
-        var overlaySolution = solution;
-        foreach ((var fullPath, var overlay) in sourceByFullPath)
-        {
-            if (documentsByPath.TryGetValue(fullPath, out var documentIds))
-            {
-                foreach (var documentId in documentIds)
-                {
-                    overlaySolution = overlay.Text is null
-                        ? overlaySolution.RemoveDocument(documentId)
-                        : overlaySolution.WithDocumentText(
-                            documentId,
-                            SourceText.From(overlay.Text, Encoding.UTF8),
-                            PreservationMode.PreserveIdentity);
-                }
-
-                continue;
-            }
-
-            if (overlay.Text is null)
-            {
-                continue;
-            }
-
-            foreach (var project in FindContainingProjects(overlaySolution, fullPath))
-            {
-                overlaySolution = overlaySolution.AddDocument(
-                    DocumentId.CreateNewId(project.Id),
-                    Path.GetFileName(fullPath),
-                    SourceText.From(overlay.Text, Encoding.UTF8),
-                    GetDocumentFolders(project.FilePath, fullPath),
-                    fullPath);
-            }
-        }
-
-        return overlaySolution;
-    }
-
     private static string ToRepositoryRelativePath(string repositoryPath, string fullPath)
     {
         var relative = Path.GetRelativePath(repositoryPath, fullPath);
@@ -2092,102 +1581,6 @@ public sealed partial class SemanticEngine : ISemanticEngine
             || Path.IsPathRooted(relative)
                 ? fullPath
                 : relative.Replace('\\', '/');
-    }
-
-    private static PreMutationDiagnostic CreatePreMutationDiagnostic(
-        PreMutationDiagnosticSource source,
-        Microsoft.CodeAnalysis.Diagnostic diagnostic,
-        string repositoryPath,
-        PreMutationOverlayFile overlay,
-        string? projectName,
-        string? targetFramework,
-        SyntaxTree? syntaxTree,
-        string? text)
-    {
-        var lineSpan = diagnostic.Location == Location.None
-            ? default
-            : diagnostic.Location.GetLineSpan();
-        var range = diagnostic.Location == Location.None
-            ? null
-            : new SourceRange(
-                lineSpan.StartLinePosition.Line + 1,
-                lineSpan.StartLinePosition.Character + 1,
-                lineSpan.EndLinePosition.Line + 1,
-                lineSpan.EndLinePosition.Character + 1);
-        string? file = null;
-        if (diagnostic.Location != Location.None)
-        {
-            var path = string.IsNullOrWhiteSpace(lineSpan.Path)
-                ? overlay.RelativePath
-                : lineSpan.Path;
-            file = ToRepositoryRelativePath(repositoryPath, Path.GetFullPath(path));
-        }
-
-        return new PreMutationDiagnostic
-        {
-            Source = source,
-            Code = diagnostic.Id,
-            Severity = diagnostic.Severity switch
-            {
-                Microsoft.CodeAnalysis.DiagnosticSeverity.Error => Threadsmith.Core.DiagnosticSeverity.Error,
-                Microsoft.CodeAnalysis.DiagnosticSeverity.Warning => Threadsmith.Core.DiagnosticSeverity.Warning,
-                _ => Threadsmith.Core.DiagnosticSeverity.Info,
-            },
-            File = file ?? overlay.RelativePath,
-            Range = range,
-            Message = diagnostic.GetMessage(),
-            Project = projectName,
-            TargetFramework = targetFramework,
-            RelatedMutationId = overlay.RelatedMutationId,
-            ChangedHunk = GetLineExcerpt(text, range?.StartLine),
-            ContainingSymbol = GetContainingSyntax(syntaxTree, diagnostic.Location),
-        };
-    }
-
-    private static string CreatePreMutationFingerprint(PreMutationDiagnostic diagnostic)
-    {
-        ArgumentNullException.ThrowIfNull(diagnostic);
-        return string.Join(
-            '|',
-            diagnostic.Source,
-            diagnostic.Code,
-            diagnostic.File,
-            diagnostic.Range?.StartLine,
-            diagnostic.Range?.StartColumn,
-            diagnostic.Message);
-    }
-
-    private static string? GetLineExcerpt(string? text, int? oneBasedLine)
-    {
-        if (string.IsNullOrEmpty(text) || oneBasedLine is null || oneBasedLine <= 0)
-        {
-            return null;
-        }
-
-        var lines = text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-        var index = oneBasedLine.Value - 1;
-        return index >= 0 && index < lines.Length
-            ? lines[index].Trim()
-            : null;
-    }
-
-    private static string? GetContainingSyntax(SyntaxTree? syntaxTree, Location location)
-    {
-        if (syntaxTree is null || location == Location.None || !location.IsInSource)
-        {
-            return null;
-        }
-
-        var root = syntaxTree.GetRoot();
-        var node = root.FindNode(location.SourceSpan, getInnermostNodeForTie: true);
-        var containing = node.AncestorsAndSelf()
-            .FirstOrDefault(candidate => candidate is Microsoft.CodeAnalysis.CSharp.Syntax.MemberDeclarationSyntax
-                or Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax
-                or Microsoft.CodeAnalysis.CSharp.Syntax.NamespaceDeclarationSyntax
-                or Microsoft.CodeAnalysis.CSharp.Syntax.FileScopedNamespaceDeclarationSyntax);
-        return containing is null
-            ? node.Kind().ToString()
-            : containing.Kind().ToString();
     }
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows()
@@ -2386,34 +1779,27 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task<ISymbol> ResolveSymbolAsync(
+    private static async Task<ISymbol> ResolveSymbolAsync(
         Solution solution,
         string symbolId,
         CancellationToken cancellationToken)
     {
-        return await RunNonCooperativeAsync(
-            async operationToken =>
+        foreach (var project in solution.Projects)
+        {
+            var compilation = await project.GetCompilationAsync(cancellationToken);
+            if (compilation is null)
             {
-                foreach (var project in solution.Projects)
-                {
-                    var compilation = await project.GetCompilationAsync(operationToken);
-                    if (compilation is null)
-                    {
-                        continue;
-                    }
+                continue;
+            }
 
-                    var symbol = DocumentationCommentId.GetFirstSymbolForDeclarationId(
-                        symbolId,
-                        compilation);
-                    if (symbol is not null)
-                    {
-                        return symbol;
-                    }
-                }
+            var symbol = DocumentationCommentId.GetFirstSymbolForDeclarationId(symbolId, compilation);
+            if (symbol is not null)
+            {
+                return symbol;
+            }
+        }
 
-                throw new KeyNotFoundException($"Semantic symbol '{symbolId}' is not loaded.");
-            },
-            cancellationToken);
+        throw new KeyNotFoundException($"Semantic symbol '{symbolId}' is not loaded.");
     }
 
     private (Solution Solution, HashSet<ProjectId> CompiledProjects, SemanticConfidenceLevel Confidence, string RepositoryPath)
@@ -2622,6 +2008,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 previousConfidence = _confidence;
                 _workspace = workspace;
                 _solution = solution;
+                ResetEditAnalysisInputs();
                 _refreshInventory = refreshInventory;
                 _compiledProjects = compiledProjects;
                 _projects = projects;
@@ -2644,7 +2031,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         if (!ReferenceEquals(previousWorkspace, workspace))
         {
-            previousWorkspace?.Dispose();
+            RetireCompilerWorkspace(previousWorkspace);
         }
 
         if (publishConfidenceChanged && previousConfidence != confidence)
@@ -2906,9 +2293,16 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
     private sealed record ProjectCompilationSample(string ProjectName, TimeSpan Duration);
 
-    private sealed class WorkspaceLease(MSBuildWorkspace workspace) : IDisposable
+    private sealed class WorkspaceLease : IDisposable
     {
-        private MSBuildWorkspace? _workspace = workspace;
+        private readonly Action<Workspace> _retire;
+        private MSBuildWorkspace? _workspace;
+
+        public WorkspaceLease(MSBuildWorkspace workspace, Action<Workspace> retire)
+        {
+            _workspace = workspace;
+            _retire = retire;
+        }
 
         public void TransferOwnership()
         {
@@ -2917,33 +2311,86 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         public void Dispose()
         {
-            Interlocked.Exchange(ref _workspace, null)?.Dispose();
+            if (Interlocked.Exchange(ref _workspace, null) is { } workspace)
+            {
+                _retire(workspace);
+            }
         }
     }
 
     private async Task<T> RunNonCooperativeAsync<T>(
         Func<CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken,
-        Action<T>? abandonedResultCleanup = null)
+        Action<T>? abandonedResultCleanup = null,
+        Solution? sourceSolution = null,
+        CancellationToken queryDeadline = default,
+        Action? failedOperationCleanup = null,
+        CancellationToken? retainedCandidateLifetime = null,
+        Action<Task<T>>? retainActualOperation = null)
     {
-        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken);
-        var task = Task.Run(() => operation(operationCancellation.Token), CancellationToken.None);
+        using var hostWait = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, queryDeadline);
+        var operationCancellation = new CompilerOperationCancellation(retainedCandidateLifetime ?? cancellationToken, queryDeadline, _logger);
+        var operationToken = operationCancellation.Token;
         try
         {
-            return await task.WaitAsync(cancellationToken);
+            await AcquireCompilerResourcesAsync(sourceSolution, hostWait.Token);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch
         {
-            await operationCancellation.CancelAsync();
+            await operationCancellation.DisposeAsync();
+            throw;
+        }
+
+        var task = Task.Run(
+            async () =>
+            {
+                var succeeded = false;
+                try
+                {
+                    var result = await operation(operationToken);
+                    succeeded = true;
+                    return result;
+                }
+                finally
+                {
+                    try
+                    {
+                        await operationCancellation.DisposeAsync();
+                        if (!succeeded)
+                        {
+                            failedOperationCleanup?.Invoke();
+                        }
+                    }
+                    finally
+                    {
+                        ReleaseCompilerResources(sourceSolution);
+                    }
+                }
+            },
+            CancellationToken.None);
+        retainActualOperation?.Invoke(task);
+        try
+        {
+            // The host deadline cannot share the callback queue exposed to compiler extensions.
+            return await task.WaitAsync(hostWait.Token);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || queryDeadline.IsCancellationRequested)
+        {
+            var backstop = retainedCandidateLifetime is { IsCancellationRequested: false }
+                ? Task.CompletedTask : Task.Delay(_cancellationBackstop, CancellationToken.None);
             var completed = await Task.WhenAny(
                 task,
-                Task.Delay(_cancellationBackstop, CancellationToken.None));
+                backstop);
             if (completed == task)
             {
                 try
                 {
                     var abandonedResult = await task;
+                    if (queryDeadline.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+                    {
+                        return abandonedResult;
+                    }
+
                     abandonedResultCleanup?.Invoke(abandonedResult);
                 }
                 catch (OperationCanceledException)
@@ -2983,6 +2430,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     CancellationToken.None,
                     TaskContinuationOptions.ExecuteSynchronously,
                     TaskScheduler.Default);
+                throw new SemanticOperationAbandonedException(task, operationToken);
             }
 
             throw;

@@ -73,7 +73,7 @@ internal static class AnthropicRequestPreparer
             {
                 breakpoints.Add(new ModelCacheBreakpoint(ModelCacheBreakpointClass.ConversationHistory, index));
             }
-            else if (stableSections.ContainsKey("phase-policy"))
+            else if (stableSections.ContainsKey("conversation-policy"))
             {
                 breakpoints.Add(new ModelCacheBreakpoint(ModelCacheBreakpointClass.PhasePolicy, -1));
             }
@@ -154,7 +154,7 @@ internal static class AnthropicRequestPreparer
             }
         }
 
-        var toolInsertionIndex = systemComponents.FindIndex(item => item.Category == "Phase instructions");
+        var toolInsertionIndex = systemComponents.FindIndex(item => item.Category == "Conversation instructions");
         if (toolInsertionIndex < 0)
         {
             toolInsertionIndex = systemComponents.Count;

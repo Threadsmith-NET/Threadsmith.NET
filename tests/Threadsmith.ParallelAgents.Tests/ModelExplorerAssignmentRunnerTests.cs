@@ -1528,7 +1528,6 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             SupportsCancellation = true,
             Timeout = TimeSpan.FromSeconds(2),
             MaximumOutputBytes = 4_096,
-            ConversationAvailable = true,
         };
 
         public override Task<ToolExecution<string>> ExecuteAsync(

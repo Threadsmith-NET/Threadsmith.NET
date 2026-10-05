@@ -14,7 +14,7 @@ public static class ContextUsageAttribution
         return message.SectionId switch
         {
             "host-policy" => "System prompt",
-            "phase-policy" => "Phase instructions",
+            "conversation-policy" => "Conversation instructions",
             "repository-instructions" => "Repository instructions",
             "repository-memory" => "Memories",
             "governed-request-state" => "Task and governed state",

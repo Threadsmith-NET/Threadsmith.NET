@@ -242,26 +242,6 @@ public class InteractionPresenter
             cancellationToken);
     }
 
-    /// <summary>Gets the current plan approval policy through the shared host boundary.</summary>
-    public Task<PlanApprovalPolicy> GetPlanApprovalPolicyAsync(CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new GetPlanApprovalPolicyCommand(), cancellationToken);
-    }
-
-    /// <summary>Sets the current plan approval policy through the shared host boundary.</summary>
-    public Task<PlanApprovalPolicy> SetPlanApprovalPolicyAsync(
-        PlanApprovalPolicy policy,
-        SessionId sessionId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new SetPlanApprovalPolicyCommand(
-                policy,
-                sessionId,
-                policy == PlanApprovalPolicy.TrustSession ? "session" : "repository"),
-            cancellationToken);
-    }
-
     /// <summary>Executes one MCP lifecycle operation through the shared host manager.</summary>
     public Task<McpManagementResult> ManageMcpAsync(
         McpManagementRequest request,
@@ -498,41 +478,6 @@ public class InteractionPresenter
             cancellationToken);
     }
 
-    /// <summary>Approves a pending structured plan.</summary>
-    public Task<bool> ApprovePlanAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new ApprovePlanCommand(sessionId, runId),
-            cancellationToken);
-    }
-
-    /// <summary>Rejects a pending structured plan.</summary>
-    public Task<bool> RejectPlanAsync(
-        SessionId sessionId,
-        RunId runId,
-        string reason,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new RejectPlanCommand(sessionId, runId, reason),
-            cancellationToken);
-    }
-
-    /// <summary>Requests a governed plan revision.</summary>
-    public Task<bool> RevisePlanAsync(
-        SessionId sessionId,
-        RunId runId,
-        string instructions,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new RevisePlanCommand(sessionId, runId, instructions),
-            cancellationToken);
-    }
-
     /// <summary>Gets durable repository trust through the application command boundary.</summary>
     public Task<RepositoryTrustState?> GetRepositoryTrustAsync(
         string repositoryPath,
@@ -614,17 +559,6 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(command, cancellationToken);
     }
 
-    /// <summary>Gets the active execution mutation staged for review.</summary>
-    public Task<StagedMutationSet?> GetExecutionMutationAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new GetExecutionMutationCommand(sessionId, runId),
-            cancellationToken);
-    }
-
     /// <summary>Gets the exact staged mutation referenced by a review-ready event.</summary>
     public Task<StagedMutationSet> GetMutationReviewAsync(
         SessionId sessionId,
@@ -634,58 +568,6 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(
             new GetMutationReviewCommand(sessionId, mutationSetId),
             cancellationToken);
-    }
-
-    /// <summary>Continues approved-plan execution with a separate mutation authorization.</summary>
-    public Task<ExecutionOutcomeProjection> ContinueExecutionAsync(
-        ContinueExecutionRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new ContinueExecutionCommand(request), cancellationToken);
-    }
-
-    /// <summary>Pre-captures validation baseline evidence while a mutation review is pending.</summary>
-    public Task<ExecutionContinuation> PrepareExecutionValidationAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new PrepareExecutionValidationCommand(sessionId, runId),
-            cancellationToken);
-    }
-
-    /// <summary>Applies approved-plan execution mutation and stops before validation.</summary>
-    public Task<ExecutionApplyResult> ApplyExecutionMutationAsync(
-        ContinueExecutionRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new ApplyExecutionMutationCommand(request), cancellationToken);
-    }
-
-    /// <summary>Resumes an applied execution through post-apply validation.</summary>
-    public Task<ExecutionContinuation> ResumeExecutionAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new ResumeRunCommand(sessionId, runId), cancellationToken);
-    }
-
-    /// <summary>Stages a bounded mutation set for exact diff review.</summary>
-    public Task<StagedMutationSet> StageMutationSetAsync(
-        MutationSet mutationSet,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new StageMutationSetCommand(mutationSet), cancellationToken);
-    }
-
-    /// <summary>Requests and stages a governed model mutation proposal.</summary>
-    public Task<StagedMutationSet> ProposeMutationSetAsync(
-        ProposeMutationSetCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(command, cancellationToken);
     }
 
     /// <summary>Changes whether one mutation's individual preview is rendered.</summary>
@@ -705,6 +587,18 @@ public class InteractionPresenter
             cancellationToken);
     }
 
+    /// <summary>Applies source instructions through the shared execution owner.</summary>
+    public Task<SourceEditReceipt> ApplySourceEditAsync(ApplySourceEditCommand command, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(command, cancellationToken);
+    }
+
+    /// <summary>Declines a pending exact edit review and releases the ordinary conversation.</summary>
+    public Task<bool> RejectSourceEditAsync(SessionId sessionId, MutationSetId mutationSetId, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new RejectSourceEditCommand(sessionId, mutationSetId), cancellationToken);
+    }
+
     /// <summary>Commits an explicitly approved mutation selection.</summary>
     public Task<MutationCommitResult> CommitMutationSetAsync(
         SessionId sessionId,
@@ -713,7 +607,7 @@ public class InteractionPresenter
         CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new CommitMutationSetCommand(sessionId, mutationSetId, approval),
+            new AuthorizeSourceEditCommand(sessionId, mutationSetId, approval),
             cancellationToken);
     }
 

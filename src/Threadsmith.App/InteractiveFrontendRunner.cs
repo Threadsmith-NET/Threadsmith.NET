@@ -53,7 +53,6 @@ internal static class InteractiveFrontendRunner
             context.Configuration.GetValue("tui:footer:enabled", true),
             context.ToolStateManager,
             context.Applications.MutationApprovalPolicy,
-            context.Applications.PlanApprovalPolicy,
             context.Models.ActiveModels is not null,
             context.Applications.ClaudeSkillCatalog,
             sessionLifecycleAvailable: true,
@@ -63,7 +62,6 @@ internal static class InteractiveFrontendRunner
             webFetchAuthorization: context.WebFetchAuthorization,
             directFetchApprovalPrompt: context.DirectFetchApprovalPrompt,
             frontendCommands: themeCommands,
-            validationStages: context.Applications.ValidationStages,
             codeExploreOutputOptions: context.CodeExploreOutputOptions,
             standingPreferenceWarningThreshold: context.Configuration.GetValue(
                 "tools:config:memories:standingPreferenceWarningThreshold",

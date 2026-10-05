@@ -1,122 +1,94 @@
 {
-    "schemaVersion":  1,
-    "skillId":  {
-                    "value":  "upgrade-package"
-                },
-    "packageId":  "threadsmith.upgrade-package",
-    "version":  "1.0.0",
-    "displayName":  "Package Upgrade",
-    "description":  "Assess one bounded package upgrade and propose a governed compatibility and validation plan.",
-    "tags":  [
-                 "packages",
-                 "dependencies",
-                 "planning"
-             ],
-    "publisher":  "Threadsmith.NET",
-    "license":  "MIT",
-    "assets":  [
-                   {
-                       "path":  "instructions/assess.md",
-                       "bytes":  453,
-                       "sha256":  "43b7c328acd3014f3de4a4f1cdb7354ff0b844c8756080d1a87e1f20e568b158",
-                       "required":  true,
-                       "kind":  "instructions"
-                   },
-                   {
-                       "path":  "schemas/host-result.json",
-                       "bytes":  209,
-                       "sha256":  "dfb4434429def34a4450c489dc9a93a217e1502cdc1ea2fa4fd848fcec7e18ea",
-                       "required":  true,
-                       "kind":  "reference"
-                   },
-                   {
-                       "path":  "schemas/input.json",
-                       "bytes":  380,
-                       "sha256":  "85ae7c36be605686b45f19ca57572f130cb98d37d277c2de901cb46e31ffc4a4",
-                       "required":  true,
-                       "kind":  "input-schema"
-                   },
-                   {
-                       "path":  "schemas/plan-output.json",
-                       "bytes":  2373,
-                       "sha256":  "c3d438376a34bff38ca8338c32d5397e149822a52d6466b191dd93b78cbd060f",
-                       "required":  true,
-                       "kind":  "output-schema"
-                   }
-               ],
-    "requirements":  {
-                         "requiredTools":  [
-                                               "read_file",
-                                               "search",
-                                               "list_files"
-                                           ],
-                         "optionalTools":  [
-                                               "git_status"
-                                           ],
-                         "toolContractVersions":  {
-
-                                                  },
-                         "minimumTrust":  "TrustedRead",
-                         "approvalCategories":  [
-                                                    "read-only discovery",
-                                                    "governed plan proposal"
-                                                ],
-                         "model":  {
-                                       "workloads":  [
-                                                         "Planning",
-                                                         "CodeEdit"
-                                                     ],
-                                       "requiresToolCalls":  true,
-                                       "requiresStructuredOutput":  true,
-                                       "minimumContextWindow":  8192,
-                                       "allowedProfiles":  [
-
-                                                           ],
-                                       "deniedProfiles":  [
-
-                                                          ]
-                                   },
-                         "minimumHostVersion":  "1.0.0",
-                         "maximumHostVersion":  "1.999.999"
-                     },
-    "budget":  {
-                   "contentTokens":  8000,
-                   "workflowSteps":  8,
-                   "modelTurns":  6,
-                   "toolCalls":  24,
-                   "mutations":  16,
-                   "validationAttempts":  4,
-                   "wallTime":  "00:20:00"
-               },
-    "workflow":  {
-                     "schemaVersion":  1,
-                     "workflowId":  "upgrade-package",
-                     "steps":  [
-                                   {
-                                       "instructionAsset":  "instructions/assess.md",
-                                       "inputSchemaAsset":  "schemas/input.json",
-                                       "stepId":  "assess",
-                                       "maximumIterations":  1,
-                                       "hostAction":  null,
-                                       "outputSchemaAsset":  "schemas/plan-output.json",
-                                       "dependsOn":  [
-
-                                                     ],
-                                       "kind":  "invokeProcedure"
-                                   },
-                                   {
-                                       "instructionAsset":  null,
-                                       "inputSchemaAsset":  null,
-                                       "stepId":  "propose-plan",
-                                       "maximumIterations":  1,
-                                       "hostAction":  "proposePlan",
-                                       "outputSchemaAsset":  "schemas/host-result.json",
-                                       "dependsOn":  [
-                                                         "assess"
-                                                     ],
-                                       "kind":  "proposePlan"
-                                   }
-                               ]
-                 },
-    "signature":  null
+  "schemaVersion": 1,
+  "skillId": {
+    "value": "upgrade-package"
+  },
+  "packageId": "threadsmith.upgrade-package",
+  "version": "1.0.0",
+  "displayName": "Package Upgrade",
+  "description": "Assess one bounded package upgrade and return compatibility and validation recommendations.",
+  "tags": [
+    "packages",
+    "dependencies",
+    "analysis"
+  ],
+  "publisher": "Threadsmith.NET",
+  "license": "MIT",
+  "assets": [
+    {
+      "path": "instructions/assess.md",
+      "bytes": 368,
+      "sha256": "c119bb40b59ebceaaba9fd39ecba24ab3e51220965f786a0be61f9ae5d14b6ef",
+      "required": true,
+      "kind": "instructions"
+    },
+    {
+      "path": "schemas/input.json",
+      "bytes": 380,
+      "sha256": "85ae7c36be605686b45f19ca57572f130cb98d37d277c2de901cb46e31ffc4a4",
+      "required": true,
+      "kind": "input-schema"
+    },
+    {
+      "path": "schemas/analysis-output.json",
+      "bytes": 714,
+      "sha256": "f1cb26f8fa5a5599055e3c14a4bd3ece15070107387c0db2df2652c649ecdd27",
+      "required": true,
+      "kind": "output-schema"
+    }
+  ],
+  "requirements": {
+    "requiredTools": [
+      "read_file",
+      "search",
+      "list_files"
+    ],
+    "optionalTools": [
+      "git_status"
+    ],
+    "toolContractVersions": {},
+    "minimumTrust": "TrustedRead",
+    "approvalCategories": [
+      "read-only discovery"
+    ],
+    "model": {
+      "workloads": [
+        "General",
+        "CodeEdit"
+      ],
+      "requiresToolCalls": true,
+      "requiresStructuredOutput": true,
+      "minimumContextWindow": 8192,
+      "allowedProfiles": [],
+      "deniedProfiles": []
+    },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999"
+  },
+  "budget": {
+    "contentTokens": 8000,
+    "workflowSteps": 8,
+    "modelTurns": 6,
+    "toolCalls": 24,
+    "mutations": 16,
+    "validationAttempts": 4,
+    "wallTime": "00:20:00"
+  },
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "upgrade-package",
+    "steps": [
+      {
+        "instructionAsset": "instructions/assess.md",
+        "inputSchemaAsset": "schemas/input.json",
+        "stepId": "assess",
+        "maximumIterations": 1,
+        "hostAction": null,
+        "outputSchemaAsset": "schemas/analysis-output.json",
+        "dependsOn": [],
+        "kind": "invokeProcedure"
+      }
+    ]
+  },
+  "signature": null
 }

@@ -23,7 +23,7 @@ public static class Plan117RoslynUpgradeTests
         var root = FixtureRoot;
         var request = CreateLoadRequest(root);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
 
         var load = await registry.LoadAsync(request, TestContext.Current.CancellationToken);
@@ -99,7 +99,7 @@ public static class Plan117RoslynUpgradeTests
         var root = FixtureRoot;
         var request = CreateLoadRequest(root);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         await registry.LoadAsync(request, TestContext.Current.CancellationToken);
         await registry.GetEngine(request.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken);
@@ -149,7 +149,7 @@ public static class Plan117RoslynUpgradeTests
         var pipeName = Guid.NewGuid().ToString("N")[..16];
         await using var pipe = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1, PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var released = false;
         try
         {
@@ -267,7 +267,7 @@ public static class Plan117RoslynUpgradeTests
                 TestContext.Current.CancellationToken);
             var request = CreateLoadRequest(temporaryRoot);
             await using var events = new DomainEventStream();
-            await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
             var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
             var load = await registry.LoadAsync(request, TestContext.Current.CancellationToken);
             Assert.Equal(SemanticConfidenceLevel.PartialCompilation, load.Confidence);
@@ -309,7 +309,7 @@ public static class Plan117RoslynUpgradeTests
         var root = FixtureRoot;
         var logger = new RecordingLogger<SemanticEngine>();
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, logger);
+        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance);
 
         var load = await engine.LoadAsync(
             CreateLoadRequest(root),
@@ -342,7 +342,7 @@ public static class Plan117RoslynUpgradeTests
         var root = FixtureRoot;
         var textLogger = new RecordingLogger<SemanticEngine>();
         await using (var events = new DomainEventStream())
-        await using (var engine = new SemanticEngine(events, textLogger))
+        await using (var engine = new SemanticEngine(events, textLogger, TestPromptLoader.Instance))
         {
             var request = CreateLoadRequest(root) with { TrustLevel = RepositoryTrustLevel.TrustedRead };
             var load = await engine.LoadAsync(request, TestContext.Current.CancellationToken);
@@ -356,7 +356,7 @@ public static class Plan117RoslynUpgradeTests
 
         var cancellationLogger = new RecordingLogger<SemanticEngine>();
         await using (var events = new DomainEventStream())
-        await using (var engine = new SemanticEngine(events, cancellationLogger))
+        await using (var engine = new SemanticEngine(events, cancellationLogger, TestPromptLoader.Instance))
         using (var cancellation = new CancellationTokenSource())
         {
             await cancellation.CancelAsync();
@@ -379,7 +379,7 @@ public static class Plan117RoslynUpgradeTests
             domainEvent is SemanticConfidenceChanged
                 ? Task.FromException(new InvalidOperationException("Injected post-commit publication failure."))
                 : Task.CompletedTask);
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             engine.LoadAsync(CreateLoadRequest(FixtureRoot), TestContext.Current.CancellationToken));
@@ -407,7 +407,7 @@ public static class Plan117RoslynUpgradeTests
                 "trigger",
                 TestContext.Current.CancellationToken);
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
 
             var load = await engine.LoadAsync(
                 CreateLoadRequest(temporaryRoot),
@@ -454,7 +454,7 @@ public static class Plan117RoslynUpgradeTests
             return Task.CompletedTask;
         });
         var logger = new RecordingLogger<SemanticEngine>();
-        await using var engine = new SemanticEngine(events, logger);
+        await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance);
         var request = CreateLoadRequest(temporaryRoot);
         var analyzerPath = Path.Combine(
             AppContext.BaseDirectory,
@@ -556,7 +556,7 @@ public static class Plan117RoslynUpgradeTests
                 TestContext.Current.CancellationToken);
             var logger = new RecordingLogger<SemanticEngine>();
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, logger);
+            await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance);
 
             var load = await engine.LoadAsync(
                 CreateLoadRequest(temporaryRoot),
@@ -607,7 +607,7 @@ public static class Plan117RoslynUpgradeTests
                 """,
                 TestContext.Current.CancellationToken);
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
 
             var load = await engine.LoadAsync(
                 CreateLoadRequest(temporaryRoot),
@@ -664,7 +664,7 @@ public static class Plan117RoslynUpgradeTests
             var workers = Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_WORKERS") == "2" ? 2 : 1;
             var logger = new RecordingLogger<SemanticEngine>();
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, logger, new SemanticPreparationLimits { Workers = workers, Frontier = workers });
+            await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance, new SemanticPreparationLimits { Workers = workers, Frontier = workers });
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -788,7 +788,7 @@ public static class Plan117RoslynUpgradeTests
         for (var iteration = 1; iteration <= 3; iteration++)
         {
             await using var events = new DomainEventStream();
-            await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
             var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, selection, RepositoryTrustLevel.TrustedBuild);
             var started = Stopwatch.GetTimestamp();
             if (Environment.GetEnvironmentVariable("THREADSMITH_PLAN118_BASELINE") == "1")

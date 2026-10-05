@@ -103,6 +103,13 @@ public static class Program
         try
         {
             configuration = ConfigurationBootstrap.Build(args, paths);
+            await RetiredPlanningConfiguration.MigrateAsync(paths, CancellationToken.None);
+            configuration.Reload();
+            if (RetiredPlanningConfiguration.GetWarning(configuration) is { } retiredSettingsWarning)
+            {
+                await Console.Error.WriteLineAsync(retiredSettingsWarning);
+            }
+
             trustedConfiguration = ConfigurationBootstrap.BuildTrusted(paths);
         }
         catch (Exception exception) when (exception is InvalidDataException or FormatException)

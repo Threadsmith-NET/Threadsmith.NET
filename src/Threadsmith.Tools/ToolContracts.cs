@@ -260,12 +260,6 @@ public sealed record ToolDefinition
     /// <summary>Maximum serialized result size retained in durable activity.</summary>
     public int MaximumOutputBytes { get; init; }
 
-    /// <summary>
-    /// Whether this compiled capability may be advertised during ordinary conversational turns even when it is
-    /// not read-only. Runtime trust, approval, policy, and execution controls remain authoritative.
-    /// </summary>
-    public bool ConversationAvailable { get; init; }
-
     /// <summary>Whether this tool may be included in a subagent's inherited tool surface.</summary>
     public bool SubagentAvailable { get; init; } = true;
 
@@ -389,6 +383,9 @@ public sealed record ActiveTurnEvidenceReference(
 /// <summary>A model or host request entering the dynamic invocation pipeline.</summary>
 public sealed record ToolInvocationRequest
 {
+    /// <summary>Provider or host invocation identity, stable when replaying the same request within a run.</summary>
+    public string? InvocationKey { get; init; }
+
     /// <summary>The exact dynamic registration authorized for this invocation, when identity pinning is required.</summary>
     public ToolRegistration? ExpectedRegistration { get; init; }
 
@@ -556,11 +553,17 @@ public sealed record ToolExecutionContext(
     RunId RunId,
     ToolInvocationContext Invocation)
 {
+    /// <summary>Host-forwarded invocation identity for durable effect deduplication.</summary>
+    public string? InvocationKey { get; init; }
+
     /// <summary>Authoritative run phase for this invocation.</summary>
     public RunPhase Phase { get; init; } = RunPhase.Intake;
 
     /// <summary>Effective serialized output ceiling after configured runtime wrappers are applied.</summary>
     public int? MaximumOutputBytes { get; init; }
+
+    /// <summary>Whether tool policy requires review of the exact staged diff.</summary>
+    internal bool RequireExactDiffReview { get; init; }
 }
 
 /// <summary>Non-generic execution envelope retained inside the tool runtime.</summary>
@@ -578,6 +581,11 @@ internal interface ITransientToolActivityDetail
 {
     /// <summary>Describes validated input without consuming or granting invocation authority.</summary>
     string? GetTransientActivityDetail(object input, ToolExecutionContext context);
+}
+
+/// <summary>Host-owned capability requiring exact-diff authorization through the transactional mutation owner.</summary>
+internal interface IExactMutationAuthorizationTool
+{
 }
 
 /// <summary>Applies a tool-specific model-output boundary after centralized sanitization.</summary>
@@ -620,6 +628,7 @@ public abstract class Tool<TInput, TOutput> : ITool
     {
         PropertyNameCaseInsensitive = true,
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        AllowOutOfOrderMetadataProperties = true,
         Converters = { new JsonStringEnumConverter() },
     };
 

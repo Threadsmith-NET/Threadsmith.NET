@@ -1,123 +1,95 @@
 {
-    "schemaVersion":  1,
-    "skillId":  {
-                    "value":  "fix-analyzer-warnings"
-                },
-    "packageId":  "threadsmith.fix-analyzer-warnings",
-    "version":  "1.0.0",
-    "displayName":  "Analyzer Fix",
-    "description":  "Investigate bounded analyzer diagnostics and propose a governed, testable fix plan.",
-    "tags":  [
-                 "analyzers",
-                 "csharp",
-                 "planning"
-             ],
-    "publisher":  "Threadsmith.NET",
-    "license":  "MIT",
-    "assets":  [
-                   {
-                       "path":  "instructions/analyze.md",
-                       "bytes":  419,
-                       "sha256":  "d8481a5e8d70bdd292a871b773c10b7466b47b0dba2555f87c49235ae30eb52e",
-                       "required":  true,
-                       "kind":  "instructions"
-                   },
-                   {
-                       "path":  "schemas/host-result.json",
-                       "bytes":  209,
-                       "sha256":  "dfb4434429def34a4450c489dc9a93a217e1502cdc1ea2fa4fd848fcec7e18ea",
-                       "required":  true,
-                       "kind":  "reference"
-                   },
-                   {
-                       "path":  "schemas/input.json",
-                       "bytes":  331,
-                       "sha256":  "d02aab8e138553476a3416ec20418ea9287c9aa11f898143aad8772494c2f651",
-                       "required":  true,
-                       "kind":  "input-schema"
-                   },
-                   {
-                       "path":  "schemas/plan-output.json",
-                       "bytes":  2373,
-                       "sha256":  "c3d438376a34bff38ca8338c32d5397e149822a52d6466b191dd93b78cbd060f",
-                       "required":  true,
-                       "kind":  "output-schema"
-                   }
-               ],
-    "requirements":  {
-                         "requiredTools":  [
-                                               "read_file",
-                                               "search",
-                                               "find_symbol",
-                                               "find_references"
-                                           ],
-                         "optionalTools":  [
-                                               "git_status"
-                                           ],
-                         "toolContractVersions":  {
-
-                                                  },
-                         "minimumTrust":  "TrustedRead",
-                         "approvalCategories":  [
-                                                    "read-only discovery",
-                                                    "governed plan proposal"
-                                                ],
-                         "model":  {
-                                       "workloads":  [
-                                                         "Planning",
-                                                         "CodeEdit"
-                                                     ],
-                                       "requiresToolCalls":  true,
-                                       "requiresStructuredOutput":  true,
-                                       "minimumContextWindow":  8192,
-                                       "allowedProfiles":  [
-
-                                                           ],
-                                       "deniedProfiles":  [
-
-                                                          ]
-                                   },
-                         "minimumHostVersion":  "1.0.0",
-                         "maximumHostVersion":  "1.999.999"
-                     },
-    "budget":  {
-                   "contentTokens":  8000,
-                   "workflowSteps":  8,
-                   "modelTurns":  6,
-                   "toolCalls":  24,
-                   "mutations":  16,
-                   "validationAttempts":  4,
-                   "wallTime":  "00:20:00"
-               },
-    "workflow":  {
-                     "schemaVersion":  1,
-                     "workflowId":  "fix-analyzer-warnings",
-                     "steps":  [
-                                   {
-                                       "instructionAsset":  "instructions/analyze.md",
-                                       "inputSchemaAsset":  "schemas/input.json",
-                                       "stepId":  "analyze",
-                                       "maximumIterations":  1,
-                                       "hostAction":  null,
-                                       "outputSchemaAsset":  "schemas/plan-output.json",
-                                       "dependsOn":  [
-
-                                                     ],
-                                       "kind":  "invokeProcedure"
-                                   },
-                                   {
-                                       "instructionAsset":  null,
-                                       "inputSchemaAsset":  null,
-                                       "stepId":  "propose-plan",
-                                       "maximumIterations":  1,
-                                       "hostAction":  "proposePlan",
-                                       "outputSchemaAsset":  "schemas/host-result.json",
-                                       "dependsOn":  [
-                                                         "analyze"
-                                                     ],
-                                       "kind":  "proposePlan"
-                                   }
-                               ]
-                 },
-    "signature":  null
+  "schemaVersion": 1,
+  "skillId": {
+    "value": "fix-analyzer-warnings"
+  },
+  "packageId": "threadsmith.fix-analyzer-warnings",
+  "version": "1.0.0",
+  "displayName": "Analyzer Fix",
+  "description": "Investigate bounded analyzer diagnostics and return focused fix recommendations.",
+  "tags": [
+    "analyzers",
+    "csharp",
+    "analysis"
+  ],
+  "publisher": "Threadsmith.NET",
+  "license": "MIT",
+  "assets": [
+    {
+      "path": "instructions/analyze.md",
+      "bytes": 408,
+      "sha256": "66dde6c1b94b2cc80106e45fc244de363f17986b052b03e0292827f8c526abfc",
+      "required": true,
+      "kind": "instructions"
+    },
+    {
+      "path": "schemas/input.json",
+      "bytes": 331,
+      "sha256": "d02aab8e138553476a3416ec20418ea9287c9aa11f898143aad8772494c2f651",
+      "required": true,
+      "kind": "input-schema"
+    },
+    {
+      "path": "schemas/analysis-output.json",
+      "bytes": 714,
+      "sha256": "f1cb26f8fa5a5599055e3c14a4bd3ece15070107387c0db2df2652c649ecdd27",
+      "required": true,
+      "kind": "output-schema"
+    }
+  ],
+  "requirements": {
+    "requiredTools": [
+      "read_file",
+      "search",
+      "find_symbol",
+      "find_references"
+    ],
+    "optionalTools": [
+      "git_status"
+    ],
+    "toolContractVersions": {},
+    "minimumTrust": "TrustedRead",
+    "approvalCategories": [
+      "read-only discovery"
+    ],
+    "model": {
+      "workloads": [
+        "General",
+        "CodeEdit"
+      ],
+      "requiresToolCalls": true,
+      "requiresStructuredOutput": true,
+      "minimumContextWindow": 8192,
+      "allowedProfiles": [],
+      "deniedProfiles": []
+    },
+    "minimumHostVersion": "1.0.0",
+    "maximumHostVersion": "1.999.999"
+  },
+  "budget": {
+    "contentTokens": 8000,
+    "workflowSteps": 8,
+    "modelTurns": 6,
+    "toolCalls": 24,
+    "mutations": 16,
+    "validationAttempts": 4,
+    "wallTime": "00:20:00"
+  },
+  "workflow": {
+    "schemaVersion": 1,
+    "workflowId": "fix-analyzer-warnings",
+    "steps": [
+      {
+        "instructionAsset": "instructions/analyze.md",
+        "inputSchemaAsset": "schemas/input.json",
+        "stepId": "analyze",
+        "maximumIterations": 1,
+        "hostAction": null,
+        "outputSchemaAsset": "schemas/analysis-output.json",
+        "dependsOn": [],
+        "kind": "invokeProcedure"
+      }
+    ]
+  },
+  "signature": null
 }

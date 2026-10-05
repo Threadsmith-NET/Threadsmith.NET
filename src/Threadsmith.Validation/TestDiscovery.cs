@@ -2,6 +2,7 @@ namespace Threadsmith.Validation;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using Threadsmith.Core;
@@ -184,7 +185,25 @@ public sealed class TestDiscoverer
                     $"Test discovery failed for '{project.Name}' with exit code {process.ExitCode?.ToString() ?? "none"}.");
             }
 
-            var collecting = project.Framework == TestFramework.MicrosoftTestingPlatform;
+            if (project.Framework == TestFramework.MicrosoftTestingPlatform)
+            {
+                using var inventory = JsonDocument.Parse(process.StandardOutput);
+                foreach (var test in inventory.RootElement.GetProperty("tests").EnumerateArray())
+                {
+                    var uid = test.GetProperty("uid").GetString();
+                    var name = test.GetProperty("displayName").GetString();
+                    if (string.IsNullOrWhiteSpace(uid) || uid.Length > 1024 || string.IsNullOrWhiteSpace(name))
+                    {
+                        throw new InvalidDataException("Test discovery returned an invalid runner identity or name.");
+                    }
+
+                    cases.Add(new TestCase { Id = uid, FullyQualifiedName = name, ProjectPath = project.FilePath });
+                }
+
+                continue;
+            }
+
+            var collecting = false;
             foreach (var configuredLine in string.Concat(
                     process.StandardOutput,
                     Environment.NewLine,
@@ -206,15 +225,7 @@ public sealed class TestDiscoverer
                     continue;
                 }
 
-                var isTestingPlatformCase = project.Framework == TestFramework.MicrosoftTestingPlatform
-                    && configuredLine.Length > 0
-                    && char.IsWhiteSpace(configuredLine[0])
-                    && line.Contains('.', StringComparison.Ordinal)
-                    && !line.StartsWith("xUnit.net ", StringComparison.OrdinalIgnoreCase)
-                    && !line.StartsWith("Running tests from ", StringComparison.OrdinalIgnoreCase)
-                    && !line.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
                 if (!collecting
-                    || (project.Framework == TestFramework.MicrosoftTestingPlatform && !isTestingPlatformCase)
                     || line.StartsWith("Discovered ", StringComparison.OrdinalIgnoreCase)
                     || line.StartsWith("Test run", StringComparison.OrdinalIgnoreCase)
                     || line.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
@@ -235,7 +246,7 @@ public sealed class TestDiscoverer
         }
 
         return cases
-            .DistinctBy(testCase => testCase.Id, StringComparer.Ordinal)
+            .DistinctBy(testCase => (testCase.ProjectPath, testCase.Id))
             .OrderBy(testCase => testCase.ProjectPath, StringComparer.Ordinal)
             .ThenBy(testCase => testCase.FullyQualifiedName, StringComparer.Ordinal)
             .ToArray();
@@ -246,7 +257,7 @@ public sealed class TestDiscoverer
         List<string> arguments = project.Framework == TestFramework.MicrosoftTestingPlatform
             ?
             [
-                "run", "--project", project.FilePath, "--no-restore", "--no-build", "--", "--list-tests",
+                "run", "--project", project.FilePath, "--no-restore", "--no-build", "--", "--list-tests", "json",
             ]
             :
             [

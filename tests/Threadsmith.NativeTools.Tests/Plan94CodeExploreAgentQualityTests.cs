@@ -1063,7 +1063,7 @@ public sealed class Plan94CodeExploreAgentQualityTests : IClassFixture<Plan94Cod
             }
 
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
             var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(

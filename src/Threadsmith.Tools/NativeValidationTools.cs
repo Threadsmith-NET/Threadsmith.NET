@@ -608,7 +608,11 @@ internal static class NativeValidationToolDefinitions
             ApprovalLevel.None,
             executable ? ToolSideEffect.ExecutesCode : ToolSideEffect.ReadOnly,
             executable ? TimeSpan.FromMinutes(5) : TimeSpan.FromSeconds(10),
-            1024 * 1024);
+            1024 * 1024) with
+        {
+            // Source changes can require the same validation request again.
+            AllowDuplicateInvocations = true,
+        };
     }
 }
 

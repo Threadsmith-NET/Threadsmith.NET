@@ -205,7 +205,7 @@ public sealed partial class Milestone19Tests
             var instructions = Assert.Single(messages, item => item.SectionId == "repository-instructions");
             var layout = Assert.IsType<ModelRequestLayout>(nested.Layout);
             Assert.Equal(
-                ["host-policy", "repository-instructions", "phase-policy"],
+                ["host-policy", "repository-instructions", "conversation-policy"],
                 messages.Take(layout.StablePrefixMessageCount).Select(message => message.SectionId));
             Assert.Equal(["AGENTS.md", "src/AGENTS.md", "append1.md", "append2.md"], instructions.Sources.Select(item => item.Label));
             Assert.Equal(["Repository instructions", "Repository instructions", "Appended prompts", "Appended prompts"], instructions.Sources.Select(item => item.Category));

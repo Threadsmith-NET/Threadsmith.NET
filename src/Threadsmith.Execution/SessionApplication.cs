@@ -19,21 +19,13 @@ public sealed partial class SessionApplication :
     ICommandHandler<SubmitRequestCommand, RunId>,
     ICommandHandler<WaitForRunCommand, bool>,
     ICommandHandler<CancelRunCommand, bool>,
-    ICommandHandler<ResumeRunCommand, ExecutionContinuation>,
     ICommandHandler<RequestRunSteeringPauseCommand, RunSteeringPauseRequestResult>,
     ICommandHandler<WaitForRunSteeringPauseCommand, RunSteeringPauseWaitResult>,
     ICommandHandler<SubmitRunSteeringCommand, RunSteeringSubmissionResult>,
-    ICommandHandler<ApprovePlanCommand, bool>,
-    ICommandHandler<RejectPlanCommand, bool>,
-    ICommandHandler<RevisePlanCommand, bool>,
     ICommandHandler<SetConversationContextModeCommand, bool>,
     ICommandHandler<GetConversationStateCommand, ConversationStateSnapshot>,
     ISemanticRefreshPublicationGate
 {
-    private const string ProposePlanToolName = "propose_plan";
-    private const string CompleteObjectiveToolName = "complete_objective";
-    private readonly string _proposePlanArgumentsSchema;
-
     private static readonly Meter _meter = new("Threadsmith.Execution");
     private static readonly Histogram<double> _semanticAdmissionWait = _meter.CreateHistogram<double>(
         "threadsmith.semantic.refresh.admission_wait.duration",
@@ -50,20 +42,9 @@ public sealed partial class SessionApplication :
     private readonly ConversationContextMode _defaultConversationMode;
     private readonly ModelProfileId? _defaultModelProfileId;
     private readonly IEvidenceStore? _evidenceStore;
-    private readonly IExecutionOrchestrator? _executionOrchestrator;
     private readonly IHookCoordinator? _hooks;
-    private readonly IPlanApprovalPolicy? _planApprovalPolicy;
-    private readonly IPlanSanityChecker? _planSanityChecker;
     private readonly ISemanticRefreshCoordinator? _semanticRefreshCoordinator;
-    private readonly Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
-        _executionRequestFactory;
-
-    private readonly Func<SessionId, CancellationToken, Task<SessionProjection?>>?
-        _sessionProjectionReader;
-
-    private readonly Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
-        _planSanityRequestFactory;
-
+    private readonly SourceEditApplication? _sourceEdits;
     private readonly IActiveTurnCompactor? _activeTurnCompactor;
     private readonly ActiveTurnCompactionPolicy _activeTurnCompactionPolicy;
     private readonly ActiveTurnCompactionCandidateProfile? _activeTurnCompactionProfile;
@@ -72,9 +53,6 @@ public sealed partial class SessionApplication :
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
 
-    // Keep same-process continuation context outside completed registrations. This is deliberately
-    // non-durable: restored conversation text must never mint or restore transient URL authority.
-    private readonly ConcurrentDictionary<RunId, IReadOnlyList<string>> _resumableCurrentTurnHostContexts = new();
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
     private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
     private readonly RunSteeringCoordinator _steering;
@@ -116,81 +94,6 @@ public sealed partial class SessionApplication :
     }
 
     /// <inheritdoc />
-    public async Task<ExecutionContinuation> HandleAsync(
-        ResumeRunCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        var orchestrator = _executionOrchestrator
-            ?? throw new InvalidOperationException("The execution orchestrator is unavailable.");
-        var registration = await GetResumeRegistrationAsync(command, cancellationToken);
-
-        var request = await orchestrator.GetResumeRequestAsync(
-            command.SessionId,
-            command.RunId,
-            cancellationToken);
-        if (registration is not null && !registration.Completion.Task.IsCompleted)
-        {
-            if (registration.WorkspaceId != request.Baseline.WorkspaceId)
-            {
-                throw new InvalidOperationException("The active execution workspace no longer matches its resume request.");
-            }
-
-            // This run already owns admission. Its post-apply validation must finish before
-            // refresh publication can drain active runs; re-entering admission would wait on itself.
-            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
-                cancellationToken, registration.Cancellation.Token);
-            return await orchestrator.ResumeAsync(command.SessionId, command.RunId, lifetime.Token);
-        }
-
-        if (_semanticRefreshCoordinator is null)
-        {
-            return await ResumeWithAdmissionAsync(
-                command,
-                request,
-                orchestrator,
-                cancellationToken);
-        }
-
-        while (true)
-        {
-            var refresh = await _semanticRefreshCoordinator.EnsureCurrentAsync(
-                command.SessionId,
-                SemanticRefreshReason.UserAdmission,
-                cancellationToken);
-            if (refresh.WorkspaceId != request.Baseline.WorkspaceId)
-            {
-                throw new InvalidOperationException(
-                    "The resumed execution workspace no longer matches the session's semantic binding.");
-            }
-
-            var gate = _semanticAdmissionGates.GetOrAdd(
-                SemanticAdmissionKey.Create(command.SessionId, refresh.WorkspaceId),
-                static _ => new SemaphoreSlim(1, 1));
-            await gate.WaitAsync(cancellationToken);
-            try
-            {
-                if (!_semanticRefreshCoordinator.TryAdmitCurrent(
-                    command.SessionId,
-                    refresh.WorkspaceId,
-                    static () => true))
-                {
-                    continue;
-                }
-
-                return await ResumeAndAttachAsync(
-                    command,
-                    request,
-                    orchestrator,
-                    cancellationToken);
-            }
-            finally
-            {
-                gate.Release();
-            }
-        }
-    }
-
-    /// <inheritdoc />
     public async Task<TResult> PublishAsync<TResult>(
         SessionId sessionId,
         WorkspaceId workspaceId,
@@ -209,21 +112,8 @@ public sealed partial class SessionApplication :
         await admissionGate.WaitAsync(cancellationToken);
         try
         {
-            // These completion tasks are the intentional cross-command terminal signals owned by each run.
-#pragma warning disable VSTHRD003
-            var activeRuns = _runs.Values
-                .Where(registration => workspaceId == default
-                    ? registration.WorkspaceId == default && registration.SessionId == sessionId
-                    : registration.WorkspaceId == workspaceId)
-                .Where(registration => !registration.Completion.Task.IsCompleted)
-                .Select(registration => registration.Completion.Task)
-                .ToArray();
-#pragma warning restore VSTHRD003
-            foreach (var activeRun in activeRuns)
-            {
-                await WaitForTerminalStateAsync(activeRun, cancellationToken);
-            }
-
+            // Compiler operations retain their source generation and actual resource lifetime.
+            // Waiting for this run here would deadlock an edit that publishes its own next generation.
             return await publication(cancellationToken);
         }
         finally
@@ -251,17 +141,10 @@ public sealed partial class SessionApplication :
         SessionUsageProjection? sessionUsage = null,
         IConversationStore? conversationStore = null,
         ConversationContextMode defaultConversationMode = ConversationContextMode.ConversationAware,
-        IExecutionOrchestrator? executionOrchestrator = null,
-        Func<SessionId, RunId, TaskSpecification, ImplementationPlan, CancellationToken, Task<ExecutionStartRequest?>>?
-            executionRequestFactory = null,
         IHookCoordinator? hooks = null,
         Func<IBudget>? budgetFactory = null,
         Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
             userUrlIntake = null,
-        IPlanSanityChecker? planSanityChecker = null,
-        IPlanApprovalPolicy? planApprovalPolicy = null,
-        Func<SessionId, ImplementationPlan, CancellationToken, Task<PlanSanityCheckRequest?>>?
-            planSanityRequestFactory = null,
         IActiveTurnCompactor? activeTurnCompactor = null,
         ActiveTurnCompactionPolicy? activeTurnCompactionPolicy = null,
         ActiveTurnCompactionCandidateProfile? activeTurnCompactionProfile = null,
@@ -273,7 +156,7 @@ public sealed partial class SessionApplication :
         ISemanticRefreshCoordinator? semanticRefreshCoordinator = null,
         IManagedRepositoryMemoryService? repositoryMemories = null,
         IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null,
-        Func<SessionId, CancellationToken, Task<SessionProjection?>>? sessionProjectionReader = null)
+        SourceEditApplication? sourceEdits = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -289,13 +172,6 @@ public sealed partial class SessionApplication :
                 nameof(toolPipeline));
         }
 
-        if ((executionOrchestrator is null) != (executionRequestFactory is null))
-        {
-            throw new ArgumentException(
-                "The execution orchestrator and start-request factory must be configured together.",
-                nameof(executionOrchestrator));
-        }
-
         _events = events;
         _model = model;
         _budgetFactory = budgetFactory ?? budget switch
@@ -309,13 +185,8 @@ public sealed partial class SessionApplication :
         _toolContextFactory = toolContextFactory;
         _contextAssembler = contextAssembler;
         _evidenceStore = evidenceStore;
-        _executionOrchestrator = executionOrchestrator;
-        _executionRequestFactory = executionRequestFactory;
-        _sessionProjectionReader = sessionProjectionReader;
+        _sourceEdits = sourceEdits;
         _hooks = hooks;
-        _planSanityChecker = planSanityChecker;
-        _planApprovalPolicy = planApprovalPolicy;
-        _planSanityRequestFactory = planSanityRequestFactory;
         _activeTurnCompactor = activeTurnCompactor;
         _activeTurnCompactionPolicy = activeTurnCompactionPolicy ?? new ActiveTurnCompactionPolicy();
         _activeTurnCompactionPolicy.Validate();
@@ -324,7 +195,6 @@ public sealed partial class SessionApplication :
         _toolRegistry = toolRegistry;
         _defaultModelProfileId = defaultModelProfileId;
         _limits = limits ?? ExecutionLimits.Default;
-        _proposePlanArgumentsSchema = CreateProposePlanArgumentsSchema(_limits.Plan);
         _sessionPreferences = sessionPreferences;
         _sessionUsage = sessionUsage;
         _selectActiveModel = selectActiveModel;
@@ -479,41 +349,6 @@ public sealed partial class SessionApplication :
         }
 
         await registration.Cancellation.CancelAsync();
-        if (registration.PendingApprovalId is { } approvalId)
-        {
-            await registration.Gate.WaitAsync(cancellationToken);
-            try
-            {
-                if (!registration.Completion.Task.IsCompleted)
-                {
-                    await _events.PublishAsync(
-                        new ApprovalDenied(
-                            command.SessionId,
-                            DateTimeOffset.UtcNow,
-                            approvalId,
-                            "Run cancelled while awaiting plan approval."),
-                        cancellationToken);
-                    registration.PendingApprovalId = null;
-                    await registration.Machine.TransitionAsync(
-                        RunPhase.Cancelled,
-                        "cancellation requested",
-                        cancellationToken);
-                    await _events.PublishAsync(
-                        new RunCompleted(
-                            command.SessionId,
-                            DateTimeOffset.UtcNow,
-                            command.RunId,
-                            false),
-                        cancellationToken);
-                    registration.Completion.TrySetCanceled(registration.Cancellation.Token);
-                }
-            }
-            finally
-            {
-                registration.Gate.Release();
-            }
-        }
-
         return true;
     }
 
@@ -596,205 +431,6 @@ public sealed partial class SessionApplication :
 
     /// <inheritdoc />
     public async Task<bool> HandleAsync(
-        ApprovePlanCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        if (!TryGetPendingPlan(command.SessionId, command.RunId, out var registration))
-        {
-            return false;
-        }
-
-        await registration.Gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (registration.PendingApprovalId is not { } approvalId
-                || registration.Completion.Task.IsCompleted)
-            {
-                return false;
-            }
-
-            var approvedPlan = registration.PendingPlan
-                ?? throw new InvalidOperationException("The approved plan is no longer available.");
-            await _events.PublishAsync(
-                new ApprovalGranted(command.SessionId, DateTimeOffset.UtcNow, approvalId),
-                cancellationToken);
-            registration.PendingApprovalId = null;
-            return await ContinueApprovedPlanAsync(
-                command.RunId,
-                registration,
-                approvedPlan,
-                approvalId,
-                cancellationToken);
-        }
-        finally
-        {
-            registration.Gate.Release();
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<bool> HandleAsync(
-        RejectPlanCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(command.Reason);
-        if (!TryGetPendingPlan(command.SessionId, command.RunId, out var registration))
-        {
-            return false;
-        }
-
-        await registration.Gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (registration.PendingApprovalId is not { } approvalId
-                || registration.Completion.Task.IsCompleted)
-            {
-                return false;
-            }
-
-            await _events.PublishAsync(
-                new ApprovalDenied(
-                    command.SessionId,
-                    DateTimeOffset.UtcNow,
-                    approvalId,
-                    _sanitizer.Sanitize(command.Reason)),
-                cancellationToken);
-            registration.PendingApprovalId = null;
-            await registration.Machine.TransitionAsync(
-                RunPhase.Cancelled,
-                "plan rejected",
-                cancellationToken);
-            await _events.PublishAsync(
-                new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, command.RunId, false),
-                cancellationToken);
-            registration.Completion.TrySetResult(false);
-            await registration.Cancellation.CancelAsync();
-            return true;
-        }
-        finally
-        {
-            registration.Gate.Release();
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<bool> HandleAsync(
-        RevisePlanCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(command.RevisionInstructions);
-        if (_contextAssembler is null
-            || !TryGetPendingPlan(command.SessionId, command.RunId, out var registration))
-        {
-            return false;
-        }
-
-        await registration.Gate.WaitAsync(cancellationToken);
-        try
-        {
-            if (registration.PendingApprovalId is null
-                || registration.Completion.Task.IsCompleted)
-            {
-                return false;
-            }
-
-            var instructions = _sanitizer.Sanitize(command.RevisionInstructions);
-            await _events.PublishAsync(
-                new PlanRevisionRequested(
-                    command.SessionId,
-                    DateTimeOffset.UtcNow,
-                    command.RunId,
-                    instructions),
-                cancellationToken);
-            registration.Task = registration.Task with
-            {
-                UserConstraints =
-                [
-                    .. registration.Task.UserConstraints ?? [],
-                    $"Plan revision request: {instructions}",
-                ],
-            };
-            registration.PendingApprovalId = null;
-            var stopwatch = Stopwatch.StartNew();
-            try
-            {
-                PlanPublication revisedPublication;
-                try
-                {
-                    revisedPublication = await GeneratePlanAsync(
-                        command.RunId,
-                        registration,
-                        RunPhase.AwaitingPlanApproval,
-                        cancellationToken) ?? throw new MalformedModelOutputException(
-                            "The revision response did not contain a structured plan.");
-                }
-                finally
-                {
-                    await SettlePlanningUsageAsync(
-                        command.RunId,
-                        registration,
-                        _executionOrchestrator,
-                        stopwatch);
-                }
-
-                await PublishPlanAsync(
-                    command.RunId,
-                    registration,
-                    revisedPublication.Plan,
-                    revisedPublication.Decision,
-                    cancellationToken);
-                return true;
-            }
-            catch (Exception exception)
-            {
-                var classification = ModelFailureClassifier.Classify(exception);
-                await registration.Machine.TransitionAsync(
-                    exception is OperationCanceledException
-                        ? RunPhase.Cancelled
-                        : RunPhase.Failed,
-                    "plan revision failed",
-                    CancellationToken.None);
-                await _events.PublishAsync(
-                    new DiagnosticObserved(
-                        command.SessionId,
-                        DateTimeOffset.UtcNow,
-                        classification.ToString(),
-                        _sanitizer.Sanitize(exception.Message)),
-                    CancellationToken.None);
-                await _events.PublishAsync(
-                    new RunCompleted(
-                        command.SessionId,
-                        DateTimeOffset.UtcNow,
-                        command.RunId,
-                        false),
-                    CancellationToken.None);
-                await registration.Cancellation.CancelAsync();
-                if (registration.SteeringRegistered)
-                {
-                    _steering.CompleteRun(registration.SessionId, command.RunId);
-                    registration.SteeringRegistered = false;
-                }
-
-                if (exception is OperationCanceledException cancellation)
-                {
-                    registration.Completion.TrySetCanceled(cancellation.CancellationToken);
-                }
-                else
-                {
-                    registration.Completion.TrySetException(exception);
-                }
-
-                throw;
-            }
-        }
-        finally
-        {
-            registration.Gate.Release();
-        }
-    }
-
-    /// <inheritdoc />
-    public async Task<bool> HandleAsync(
         SetConversationContextModeCommand command,
         CancellationToken cancellationToken = default)
     {
@@ -830,58 +466,6 @@ public sealed partial class SessionApplication :
         _sessions.TryRemove(sessionId, out _);
     }
 
-    private static string CreateProposePlanArgumentsSchema(PlanResourceLimits limits)
-    {
-        return $$"""
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["summary", "steps", "risks", "outstandingQuestions"],
-          "properties": {
-            "summary": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} },
-            "steps": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": {{limits.MaximumSteps}},
-              "items": {
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["title", "description", "fileIntents", "expectedOutcome", "validation"],
-                "properties": {
-                  "title": { "type": "string", "maxLength": {{limits.MaximumTitleCharacters}} },
-                  "description": { "type": "string", "maxLength": {{limits.MaximumDescriptionCharacters}} },
-                  "fileIntents": {
-                    "type": "array",
-                    "description": "Every step must declare at least one concrete file change. Put review-only or verification work in a relevant step's validation array.",
-                    "minItems": 1,
-                    "maxItems": {{limits.MaximumMetadataItems}},
-                    "items": {
-                      "type": "object",
-                      "additionalProperties": false,
-                      "required": ["kind", "path"],
-                      "properties": {
-                        "kind": { "type": "string", "enum": ["Modify", "Create", "Delete", "Move", "Rename"] },
-                        "path": { "type": "string", "maxLength": {{limits.MaximumPathCharacters}} },
-                        "destinationPath": {
-                          "type": ["string", "null"],
-                          "description": "Required for Move/Rename: the repository-relative destination path. Omit for Modify/Create/Delete; use null if the transport requires this property.",
-                          "maxLength": {{limits.MaximumPathCharacters}}
-                        }
-                      }
-                    }
-                  },
-                  "expectedOutcome": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} },
-                  "validation": { "type": "array", "maxItems": {{limits.MaximumMetadataItems}}, "items": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} } }
-                }
-              }
-            },
-            "risks": { "type": "array", "maxItems": {{limits.MaximumMetadataItems}}, "items": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} } },
-            "outstandingQuestions": { "type": "array", "maxItems": {{limits.MaximumMetadataItems}}, "items": { "type": "string", "maxLength": {{limits.MaximumSummaryCharacters}} } }
-          }
-        }
-        """;
-    }
-
     private CorrectiveMessageFactory RequireCorrectiveMessages()
     {
         return _correctiveMessages;
@@ -890,18 +474,6 @@ public sealed partial class SessionApplication :
     private IPromptLoader RequirePrompts()
     {
         return _prompts;
-    }
-
-    private static async Task WaitForTerminalStateAsync(
-        Task<bool> activeRun,
-        CancellationToken cancellationToken)
-    {
-        // Run failure and cancellation are already projected by ExecuteRunAsync. Publication needs only
-        // the terminal boundary, while cancellation of this waiter must remain observable to its caller.
-        await ((Task)activeRun)
-            .WaitAsync(cancellationToken)
-            .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
-        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private RunId AdmitRun(
@@ -951,176 +523,7 @@ public sealed partial class SessionApplication :
         }
 
         _steering.RegisterRun(command.SessionId, runId);
-        registration.SteeringRegistered = true;
         return true;
-    }
-
-    private async Task<ExecutionContinuation> ResumeWithAdmissionAsync(
-        ResumeRunCommand command,
-        ExecutionStartRequest request,
-        IExecutionOrchestrator orchestrator,
-        CancellationToken cancellationToken)
-    {
-        var gate = _semanticAdmissionGates.GetOrAdd(
-            SemanticAdmissionKey.Create(command.SessionId, request.Baseline.WorkspaceId),
-            static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            return await ResumeAndAttachAsync(
-                command,
-                request,
-                orchestrator,
-                cancellationToken);
-        }
-        finally
-        {
-            gate.Release();
-        }
-    }
-
-    private async Task<RunRegistration?> GetResumeRegistrationAsync(
-        ResumeRunCommand command,
-        CancellationToken cancellationToken)
-    {
-        _runs.TryGetValue(command.RunId, out var registration);
-        if (registration is not null && registration.SessionId != command.SessionId)
-        {
-            throw new UnauthorizedAccessException("The execution does not belong to the requesting session.");
-        }
-
-        if (registration?.Cancellation.IsCancellationRequested == true
-            && registration.ExecutionObservation is { } observation)
-        {
-            await observation.WaitAsync(cancellationToken);
-        }
-
-        return registration;
-    }
-
-    private async Task<ExecutionContinuation> ResumeAndAttachAsync(
-        ResumeRunCommand command,
-        ExecutionStartRequest request,
-        IExecutionOrchestrator orchestrator,
-        CancellationToken cancellationToken)
-    {
-        var previous = await GetResumeRegistrationAsync(command, cancellationToken);
-        if (previous is not null && !previous.Completion.Task.IsCompleted)
-        {
-            return await orchestrator.ResumeAsync(
-                command.SessionId,
-                command.RunId,
-                cancellationToken);
-        }
-
-        if (previous?.ExecutionObservation is { } finishedObservation)
-        {
-            await finishedObservation.WaitAsync(cancellationToken);
-        }
-
-        var pendingPlan = request.AllowPlanContinuation
-            ? await GetPendingPlanAsync(
-                command.SessionId,
-                command.RunId,
-                request.ApprovedPlan.Revision,
-                cancellationToken)
-            : null;
-        var registration = CreateRunRegistration(
-            command.SessionId,
-            command.RunId,
-            request.Baseline.WorkspaceId,
-            request.Task,
-            pendingPlan is null ? RunPhase.ImplementationPreparing : RunPhase.AwaitingPlanApproval,
-            cancellationToken);
-        registration.BaseCurrentTurnHostContext = previous?.BaseCurrentTurnHostContext
-            ?? (_resumableCurrentTurnHostContexts.TryGetValue(command.RunId, out var resumableHostContext)
-                ? resumableHostContext
-                : []);
-        registration.CurrentTurnHostContext = registration.BaseCurrentTurnHostContext;
-        var usage = registration.Budget.Accrue(request.InitialBudgetUsage);
-        if (usage.IsExhausted)
-        {
-            registration.Cancellation.Dispose();
-            throw new BudgetExceededException(usage.Reason ?? "Execution budget exhausted.");
-        }
-
-        registration.ExecutionStarted = true;
-        registration.IncrementalPlanExecution = request.AllowPlanContinuation;
-        registration.PendingPlan = pendingPlan?.Plan;
-        registration.PendingApprovalId = pendingPlan?.ApprovalId;
-        registration.LastPublishedPlan = pendingPlan?.Plan ?? request.ApprovedPlan;
-        var installed = previous is not null
-            && _runs.TryUpdate(command.RunId, registration, previous);
-        installed = installed || _runs.TryAdd(command.RunId, registration);
-        if (!installed)
-        {
-            registration.Cancellation.Dispose();
-            throw new InvalidOperationException("The execution became active while resume admission was in progress.");
-        }
-
-        previous?.Cancellation.Dispose();
-        try
-        {
-            _steering.RegisterRun(command.SessionId, command.RunId);
-            registration.SteeringRegistered = true;
-            var checkpoint = await orchestrator.ResumeAsync(
-                command.SessionId,
-                command.RunId,
-                registration.Cancellation.Token);
-            if (pendingPlan is not null
-                && checkpoint.Phase is not (ExecutionCheckpointPhase.PlanContinuationPending
-                    or ExecutionCheckpointPhase.PlanReplanningPending))
-            {
-                throw new InvalidDataException(
-                    "The pending replacement plan does not correspond to an incremental execution boundary.");
-            }
-
-            registration.LastPlanBoundaryOrdinal = pendingPlan is null
-                ? checkpoint.PlanOrdinal - 1
-                : checkpoint.PlanOrdinal;
-            registration.LastArchivedPlanBoundaryOrdinal = checkpoint.Phase is
-                ExecutionCheckpointPhase.PlanContinuationPending
-                or ExecutionCheckpointPhase.PlanReplanningPending
-                    ? checkpoint.PlanOrdinal
-                    : checkpoint.PlanOrdinal - 1;
-            registration.ReplanningPlan = checkpoint.Phase == ExecutionCheckpointPhase.PlanReplanningPending
-                ? request.ApprovedPlan
-                : null;
-            if (_conversationStore is not null)
-            {
-                var snapshot = await _conversationStore.GetSnapshotAsync(
-                    command.SessionId,
-                    cancellationToken: registration.Cancellation.Token);
-                registration.SourceMessage = snapshot.Messages.FirstOrDefault(message =>
-                    message.RunId == command.RunId && message.Role == ConversationRole.User);
-                registration.CurrentMessageId = registration.SourceMessage?.Id;
-                registration.ConversationMode = snapshot.Mode;
-            }
-
-            registration.ExecutionObservation = CompleteExecutionAsync(command.RunId, registration);
-            return checkpoint;
-        }
-        catch (Exception exception)
-        {
-            if (exception is OperationCanceledException && registration.Cancellation.IsCancellationRequested)
-            {
-                registration.Completion.TrySetCanceled(registration.Cancellation.Token);
-            }
-            else
-            {
-                registration.Completion.TrySetException(exception);
-            }
-
-            if (registration.SteeringRegistered)
-            {
-                _steering.CompleteRun(command.SessionId, command.RunId);
-                registration.SteeringRegistered = false;
-            }
-
-            _runs.TryRemove(new KeyValuePair<RunId, RunRegistration>(command.RunId, registration));
-            registration.Cancellation.Dispose();
-            throw;
-        }
     }
 
     private RunRegistration CreateRunRegistration(
@@ -1180,9 +583,6 @@ public sealed partial class SessionApplication :
                 ];
             }
 
-            registration.BaseCurrentTurnHostContext = registration.CurrentTurnHostContext;
-            SetIncrementalPlanningContext(registration, plansUsed: 0);
-
             if (_conversationStore is not null)
             {
                 var conversationState = await _conversationStore.GetSnapshotAsync(
@@ -1209,7 +609,7 @@ public sealed partial class SessionApplication :
                 "request accepted",
                 registration.Cancellation.Token);
 
-            var publication = await GeneratePlanAsync(
+            await RunConversationAsync(
                 runId,
                 registration,
                 registration.Machine.Phase,
@@ -1217,37 +617,19 @@ public sealed partial class SessionApplication :
             stopwatch.Stop();
             AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
 
-            if (publication is not null)
-            {
-                if (registration.Machine.Phase == RunPhase.EvidenceCollection)
-                {
-                    await registration.Machine.TransitionAsync(
-                        RunPhase.ChangePlanning,
-                        "model proposed governed repository work",
-                        registration.Cancellation.Token);
-                }
-
-                await PublishPlanAsync(
-                    runId,
-                    registration,
-                    publication.Plan,
-                    publication.Decision,
-                    registration.Cancellation.Token);
-                return;
-            }
-
             registration.Cancellation.Token.ThrowIfCancellationRequested();
 
             // Once the terminal state commits, publish its outcome and release waiters even
             // if cancellation arrives while subscribers are processing that final publication.
+            var editSucceeded = await RecordDirectEditOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Completed, registration.Cancellation.Token);
             await registration.Machine.TransitionAsync(
-                RunPhase.Completion,
+                editSucceeded ? RunPhase.Completion : RunPhase.Failed,
                 "scripted activity completed",
                 CancellationToken.None);
             await _events.PublishAsync(
-                new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, true),
+                new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, editSucceeded),
                 CancellationToken.None);
-            registration.Completion.TrySetResult(true);
+            registration.Completion.TrySetResult(editSucceeded);
         }
         catch (OperationCanceledException)
         {
@@ -1256,6 +638,7 @@ public sealed partial class SessionApplication :
                 return;
             }
 
+            await RecordDirectEditOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Cancelled);
             await registration.Machine.TransitionAsync(
                 RunPhase.Cancelled,
                 "cancellation requested",
@@ -1275,6 +658,7 @@ public sealed partial class SessionApplication :
                 ModelFailureClassifier.Classify(exception),
                 sanitizedMessage);
             var classification = ModelFailureClassifier.Classify(exception);
+            await RecordDirectEditOutcomeAsync(command.SessionId, runId, ExecutionCheckpointPhase.Failed);
             await registration.Machine.TransitionAsync(
                 RunPhase.Failed,
                 "run failed",
@@ -1293,325 +677,61 @@ public sealed partial class SessionApplication :
         }
         finally
         {
-            if (!registration.ExecutionStarted || registration.Completion.Task.IsCompleted)
-            {
-                _steering.CompleteRun(command.SessionId, runId);
-                registration.SteeringRegistered = false;
-            }
+            _sourceEdits?.CompleteRun(runId);
+            _steering.CompleteRun(command.SessionId, runId);
         }
     }
 
-    private async Task CompleteExecutionAsync(
-        RunId runId,
-        RunRegistration registration)
+    private async Task<bool> RecordDirectEditOutcomeAsync(SessionId sessionId, RunId runId, ExecutionCheckpointPhase status, CancellationToken cancellationToken = default)
     {
-        using var observationCancellation = CancellationTokenSource.CreateLinkedTokenSource(registration.Cancellation.Token);
+        if (_sourceEdits is null)
+        {
+            return true;
+        }
+
         try
         {
-            var orchestrator = _executionOrchestrator
-                ?? throw new InvalidOperationException("The execution orchestrator is unavailable.");
-            if (registration.IncrementalPlanExecution)
+            var outcome = await _sourceEdits.RecordRunOutcomeAsync(sessionId, runId, status, cancellationToken);
+            if (outcome is not null && _conversationStore is not null)
             {
-                await CompleteIncrementalExecutionAsync(runId, registration, orchestrator, observationCancellation.Token);
-                return;
-            }
-
-            var outcome = await orchestrator.WaitForOutcomeAsync(
-                runId,
-                observationCancellation.Token);
-            await FinalizeExecutionOutcomeAsync(runId, registration, outcome);
-        }
-        catch (OperationCanceledException)
-        {
-            if (registration.Completion.Task.IsCompleted)
-            {
-                return;
-            }
-
-            await registration.Machine.TransitionAsync(
-                RunPhase.Cancelled,
-                "execution cancelled",
-                CancellationToken.None);
-            await _events.PublishAsync(
-                new RunCompleted(
-                    registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    runId,
-                    false),
-                CancellationToken.None);
-            registration.Completion.TrySetCanceled(registration.Cancellation.Token);
-        }
-        catch (Exception exception)
-        {
-            _logger.LogError(
-                exception,
-                "Execution completion observation failed for run {RunId}.",
-                runId.Value);
-            await registration.Machine.TransitionAsync(
-                RunPhase.Failed,
-                "execution completion observation failed",
-                CancellationToken.None);
-            await _events.PublishAsync(
-                new RunCompleted(
-                    registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    runId,
-                    false),
-                CancellationToken.None);
-            registration.Completion.TrySetException(exception);
-        }
-        finally
-        {
-            _steering.CompleteRun(registration.SessionId, runId);
-            registration.SteeringRegistered = false;
-            await observationCancellation.CancelAsync();
-        }
-    }
-
-    private async Task CompleteIncrementalExecutionAsync(
-        RunId runId,
-        RunRegistration registration,
-        IExecutionOrchestrator orchestrator,
-        CancellationToken cancellationToken)
-    {
-        var terminalTask = orchestrator.WaitForOutcomeAsync(
-            runId,
-            cancellationToken);
-        while (!registration.Completion.Task.IsCompleted)
-        {
-            var boundaryTask = orchestrator.WaitForPlanCompletionAsync(
-                runId,
-                registration.LastPlanBoundaryOrdinal,
-                cancellationToken);
-            var completed = await Task.WhenAny(
-                boundaryTask,
-                terminalTask);
-
-            if (completed == terminalTask)
-            {
-                await FinalizeExecutionOutcomeAsync(runId, registration, await terminalTask);
-                return;
-            }
-
-            var boundary = await boundaryTask;
-            registration.LastPlanBoundaryOrdinal = boundary.PlanOrdinal;
-            registration.ReplanningPlan = boundary.PlanUnderRevision;
-            AccrueBudgetAtLeastOrThrow(registration, boundary.Progress.BudgetUsed);
-            if (boundary.PlanOrdinal > registration.LastArchivedPlanBoundaryOrdinal)
-            {
-                await ArchiveExecutionOutcomeAsync(
-                    runId,
-                    registration,
-                    boundary.Progress,
-                    CancellationToken.None);
-                registration.LastArchivedPlanBoundaryOrdinal = boundary.PlanOrdinal;
-            }
-
-            registration.PendingPlan = null;
-            var boundaryReason = boundary.PlanUnderRevision is null
-                ? "validated plan tranche completed; remaining objective assessment started"
-                : "implementation requested investigation and replacement of unfinished work";
-            await registration.Machine.TransitionAsync(
-                RunPhase.EvidenceCollection,
-                boundaryReason,
-                registration.Cancellation.Token);
-            SetIncrementalPlanningContext(registration, boundary.PlanOrdinal, boundary.Progress);
-
-            PlanPublication? publication;
-            var stopwatch = Stopwatch.StartNew();
-            try
-            {
-                publication = await GeneratePlanAsync(
-                    runId,
-                    registration,
-                    RunPhase.EvidenceCollection,
-                    registration.Cancellation.Token);
-            }
-            finally
-            {
-                await SettlePlanningUsageAsync(
-                    runId,
-                    registration,
-                    orchestrator,
-                    stopwatch);
-            }
-
-            if (publication is null)
-            {
-                if (!registration.ObjectiveCompletionRequested || registration.ReplanningPlan is not null)
+                try
                 {
-                    await registration.Machine.TransitionAsync(
-                        RunPhase.Cancelled,
-                        "objective assessment ended without confirmed completion; explicit resume is available",
-                        CancellationToken.None);
-                    await _events.PublishAsync(
-                        new RunCompleted(registration.SessionId, DateTimeOffset.UtcNow, runId, false),
-                        CancellationToken.None);
-                    CompleteSteeringIfRegistered(runId, registration);
-                    registration.Completion.TrySetResult(false);
-                    return;
+                    var outcomeJson = JsonSerializer.Serialize(new
+                    {
+                        RunId = runId.Value,
+                        Status = outcome.Status.ToString(),
+                        ChangedFiles = outcome.ChangedFiles.Take(32),
+                        OmittedFileCount = Math.Max(0, outcome.ChangedFiles.Count - 32),
+                        ValidationStatus = outcome.Validation?.Gate.Status.ToString(),
+                        ValidationReasons = outcome.Validation?.Gate.Reasons.Take(8),
+                        outcome.FinalDiff,
+                        ResidualRisks = outcome.ResidualRisks.Take(8),
+                    });
+                    var content = _prompts.Render(PromptFileNames.ContextExecutionOutcome, new Dictionary<string, string>(StringComparer.Ordinal)
+                    {
+                        ["OutcomeJson"] = JsonOutputSanitizer.Sanitize(outcomeJson, _sanitizer),
+                    });
+                    await ArchiveVisibleMessageAsync(sessionId, runId, ConversationRole.Assistant, content, CancellationToken.None);
                 }
-
-                var outcome = await orchestrator.CompleteObjectiveAsync(
-                    registration.SessionId,
-                    runId,
-                    registration.Cancellation.Token);
-                await FinalizeExecutionOutcomeAsync(runId, registration, outcome);
-                return;
+                catch (Exception exception)
+                {
+                    _logger.LogWarning(exception, "The authoritative direct-edit outcome for run {RunId} could not be archived", runId.Value);
+                }
             }
 
-            await registration.Machine.TransitionAsync(
-                RunPhase.ChangePlanning,
-                "model proposed the next governed plan tranche",
-                registration.Cancellation.Token);
-            await PublishPlanAsync(
-                runId,
-                registration,
-                publication.Plan,
-                publication.Decision,
-                registration.Cancellation.Token);
+            return outcome is null || outcome.Status == ExecutionCheckpointPhase.Completed;
         }
-    }
-
-    private async Task FinalizeExecutionOutcomeAsync(
-        RunId runId,
-        RunRegistration registration,
-        ExecutionOutcomeProjection outcome)
-    {
-        var succeeded = outcome.Status == ExecutionCheckpointPhase.Completed;
-        _resumableCurrentTurnHostContexts.TryRemove(runId, out _);
-
-        // Complete the archived exchange before another request can observe this run as finished.
-        await ArchiveExecutionOutcomeAsync(runId, registration, outcome, CancellationToken.None);
-        await registration.Machine.TransitionAsync(
-            succeeded ? RunPhase.Completion : RunPhase.Failed,
-            "authoritative execution outcome recorded",
-            CancellationToken.None);
-        await _events.PublishAsync(
-            new RunCompleted(
-                registration.SessionId,
-                DateTimeOffset.UtcNow,
-                runId,
-                succeeded),
-            CancellationToken.None);
-        registration.Completion.TrySetResult(succeeded);
-    }
-
-    private void CompleteSteeringIfRegistered(RunId runId, RunRegistration registration)
-    {
-        if (!registration.SteeringRegistered)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return;
-        }
-
-        _steering.CompleteRun(registration.SessionId, runId);
-        registration.SteeringRegistered = false;
-    }
-
-    private void SetIncrementalPlanningContext(
-        RunRegistration registration,
-        int plansUsed,
-        ExecutionOutcomeProjection? progress = null)
-    {
-        if (!_limits.IncrementalPlanning.Enabled || _executionOrchestrator is null)
-        {
-            registration.CurrentTurnHostContext = registration.BaseCurrentTurnHostContext;
-            return;
-        }
-
-        var options = _limits.IncrementalPlanning;
-        registration.CurrentTurnHostContext =
-        [
-            .. registration.BaseCurrentTurnHostContext,
-            .. progress is null ? Array.Empty<string>() : [CreateExecutionOutcomeContent(registration, progress)],
-            .. registration.ReplanningPlan is null ? Array.Empty<string>() : [RequirePrompts().Get(PromptFileNames.ContextReplanning)],
-            RequirePrompts().Render(
-                PromptFileNames.ContextIncrementalPlanning,
-                new Dictionary<string, string>(StringComparer.Ordinal)
-                {
-                    ["PlansUsed"] = plansUsed.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture),
-                    ["TargetSteps"] = options.TargetSteps.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture),
-                    ["TargetFiles"] = options.TargetFiles.ToString(
-                        System.Globalization.CultureInfo.InvariantCulture),
-                }),
-        ];
-    }
-
-    private async Task ArchiveExecutionOutcomeAsync(
-        RunId runId,
-        RunRegistration registration,
-        ExecutionOutcomeProjection outcome,
-        CancellationToken cancellationToken)
-    {
-        if (_conversationStore is null)
-        {
-            return;
-        }
-
-        try
-        {
-            // Keep the authoritative result in ordinary history. Raw diffs and full diagnostics
-            // remain in execution artifacts; transcript retention and context budgets still apply.
-            await ArchiveVisibleMessageAsync(
-                registration.SessionId,
-                runId,
-                ConversationRole.Assistant,
-                CreateExecutionOutcomeContent(registration, outcome),
-                cancellationToken);
+            throw;
         }
         catch (Exception exception)
         {
-            // An archive failure cannot change the already-persisted mutation outcome.
-            _logger.LogWarning(
-                exception,
-                "Execution outcome for run {RunId} could not be archived in conversation history; the authoritative execution result is unchanged.",
-                runId.Value);
+            // Durable per-edit receipts remain authoritative even when optional cumulative evidence fails.
+            _logger.LogWarning(exception, "Cumulative direct-edit evidence is unavailable for run {RunId}", runId.Value);
+            await _events.PublishAsync(new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "SourceEditOutcomeUnavailable", "Cumulative edit evidence is unavailable; individual durable edit receipts remain authoritative."), CancellationToken.None);
+            return false;
         }
-    }
-
-    private string CreateExecutionOutcomeContent(RunRegistration registration, ExecutionOutcomeProjection outcome)
-    {
-        var outcomeJson = JsonSerializer.Serialize(new
-        {
-            RunId = outcome.RunId.Value,
-            Request = registration.Task.Intent,
-            Status = outcome.Status.ToString(),
-            CompletedStepIds = outcome.CompletedStepIds.Select(step => step.Value),
-            UncompletedStepIds = outcome.UncompletedStepIds.Select(step => step.Value),
-            outcome.ChangedFiles,
-            LifecycleChanges = outcome.LifecycleChanges.Select(change => new
-            {
-                Type = change.Type.ToString(),
-                change.SourcePath,
-                change.DestinationPath,
-                change.IsCaseOnlyMove,
-            }),
-            LifecycleReconciliations = outcome.LifecycleReconciliations.Select(item => new
-            {
-                State = item.State.ToString(),
-                item.SourcePath,
-                item.DestinationPath,
-                item.Reason,
-            }),
-            outcome.BehaviorSummary,
-            Validation = new
-            {
-                Status = outcome.Validation?.Gate.Status.ToString(),
-                Reasons = outcome.Validation?.Gate.Reasons ?? [],
-            },
-            outcome.RollbackAvailable,
-            outcome.FinalDiff,
-            outcome.ResidualRisks,
-            outcome.ReplanReason,
-        });
-        return RequirePrompts().Render(
-            PromptFileNames.ContextExecutionOutcome,
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["OutcomeJson"] = JsonOutputSanitizer.Sanitize(outcomeJson, _sanitizer),
-            });
     }
 
     private static void AccrueUnchargedWallClockOrThrow(
@@ -1637,40 +757,6 @@ public sealed partial class SessionApplication :
         if (elapsedStatus.IsExhausted)
         {
             throw new BudgetExceededException(elapsedStatus.Reason ?? "Execution budget exhausted.");
-        }
-    }
-
-    private static void AccrueBudgetAtLeastOrThrow(
-        RunRegistration registration,
-        BudgetDimensions? targetUsage)
-    {
-        ArgumentNullException.ThrowIfNull(registration);
-        if (targetUsage is null)
-        {
-            return;
-        }
-
-        ExecutionBudget.ValidateDimensions(targetUsage, nameof(targetUsage));
-        var currentUsage = registration.Budget
-            .Check(new BudgetDimensions(0, 0, TimeSpan.Zero))
-            .Used;
-        var delta = new BudgetDimensions(
-            targetUsage.Tokens > currentUsage.Tokens ? targetUsage.Tokens - currentUsage.Tokens : 0,
-            targetUsage.Calls > currentUsage.Calls ? targetUsage.Calls - currentUsage.Calls : 0,
-            targetUsage.WallClock > currentUsage.WallClock ? targetUsage.WallClock - currentUsage.WallClock : TimeSpan.Zero,
-            targetUsage.Cost > currentUsage.Cost ? targetUsage.Cost - currentUsage.Cost : 0);
-        if (delta.Tokens == 0
-            && delta.Calls == 0
-            && delta.WallClock == TimeSpan.Zero
-            && delta.Cost == 0)
-        {
-            return;
-        }
-
-        var status = registration.Budget.Accrue(delta);
-        if (status.IsExhausted)
-        {
-            throw new BudgetExceededException(status.Reason ?? "Execution budget exhausted.");
         }
     }
 
@@ -1891,364 +977,6 @@ public sealed partial class SessionApplication :
             cancellationToken);
     }
 
-    private async Task<PlanSanityEvaluation> CheckPlanSanityAsync(
-        RunRegistration registration,
-        ImplementationPlan plan,
-        CancellationToken cancellationToken)
-    {
-        if (_planSanityChecker is null || _planSanityRequestFactory is null)
-        {
-            return CreateUnavailableSanityEvaluation(plan);
-        }
-
-        var request = await _planSanityRequestFactory(
-            registration.SessionId,
-            plan,
-            cancellationToken);
-        if (request is null)
-        {
-            return CreateUnavailableSanityEvaluation(plan);
-        }
-
-        registration.PendingSanityTrust = request.TrustLevel;
-        var result = await _planSanityChecker.CheckAsync(
-            request with { Plan = plan },
-            cancellationToken);
-        return new PlanSanityEvaluation(result, CanAutoApprove: true);
-    }
-
-    private static PlanSanityEvaluation CreateUnavailableSanityEvaluation(ImplementationPlan plan)
-    {
-        return new PlanSanityEvaluation(
-            new PlanSanityCheckResult
-            {
-                Risk = PlanRiskClassification.High,
-                Issues =
-                [
-                    new PlanSanityIssue
-                    {
-                        Kind = PlanSanityIssueKind.EvidenceUnavailable,
-                        IsRepairable = false,
-                        IsBlocking = false,
-                        Message = "Required host plan sanity evidence is unavailable.",
-                    },
-                ],
-                NormalizedAffectedPaths = plan.Steps.SelectMany(step => step.GetAffectedPaths()).ToArray(),
-                DeclaredAffectedPathCount = plan.Steps.Sum(step => step.GetAffectedPaths().Count),
-            },
-            CanAutoApprove: false);
-    }
-
-    private static PlanApprovalDecision RequireManualPlanReview(
-        PlanSanityCheckResult sanity,
-        PlanApprovalPolicy policy,
-        string reason)
-    {
-        return new PlanApprovalDecision
-        {
-            Kind = PlanApprovalDecisionKind.RequiresReview,
-            Policy = policy,
-            Risk = sanity.Risk,
-            Reason = reason,
-        };
-    }
-
-    private static RepositoryTrustLevel ResolveTrust(RunRegistration registration)
-    {
-        return registration.PendingSanityTrust ?? RepositoryTrustLevel.UntrustedInspection;
-    }
-
-    private async Task PublishPlanAsync(
-        RunId runId,
-        RunRegistration registration,
-        ImplementationPlan plan,
-        PlanApprovalDecision decision,
-        CancellationToken cancellationToken)
-    {
-        var approvalId = ApprovalId.New();
-        if (_hooks is not null)
-        {
-            var hookDecision = await _hooks.InvokeAsync(
-                HookPoint.PlanProposed,
-                registration.SessionId,
-                runId,
-                registration.RepositoryIdentity,
-                approvalId.Value,
-                0,
-                new Dictionary<string, string>
-                {
-                    ["revision"] = plan.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    ["stepCount"] = plan.Steps.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                    ["summaryLength"] = plan.Summary.Length.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                },
-                cancellationToken: cancellationToken);
-            if (hookDecision.Decision == HookDecisionKind.Block)
-            {
-                throw new UnauthorizedAccessException("A trusted managed lifecycle policy blocked the proposed plan.");
-            }
-        }
-
-        registration.PendingPlan = plan;
-        registration.LastPublishedPlan = plan;
-        var autoApproved = decision.Kind == PlanApprovalDecisionKind.AutoApproved;
-        registration.PendingApprovalId = autoApproved ? null : approvalId;
-        await _events.PublishAsync(
-            new PlanProposed(
-                registration.SessionId,
-                DateTimeOffset.UtcNow,
-                plan.Summary,
-                runId,
-                plan,
-                approvalId,
-                PlanReviewStatus.Pending)
-            {
-                SchemaVersion = 2,
-            },
-            cancellationToken);
-        if (autoApproved)
-        {
-            await _events.PublishAsync(
-                new PlanAutoApproved(
-                    registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    runId,
-                    approvalId,
-                    decision.Policy,
-                    decision.Risk,
-                    plan.Revision,
-                    _sanitizer.Sanitize(decision.Reason)),
-                cancellationToken);
-            await _events.PublishAsync(
-                new ApprovalGranted(registration.SessionId, DateTimeOffset.UtcNow, approvalId),
-                cancellationToken);
-            if (registration.Machine.Phase == RunPhase.ChangePlanning)
-            {
-                await registration.Machine.TransitionAsync(
-                    RunPhase.AwaitingPlanApproval,
-                    "structured plan approved by policy",
-                    cancellationToken);
-            }
-
-            _ = await ContinueApprovedPlanAsync(
-                runId,
-                registration,
-                plan,
-                approvalId,
-                cancellationToken,
-                rethrowStartupFailure: false);
-            return;
-        }
-
-        await _events.PublishAsync(
-            new ApprovalRequested(
-                registration.SessionId,
-                DateTimeOffset.UtcNow,
-                approvalId,
-                $"Approve plan revision {plan.Revision}: {plan.Summary} ({decision.Risk} risk; {decision.Policy})",
-                ApprovalRequestKind.Plan)
-            {
-                SchemaVersion = 2,
-            },
-            cancellationToken);
-        if (registration.Machine.Phase == RunPhase.ChangePlanning)
-        {
-            await registration.Machine.TransitionAsync(
-                RunPhase.AwaitingPlanApproval,
-                "structured plan proposed",
-                cancellationToken);
-        }
-    }
-
-    private async Task<bool> ContinueApprovedPlanAsync(
-        RunId runId,
-        RunRegistration registration,
-        ImplementationPlan approvedPlan,
-        ApprovalId approvalId,
-        CancellationToken cancellationToken,
-        bool rethrowStartupFailure = true)
-    {
-        if (_hooks is not null)
-        {
-            _ = await _hooks.InvokeAsync(
-                HookPoint.PlanApproved,
-                registration.SessionId,
-                runId,
-                registration.RepositoryIdentity,
-                approvalId.Value,
-                0,
-                new Dictionary<string, string>
-                {
-                    ["revision"] = approvedPlan.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                },
-                cancellationToken: cancellationToken);
-        }
-
-        if (_executionOrchestrator is not null && _executionRequestFactory is not null)
-        {
-            try
-            {
-                var startRequest = await _executionRequestFactory(
-                    registration.SessionId,
-                    runId,
-                    registration.Task,
-                    approvedPlan,
-                    cancellationToken) ?? throw new InvalidOperationException(
-                        "The approved plan cannot execute without a trusted workspace and selected solution.");
-                startRequest = startRequest with
-                {
-                    InitialBudgetUsage = registration.Budget
-                        .Check(new BudgetDimensions(0, 0, TimeSpan.Zero))
-                        .Used,
-                };
-
-                await registration.Machine.TransitionAsync(
-                    RunPhase.ImplementationPreparing,
-                    "approved plan entered governed execution",
-                    cancellationToken);
-                registration.IncrementalPlanExecution = startRequest.AllowPlanContinuation;
-                if (registration.IncrementalPlanExecution
-                    && registration.BaseCurrentTurnHostContext.Count > 0)
-                {
-                    _resumableCurrentTurnHostContexts[runId] = registration.BaseCurrentTurnHostContext;
-                }
-
-                if (!registration.SteeringRegistered)
-                {
-                    _steering.RegisterRun(registration.SessionId, runId);
-                    registration.SteeringRegistered = true;
-                }
-
-                if (registration.ExecutionStarted)
-                {
-                    _ = await _executionOrchestrator.ContinueWithPlanAsync(
-                        startRequest,
-                        registration.Cancellation.Token);
-                }
-                else
-                {
-                    _ = await _executionOrchestrator.StartAsync(
-                        startRequest,
-                        registration.Cancellation.Token);
-                    registration.ExecutionStarted = true;
-                    registration.ExecutionObservation = CompleteExecutionAsync(runId, registration);
-                }
-
-                return true;
-            }
-            catch (Exception exception)
-            {
-                var classification = ModelFailureClassifier.Classify(exception);
-                await registration.Machine.TransitionAsync(
-                    exception is OperationCanceledException
-                        ? RunPhase.Cancelled
-                        : RunPhase.Failed,
-                    "execution startup failed",
-                    CancellationToken.None);
-                await _events.PublishAsync(
-                    new DiagnosticObserved(
-                        registration.SessionId,
-                        DateTimeOffset.UtcNow,
-                        classification.ToString(),
-                        _sanitizer.Sanitize(exception.Message)),
-                    CancellationToken.None);
-                await _events.PublishAsync(
-                    new RunCompleted(
-                        registration.SessionId,
-                        DateTimeOffset.UtcNow,
-                        runId,
-                        false),
-                    CancellationToken.None);
-                if (exception is OperationCanceledException cancellation)
-                {
-                    registration.Completion.TrySetCanceled(cancellation.CancellationToken);
-                }
-                else
-                {
-                    registration.Completion.TrySetException(exception);
-                }
-
-                await registration.Cancellation.CancelAsync();
-                if (registration.SteeringRegistered)
-                {
-                    _steering.CompleteRun(registration.SessionId, runId);
-                    registration.SteeringRegistered = false;
-                }
-
-                if (rethrowStartupFailure)
-                {
-                    throw;
-                }
-
-                return false;
-            }
-        }
-
-        await registration.Machine.TransitionAsync(
-            RunPhase.Completion,
-            "plan approved in compatibility planning mode",
-            cancellationToken);
-        await _events.PublishAsync(
-            new RunCompleted(registration.SessionId, DateTimeOffset.UtcNow, runId, true),
-            cancellationToken);
-        registration.Completion.TrySetResult(true);
-        return true;
-    }
-
-    private static void AddRetainedPlanOutputCharacters(
-        ImplementationPlan plan,
-        int maximumCharacters,
-        ref int retainedCharacters)
-    {
-        const int planStructuralCharacters = 64;
-        const int stepStructuralCharacters = 128;
-        const int itemStructuralCharacters = 16;
-        AddRetainedOutputCharacters(
-            planStructuralCharacters + plan.Summary.Length,
-            maximumCharacters,
-            ref retainedCharacters);
-        foreach (var risk in plan.Risks)
-        {
-            AddRetainedOutputCharacters(
-                itemStructuralCharacters + risk.Length,
-                maximumCharacters,
-                ref retainedCharacters);
-        }
-
-        foreach (var question in plan.OutstandingQuestions)
-        {
-            AddRetainedOutputCharacters(
-                itemStructuralCharacters + question.Length,
-                maximumCharacters,
-                ref retainedCharacters);
-        }
-
-        foreach (var step in plan.Steps)
-        {
-            AddRetainedOutputCharacters(
-                stepStructuralCharacters
-                    + step.Title.Length
-                    + step.Description.Length
-                    + step.ExpectedOutcome.Length,
-                maximumCharacters,
-                ref retainedCharacters);
-            foreach (var path in step.GetAffectedPaths())
-            {
-                AddRetainedOutputCharacters(
-                    itemStructuralCharacters + path.Length,
-                    maximumCharacters,
-                    ref retainedCharacters);
-            }
-
-            foreach (var validation in step.Validation)
-            {
-                AddRetainedOutputCharacters(
-                    itemStructuralCharacters + validation.Length,
-                    maximumCharacters,
-                    ref retainedCharacters);
-            }
-        }
-    }
-
     private static void AddRetainedOutputCharacters(
         int additionalCharacters,
         int maximumCharacters,
@@ -2262,100 +990,6 @@ public sealed partial class SessionApplication :
 
         retainedCharacters = checked(retainedCharacters + additionalCharacters);
     }
-
-    private async Task<PlanProjection?> GetPendingPlanAsync(
-        SessionId sessionId,
-        RunId runId,
-        int approvedRevision,
-        CancellationToken cancellationToken)
-    {
-        if (_sessionProjectionReader is null)
-        {
-            return null;
-        }
-
-        var projection = await _sessionProjectionReader(sessionId, cancellationToken);
-        var plan = projection?.PendingPlans.LastOrDefault(item => item.RunId == runId)
-            ?? projection?.Plan;
-        if (plan is null
-            || plan.RunId != runId
-            || plan.Status != PlanReviewStatus.Pending
-            || plan.Plan.Revision <= approvedRevision
-            || !projection!.PendingApprovals.Any(item => item.ApprovalId == plan.ApprovalId))
-        {
-            return null;
-        }
-
-        return plan;
-    }
-
-    private static async Task PersistPlanningUsageAsync(
-        RunId runId,
-        RunRegistration registration,
-        IExecutionOrchestrator? orchestrator,
-        CancellationToken cancellationToken)
-    {
-        if (!registration.ExecutionStarted
-            || !registration.IncrementalPlanExecution
-            || orchestrator is null)
-        {
-            return;
-        }
-
-        var usage = registration.Budget.Check(new BudgetDimensions(0, 0, TimeSpan.Zero)).Used;
-        await orchestrator.RecordPlanningUsageAsync(
-            registration.SessionId,
-            runId,
-            usage,
-            cancellationToken);
-    }
-
-    private static async Task SettlePlanningUsageAsync(
-        RunId runId,
-        RunRegistration registration,
-        IExecutionOrchestrator? orchestrator,
-        Stopwatch stopwatch)
-    {
-        stopwatch.Stop();
-        try
-        {
-            AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
-        }
-        finally
-        {
-            await PersistPlanningUsageAsync(
-                runId,
-                registration,
-                orchestrator,
-                CancellationToken.None);
-        }
-    }
-
-    private bool TryGetPendingPlan(
-        SessionId sessionId,
-        RunId runId,
-        [NotNullWhen(true)] out RunRegistration? registration)
-    {
-        if (_runs.TryGetValue(runId, out var found)
-            && found.SessionId == sessionId
-            && found.PendingApprovalId is not null
-            && !found.Completion.Task.IsCompleted)
-        {
-            registration = found;
-            return true;
-        }
-
-        registration = null;
-        return false;
-    }
-
-    private sealed record PlanPublication(
-        ImplementationPlan Plan,
-        PlanApprovalDecision Decision);
-
-    private sealed record PlanSanityEvaluation(
-        PlanSanityCheckResult Result,
-        bool CanAutoApprove);
 
     private readonly record struct SemanticAdmissionKey(
         WorkspaceId WorkspaceId,
@@ -2395,44 +1029,16 @@ public sealed partial class SessionApplication :
 
         public IReadOnlyList<string> CurrentTurnHostContext { get; set; } = [];
 
-        public IReadOnlyList<string> BaseCurrentTurnHostContext { get; set; } = [];
-
         public ConversationContextMode ConversationMode { get; set; } = ConversationContextMode.ConversationAware;
 
         public TaskCompletionSource<bool> Completion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public SemaphoreSlim Gate { get; } = new(1, 1);
 
         public RunStateMachine Machine { get; }
 
         public TimeSpan ModelRequestWallClockAccrued { get; set; }
 
         public TimeSpan ModelRequestWallClockSettled { get; set; }
-
-        public ApprovalId? PendingApprovalId { get; set; }
-
-        public ImplementationPlan? PendingPlan { get; set; }
-
-        public ImplementationPlan? LastPublishedPlan { get; set; }
-
-        public ImplementationPlan? ReplanningPlan { get; set; }
-
-        public int LastPlanBoundaryOrdinal { get; set; }
-
-        public int LastArchivedPlanBoundaryOrdinal { get; set; }
-
-        public bool ExecutionStarted { get; set; }
-
-        public bool IncrementalPlanExecution { get; set; }
-
-        public Task? ExecutionObservation { get; set; }
-
-        public bool ObjectiveCompletionRequested { get; set; }
-
-        public bool SteeringRegistered { get; set; }
-
-        public RepositoryTrustLevel? PendingSanityTrust { get; set; }
 
         public string? RepositoryIdentity { get; set; }
 

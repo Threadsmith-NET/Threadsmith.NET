@@ -7,9 +7,6 @@ public sealed record OperationalLimits
     /// <summary>Limits for persisted approvals and skill policies.</summary>
     public PolicyStoreResourceLimits PolicyStores { get; init; } = new();
 
-    /// <summary>Limits for structured plan admission.</summary>
-    public PlanResourceLimits Plan { get; init; } = new();
-
     /// <summary>Limits for tracked child processes.</summary>
     public ProcessResourceLimits Process { get; init; } = new();
 
@@ -32,11 +29,9 @@ public sealed record OperationalLimits
         ArgumentNullException.ThrowIfNull(Semantic);
         ArgumentNullException.ThrowIfNull(Git);
         ArgumentNullException.ThrowIfNull(Validation);
-        ArgumentNullException.ThrowIfNull(Plan);
         ArgumentNullException.ThrowIfNull(Process);
         ArgumentNullException.ThrowIfNull(PolicyStores);
         PolicyStores.Validate();
-        Plan.Validate();
         Process.Validate();
         Workspace.Validate();
         Semantic.Validate();
@@ -350,39 +345,6 @@ public sealed record ValidationResourceLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumAssetsBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumBuildOutputCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumAdvisorySources);
-    }
-}
-
-/// <summary>Configurable resource budgets for PlanResourceLimits.</summary>
-public sealed record PlanResourceLimits
-{
-    /// <summary>Maximum steps in a structured plan.</summary>
-    public int MaximumSteps { get; init; } = 100;
-
-    /// <summary>Maximum risks, questions, file intents, or validation expectations.</summary>
-    public int MaximumMetadataItems { get; init; } = 100;
-
-    /// <summary>Maximum summary, risk, question, or expected-outcome characters.</summary>
-    public int MaximumSummaryCharacters { get; init; } = 4096;
-
-    /// <summary>Maximum step title characters.</summary>
-    public int MaximumTitleCharacters { get; init; } = 256;
-
-    /// <summary>Maximum step description characters.</summary>
-    public int MaximumDescriptionCharacters { get; init; } = 8192;
-
-    /// <summary>Maximum plan path characters.</summary>
-    public int MaximumPathCharacters { get; init; } = 1024;
-
-    /// <summary>Rejects nonpositive resource limits.</summary>
-    public void Validate()
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumSteps);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumMetadataItems);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumSummaryCharacters);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTitleCharacters);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDescriptionCharacters);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumPathCharacters);
     }
 }
 

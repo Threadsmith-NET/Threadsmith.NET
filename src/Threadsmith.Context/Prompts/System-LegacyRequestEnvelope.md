@@ -1,1 +1,1 @@
-{{SystemPolicy}}{{RepositoryInstructions}}{{PhaseInstructions}}{{Task}}{{CurrentTurn}}{{AdditionalMessages}}{{RecentTurns}}{{ConversationSummary}}{{RetrievedMemory}}{{RepositoryMemory}}{{GovernedState}}{{EvidenceSet}}{{AvailableTools}}{{RequiredOutput}}
+{{SystemPolicy}}{{RepositoryInstructions}}{{ConversationInstructions}}{{Task}}{{CurrentTurn}}{{AdditionalMessages}}{{RecentTurns}}{{ConversationSummary}}{{RetrievedMemory}}{{RepositoryMemory}}{{GovernedState}}{{EvidenceSet}}{{AvailableTools}}{{RequiredOutput}}

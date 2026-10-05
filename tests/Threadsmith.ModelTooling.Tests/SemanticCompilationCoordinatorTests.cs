@@ -23,7 +23,7 @@ public static class SemanticCompilationCoordinatorTests
             observed.Enqueue(domainEvent);
             return Task.CompletedTask;
         });
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
         var generation = engine.CaptureAdvancedSnapshot().Generation;
@@ -220,7 +220,7 @@ public static class SemanticCompilationCoordinatorTests
             observed.Enqueue(domainEvent);
             return Task.CompletedTask;
         });
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var request = new SemanticLoadRequest(
             SessionId.New(),
             WorkspaceId.New(),
@@ -295,7 +295,7 @@ public static class SemanticCompilationCoordinatorTests
                 order.Enqueue(id == solution.ProjectIds[0] ? "first" : "warm");
                 if (id == solution.ProjectIds[0])
                 {
-                    started.SetResult();
+                    started.TrySetResult();
                     await release.Task.WaitAsync(token);
                 }
 
@@ -315,8 +315,78 @@ public static class SemanticCompilationCoordinatorTests
         release.SetResult();
         Assert.Equal(42, await operation);
         await coordinator.Completion.WaitAsync(TestContext.Current.CancellationToken);
-        Assert.Equal("first,validation,warm", string.Join(',', order));
+        var observedOrder = order.ToArray();
+        Assert.Equal("first", observedOrder[0]);
+        Assert.Equal("validation", observedOrder[1]);
+        Assert.Single(observedOrder, item => item == "warm");
+        Assert.All(observedOrder[2..], item => Assert.Contains(item, new[] { "first", "warm" }));
         Assert.Equal(1, coordinator.Statistics.MaximumRunning);
+    }
+
+    /// <summary>Generation retirement reports obsolete running and queued operations without cancelling their callers.</summary>
+    [Fact]
+    public static async Task SupersededForegroundOperationsAreNotCallerCancellation()
+    {
+        using var workspace = new AdhocWorkspace();
+        var solution = CreateSolution(workspace, 1);
+        var started = Signal();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var coordinator = new SemanticCompilationCoordinator(
+            solution,
+            new(),
+            solution.ProjectIds.ToHashSet(),
+            static (id, _) => Task.FromResult(new SemanticPreparationOutcome(id, true)),
+            static (_, _, _) => Task.CompletedTask);
+        var running = coordinator.RunAsync(
+            async token =>
+            {
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return 1;
+            },
+            cancellationToken);
+        await started.Task.WaitAsync(cancellationToken);
+        var queued = coordinator.RunAsync(_ => Task.FromResult(2), cancellationToken);
+
+        coordinator.Abort();
+
+#pragma warning disable VSTHRD003 // Both tasks were admitted by this test before retiring their owner.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => running);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => queued);
+#pragma warning restore VSTHRD003
+        Assert.False(cancellationToken.IsCancellationRequested);
+    }
+
+    /// <summary>Waiter cancellation preserves the shared compiler owner for subsequent work.</summary>
+    [Fact]
+    public static async Task ForegroundWaiterCancellationPreservesGeneration()
+    {
+        using var workspace = new AdhocWorkspace();
+        var solution = CreateSolution(workspace, 1);
+        var started = Signal();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        await using var coordinator = new SemanticCompilationCoordinator(
+            solution,
+            new(),
+            solution.ProjectIds.ToHashSet(),
+            static (id, _) => Task.FromResult(new SemanticPreparationOutcome(id, true)),
+            static (_, _, _) => Task.CompletedTask);
+        var running = coordinator.RunAsync(
+            async token =>
+            {
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return 1;
+            },
+            cancellation.Token);
+        await started.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        await cancellation.CancelAsync();
+
+#pragma warning disable VSTHRD003 // This test started the operation before cancelling its own waiter.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => running);
+#pragma warning restore VSTHRD003
+        Assert.Equal(2, await coordinator.RunAsync(_ => Task.FromResult(2), TestContext.Current.CancellationToken));
     }
 
     /// <summary>A failed background event preserves proven coverage and emits one recovery diagnostic.</summary>
@@ -346,7 +416,7 @@ public static class SemanticCompilationCoordinatorTests
 
             return Task.CompletedTask;
         });
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         await diagnostic.Task.WaitAsync(TestContext.Current.CancellationToken);
         await engine.WaitForWarmAsync(TestContext.Current.CancellationToken);
@@ -371,7 +441,7 @@ public static class SemanticCompilationCoordinatorTests
 
             return Task.CompletedTask;
         });
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         await using var refresh = new SemanticRefreshCoordinator(registry, events, NullLogger<SemanticRefreshCoordinator>.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var generation = await refresh.BeginBindingAsync(request, TestContext.Current.CancellationToken);
@@ -395,7 +465,7 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         await using var refresh = new SemanticRefreshCoordinator(registry, events, NullLogger<SemanticRefreshCoordinator>.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var generation = await refresh.BeginBindingAsync(request, cancellationToken);
@@ -482,7 +552,7 @@ public static class SemanticCompilationCoordinatorTests
 
             return Task.CompletedTask;
         });
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         await using var refresh = new SemanticRefreshCoordinator(registry, events, NullLogger<SemanticRefreshCoordinator>.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var generation = await refresh.BeginBindingAsync(request, TestContext.Current.CancellationToken);
@@ -507,7 +577,7 @@ public static class SemanticCompilationCoordinatorTests
     {
         var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         var before = engine.CaptureAdvancedSnapshot();
         var projectPath = before.Solution.Projects.First(project => before.CompiledProjects.Contains(project.Id)).FilePath
@@ -526,7 +596,7 @@ public static class SemanticCompilationCoordinatorTests
     {
         var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
         var receipt = await engine.EnsurePreparedAsync(null, "symbols", true, TestContext.Current.CancellationToken)
             ?? throw new InvalidOperationException("Fixture preparation is unavailable.");
@@ -555,7 +625,7 @@ public static class SemanticCompilationCoordinatorTests
                 await release.Task.WaitAsync(token);
             }
         });
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         try
         {
             await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
@@ -598,7 +668,7 @@ public static class SemanticCompilationCoordinatorTests
         solution = solution.AddDocument(DocumentId.CreateNewId(ids[2]), "Owner.cs", "namespace Workspace; public class Unrelated {}", filePath: Path.Combine(root, "Other", "Owner.cs"));
         solution = solution.AddProjectReference(ids[1], new ProjectReference(ids[0]));
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
         var readiness = new CodeExploreReadinessSnapshot(solution, new HashSet<ProjectId>(), SemanticConfidenceLevel.PartialCompilation, root, Path.Combine(root, "Fixture.sln"), 1, 1);
         var request = new CodeExploreRequest
@@ -623,7 +693,7 @@ public static class SemanticCompilationCoordinatorTests
     {
         var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         var result = await registry.LoadForBindingAsync(request, TestContext.Current.CancellationToken);
         var engine = registry.GetEngine(request.WorkspaceId);
@@ -642,12 +712,14 @@ public static class SemanticCompilationCoordinatorTests
         var cancellationToken = TestContext.Current.CancellationToken;
         var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
         await registry.LoadAsync(request, cancellationToken);
         var engine = registry.GetEngine(request.WorkspaceId);
         await engine.WaitForWarmAsync(cancellationToken);
         var before = engine.CaptureAdvancedSnapshot();
+        var mutationSnapshot = engine.CaptureMutationSnapshot();
+        engine.EnsureMutationSnapshotCurrent(mutationSnapshot);
         var document = before.Solution.Projects.SelectMany(project => project.Documents)
             .First(document => document.FilePath is not null && !document.FilePath.Contains("obj", StringComparison.Ordinal));
         var updatedText = (await document.GetTextAsync(cancellationToken)) + "\npublic class RefreshAddedType { }\n";
@@ -655,6 +727,9 @@ public static class SemanticCompilationCoordinatorTests
         await engine.RefreshDocumentsAsync([new(document.FilePath!, updatedText, "updated")], cancellationToken);
 
         var after = engine.CaptureAdvancedSnapshot();
+        Assert.False(engine.IsCurrentGeneration(before.Generation));
+        Assert.Throws<InvalidOperationException>(() => engine.EnsureMutationSnapshotCurrent(mutationSnapshot));
+        engine.EnsureMutationSnapshotCurrent(engine.CaptureMutationSnapshot());
         Assert.Equal(updatedText, (await after.Solution.GetDocument(document.Id)!.GetTextAsync(cancellationToken)).ToString());
         Assert.False(after.Solution.GetProject(document.Project.Id)!.TryGetCompilation(out _));
         Assert.Equal(before.CompiledProjects.Count, after.CompiledProjects.Count);
@@ -662,46 +737,308 @@ public static class SemanticCompilationCoordinatorTests
         Assert.Single(compilation!.GetSymbolsWithName("RefreshAddedType"));
     }
 
-    /// <summary>Batch screening parses proposed text without joining compiler readiness.</summary>
-    [Theory]
-    [InlineData("public class Proposal { public void M() { Missing.NewApi(); } }", false)]
-    [InlineData("public class Proposal { public void M( { }", true)]
-    public static async Task SyntaxScreeningDoesNotWaitForCompilerPublication(string text, bool hasSyntaxError)
+    /// <summary>Refresh abandons noncooperative mutation work and discards its late result.</summary>
+    [Fact]
+    public static async Task IncrementalRefreshDiscardsNoncooperativeMutationResult()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
         await using var events = new DomainEventStream();
-        var observed = new ConcurrentQueue<IDomainEvent>();
-        await using var subscription = events.Subscribe((item, _) =>
-        {
-            observed.Enqueue(item);
-            return Task.CompletedTask;
-        });
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
-        var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
-        var loaded = await registry.LoadForBindingAsync(request, cancellationToken);
-        var engine = registry.GetEngine(request.WorkspaceId);
-        var baseline = new WorkspaceBaseline(request.WorkspaceId, root, DateTimeOffset.UtcNow, []);
-        var mutations = new MutationSet
-        {
-            MutationSetId = MutationSetId.New(), SessionId = request.SessionId, RunId = RunId.New(),
-            WorkspaceId = request.WorkspaceId, BaselineCapturedAt = baseline.CapturedAt,
-            Rationale = "Screen a batch without joining deferred compilation.", Mutations = [],
-        };
-
-        var result = await engine.AnalyzePreMutationAsync(
-            new()
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
+        await engine.LoadAsync(
+            new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild),
+            cancellationToken);
+        await engine.WaitForWarmAsync(cancellationToken);
+        var snapshot = engine.CaptureMutationSnapshot();
+        var document = snapshot.Solution.Projects.SelectMany(project => project.Documents)
+            .First(document => document.FilePath is not null && !document.FilePath.Contains("obj", StringComparison.Ordinal));
+        var text = (await document.GetTextAsync(cancellationToken)) + "\npublic class LateMutationFence { }\n";
+        var started = Signal();
+        var release = Signal();
+        var finished = Signal();
+        var operation = engine.RunMutationOperationAsync(
+            snapshot,
+            async _ =>
             {
-                SessionId = request.SessionId, WorkspaceId = request.WorkspaceId,
-                Baseline = baseline, MutationSet = mutations, IncludeCompilation = false,
-                OverlayFiles = [new() { RelativePath = "Proposal.cs", Text = text }],
+                started.SetResult();
+                // Deliberately emulate a Roslyn operation that ignores owner cancellation.
+                await release.Task.WaitAsync(cancellationToken);
+                finished.SetResult();
+                return 42;
             },
             cancellationToken);
+        try
+        {
+            await started.Task.WaitAsync(cancellationToken);
+            await engine.RefreshDocumentsAsync([new(document.FilePath!, text, "updated")], cancellationToken);
+#pragma warning disable VSTHRD003 // The test admitted this operation before superseding its compiler owner.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
+#pragma warning restore VSTHRD003
+            Assert.False(finished.Task.IsCompleted);
+            Assert.False(engine.IsCurrentGeneration(snapshot.Generation));
+        }
+        finally
+        {
+            release.TrySetResult();
+            await finished.Task.WaitAsync(cancellationToken);
+        }
+    }
 
-        Assert.Equal(hasSyntaxError ? PreMutationGateDecision.RepairableDiagnostics : PreMutationGateDecision.PassedCheapGates, result.Decision);
-        Assert.All(result.Diagnostics, diagnostic => Assert.Equal(PreMutationDiagnosticSource.Syntax, diagnostic.Source));
-        Assert.Single(observed.OfType<SemanticCheckStarted>());
-        await registry.CompleteInitialPublicationAsync(loaded, false, cancellationToken);
+    /// <summary>Logical disposal is bounded while actual compiler work retains its workspace until completion.</summary>
+    [Fact]
+    public static async Task DisposalRetainsWorkspaceUntilAbandonedOperationActuallyCompletes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        var disposed = new TaskCompletionSource<Workspace>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var engine = new SemanticEngine(
+            events,
+            NullLogger<SemanticEngine>.Instance,
+            TestPromptLoader.Instance,
+            cancellationBackstop: TimeSpan.FromMilliseconds(1))
+        {
+            WorkspaceDisposalObserver = workspace => disposed.TrySetResult(workspace),
+        };
+        await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
+        await engine.WaitForWarmAsync(ct);
+        var snapshot = engine.CaptureMutationSnapshot();
+        var started = Signal();
+        var release = Signal();
+        var operation = engine.RunMutationOperationAsync(
+            snapshot,
+            async _ =>
+            {
+                started.SetResult();
+                await release.Task.WaitAsync(ct);
+                return 42;
+            },
+            ct);
+        try
+        {
+            await started.Task.WaitAsync(ct);
+            await engine.DisposeAsync();
+#pragma warning disable VSTHRD003 // This test owns the admitted operation and its retirement.
+            await Assert.ThrowsAsync<InvalidOperationException>(() => operation);
+#pragma warning restore VSTHRD003
+            Assert.False(disposed.Task.IsCompleted);
+            release.TrySetResult();
+            Assert.Same(snapshot.Solution.Workspace, await disposed.Task.WaitAsync(ct));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    /// <summary>A query deadline retains completed partial output without treating it as caller cancellation.</summary>
+    [Fact]
+    public static async Task QueryDeadlinePreservesCompletedPartialResult()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
+        await engine.WaitForWarmAsync(ct);
+        var snapshot = engine.CaptureMutationSnapshot();
+        var started = Signal();
+        using var deadline = new CancellationTokenSource();
+        var operation = engine.RunSnapshotQueryAsync(
+            snapshot.Solution,
+            async token =>
+            {
+                started.SetResult();
+                try
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                }
+                catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+                {
+                    return 17;
+                }
+
+                return 0;
+            },
+            deadline.Token,
+            ct);
+        await started.Task.WaitAsync(ct);
+        await deadline.CancelAsync();
+#pragma warning disable VSTHRD003 // The test owns both the query and its independently controlled deadline.
+        Assert.Equal(17, await operation);
+#pragma warning restore VSTHRD003
+        Assert.False(ct.IsCancellationRequested);
+    }
+
+    /// <summary>Blocking or throwing compiler callbacks cannot hold a caller beyond bounded abandonment.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task CompilerCancellationCallbacksRetainResourcesWithoutBlockingCaller(bool throws)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        var disposed = Signal();
+        await using var engine = new SemanticEngine(
+            events,
+            NullLogger<SemanticEngine>.Instance,
+            TestPromptLoader.Instance,
+            cancellationBackstop: TimeSpan.FromMilliseconds(1))
+        {
+            WorkspaceDisposalObserver = _ => disposed.TrySetResult(),
+        };
+        await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
+        await engine.WaitForWarmAsync(ct);
+        var snapshot = engine.CaptureMutationSnapshot();
+        var started = Signal();
+        var callbackEntered = Signal();
+        using var release = new ManualResetEventSlim();
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var operation = engine.RunSnapshotOperationAsync(
+            snapshot.Solution,
+            async token =>
+            {
+                using var registration = token.Register(() =>
+                {
+                    callbackEntered.TrySetResult();
+                    release.Wait(ct);
+                    if (throws)
+                    {
+                        throw new InvalidOperationException("Deliberate compiler callback failure.");
+                    }
+                });
+                started.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return 0;
+            },
+            caller.Token);
+        try
+        {
+            await started.Task.WaitAsync(ct);
+            await caller.CancelAsync();
+            await callbackEntered.Task.WaitAsync(ct);
+#pragma warning disable VSTHRD003 // This test owns the cancelled compiler task.
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+#pragma warning restore VSTHRD003
+            await engine.DisposeAsync();
+            Assert.False(disposed.Task.IsCompleted);
+        }
+        finally
+        {
+            release.Set();
+        }
+
+        await disposed.Task.WaitAsync(ct);
+    }
+
+    /// <summary>A query whose deadline already expired cannot interrupt useful warming.</summary>
+    [Fact]
+    public static async Task ExpiredQueryDoesNotInterruptWarming()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var workspace = new AdhocWorkspace();
+        var solution = CreateSolution(workspace, 1);
+        var started = Signal();
+        var release = Signal();
+        var interruptions = 0;
+        await using var coordinator = new SemanticCompilationCoordinator(
+            solution,
+            new(),
+            new HashSet<ProjectId>(),
+            async (id, token) =>
+            {
+                using var registration = token.Register(() => Interlocked.Increment(ref interruptions));
+                started.TrySetResult();
+                await release.Task.WaitAsync(token);
+                return new(id, true);
+            },
+            static (_, _, _) => Task.CompletedTask);
+        coordinator.Warm(solution.ProjectIds);
+        try
+        {
+            await started.Task.WaitAsync(ct);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => coordinator.RunQueryAsync(_ => Task.FromResult(1), new(true), ct));
+            Assert.Equal(0, Volatile.Read(ref interruptions));
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+
+        await coordinator.Completion.WaitAsync(ct);
+    }
+
+    /// <summary>Saturated abandoned work defers fresh preparation instead of permanently failing its project.</summary>
+    [Fact]
+    public static async Task SaturationThenReleaseAllowsFreshPreparation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
+        await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
+        await engine.WaitForWarmAsync(ct);
+        var snapshot = engine.CaptureMutationSnapshot();
+        var release = Signal();
+        try
+        {
+            for (var index = 0; index < 2; index++)
+            {
+                using var caller = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                var started = Signal();
+                var operation = engine.RunMutationOperationAsync(
+                    snapshot,
+                    async _ =>
+                    {
+                        started.SetResult();
+                        await release.Task.WaitAsync(ct);
+                        return 42;
+                    },
+                    caller.Token);
+                await started.Task.WaitAsync(ct);
+                await caller.CancelAsync();
+#pragma warning disable VSTHRD003 // The test owns each deliberately abandoned operation.
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+#pragma warning restore VSTHRD003
+            }
+
+            var document = snapshot.Solution.Projects.SelectMany(project => project.Documents)
+                .First(document => document.FilePath is not null && !document.FilePath.Contains("obj", StringComparison.Ordinal));
+            var text = (await document.GetTextAsync(ct)) + "\npublic class AfterSaturation { }\n";
+            await engine.RefreshDocumentsAsync([new(document.FilePath!, text, "saturated-refresh")], ct);
+            var query = engine.FindSymbolsAsync("AfterSaturation", ct);
+            Assert.False(query.IsCompleted);
+            release.SetResult();
+#pragma warning disable VSTHRD003 // The query awaits the capacity released by this test.
+            Assert.NotEmpty(await query);
+#pragma warning restore VSTHRD003
+        }
+        finally
+        {
+            release.TrySetResult();
+        }
+    }
+
+    /// <summary>Disposal invalidates admitted query and mutation generations even if source never changed.</summary>
+    [Fact]
+    public static async Task DisposalInvalidatesCapturedSemanticInputs()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await engine.LoadAsync(
+            new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild),
+            cancellationToken);
+        var query = engine.CaptureAdvancedSnapshot();
+        var mutation = engine.CaptureMutationSnapshot();
+
+        await engine.DisposeAsync();
+
+        Assert.False(engine.IsCurrentGeneration(query.Generation));
+        Assert.Throws<InvalidOperationException>(() => engine.EnsureMutationSnapshotCurrent(mutation));
+        Assert.Throws<InvalidOperationException>(() => engine.CaptureMutationSnapshot());
     }
 
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);

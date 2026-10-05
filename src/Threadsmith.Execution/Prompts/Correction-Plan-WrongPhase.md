@@ -1,1 +1,0 @@
-The requested planning decision is not available in this turn. Use only advertised tools. Confirm completion only when advertised and all work is done; otherwise propose remaining work or explain a blocker in ordinary text.

@@ -88,7 +88,6 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
                 "active-turn-evidence-output",
                 1,
                 """{"type":"object","additionalProperties":false,"required":["status","evidenceId"],"properties":{"status":{"type":"string","enum":["Available","Stale","Missing"]},"evidenceId":{"type":"string","format":"uuid"},"content":{"type":["string","null"]},"nextLine":{"type":["integer","null"],"minimum":1},"nextColumn":{"type":["integer","null"],"minimum":1},"totalLines":{"type":["integer","null"],"minimum":0},"detail":{"type":["string","null"]}}}"""),
-            ConversationAvailable = true,
             SubagentAvailable = false,
             Scheduling = new ToolSchedulingDescriptor
             {

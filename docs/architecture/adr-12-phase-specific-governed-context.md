@@ -1,5 +1,7 @@
 # ADR-12: Phase-Specific Governed Context
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 - **Status:** Accepted
 - **Date:** 2026-08-01
 - **Strategy source:** §5.2, §10.2, §11.6, §14, §29 (decision 19)
@@ -26,3 +28,7 @@ Configured-model selection occurs per request. Active contributor hints are turn
 - Stale semantic or tool-derived facts cannot silently enter a later request.
 - Plans are durable review artifacts that later mutation and validation milestones can consume.
 - Adding a new evidence category requires an explicit phase-policy decision.
+
+## Direct-editing amendment (2026-10-05)
+
+Phase-specific planning, proposal and required-output instructions are removed. Ordinary turns use stable conversation instructions, ordinary evidence policy and the existing context/replay/capacity path. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

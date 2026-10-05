@@ -179,7 +179,6 @@ public sealed class SdkHttpTransportTests
         Assert.Equal(ToolSideEffect.ExecutesCode, tool.Definition.SideEffect);
         Assert.Equal(ApprovalLevel.HostPolicy, tool.Definition.RequiredApproval);
         Assert.Equal(RepositoryTrustLevel.TrustedBuild, tool.Definition.RequiredTrust);
-        Assert.True(tool.Definition.ConversationAvailable);
 
         var denied = policy.Evaluate(tool, input, CreateContext([]));
         var allowed = policy.Evaluate(tool, input, CreateContext(["mcp.example.test"]));

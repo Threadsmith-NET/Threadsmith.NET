@@ -651,27 +651,9 @@
     "maximumExtractedCharacters": 131072
   },
 
-  // ── Plan approval policy (M23.4 plan 75) ───────────────────────────────
-  // Plans remain mandatory structured execution contracts. This policy controls
-  // only whether a sanity-checked valid plan pauses for manual approval before
-  // mutation proposal; it never approves exact diffs or repository writes.
-  // Repository-persisted values: reviewAll (default), reviewRisky,
-  // autoApproveAllValid, and alwaysTrustRepo. TrustSession is session-only.
-  // /plan-policy saves every non-session selection only in this repo config.
-  // TrustSession leaves the saved policy unchanged; no user-side grant is needed.
-  "planning": {
-    "approvalPolicy": "reviewAll",
-    // A validated plan can return to planning for the next cohesive tranche.
-    // Step/file values are soft model guidance; existing execution budgets remain authoritative.
-    "incrementalPlans": {
-      "enabled": true,
-      "targetSteps": 4,
-      "targetFiles": 8
-    }
-  },
 
   // ── Mutation approval policy (M7.2 plan 30) ────────────────────────────
-  // /policy saves reviewAll (default), reviewRisky, trustPlan, and alwaysTrustRepo
+  // /policy saves reviewAll (default), reviewRisky, and alwaysTrustRepo
   // only in this repo config. TrustSession applies only to the running session
   // and leaves the saved policy unchanged.
   "mutation": {
@@ -686,9 +668,6 @@
   "execution": {
     // Optional model continuation-round cutoff. 0 disables the separate cutoff.
     "maxModelRounds": 0,
-    // Optional initial evidence-collection inspection-tool cutoff. 0 disables the
-    // separate cutoff so exploration can use the full model-round budget.
-    "maxPlanningToolRounds": 0,
     // Active-turn corrective attempts for recoverable malformed or invalid
     // model-authored requests before the host fails closed.
     "maxCorrectiveTurns": 3,
@@ -698,14 +677,7 @@
     // Maximum characters of a tool result preview retained in session projections.
     "toolResultPreviewCharacters": 4096,
     "maxModelOutputBatchCharacters": 4096,
-    "modelOutputFlushIntervalMilliseconds": 50,
-    // Soft proposal targets for incremental approved-plan execution. Existing
-    // workspace limits remain the hard admission ceilings.
-    "mutationBatching": {
-      "targetMutations": 8,
-      "targetFiles": 3,
-      "targetMutationCharacters": 24000
-    }
+    "modelOutputFlushIntervalMilliseconds": 50
   },
 
   // ── Repository configuration safety (§22.2) ───────────────────────────
@@ -750,13 +722,12 @@
   },
 
   // ── Validation requirements (§21.2) ────────────────────────────────────
-  // The post-approval validation gate a mutation must pass before it can be
-  // accepted (plan-12/13). Stages run in order; a failing stage blocks later
+  // Final validation runs over cumulative affected scope after direct edits. Stages run in order; a failing stage blocks later
   // stages. Omitting this key uses the compiled default shown here: fast
   // semantic diagnostics plus process-based compile, diagnostics, and affected
-  // tests. This key does NOT disable always-on proposal/schema/path checks or
-  // automatic pre-mutation Roslyn screening of proposed .cs overlays before
-  // staging/approval; those cheap gates degrade explicitly when unavailable.
+  // tests. Exact instruction/path checks and mutation authorization remain
+  // required. Incremental Roslyn feedback is advisory and does not reject
+  // otherwise valid edits because of compiler errors or incomplete coverage.
   "validation": {
     "stages": [ "semantic", "compile", "diagnostics", "tests" ],
     // Treat baseline diagnostics as non-blocking (plan-12 §16.3).

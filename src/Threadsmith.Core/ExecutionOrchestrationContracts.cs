@@ -113,20 +113,13 @@ public sealed record ExecutionOperationRecord
     public string? Reconciliation { get; init; }
 }
 
-/// <summary>Model-authored mutation proposal correlated to host-owned plan context.</summary>
-public sealed record MutationProposalEnvelope
-{
-    /// <summary>Model-authored changes from which the host creates an identity-bound mutation set.</summary>
-    public required MutationProposalSet MutationSet { get; init; }
-}
-
 /// <summary>Model-authored mutation-set content without host-owned execution identities.</summary>
 public sealed record MutationProposalSet
 {
     /// <summary>Ordered proposed changes.</summary>
     public required IReadOnlyList<MutationProposalChange> Mutations { get; init; }
 
-    /// <summary>Why the changes implement the approved plan.</summary>
+    /// <summary>Why the requested source changes are needed.</summary>
     public required string Rationale { get; init; }
 
     /// <summary>Projects expected to be affected.</summary>
@@ -140,9 +133,6 @@ public sealed record MutationProposalSet
 
     /// <summary>Model-supplied risk classification subject to host recomputation.</summary>
     public MutationRisk? Risk { get; init; } = MutationRisk.Medium;
-
-    /// <summary>Whether the model believes this proposal completes the selected approved step.</summary>
-    public bool? StepComplete { get; init; }
 }
 
 /// <summary>Purpose of one proposal within incremental approved-plan execution.</summary>
@@ -153,43 +143,6 @@ public enum MutationBatchPurpose
 
     /// <summary>A correction responding to failed validation.</summary>
     Correction,
-}
-
-/// <summary>Host-selected scope and progress supplied to one approved-plan proposal turn.</summary>
-public sealed record MutationExecutionScope
-{
-    /// <summary>Approved step selected by the host.</summary>
-    public required ImplementationPlanStep ActiveStep { get; init; }
-
-    /// <summary>One-based position of the selected step in the approved plan.</summary>
-    public required int StepOrdinal { get; init; }
-
-    /// <summary>Total approved steps.</summary>
-    public required int StepCount { get; init; }
-
-    /// <summary>One-based proposal ordinal across the execution.</summary>
-    public required int BatchOrdinal { get; init; }
-
-    /// <summary>Reason this proposal is being requested.</summary>
-    public MutationBatchPurpose Purpose { get; init; } = MutationBatchPurpose.Implementation;
-
-    /// <summary>Approved steps with supported completion evidence.</summary>
-    public IReadOnlyList<StepId> CompletedStepIds { get; init; } = [];
-
-    /// <summary>Paths activated by authoritative lifecycle effects from earlier batches of this step.</summary>
-    public IReadOnlyList<string> ActivatedPaths { get; init; } = [];
-
-    /// <summary>Whether current passing evidence supports a no-change confirmation for this step.</summary>
-    public bool CanCompleteWithoutChanges { get; init; }
-
-    /// <summary>Effective soft operation target for this proposal.</summary>
-    public required int TargetMutations { get; init; }
-
-    /// <summary>Effective soft distinct-path target for this proposal.</summary>
-    public required int TargetFiles { get; init; }
-
-    /// <summary>Effective soft mutation-content character target for this proposal.</summary>
-    public required long TargetMutationCharacters { get; init; }
 }
 
 /// <summary>Model-authored lifecycle content without host-computed byte identity.</summary>
@@ -435,95 +388,11 @@ public sealed record ExecutionOutcomeProjection : IProjection
     public string? ReplanReason { get; init; }
 }
 
-/// <summary>Start input assembled by the host after plan approval.</summary>
-public sealed record ExecutionStartRequest
-{
-    /// <summary>Owning session.</summary>
-    public required SessionId SessionId { get; init; }
-
-    /// <summary>Owning run.</summary>
-    public required RunId RunId { get; init; }
-
-    /// <summary>Current immutable workspace baseline.</summary>
-    public required WorkspaceBaseline Baseline { get; init; }
-
-    /// <summary>Approved task.</summary>
-    public required TaskSpecification Task { get; init; }
-
-    /// <summary>Approved plan.</summary>
-    public required ImplementationPlan ApprovedPlan { get; init; }
-
-    /// <summary>Build request for the exact pre-mutation workspace.</summary>
-    public required BuildValidationRequest ValidationRequest { get; init; }
-
-    /// <summary>Combined compiler/test correction limit.</summary>
-    public int CorrectionBudget { get; init; } = 3;
-
-    /// <summary>Budget already consumed before approved execution begins.</summary>
-    public BudgetDimensions InitialBudgetUsage { get; init; } = new(0, 0, TimeSpan.Zero);
-
-    /// <summary>Whether successful completion should pause for another objective-level planning turn.</summary>
-    public bool AllowPlanContinuation { get; init; }
-}
-
-/// <summary>A completed or interrupted plan boundary within an incremental objective.</summary>
-public sealed record ExecutionPlanBoundary
-{
-    /// <summary>One-based plan ordinal, including plans interrupted for replanning.</summary>
-    public required int PlanOrdinal { get; init; }
-
-    /// <summary>Authoritative progress through the completed plan boundary.</summary>
-    public required ExecutionOutcomeProjection Progress { get; init; }
-
-    /// <summary>The interrupted approved plan when replacement of unfinished work is required.</summary>
-    public ImplementationPlan? PlanUnderRevision { get; init; }
-}
-
-/// <summary>Host authorization for applying one staged execution mutation.</summary>
-public sealed record ContinueExecutionRequest
-{
-    /// <summary>Owning session.</summary>
-    public required SessionId SessionId { get; init; }
-
-    /// <summary>Owning run.</summary>
-    public required RunId RunId { get; init; }
-
-    /// <summary>Explicit or host-policy mutation approval.</summary>
-    public required MutationApproval Approval { get; init; }
-
-    /// <summary>Sanitized approval/policy provenance.</summary>
-    public required string ApprovalProvenance { get; init; }
-}
-
-/// <summary>Result returned after an execution mutation is authoritatively applied but before validation completes.</summary>
-public sealed record ExecutionApplyResult
-{
-    /// <summary>Owning session.</summary>
-    public required SessionId SessionId { get; init; }
-
-    /// <summary>Owning run.</summary>
-    public required RunId RunId { get; init; }
-
-    /// <summary>Applied mutation set.</summary>
-    public required MutationSetId MutationSetId { get; init; }
-
-    /// <summary>Changed repository-relative files.</summary>
-    public IReadOnlyList<string> ChangedFiles { get; init; } = [];
-
-    /// <summary>Explicit lifecycle reconciliation evidence from the commit.</summary>
-    public IReadOnlyList<FileLifecycleReconciliation> LifecycleReconciliations { get; init; } = [];
-
-    /// <summary>Checkpoint reached after the mutation side effect was reconciled as applied.</summary>
-    public required ExecutionContinuation Continuation { get; init; }
-}
-
 /// <summary>Persists atomic orchestration checkpoints and authoritative outcomes.</summary>
 public interface IExecutionCheckpointStore
 {
-    /// <summary>Atomically writes the latest checkpoint.</summary>
-    Task SaveCheckpointAsync(
-        ExecutionContinuation checkpoint,
-        CancellationToken cancellationToken = default);
+    /// <summary>Detects legacy write intents that cannot prove their disk outcome, including unbound history.</summary>
+    Task<bool> HasUnresolvedLegacyEffectsAsync(string repositoryIdentity, CancellationToken cancellationToken = default);
 
     /// <summary>Reads the latest supported checkpoint or returns an inspectable unsupported result.</summary>
     Task<ExecutionContinuation?> GetCheckpointAsync(
@@ -556,98 +425,3 @@ public interface IExecutionArtifactPublisher
         ExecutionArtifactReference reference,
         CancellationToken cancellationToken = default);
 }
-
-/// <summary>Host-owned serial approved-plan execution facade.</summary>
-public interface IExecutionOrchestrator
-{
-    /// <summary>Starts implementation for an approved plan and stops at the next required host decision.</summary>
-    Task<ExecutionContinuation> StartAsync(
-        ExecutionStartRequest request,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Starts the next approved plan tranche on the existing objective execution.</summary>
-    Task<ExecutionContinuation> ContinueWithPlanAsync(
-        ExecutionStartRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return Task.FromException<ExecutionContinuation>(
-            new NotSupportedException("Incremental plan continuation is not supported by this orchestrator."));
-    }
-
-    /// <summary>Continues a staged execution after mutation authorization.</summary>
-    Task<ExecutionOutcomeProjection> ContinueAsync(
-        ContinueExecutionRequest request,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Explicitly resumes an interrupted nonterminal run after fail-closed revalidation.</summary>
-    Task<ExecutionContinuation> ResumeAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Reads the durable approved request and planning budget to reattach the session observer after resume.</summary>
-    Task<ExecutionStartRequest> GetResumeRequestAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return Task.FromException<ExecutionStartRequest>(
-            new NotSupportedException("Session resume is not supported by this orchestrator."));
-    }
-
-    /// <summary>Durably records planning usage consumed while assessing an incremental plan boundary.</summary>
-    Task RecordPlanningUsageAsync(
-        SessionId sessionId,
-        RunId runId,
-        BudgetDimensions usage,
-        CancellationToken cancellationToken = default)
-    {
-        return Task.FromException(
-            new NotSupportedException("Incremental planning usage persistence is not supported by this orchestrator."));
-    }
-
-    /// <summary>Waits for the next completed-plan or replanning boundary.</summary>
-    Task<ExecutionPlanBoundary> WaitForPlanCompletionAsync(
-        RunId runId,
-        int afterPlanOrdinal,
-        CancellationToken cancellationToken = default)
-    {
-        return Task.FromException<ExecutionPlanBoundary>(
-            new NotSupportedException("Incremental plan completion is not supported by this orchestrator."));
-    }
-
-    /// <summary>Records successful objective completion at a validated plan boundary.</summary>
-    Task<ExecutionOutcomeProjection> CompleteObjectiveAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return Task.FromException<ExecutionOutcomeProjection>(
-            new NotSupportedException("Incremental objective completion is not supported by this orchestrator."));
-    }
-
-    /// <summary>Waits for the authoritative terminal execution outcome.</summary>
-    Task<ExecutionOutcomeProjection> WaitForOutcomeAsync(
-        RunId runId,
-        CancellationToken cancellationToken = default);
-}
-
-/// <summary>Explicitly resumes an eligible interrupted execution.</summary>
-public sealed record ResumeRunCommand(SessionId SessionId, RunId RunId)
-    : ICommand<ExecutionContinuation>;
-
-/// <summary>Continues a staged execution with a separate mutation authorization.</summary>
-public sealed record ContinueExecutionCommand(ContinueExecutionRequest Request)
-    : ICommand<ExecutionOutcomeProjection>;
-
-/// <summary>Pre-captures validation baseline evidence while mutation review is pending.</summary>
-public sealed record PrepareExecutionValidationCommand(SessionId SessionId, RunId RunId)
-    : ICommand<ExecutionContinuation>;
-
-/// <summary>Applies an approved execution mutation and stops before post-apply validation.</summary>
-public sealed record ApplyExecutionMutationCommand(ContinueExecutionRequest Request)
-    : ICommand<ExecutionApplyResult>;
-
-/// <summary>Gets the active staged mutation for a host review surface.</summary>
-public sealed record GetExecutionMutationCommand(SessionId SessionId, RunId RunId)
-    : ICommand<StagedMutationSet?>;

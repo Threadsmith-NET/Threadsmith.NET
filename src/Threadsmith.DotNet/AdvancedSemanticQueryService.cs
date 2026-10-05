@@ -47,8 +47,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private const string GeneratedCodeToolFamily = "generated_code";
     private const string SymbolImpactToolFamily = "symbol_impact";
 
-    private static readonly TimeSpan NonCooperativeCompilationBackstop = TimeSpan.FromSeconds(2);
-
     private static readonly HashSet<string> TestPathSegments = new(
         [
             "__tests__",
@@ -273,138 +271,153 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var engine = _registry.GetEngine(workspaceId);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
         var snapshot = engine.CaptureAdvancedSnapshot();
-        var nodes = new Dictionary<string, CallHierarchyNode>(StringComparer.Ordinal);
-        var edges = new List<CallHierarchyEdge>();
-        var pending = new Queue<(ISymbol Symbol, int Depth)>();
-        var expanded = new HashSet<string>(StringComparer.Ordinal);
-
-        var depthReached = false;
-        var nodeReached = false;
-        var edgeReached = false;
-        var timeReached = false;
-
         try
         {
             var preparedSolution = await engine.EnsurePreparedAsync(null, "call-hierarchy", requireSuccess: true, timeout.Token);
             snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
-            var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, timeout.Token);
-            var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
-            AddNode(nodes, root, 0, snapshot, projection);
-            pending.Enqueue((root, 0));
-            while (pending.Count > 0)
-            {
-                timeout.Token.ThrowIfCancellationRequested();
-                (var symbol, var depth) = pending.Dequeue();
-
-                var symbolId = CreateIdentity(symbol).Id;
-
-                if (!expanded.Add(symbolId))
+            return await engine.RunSnapshotQueryAsync<CallHierarchyResult>(
+                snapshot.Solution,
+                async token =>
                 {
-                    continue;
-                }
+                    var nodes = new Dictionary<string, CallHierarchyNode>(StringComparer.Ordinal);
+                    var edges = new List<CallHierarchyEdge>();
+                    var pending = new Queue<(ISymbol Symbol, int Depth)>();
+                    var expanded = new HashSet<string>(StringComparer.Ordinal);
 
-                if (depth > request.Limits.MaximumDepth)
-                {
-                    depthReached = true;
-                    continue;
-                }
+                    var depthReached = false;
+                    var nodeReached = false;
+                    var edgeReached = false;
+                    var timeReached = false;
 
-                var discovered = new List<(ISymbol Caller, ISymbol Callee, Location? Site)>();
-
-                if (request.Direction is CallHierarchyDirection.Incoming or CallHierarchyDirection.Both)
-                {
-                    var callers = await SymbolFinder.FindCallersAsync(
-                        symbol,
-                        snapshot.Solution,
-                        timeout.Token);
-                    discovered.AddRange(callers.SelectMany(
-                        caller => caller.Locations.DefaultIfEmpty(),
-                        (caller, location) => (caller.CallingSymbol, symbol, location)));
-                }
-
-                if (request.Direction is CallHierarchyDirection.Outgoing or CallHierarchyDirection.Both)
-                {
-                    discovered.AddRange(await FindOutgoingAsync(symbol, snapshot.Solution, timeout.Token));
-                }
-
-                foreach ((var caller, var callee, var site) in discovered
-                    .OrderBy(item => CreateIdentity(item.Caller).Id, StringComparer.Ordinal)
-                    .ThenBy(item => CreateIdentity(item.Callee).Id, StringComparer.Ordinal)
-                    .ThenBy(item => item.Site?.SourceSpan.Start ?? -1))
-                {
-                    if (edges.Count >= request.Limits.MaximumEdges)
+                    try
                     {
-                        edgeReached = true;
-                        break;
+                        var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, token);
+                        var projection = new SemanticSourceProjection(snapshot.Solution, token);
+                        AddNode(nodes, root, 0, snapshot, projection);
+                        pending.Enqueue((root, 0));
+                        while (pending.Count > 0)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            (var symbol, var depth) = pending.Dequeue();
+
+                            var symbolId = CreateIdentity(symbol).Id;
+
+                            if (!expanded.Add(symbolId))
+                            {
+                                continue;
+                            }
+
+                            if (depth > request.Limits.MaximumDepth)
+                            {
+                                depthReached = true;
+                                continue;
+                            }
+
+                            var discovered = new List<(ISymbol Caller, ISymbol Callee, Location? Site)>();
+
+                            if (request.Direction is CallHierarchyDirection.Incoming or CallHierarchyDirection.Both)
+                            {
+                                var callers = await SymbolFinder.FindCallersAsync(
+                                    symbol,
+                                    snapshot.Solution,
+                                    token);
+                                discovered.AddRange(callers.SelectMany(
+                                    caller => caller.Locations.DefaultIfEmpty(),
+                                    (caller, location) => (caller.CallingSymbol, symbol, location)));
+                            }
+
+                            if (request.Direction is CallHierarchyDirection.Outgoing or CallHierarchyDirection.Both)
+                            {
+                                discovered.AddRange(await FindOutgoingAsync(symbol, snapshot.Solution, token));
+                            }
+
+                            foreach ((var caller, var callee, var site) in discovered
+                                .OrderBy(item => CreateIdentity(item.Caller).Id, StringComparer.Ordinal)
+                                .ThenBy(item => CreateIdentity(item.Callee).Id, StringComparer.Ordinal)
+                                .ThenBy(item => item.Site?.SourceSpan.Start ?? -1))
+                            {
+                                if (edges.Count >= request.Limits.MaximumEdges)
+                                {
+                                    edgeReached = true;
+                                    break;
+                                }
+
+                                var callerId = CreateIdentity(caller).Id;
+                                var calleeId = CreateIdentity(callee).Id;
+                                var traversedEndpoint = callerId == symbolId ? callee : caller;
+                                var traversedEndpointId = CreateIdentity(traversedEndpoint).Id;
+                                var cycle = expanded.Contains(traversedEndpointId);
+                                ISymbol[] endpoints = [caller, callee];
+                                ISymbol[] missingEndpoints = [.. endpoints
+                                    .Where(endpoint => !nodes.ContainsKey(CreateIdentity(endpoint).Id))
+                                    .Distinct(SymbolEqualityComparer.Default)];
+                                if (nodes.Count + missingEndpoints.Length > request.Limits.MaximumNodes)
+                                {
+                                    nodeReached = true;
+                                    break;
+                                }
+
+                                var callSite = site is null
+                                    ? null
+                                    : await CreateLocationAsync(snapshot, projection, site, token);
+                                foreach (var endpoint in missingEndpoints)
+                                {
+                                    AddNode(nodes, endpoint, depth + 1, snapshot, projection);
+                                }
+
+                                edges.Add(new CallHierarchyEdge(
+                                    callerId,
+                                    calleeId,
+                                    ClassifyDispatch(callee),
+                                    callSite,
+                                    IsAmbiguousDispatch(callee),
+                                    cycle));
+                                if (depth < request.Limits.MaximumDepth && !expanded.Contains(traversedEndpointId))
+                                {
+                                    pending.Enqueue((traversedEndpoint, depth + 1));
+                                }
+                                else if (depth >= request.Limits.MaximumDepth)
+                                {
+                                    depthReached = true;
+                                }
+                            }
+
+                            if (edgeReached || nodeReached)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                    {
+                        timeReached = true;
                     }
 
-                    var callerId = CreateIdentity(caller).Id;
-                    var calleeId = CreateIdentity(callee).Id;
-                    var traversedEndpoint = callerId == symbolId ? callee : caller;
-                    var traversedEndpointId = CreateIdentity(traversedEndpoint).Id;
-                    var cycle = expanded.Contains(traversedEndpointId);
-                    ISymbol[] endpoints = [caller, callee];
-                    ISymbol[] missingEndpoints = [.. endpoints
-                        .Where(endpoint => !nodes.ContainsKey(CreateIdentity(endpoint).Id))
-                        .Distinct(SymbolEqualityComparer.Default)];
-                    if (nodes.Count + missingEndpoints.Length > request.Limits.MaximumNodes)
-                    {
-                        nodeReached = true;
-                        break;
-                    }
-
-                    var callSite = site is null
-                        ? null
-                        : await CreateLocationAsync(snapshot, projection, site, timeout.Token);
-                    foreach (var endpoint in missingEndpoints)
-                    {
-                        AddNode(nodes, endpoint, depth + 1, snapshot, projection);
-                    }
-
-                    edges.Add(new CallHierarchyEdge(
-                        callerId,
-                        calleeId,
-                        ClassifyDispatch(callee),
-                        callSite,
-                        IsAmbiguousDispatch(callee),
-                        cycle));
-                    if (depth < request.Limits.MaximumDepth && !expanded.Contains(traversedEndpointId))
-                    {
-                        pending.Enqueue((traversedEndpoint, depth + 1));
-                    }
-                    else if (depth >= request.Limits.MaximumDepth)
-                    {
-                        depthReached = true;
-                    }
-                }
-
-                if (edgeReached || nodeReached)
-                {
-                    break;
-                }
-            }
+                    EnsureCurrent(engine, snapshot.Generation);
+                    var omissions = BuildOmissions(depthReached, nodeReached, edgeReached, timeReached);
+                    return new CallHierarchyResult(
+                        snapshot.Generation,
+                        snapshot.Confidence,
+                        nodes.Values.OrderBy(node => node.Depth).ThenBy(node => node.Symbol.Id, StringComparer.Ordinal).ToArray(),
+                        edges,
+                        new SemanticTraversalSummary(
+                            expanded.Count,
+                            edges.Count,
+                            omissions.Length == 0,
+                            depthReached,
+                            nodeReached,
+                            edgeReached,
+                            timeReached,
+                            omissions));
+                },
+                timeout.Token,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
-            timeReached = true;
+            EnsureCurrent(engine, snapshot.Generation);
+            return new CallHierarchyResult(snapshot.Generation, snapshot.Confidence, [], [], new SemanticTraversalSummary(0, 0, false, false, false, false, true, BuildOmissions(false, false, false, true)));
         }
-
-        EnsureCurrent(engine, snapshot.Generation);
-        var omissions = BuildOmissions(depthReached, nodeReached, edgeReached, timeReached);
-        return new CallHierarchyResult(
-            snapshot.Generation,
-            snapshot.Confidence,
-            nodes.Values.OrderBy(node => node.Depth).ThenBy(node => node.Symbol.Id, StringComparer.Ordinal).ToArray(),
-            edges,
-            new SemanticTraversalSummary(
-                expanded.Count,
-                edges.Count,
-                omissions.Length == 0,
-                depthReached,
-                nodeReached,
-                edgeReached,
-                timeReached,
-                omissions));
     }
 
     /// <inheritdoc />
@@ -419,211 +432,226 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var engine = _registry.GetEngine(workspaceId);
         using var timeout = new QueryTimeout(request.Limits.TimeoutMilliseconds, _timeProvider, cancellationToken);
         var snapshot = engine.CaptureAdvancedSnapshot();
-        var nodes = new Dictionary<string, ImpactNode>(StringComparer.Ordinal);
-        var edges = new List<ImpactEdge>();
-        var omissions = new List<string>();
-        var depthReached = false;
-        var nodeReached = false;
-        var edgeReached = false;
-        var timeReached = false;
-
         try
         {
             var preparedSolution = await engine.EnsurePreparedAsync(null, "symbol-impact", requireSuccess: true, timeout.Token);
             snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
-            var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, timeout.Token);
-            var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
-            var rootIdentity = CreateIdentity(root);
-            nodes.Add(rootIdentity.Id, new(rootIdentity.Id, rootIdentity.DisplayName, ImpactKind.RootSymbol, null, null));
-            var references = await SymbolFinder.FindReferencesAsync(root, snapshot.Solution, timeout.Token);
-            foreach (var reference in references.SelectMany(item => item.Locations))
-            {
-                var location = await CreateLocationAsync(snapshot, projection, reference.Location, timeout.Token);
-                var referenceId = location is null
-                    ? string.Empty
-                    : $"reference:{location.FilePath}:{location.Range.StartLine}:{location.Range.StartColumn}";
-                if (location is null || !TryAddImpact(
-                    nodes,
-                    edges,
-                    request.Limits,
-                    rootIdentity.Id,
-                    referenceId,
-                    rootIdentity.DisplayName,
-                    ImpactKind.Reference,
-                    location,
-                    location.ProjectName,
-                    "Source references the selected symbol."))
-                {
-                    UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                    omissions.Add(ModelVisibleStructuredFact.Exact(
-                        "Reference results exceeded the graph bounds or could not be projected."));
-                    break;
-                }
-            }
-
-            var implementations = await SymbolFinder.FindImplementationsAsync(
-                root,
+            return await engine.RunSnapshotQueryAsync<SymbolImpactResult>(
                 snapshot.Solution,
-                cancellationToken: timeout.Token);
-            foreach (var implementation in implementations)
-            {
-                var identity = CreateIdentity(implementation);
-                var location = await FirstLocationAsync(snapshot, projection, implementation, timeout.Token);
-                if (!TryAddImpact(
-                    nodes,
-                    edges,
-                    request.Limits,
-                    rootIdentity.Id,
-                    identity.Id,
-                    identity.DisplayName,
-                    ImpactKind.Implementation,
-                    location,
-                    location?.ProjectName,
-                    "Symbol implements or overrides the selected contract."))
+                async token =>
                 {
-                    UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                    omissions.Add(ModelVisibleStructuredFact.Exact(
-                        "Implementation results exceeded the graph bounds."));
-                    break;
-                }
-            }
+                    var nodes = new Dictionary<string, ImpactNode>(StringComparer.Ordinal);
+                    var edges = new List<ImpactEdge>();
+                    var omissions = new List<string>();
+                    var depthReached = false;
+                    var nodeReached = false;
+                    var edgeReached = false;
+                    var timeReached = false;
 
-            var callers = await SymbolFinder.FindCallersAsync(root, snapshot.Solution, timeout.Token);
-            foreach (var caller in callers)
-            {
-                var identity = CreateIdentity(caller.CallingSymbol);
-                var location = await FirstLocationAsync(snapshot, projection, caller.CallingSymbol, timeout.Token);
-                if (!TryAddImpact(
-                    nodes,
-                    edges,
-                    request.Limits,
-                    rootIdentity.Id,
-                    identity.Id,
-                    identity.DisplayName,
-                    ImpactKind.Caller,
-                    location,
-                    location?.ProjectName,
-                    "Caller directly invokes the selected symbol."))
-                {
-                    UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                    omissions.Add(ModelVisibleStructuredFact.Exact(
-                        "Caller results exceeded the graph bounds."));
-                    break;
-                }
-            }
-
-            var projectDepths = nodes.Values
-                .Select(node => node.ProjectName)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Select(name => name ?? string.Empty)
-                .Distinct(StringComparer.Ordinal)
-                .ToDictionary(name => name, _ => 0, StringComparer.Ordinal);
-            var pendingProjects = new Queue<(string ProjectName, int Depth)>(projectDepths
-                .OrderBy(item => item.Key, StringComparer.Ordinal)
-                .Select(item => (item.Key, item.Value)));
-            var projectBoundsReached = false;
-            while (pendingProjects.Count > 0 && !projectBoundsReached)
-            {
-                timeout.Token.ThrowIfCancellationRequested();
-                (var impactedProject, var depth) = pendingProjects.Dequeue();
-                Project[] dependents = [.. snapshot.Solution.Projects
-                    .Where(project => project.ProjectReferences.Any(reference =>
-                        string.Equals(snapshot.Solution.GetProject(reference.ProjectId)?.Name, impactedProject, StringComparison.Ordinal)))
-                    .OrderBy(project => project.Name, StringComparer.Ordinal)];
-                if (depth >= request.Limits.MaximumDepth)
-                {
-                    depthReached |= dependents.Any(project => !projectDepths.ContainsKey(project.Name));
-                    continue;
-                }
-
-                foreach (var project in dependents.Where(project => !projectDepths.ContainsKey(project.Name)))
-                {
-                    var kind = IsTestProject(project) ? ImpactKind.Test : ImpactKind.Project;
-                    var id = $"project:{project.Id.Id:D}";
-                    var reason = kind == ImpactKind.Test
-                        ? "Test project depends on an impacted project."
-                        : "Project depends on an impacted project.";
-                    if (!TryAddImpact(
-                        nodes,
-                        edges,
-                        request.Limits,
-                        rootIdentity.Id,
-                        id,
-                        project.Name,
-                        kind,
-                        null,
-                        project.Name,
-                        reason))
+                    try
                     {
-                        UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
-                        omissions.Add(ModelVisibleStructuredFact.Exact(
-                            "Dependent project/test results exceeded the graph bounds."));
-                        projectBoundsReached = true;
-                        break;
+                        var root = await ResolveSymbolAsync(snapshot.Solution, request.SymbolId, token);
+                        var projection = new SemanticSourceProjection(snapshot.Solution, token);
+                        var rootIdentity = CreateIdentity(root);
+                        nodes.Add(rootIdentity.Id, new(rootIdentity.Id, rootIdentity.DisplayName, ImpactKind.RootSymbol, null, null));
+                        var references = await SymbolFinder.FindReferencesAsync(root, snapshot.Solution, token);
+                        foreach (var reference in references.SelectMany(item => item.Locations))
+                        {
+                            var location = await CreateLocationAsync(snapshot, projection, reference.Location, token);
+                            var referenceId = location is null
+                                ? string.Empty
+                                : $"reference:{location.FilePath}:{location.Range.StartLine}:{location.Range.StartColumn}";
+                            if (location is null || !TryAddImpact(
+                                nodes,
+                                edges,
+                                request.Limits,
+                                rootIdentity.Id,
+                                referenceId,
+                                rootIdentity.DisplayName,
+                                ImpactKind.Reference,
+                                location,
+                                location.ProjectName,
+                                "Source references the selected symbol."))
+                            {
+                                UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
+                                omissions.Add(ModelVisibleStructuredFact.Exact(
+                                    "Reference results exceeded the graph bounds or could not be projected."));
+                                break;
+                            }
+                        }
+
+                        var implementations = await SymbolFinder.FindImplementationsAsync(
+                            root,
+                            snapshot.Solution,
+                            cancellationToken: token);
+                        foreach (var implementation in implementations)
+                        {
+                            var identity = CreateIdentity(implementation);
+                            var location = await FirstLocationAsync(snapshot, projection, implementation, token);
+                            if (!TryAddImpact(
+                                nodes,
+                                edges,
+                                request.Limits,
+                                rootIdentity.Id,
+                                identity.Id,
+                                identity.DisplayName,
+                                ImpactKind.Implementation,
+                                location,
+                                location?.ProjectName,
+                                "Symbol implements or overrides the selected contract."))
+                            {
+                                UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
+                                omissions.Add(ModelVisibleStructuredFact.Exact(
+                                    "Implementation results exceeded the graph bounds."));
+                                break;
+                            }
+                        }
+
+                        var callers = await SymbolFinder.FindCallersAsync(root, snapshot.Solution, token);
+                        foreach (var caller in callers)
+                        {
+                            var identity = CreateIdentity(caller.CallingSymbol);
+                            var location = await FirstLocationAsync(snapshot, projection, caller.CallingSymbol, token);
+                            if (!TryAddImpact(
+                                nodes,
+                                edges,
+                                request.Limits,
+                                rootIdentity.Id,
+                                identity.Id,
+                                identity.DisplayName,
+                                ImpactKind.Caller,
+                                location,
+                                location?.ProjectName,
+                                "Caller directly invokes the selected symbol."))
+                            {
+                                UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
+                                omissions.Add(ModelVisibleStructuredFact.Exact(
+                                    "Caller results exceeded the graph bounds."));
+                                break;
+                            }
+                        }
+
+                        var projectDepths = nodes.Values
+                            .Select(node => node.ProjectName)
+                            .Where(name => !string.IsNullOrWhiteSpace(name))
+                            .Select(name => name ?? string.Empty)
+                            .Distinct(StringComparer.Ordinal)
+                            .ToDictionary(name => name, _ => 0, StringComparer.Ordinal);
+                        var pendingProjects = new Queue<(string ProjectName, int Depth)>(projectDepths
+                            .OrderBy(item => item.Key, StringComparer.Ordinal)
+                            .Select(item => (item.Key, item.Value)));
+                        var projectBoundsReached = false;
+                        while (pendingProjects.Count > 0 && !projectBoundsReached)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            (var impactedProject, var depth) = pendingProjects.Dequeue();
+                            Project[] dependents = [.. snapshot.Solution.Projects
+                                .Where(project => project.ProjectReferences.Any(reference =>
+                                    string.Equals(snapshot.Solution.GetProject(reference.ProjectId)?.Name, impactedProject, StringComparison.Ordinal)))
+                                .OrderBy(project => project.Name, StringComparer.Ordinal)];
+                            if (depth >= request.Limits.MaximumDepth)
+                            {
+                                depthReached |= dependents.Any(project => !projectDepths.ContainsKey(project.Name));
+                                continue;
+                            }
+
+                            foreach (var project in dependents.Where(project => !projectDepths.ContainsKey(project.Name)))
+                            {
+                                var kind = IsTestProject(project) ? ImpactKind.Test : ImpactKind.Project;
+                                var id = $"project:{project.Id.Id:D}";
+                                var reason = kind == ImpactKind.Test
+                                    ? "Test project depends on an impacted project."
+                                    : "Project depends on an impacted project.";
+                                if (!TryAddImpact(
+                                    nodes,
+                                    edges,
+                                    request.Limits,
+                                    rootIdentity.Id,
+                                    id,
+                                    project.Name,
+                                    kind,
+                                    null,
+                                    project.Name,
+                                    reason))
+                                {
+                                    UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
+                                    omissions.Add(ModelVisibleStructuredFact.Exact(
+                                        "Dependent project/test results exceeded the graph bounds."));
+                                    projectBoundsReached = true;
+                                    break;
+                                }
+
+                                var projectDepth = depth + 1;
+                                projectDepths.Add(project.Name, projectDepth);
+                                pendingProjects.Enqueue((project.Name, projectDepth));
+                            }
+                        }
+
+                        foreach (var node in nodes.Values.Where(node => node.Location is { IsGenerated: true } or { IsLinked: true }).ToArray())
+                        {
+                            var location = node.Location
+                                ?? throw new InvalidOperationException("A classified impact node requires a source location.");
+                            var kind = location.IsGenerated ? ImpactKind.GeneratedDocument : ImpactKind.LinkedDocument;
+                            var id = $"{kind}:{location.FilePath}";
+                            var reason = location.IsGenerated
+                                ? "Impacted symbol evidence is generated source."
+                                : "Impacted symbol evidence is linked source.";
+                            if (!TryAddImpact(
+                                nodes,
+                                edges,
+                                request.Limits,
+                                node.Id,
+                                id,
+                                Path.GetFileName(location.FilePath),
+                                kind,
+                                location,
+                                location.ProjectName,
+                                reason))
+                            {
+                                UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
+                                omissions.Add(ModelVisibleStructuredFact.Exact(
+                                    "Generated or linked document results exceeded the graph bounds."));
+                                break;
+                            }
+                        }
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                    {
+                        timeReached = true;
+                        omissions.Add(ModelVisibleStructuredFact.Exact("The traversal time limit was reached."));
                     }
 
-                    var projectDepth = depth + 1;
-                    projectDepths.Add(project.Name, projectDepth);
-                    pendingProjects.Enqueue((project.Name, projectDepth));
-                }
-            }
-
-            foreach (var node in nodes.Values.Where(node => node.Location is { IsGenerated: true } or { IsLinked: true }).ToArray())
-            {
-                var location = node.Location
-                    ?? throw new InvalidOperationException("A classified impact node requires a source location.");
-                var kind = location.IsGenerated ? ImpactKind.GeneratedDocument : ImpactKind.LinkedDocument;
-                var id = $"{kind}:{location.FilePath}";
-                var reason = location.IsGenerated
-                    ? "Impacted symbol evidence is generated source."
-                    : "Impacted symbol evidence is linked source.";
-                if (!TryAddImpact(
-                    nodes,
-                    edges,
-                    request.Limits,
-                    node.Id,
-                    id,
-                    Path.GetFileName(location.FilePath),
-                    kind,
-                    location,
-                    location.ProjectName,
-                    reason))
-                {
-                    UpdateImpactBounds(nodes, edges, request.Limits, ref nodeReached, ref edgeReached);
                     omissions.Add(ModelVisibleStructuredFact.Exact(
-                        "Generated or linked document results exceeded the graph bounds."));
-                    break;
-                }
-            }
+                        "Runtime reflection, dynamic dispatch, execution traces, and diagnostics outside the loaded semantic snapshot are not inferred."));
+                    EnsureCurrent(engine, snapshot.Generation);
+                    if (depthReached)
+                    {
+                        omissions.Add(ModelVisibleStructuredFact.Exact("The traversal depth limit was reached."));
+                    }
+
+                    return new SymbolImpactResult(
+                        snapshot.Generation,
+                        snapshot.Confidence,
+                        nodes.Values.OrderBy(node => node.Kind).ThenBy(node => node.Id, StringComparer.Ordinal).ToArray(),
+                        edges.OrderBy(edge => edge.Kind).ThenBy(edge => edge.ToId, StringComparer.Ordinal).ToArray(),
+                        new SemanticTraversalSummary(
+                            nodes.Count,
+                            edges.Count,
+                            !depthReached && !nodeReached && !edgeReached && !timeReached,
+                            depthReached,
+                            nodeReached,
+                            edgeReached,
+                            timeReached,
+                            omissions.Distinct(StringComparer.Ordinal).ToArray()));
+                },
+                timeout.Token,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
-            timeReached = true;
-            omissions.Add(ModelVisibleStructuredFact.Exact("The traversal time limit was reached."));
+            EnsureCurrent(engine, snapshot.Generation);
+            return new SymbolImpactResult(snapshot.Generation, snapshot.Confidence, [], [], new SemanticTraversalSummary(0, 0, false, false, false, false, true, BuildOmissions(false, false, false, true)));
         }
-
-        omissions.Add(ModelVisibleStructuredFact.Exact(
-            "Runtime reflection, dynamic dispatch, execution traces, and diagnostics outside the loaded semantic snapshot are not inferred."));
-        EnsureCurrent(engine, snapshot.Generation);
-        if (depthReached)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact("The traversal depth limit was reached."));
-        }
-
-        return new SymbolImpactResult(
-            snapshot.Generation,
-            snapshot.Confidence,
-            nodes.Values.OrderBy(node => node.Kind).ThenBy(node => node.Id, StringComparer.Ordinal).ToArray(),
-            edges.OrderBy(edge => edge.Kind).ThenBy(edge => edge.ToId, StringComparer.Ordinal).ToArray(),
-            new SemanticTraversalSummary(
-                nodes.Count,
-                edges.Count,
-                !depthReached && !nodeReached && !edgeReached && !timeReached,
-                depthReached,
-                nodeReached,
-                edgeReached,
-                timeReached,
-                omissions.Distinct(StringComparer.Ordinal).ToArray()));
     }
 
     /// <inheritdoc />
@@ -638,70 +666,85 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var engine = _registry.GetEngine(workspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
         using var timeout = new QueryTimeout(request.TimeoutMilliseconds, _timeProvider, cancellationToken);
-        var projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
-        var matches = new List<CSharpPatternMatch>();
-        var timeReached = false;
-        var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
         try
         {
-            foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
-            {
-                foreach (var document in project.Documents.OrderBy(document => document.FilePath, StringComparer.Ordinal))
+            return await engine.RunSnapshotQueryAsync<CSharpPatternSearchResult>(
+                snapshot.Solution,
+                async token =>
                 {
-                    timeout.Token.ThrowIfCancellationRequested();
-                    if (!IsInScope(document.FilePath, normalizedScope))
+                    var projection = new SemanticSourceProjection(snapshot.Solution, token);
+                    var matches = new List<CSharpPatternMatch>();
+                    var timeReached = false;
+                    var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
+                    try
                     {
-                        continue;
-                    }
-
-                    var root = await document.GetSyntaxRootAsync(timeout.Token);
-                    if (root is null)
-                    {
-                        continue;
-                    }
-
-                    foreach (var node in root.DescendantNodesAndSelf().Where(node => IsPatternKind(node, request.Pattern.Kind)))
-                    {
-                        if (!MatchesPattern(node, request.Pattern))
+                        foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
                         {
-                            continue;
-                        }
+                            foreach (var document in project.Documents.OrderBy(document => document.FilePath, StringComparer.Ordinal))
+                            {
+                                token.ThrowIfCancellationRequested();
+                                if (!IsInScope(document.FilePath, normalizedScope))
+                                {
+                                    continue;
+                                }
 
-                        var location = CreateDocumentLocation(
-                            document,
-                            node.SyntaxTree,
-                            node.Span,
-                            projection);
-                        CSharpPatternCapture[] captures = request.Pattern.Capture is null
-                            ? []
-                            : [new CSharpPatternCapture(request.Pattern.Capture, location.Range, BoundText(node.ToString(), 1024))];
-                        matches.Add(new CSharpPatternMatch(request.Pattern.Kind, location, captures));
-                        if (matches.Count >= request.MaximumMatches)
-                        {
-                            EnsureCurrent(engine, snapshot.Generation);
-                            return new(
-                                snapshot.Generation,
-                                snapshot.Confidence,
-                                matches,
-                                false,
-                                [ModelVisibleStructuredFact.Exact("The maximum match count was reached.")]);
+                                var root = await document.GetSyntaxRootAsync(token);
+                                if (root is null)
+                                {
+                                    continue;
+                                }
+
+                                foreach (var node in root.DescendantNodesAndSelf().Where(node => IsPatternKind(node, request.Pattern.Kind)))
+                                {
+                                    if (!MatchesPattern(node, request.Pattern))
+                                    {
+                                        continue;
+                                    }
+
+                                    var location = CreateDocumentLocation(
+                                        document,
+                                        node.SyntaxTree,
+                                        node.Span,
+                                        projection);
+                                    CSharpPatternCapture[] captures = request.Pattern.Capture is null
+                                        ? []
+                                        : [new CSharpPatternCapture(request.Pattern.Capture, location.Range, BoundText(node.ToString(), 1024))];
+                                    matches.Add(new CSharpPatternMatch(request.Pattern.Kind, location, captures));
+                                    if (matches.Count >= request.MaximumMatches)
+                                    {
+                                        EnsureCurrent(engine, snapshot.Generation);
+                                        return new(
+                                            snapshot.Generation,
+                                            snapshot.Confidence,
+                                            matches,
+                                            false,
+                                            [ModelVisibleStructuredFact.Exact("The maximum match count was reached.")]);
+                                    }
+                                }
+                            }
                         }
                     }
-                }
-            }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                    {
+                        timeReached = true;
+                    }
+
+                    EnsureCurrent(engine, snapshot.Generation);
+                    return new(
+                        snapshot.Generation,
+                        snapshot.Confidence,
+                        matches,
+                        !timeReached,
+                        timeReached ? [ModelVisibleStructuredFact.Exact("The query time limit was reached.")] : []);
+                },
+                timeout.Token,
+                cancellationToken);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
-            timeReached = true;
+            EnsureCurrent(engine, snapshot.Generation);
+            return new CSharpPatternSearchResult(snapshot.Generation, snapshot.Confidence, [], false, [ModelVisibleStructuredFact.Exact("The query time limit was reached.")]);
         }
-
-        EnsureCurrent(engine, snapshot.Generation);
-        return new(
-            snapshot.Generation,
-            snapshot.Confidence,
-            matches,
-            !timeReached,
-            timeReached ? [ModelVisibleStructuredFact.Exact("The query time limit was reached.")] : []);
     }
 
     /// <inheritdoc />
@@ -714,80 +757,86 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         var engine = _registry.GetEngine(workspaceId);
         var preparedSolution = await engine.EnsurePreparedAsync(request.Path, "generated-code", requireSuccess: true, cancellationToken);
         var snapshot = engine.CaptureAdvancedSnapshot(preparedSolution);
-        var projection = new SemanticSourceProjection(snapshot.Solution, cancellationToken);
-        var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
-        var ordinaryScope = normalizedScope is not null && snapshot.Solution.Projects.Any(project => IsInScope(project.FilePath, normalizedScope)
-            || project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope)));
-        var documents = new List<GeneratedDocumentInfo>();
-        var truncated = false;
-        foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!snapshot.CompiledProjects.Contains(project.Id) || (ordinaryScope && !IsInScope(project.FilePath, normalizedScope)
-                && !project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope))))
+        return await engine.RunSnapshotOperationAsync<GeneratedCodeResult>(
+            snapshot.Solution,
+            async token =>
             {
-                continue;
-            }
-
-            var projectFileScoped = normalizedScope is not null
-                && project.FilePath is not null
-                && Path.GetFullPath(project.FilePath).Equals(normalizedScope, PathComparison);
-            var candidates = new List<(Document Document, GeneratedCodeOrigin Origin, string? OriginName)>();
-            candidates.AddRange(project.Documents
-                .Where(document => IsGeneratedPath(document.FilePath ?? document.Name))
-                .Select(document => (document, GeneratedCodeOrigin.FileConvention, (string?)null)));
-            IEnumerable<Document> generated = await project.GetSourceGeneratedDocumentsAsync(cancellationToken);
-            candidates.AddRange(generated.Select(document => (document, GeneratedCodeOrigin.SourceGenerator, (string?)document.Name)));
-            foreach ((var document, var origin, var originName) in candidates
-                .GroupBy(item => item.Document.Id)
-                .Select(group => group.OrderByDescending(item => item.Origin).First())
-                .OrderBy(item => item.Document.FilePath ?? item.Document.Name, StringComparer.Ordinal))
-            {
-                if (!projectFileScoped && !IsInScope(document.FilePath, normalizedScope))
+                var projection = new SemanticSourceProjection(snapshot.Solution, token);
+                var normalizedScope = NormalizeScope(request.Path, snapshot.RepositoryPath);
+                var ordinaryScope = normalizedScope is not null && snapshot.Solution.Projects.Any(project => IsInScope(project.FilePath, normalizedScope)
+                    || project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope)));
+                var documents = new List<GeneratedDocumentInfo>();
+                var truncated = false;
+                foreach (var project in snapshot.Solution.Projects.OrderBy(project => project.Name, StringComparer.Ordinal))
                 {
-                    continue;
+                    token.ThrowIfCancellationRequested();
+                    if (!snapshot.CompiledProjects.Contains(project.Id) || (ordinaryScope && !IsInScope(project.FilePath, normalizedScope)
+                        && !project.Documents.Any(document => IsInScope(document.FilePath, normalizedScope))))
+                    {
+                        continue;
+                    }
+
+                    var projectFileScoped = normalizedScope is not null
+                        && project.FilePath is not null
+                        && Path.GetFullPath(project.FilePath).Equals(normalizedScope, PathComparison);
+                    var candidates = new List<(Document Document, GeneratedCodeOrigin Origin, string? OriginName)>();
+                    candidates.AddRange(project.Documents
+                        .Where(document => IsGeneratedPath(document.FilePath ?? document.Name))
+                        .Select(document => (document, GeneratedCodeOrigin.FileConvention, (string?)null)));
+                    IEnumerable<Document> generated = await project.GetSourceGeneratedDocumentsAsync(token);
+                    candidates.AddRange(generated.Select(document => (document, GeneratedCodeOrigin.SourceGenerator, (string?)document.Name)));
+                    foreach ((var document, var origin, var originName) in candidates
+                        .GroupBy(item => item.Document.Id)
+                        .Select(group => group.OrderByDescending(item => item.Origin).First())
+                        .OrderBy(item => item.Document.FilePath ?? item.Document.Name, StringComparer.Ordinal))
+                    {
+                        if (!projectFileScoped && !IsInScope(document.FilePath, normalizedScope))
+                        {
+                            continue;
+                        }
+
+                        if (documents.Count >= _resourceLimits.MaximumGeneratedDocuments)
+                        {
+                            truncated = true;
+                            break;
+                        }
+
+                        var text = await document.GetTextAsync(token);
+                        var content = request.IncludeContent ? text.ToString() : null;
+                        var contentTruncated = content is { Length: var length } && length > _resourceLimits.MaximumGeneratedContentCharacters;
+                        if (contentTruncated)
+                        {
+                            content = content?[.._resourceLimits.MaximumGeneratedContentCharacters];
+                        }
+
+                        var filePath = document.FilePath ?? document.Name;
+                        documents.Add(new GeneratedDocumentInfo(
+                            document.Id.Id.ToString("D"),
+                            document.Name,
+                            project.Name,
+                            filePath,
+                            projection.IsLinked(filePath),
+                            origin,
+                            originName,
+                            content,
+                            contentTruncated));
+                    }
+
+                    if (truncated)
+                    {
+                        break;
+                    }
                 }
 
-                if (documents.Count >= _resourceLimits.MaximumGeneratedDocuments)
-                {
-                    truncated = true;
-                    break;
-                }
-
-                var text = await document.GetTextAsync(cancellationToken);
-                var content = request.IncludeContent ? text.ToString() : null;
-                var contentTruncated = content is { Length: var length } && length > _resourceLimits.MaximumGeneratedContentCharacters;
-                if (contentTruncated)
-                {
-                    content = content?[.._resourceLimits.MaximumGeneratedContentCharacters];
-                }
-
-                var filePath = document.FilePath ?? document.Name;
-                documents.Add(new GeneratedDocumentInfo(
-                    document.Id.Id.ToString("D"),
-                    document.Name,
-                    project.Name,
-                    filePath,
-                    projection.IsLinked(filePath),
-                    origin,
-                    originName,
-                    content,
-                    contentTruncated));
-            }
-
-            if (truncated)
-            {
-                break;
-            }
-        }
-
-        EnsureCurrent(engine, snapshot.Generation);
-        return new(
-            snapshot.Generation,
-            snapshot.Confidence,
-            documents,
-            !truncated,
-            truncated ? [ModelVisibleStructuredFact.Exact("The maximum generated-document count was reached.")] : []);
+                EnsureCurrent(engine, snapshot.Generation);
+                return new(
+                    snapshot.Generation,
+                    snapshot.Confidence,
+                    documents,
+                    !truncated,
+                    truncated ? [ModelVisibleStructuredFact.Exact("The maximum generated-document count was reached.")] : []);
+            },
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -853,7 +902,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             readiness.Confidence,
             repositoryPath,
             workspacePath,
-            readiness.SourceGeneration);
+            readiness.SourceGeneration) { SourceSolution = solution };
         CodeExploreRepositoryScale repositoryScale;
         try
         {
@@ -881,706 +930,724 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
 
         request = ApplyCodeExploreAdaptiveDefaults(request, repositoryScale, out var adaptiveBudget);
-        var anchors = BuildCodeExploreAnchors(request, queryInterpretation).ToList();
-        var requiredSymbolAnchors = anchors.Where(anchor => !IsCodeExplorePathAnchor(anchor))
-            .Select(anchor => (anchor.Kind, anchor.Value))
-            .ToHashSet();
-        var omittedNamedFiles = request.PathAnchors.Count + request.SymbolIds.Count + request.ExactSymbolAnchors.Count == 0
-            ? Math.Max(0, queryInterpretation.PathLikeSpans.Count - anchors.Count)
-            : 0;
-        var resolutions = new List<CodeExploreAnchorResolution>();
-        var candidates = new List<CodeExploreSectionCandidate>();
-        var omissions = new List<string>();
-        if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact("Code exploration used bounded candidate project coverage; other projects and their generated declarations were omitted."));
-        }
-
-        if (omittedNamedFiles > 0)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact(
-                $"The maximumAnchors limit omitted {omittedNamedFiles} named C# file requests."));
-        }
-
-        var continuations = new List<CodeExploreContinuationTarget>();
-        var allocationFiles = new List<CodeExploreAllocationFileSummary>();
-        var candidateSummaries = Array.Empty<CodeExploreCandidateSummary>();
-        IReadOnlyList<CodeExploreRankedCandidate> naturalLanguageSourceCompanions = [];
-        IReadOnlyDictionary<string, CodeExploreSelectedRelevance> selectedRelevance =
-            new Dictionary<string, CodeExploreSelectedRelevance>(StringComparer.Ordinal);
-        CodeExploreDiscoverySummary? discovery = null;
-        CodeExploreNaturalLanguageIntent? naturalLanguageIntent = null;
-        CodeExploreFlow? flow = null;
-        CodeExploreBlastRadius? blastRadius = null;
-        var alternativesCapped = false;
-        var timeReached = false;
-        SemanticSourceProjection? projection = null;
+        var fallbackInterpretation = queryInterpretation;
+        var fallbackBudget = adaptiveBudget;
         try
         {
-            projection = new SemanticSourceProjection(snapshot.Solution, timeout.Token);
-            if (anchors.Count == 0 && ShouldUseNaturalLanguageDiscovery(queryInterpretation))
+            NaturalLanguageCodeExploreDiscovery? preparedDiscovery = null;
+            if (BuildCodeExploreAnchors(request, queryInterpretation).Count == 0 && ShouldUseNaturalLanguageDiscovery(queryInterpretation))
             {
-                var naturalLanguage = await DiscoverNaturalLanguageCodeExploreAsync(
-                    workspaceId,
-                    snapshot,
-                    projection,
-                    sourceReader,
-                    request,
-                    queryInterpretation,
-                    timeout.Token);
-                anchors.AddRange(naturalLanguage.Anchors);
-                queryInterpretation = naturalLanguage.Interpretation;
-                discovery = naturalLanguage.Discovery;
-                naturalLanguageIntent = naturalLanguage.Intent;
-                candidateSummaries = naturalLanguage.Candidates;
-                naturalLanguageSourceCompanions = naturalLanguage.SourceCompanions;
-                selectedRelevance = naturalLanguage.SelectedRelevance;
-                omissions.AddRange(naturalLanguage.Omissions);
+                preparedDiscovery = await DiscoverNaturalLanguageCodeExploreAsync(
+                    workspaceId, snapshot, new SemanticSourceProjection(snapshot.Solution, timeout.Token), sourceReader, request, queryInterpretation, timeout.Token);
             }
 
-            if (anchors.Count == 0)
-            {
-                EnsureCurrent(engine, snapshot.Generation);
-                return CreateUnanchoredCodeExploreResult(
-                    snapshot,
-                    request,
-                    queryInterpretation,
-                    discovery,
-                    candidateSummaries,
-                    adaptiveBudget);
-            }
-
-            foreach (var anchor in anchors)
-            {
-                timeout.Token.ThrowIfCancellationRequested();
-                if (anchor.Kind == CodeExploreAnchorKind.SymbolId)
+            return await engine.RunSnapshotQueryAsync<CodeExploreResult>(
+                solution,
+                async token =>
                 {
-                    var symbolIdResult = await ResolveCodeExploreSymbolIdAsync(
-                        snapshot,
-                        projection,
-                        sourceReader,
-                        request.PathAnchors,
-                        request.Limits.MaximumAlternatives,
-                        anchor,
-                        resolutions,
-                        candidates,
-                        timeout.Token);
-                    alternativesCapped |= symbolIdResult.AlternativesCapped;
-                    continue;
-                }
-
-                if (IsCodeExplorePathAnchor(anchor))
-                {
-                    var pathResult = await ResolveCodeExplorePathAsync(
-                        snapshot,
-                        projection,
-                        sourceReader,
-                        request.Limits.MaximumAlternatives,
-                        anchor,
-                        resolutions,
-                        candidates,
-                        timeout.Token);
-                    alternativesCapped |= pathResult.AlternativesCapped;
-                    continue;
-                }
-
-                var result = await ResolveCodeExploreSymbolNameAsync(
-                    snapshot,
-                    projection,
-                    sourceReader,
-                    request,
-                    anchor,
-                    resolutions,
-                    candidates,
-                    timeout.Token);
-                alternativesCapped |= result.AlternativesCapped;
-            }
-
-            if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
-                && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
-                    && resolution.Outcome == CodeExploreResolutionOutcome.NotFound))
-            {
-                throw new InvalidOperationException("Exact symbol absence cannot be established while semantic candidate projects are omitted; retry after preparation or supply an owning path.");
-            }
-
-            // A retained match cannot prove uniqueness: omitted ordinary or generated declarations may share its anchor.
-            if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
-                && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
-                    && resolution.Outcome == CodeExploreResolutionOutcome.Resolved))
-            {
-                throw new InvalidOperationException("Exact symbol ownership cannot be established while semantic candidate projects are omitted; retry after preparation.");
-            }
-
-            for (var companionIndex = 0; companionIndex < naturalLanguageSourceCompanions.Count; companionIndex++)
-            {
-                await AddNaturalLanguageSourceCompanionAsync(
-                    snapshot,
-                    projection,
-                    sourceReader,
-                    naturalLanguageSourceCompanions[companionIndex],
-                    anchors.Count + companionIndex + 1,
-                    candidates,
-                    timeout.Token);
-            }
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
-        {
-            timeReached = true;
-            omissions.Add(ModelVisibleStructuredFact.Exact(
-                "The code exploration time limit was reached during anchor resolution."));
-        }
-
-        var selectedSections = new List<CodeExploreFileSection>();
-        var selectedSourceFiles = new HashSet<string>(PathComparer);
-        var selectedArtifactOrigins = new List<CodeExploreSectionCandidate>();
-        CodeExploreArtifactProjection? artifactProjection = null;
-        var backReferences = new List<CodeExploreBackReference>();
-        var emissionRecords = new List<CodeExploreEmissionRecord>();
-        var dedupReasons = new HashSet<string>(StringComparer.Ordinal);
-        var dedupCandidateRanges = 0;
-        var coveredRanges = 0;
-        var suppressedRanges = 0;
-        var reEmittedRanges = 0;
-        var reclaimedCharacters = 0;
-        var usedForNewSourceCharacters = 0;
-        var seenSections = new HashSet<string>(StringComparer.Ordinal);
-        var reservedCharacters = discovery is null
-            ? 0
-            : Math.Min(
-                request.Limits.MaximumSourceCharacters,
-                EstimateReservedCodeExploreCharacters(queryInterpretation, discovery));
-        var availableSourceCharacters = Math.Max(0, request.Limits.MaximumSourceCharacters - reservedCharacters);
-        var remainingSourceCharacters = availableSourceCharacters;
-        var remainingSourceCharactersWithoutSuppression = availableSourceCharacters;
-        var outputBoundReached = false;
-        if (!timeReached && projection is not null && !request.IsSourceContinuation)
-        {
-            try
-            {
-                var flowAnchors = await ResolveCodeExploreFlowAnchorsAsync(
-                    snapshot,
-                    projection,
-                    sourceReader,
-                    request,
-                    resolutions,
-                    timeout.Token);
-                if (ShouldBuildCodeExploreFlow(request, flowAnchors, naturalLanguageIntent))
-                {
-                    flow = await BuildCodeExploreFlowAsync(
-                        snapshot,
-                        projection,
-                        sourceReader,
-                        request,
-                        flowAnchors,
-                        candidates,
-                        timeout.Token);
-                    omissions.AddRange(flow.Traversal.Omissions);
-                }
-                else if (request.Mode == CodeExploreMode.Flow && flowAnchors.Count < 2)
-                {
-                    omissions.Add(ModelVisibleStructuredFact.Exact(
-                        "Flow mode requires at least two resolved source-bearing symbol anchors."));
-                }
-
-                if (ShouldBuildCodeExploreBlastRadius(request, flowAnchors, naturalLanguageIntent))
-                {
-                    blastRadius = await BuildCodeExploreBlastRadiusAsync(
-                        snapshot,
-                        solution,
-                        projection,
-                        sourceReader,
-                        request,
-                        flowAnchors,
-                        candidates,
-                        timeout.Token);
-                    omissions.AddRange(blastRadius.Omissions);
-                }
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
-            {
-                timeReached = true;
-                omissions.Add(ModelVisibleStructuredFact.Exact(
-                    "The code exploration time limit was reached during flow composition."));
-            }
-        }
-
-        if (!timeReached && projection is not null)
-        {
-            var omitUnrequestedTestSource = naturalLanguageIntent is not null
-                && !HasTestFocus(queryInterpretation);
-            if (omitUnrequestedTestSource
-                && candidates.Any(candidate => IsTestSourceCandidate(candidate)
-                    && !IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation)))
-            {
-                omissions.Add(ModelVisibleStructuredFact.Exact(
-                    "Unrequested test source was omitted; compact test dependencies remain available in blast-radius evidence."));
-            }
-
-            await ProjectAvailableSourceAsync(
-                candidate => !omitUnrequestedTestSource
-                    || !IsTestSourceCandidate(candidate)
-                    || IsExactSelectedSourceCandidate(candidate, selectedRelevance, queryInterpretation),
-                "source projection");
-        }
-
-        async Task ProjectAvailableSourceAsync(
-            Func<CodeExploreSectionCandidate, bool> predicate,
-            string phase)
-        {
-            if (projection is null)
-            {
-                return;
-            }
-
-            var activeProjection = projection;
-            try
-            {
-                var allOrderedCandidates = candidates
-                    .Where(candidate => !seenSections.Contains(CreateSectionKey(candidate)))
-                    .OrderByDescending(candidate => candidate.IsFlowSpine)
-                    .ThenByDescending(candidate => candidate.Importance)
-                    .ThenBy(candidate => IsExactSelectedSourceCandidate(
-                        candidate,
-                        selectedRelevance,
-                        queryInterpretation) ? 0 : 1)
-                    .ThenBy(candidate => candidate.Priority)
-                    .ThenBy(candidate => candidate.AllocationRank ?? int.MaxValue)
-                    .ThenBy(candidate => candidate.FilePath, PathComparer)
-                    .ThenBy(candidate => candidate.Location?.Range.StartLine ?? candidate.PreferredLine ?? 0)
-                    .ThenBy(candidate => candidate.Identity?.Id ?? string.Empty, StringComparer.Ordinal)
-                    .DistinctBy(CreateSectionKey, StringComparer.Ordinal)
-                    .ToArray();
-                var eligibleCandidates = allOrderedCandidates
-                    .Where(predicate)
-                    .ToArray();
-                var broadContainerKeys = GetBroadContainerSourceCandidateKeys(
-                    eligibleCandidates,
-                    selectedRelevance,
-                    queryInterpretation,
-                    request.Limits.MaximumPerFileSourceCharacters);
-                foreach (var broadContainer in eligibleCandidates
-                    .Where(candidate => broadContainerKeys.Contains(CreateSectionKey(candidate))))
-                {
-                    _ = seenSections.Add(CreateSectionKey(broadContainer));
-                    outputBoundReached = true;
-                    AddOrMergeContinuation(
-                        continuations,
-                        CreateSkippedCandidateContinuation(
-                            snapshot,
-                            broadContainer,
-                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceOversizedContainerReplaced)));
-                    allocationFiles.Add(new CodeExploreAllocationFileSummary(
-                        ToRepositoryRelativePath(broadContainer.FilePath, snapshot.RepositoryPath),
-                        0,
-                        0,
-                        CodeExploreSourceCompleteness.Omitted,
-                        false,
-                        GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceOversizedContainerOmitted)));
-                }
-
-                var unclutteredCandidates = eligibleCandidates
-                    .Where(candidate => !broadContainerKeys.Contains(CreateSectionKey(candidate)))
-                    .ToArray();
-                var orderedCandidates = await ClusterNearbySourceCandidatesAsync(
-                    unclutteredCandidates,
-                    selectedRelevance,
-                    queryInterpretation,
-                    request.Limits.MaximumPerFileSourceCharacters,
-                    timeout.Token);
-
-                // Inspect each relevant section once before reserving output. Actual demand releases
-                // small, visible, and unavailable sections before file slots or source space are assigned.
-                var sourceAllocationCandidates = CreateSourceAllocationCandidates(
-                    orderedCandidates,
-                    selectedRelevance,
-                    queryInterpretation);
-                var relevancePlan = CodeExploreSourceAllocationPlanner.Create(
-                    sourceAllocationCandidates,
-                    int.MaxValue,
-                    int.MaxValue,
-                    int.MaxValue);
-                var prepared = new Dictionary<string, ProjectedCodeExploreSection>(StringComparer.Ordinal);
-                var reemissionKeys = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var candidate in orderedCandidates)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (timeout.IsCancellationRequested)
+                    var operationInterpretation = fallbackInterpretation;
+                    var operationBudget = fallbackBudget;
+                    var anchors = BuildCodeExploreAnchors(request, operationInterpretation).ToList();
+                    var requiredSymbolAnchors = anchors.Where(anchor => !IsCodeExplorePathAnchor(anchor))
+                        .Select(anchor => (anchor.Kind, anchor.Value))
+                        .ToHashSet();
+                    var omittedNamedFiles = request.PathAnchors.Count + request.SymbolIds.Count + request.ExactSymbolAnchors.Count == 0
+                        ? Math.Max(0, operationInterpretation.PathLikeSpans.Count - anchors.Count)
+                        : 0;
+                    var resolutions = new List<CodeExploreAnchorResolution>();
+                    var candidates = new List<CodeExploreSectionCandidate>();
+                    var omissions = new List<string>();
+                    if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count)
                     {
-                        timeReached = true;
-                        break;
+                        omissions.Add(ModelVisibleStructuredFact.Exact("Code exploration used bounded candidate project coverage; other projects and their generated declarations were omitted."));
                     }
 
-                    var key = CreateSectionKey(candidate);
-                    if (!seenSections.Add(key))
+                    if (omittedNamedFiles > 0)
                     {
-                        continue;
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            $"The maximumAnchors limit omitted {omittedNamedFiles} named C# file requests."));
                     }
 
-                    if (!relevancePlan.Reservations.ContainsKey(CreateSourceAllocationKey(candidate)))
-                    {
-                        outputBoundReached = true;
-                        AddOrMergeContinuation(continuations, CreateSkippedCandidateContinuation(
-                            snapshot,
-                            candidate,
-                            GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceAllocationStrongerEvidence)));
-                        continue;
-                    }
-
+                    var continuations = new List<CodeExploreContinuationTarget>();
+                    var allocationFiles = new List<CodeExploreAllocationFileSummary>();
+                    var candidateSummaries = Array.Empty<CodeExploreCandidateSummary>();
+                    IReadOnlyList<CodeExploreRankedCandidate> naturalLanguageSourceCompanions = [];
+                    IReadOnlyDictionary<string, CodeExploreSelectedRelevance> selectedRelevance =
+                        new Dictionary<string, CodeExploreSelectedRelevance>(StringComparer.Ordinal);
+                    CodeExploreDiscoverySummary? discovery = null;
+                    CodeExploreNaturalLanguageIntent? naturalLanguageIntent = null;
+                    CodeExploreFlow? flow = null;
+                    CodeExploreBlastRadius? blastRadius = null;
+                    var alternativesCapped = false;
+                    var timeReached = false;
+                    SemanticSourceProjection? projection = null;
                     try
                     {
-                        dedupCandidateRanges++;
-                        var priorCovered = await TryCreateCodeExploreBackReferenceAsync(
-                        workspaceId,
-                        snapshot,
-                        sourceReader,
-                        visibleSourceFrontier,
-                        candidate,
-                        timeout.Token);
-                        if (priorCovered.BackReference is not null)
+                        projection = new SemanticSourceProjection(snapshot.Solution, token);
+                        if (preparedDiscovery is { } naturalLanguage)
                         {
-                            selectedArtifactOrigins.Add(candidate);
-                            coveredRanges++;
-                            suppressedRanges++;
-                            reclaimedCharacters += priorCovered.SourceCharacters;
-                            _ = ConsumeSourceCharacters(ref remainingSourceCharactersWithoutSuppression, priorCovered.SourceCharacters);
-                            backReferences.Add(priorCovered.BackReference);
-                            dedupReasons.Add("An unchanged complete source range already visible in the current request was replaced with a compact back-reference.");
-                            continue;
+                            anchors.AddRange(naturalLanguage.Anchors);
+                            operationInterpretation = naturalLanguage.Interpretation;
+                            discovery = naturalLanguage.Discovery;
+                            naturalLanguageIntent = naturalLanguage.Intent;
+                            candidateSummaries = naturalLanguage.Candidates;
+                            naturalLanguageSourceCompanions = naturalLanguage.SourceCompanions;
+                            selectedRelevance = naturalLanguage.SelectedRelevance;
+                            omissions.AddRange(naturalLanguage.Omissions);
                         }
 
-                        if (priorCovered.DisqualificationReason is { } reason)
+                        if (anchors.Count == 0)
                         {
-                            dedupReasons.Add(reason);
-                            reemissionKeys.Add(key);
+                            EnsureCurrent(engine, snapshot.Generation);
+                            return CreateUnanchoredCodeExploreResult(
+                                snapshot,
+                                request,
+                                operationInterpretation,
+                                discovery,
+                                candidateSummaries,
+                                operationBudget);
                         }
 
-                        prepared[key] = await ProjectCodeExploreSectionAsync(
-                        snapshot,
-                        activeProjection,
-                        sourceReader,
-                        candidate,
-                        request.Limits.MaximumPerFileSourceCharacters,
-                        timeout.Token);
+                        foreach (var anchor in anchors)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            if (anchor.Kind == CodeExploreAnchorKind.SymbolId)
+                            {
+                                var symbolIdResult = await ResolveCodeExploreSymbolIdAsync(
+                                    snapshot,
+                                    projection,
+                                    sourceReader,
+                                    request.PathAnchors,
+                                    request.Limits.MaximumAlternatives,
+                                    anchor,
+                                    resolutions,
+                                    candidates,
+                                    token);
+                                alternativesCapped |= symbolIdResult.AlternativesCapped;
+                                continue;
+                            }
+
+                            if (IsCodeExplorePathAnchor(anchor))
+                            {
+                                var pathResult = await ResolveCodeExplorePathAsync(
+                                    snapshot,
+                                    projection,
+                                    sourceReader,
+                                    request.Limits.MaximumAlternatives,
+                                    anchor,
+                                    resolutions,
+                                    candidates,
+                                    token);
+                                alternativesCapped |= pathResult.AlternativesCapped;
+                                continue;
+                            }
+
+                            var result = await ResolveCodeExploreSymbolNameAsync(
+                                snapshot,
+                                projection,
+                                sourceReader,
+                                request,
+                                anchor,
+                                resolutions,
+                                candidates,
+                                token);
+                            alternativesCapped |= result.AlternativesCapped;
+                        }
+
+                        if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
+                            && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
+                                && resolution.Outcome == CodeExploreResolutionOutcome.NotFound))
+                        {
+                            throw new InvalidOperationException("Exact symbol absence cannot be established while semantic candidate projects are omitted; retry after preparation or supply an owning path.");
+                        }
+
+                        // A retained match cannot prove uniqueness: omitted ordinary or generated declarations may share its anchor.
+                        if (snapshot.Solution.ProjectIds.Count < solution.ProjectIds.Count
+                            && resolutions.Any(resolution => requiredSymbolAnchors.Contains((resolution.Kind, resolution.Input))
+                                && resolution.Outcome == CodeExploreResolutionOutcome.Resolved))
+                        {
+                            throw new InvalidOperationException("Exact symbol ownership cannot be established while semantic candidate projects are omitted; retry after preparation.");
+                        }
+
+                        for (var companionIndex = 0; companionIndex < naturalLanguageSourceCompanions.Count; companionIndex++)
+                        {
+                            await AddNaturalLanguageSourceCompanionAsync(
+                                snapshot,
+                                projection,
+                                sourceReader,
+                                naturalLanguageSourceCompanions[companionIndex],
+                                anchors.Count + companionIndex + 1,
+                                candidates,
+                                token);
+                        }
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
                     {
                         timeReached = true;
-                        break;
-                    }
-                }
-
-                var demandByFile = orderedCandidates
-                    .GroupBy(CreateSourceAllocationKey, StringComparer.Ordinal)
-                    .ToDictionary(
-                        group => group.Key,
-                        group => (int)Math.Min(int.MaxValue, group.Sum(candidate => (long)(prepared.GetValueOrDefault(CreateSectionKey(candidate))?.SourceCharacters ?? 0))),
-                        StringComparer.Ordinal);
-                var allocationPlan = CodeExploreSourceAllocationPlanner.Create(
-                    sourceAllocationCandidates.Select(candidate => candidate with
-                    {
-                        RequiredCharacters = demandByFile.GetValueOrDefault(candidate.StableKey),
-                    }).ToArray(),
-                    remainingSourceCharacters,
-                    Math.Max(0, request.Limits.MaximumFiles - selectedSourceFiles.Count),
-                    request.Limits.MaximumPerFileSourceCharacters);
-                var remainingReservations = allocationPlan.Reservations.ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
-                var fittedSections = new Dictionary<string, ProjectedCodeExploreSection>(StringComparer.Ordinal);
-                var allowances = new Dictionary<string, int>(StringComparer.Ordinal);
-                var fileSpend = new Dictionary<string, int>(StringComparer.Ordinal);
-                var bearingFiles = new HashSet<string>(selectedSourceFiles, PathComparer);
-                var unspent = remainingSourceCharacters;
-                foreach (var candidate in orderedCandidates)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var key = CreateSectionKey(candidate);
-                    if (!prepared.TryGetValue(key, out var inspected))
-                    {
-                        continue;
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            "The code exploration time limit was reached during anchor resolution."));
                     }
 
-                    var allocationKey = CreateSourceAllocationKey(candidate);
-                    var allowance = Math.Min(unspent, remainingReservations.GetValueOrDefault(allocationKey));
-                    var fitted = inspected.SourceCharacters <= allowance
-                        ? inspected
-                        : FitPreparedSource(inspected, allowance, snapshot.Generation);
-                    fittedSections[key] = fitted;
-                    allowances[key] = allowance;
-                    remainingReservations[allocationKey] = allowance - fitted.SourceCharacters;
-                    fileSpend[allocationKey] = fileSpend.GetValueOrDefault(allocationKey) + fitted.SourceCharacters;
-                    unspent -= fitted.SourceCharacters;
-                    if (fitted.SourceCharacters > 0)
+                    var selectedSections = new List<CodeExploreFileSection>();
+                    var selectedSourceFiles = new HashSet<string>(PathComparer);
+                    var selectedArtifactOrigins = new List<CodeExploreSectionCandidate>();
+                    CodeExploreArtifactProjection? artifactProjection = null;
+                    var backReferences = new List<CodeExploreBackReference>();
+                    var emissionRecords = new List<CodeExploreEmissionRecord>();
+                    var dedupReasons = new HashSet<string>(StringComparer.Ordinal);
+                    var dedupCandidateRanges = 0;
+                    var coveredRanges = 0;
+                    var suppressedRanges = 0;
+                    var reEmittedRanges = 0;
+                    var reclaimedCharacters = 0;
+                    var usedForNewSourceCharacters = 0;
+                    var seenSections = new HashSet<string>(StringComparer.Ordinal);
+                    var reservedCharacters = discovery is null
+                        ? 0
+                        : Math.Min(
+                            request.Limits.MaximumSourceCharacters,
+                            EstimateReservedCodeExploreCharacters(operationInterpretation, discovery));
+                    var availableSourceCharacters = Math.Max(0, request.Limits.MaximumSourceCharacters - reservedCharacters);
+                    var remainingSourceCharacters = availableSourceCharacters;
+                    var remainingSourceCharactersWithoutSuppression = availableSourceCharacters;
+                    var outputBoundReached = false;
+                    if (!timeReached && projection is not null && !request.IsSourceContinuation)
                     {
-                        bearingFiles.Add(fitted.Section.FilePath);
-                    }
-                }
-
-                // Whole-line fitting may leave slack or an empty file slot. Reconsider prepared
-                // sections in the same relevance order, retaining all stronger source already fitted.
-                foreach (var candidate in orderedCandidates)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var key = CreateSectionKey(candidate);
-                    if (unspent <= 0 || !fittedSections.TryGetValue(key, out var previous))
-                    {
-                        continue;
-                    }
-
-                    var inspected = prepared[key];
-                    if (previous.SourceCharacters >= inspected.SourceCharacters
-                        || (!bearingFiles.Contains(inspected.Section.FilePath) && bearingFiles.Count >= request.Limits.MaximumFiles))
-                    {
-                        continue;
-                    }
-
-                    var allocationKey = CreateSourceAllocationKey(candidate);
-                    var extra = Math.Min(unspent, request.Limits.MaximumPerFileSourceCharacters - fileSpend.GetValueOrDefault(allocationKey));
-                    var allowance = previous.SourceCharacters + extra;
-                    var fitted = inspected.SourceCharacters <= allowance
-                        ? inspected
-                        : FitPreparedSource(inspected, allowance, snapshot.Generation);
-                    var additional = fitted.SourceCharacters - previous.SourceCharacters;
-                    if (additional <= 0)
-                    {
-                        continue;
-                    }
-
-                    fittedSections[key] = fitted;
-                    allowances[key] = allowance;
-                    fileSpend[allocationKey] = fileSpend.GetValueOrDefault(allocationKey) + additional;
-                    unspent -= additional;
-                    bearingFiles.Add(fitted.Section.FilePath);
-                }
-
-                foreach (var candidate in orderedCandidates)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var key = CreateSectionKey(candidate);
-                    if (!fittedSections.TryGetValue(key, out var projected))
-                    {
-                        continue;
-                    }
-
-                    var sourceAllowance = allowances[key];
-                    remainingSourceCharacters -= projected.SourceCharacters;
-                    var unreclaimedSourceCharacters = ConsumeSourceCharacters(ref remainingSourceCharactersWithoutSuppression, projected.SourceCharacters);
-                    usedForNewSourceCharacters += Math.Min(
-                        projected.SourceCharacters - unreclaimedSourceCharacters,
-                        Math.Max(0, reclaimedCharacters - usedForNewSourceCharacters));
-                    selectedSections.Add(projected.Section);
-                    if (projected.SourceCharacters > 0 && projected.Section.Source.NumberedLines.Count > 0)
-                    {
-                        _ = selectedSourceFiles.Add(projected.Section.FilePath);
-                        if (reemissionKeys.Contains(key))
+                        try
                         {
-                            reEmittedRanges++;
+                            var flowAnchors = await ResolveCodeExploreFlowAnchorsAsync(
+                                snapshot,
+                                projection,
+                                sourceReader,
+                                request,
+                                resolutions,
+                                token);
+                            if (ShouldBuildCodeExploreFlow(request, flowAnchors, naturalLanguageIntent))
+                            {
+                                flow = await BuildCodeExploreFlowAsync(
+                                    snapshot,
+                                    projection,
+                                    sourceReader,
+                                    request,
+                                    flowAnchors,
+                                    candidates,
+                                    token);
+                                omissions.AddRange(flow.Traversal.Omissions);
+                            }
+                            else if (request.Mode == CodeExploreMode.Flow && flowAnchors.Count < 2)
+                            {
+                                omissions.Add(ModelVisibleStructuredFact.Exact(
+                                    "Flow mode requires at least two resolved source-bearing symbol anchors."));
+                            }
+
+                            if (ShouldBuildCodeExploreBlastRadius(request, flowAnchors, naturalLanguageIntent))
+                            {
+                                blastRadius = await BuildCodeExploreBlastRadiusAsync(
+                                    snapshot,
+                                    solution,
+                                    projection,
+                                    sourceReader,
+                                    request,
+                                    flowAnchors,
+                                    candidates,
+                                    token);
+                                omissions.AddRange(blastRadius.Omissions);
+                            }
                         }
-
-                        if (projected.Section.Source.FileSha256 is not null)
+                        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
                         {
-                            emissionRecords.Add(new CodeExploreEmissionRecord(
-                                projected.Section.FilePath,
-                                projected.Section.Source.Range,
-                                projected.Section.Source.FileSha256,
-                                projected.Section.Source.RangeSha256,
-                                projected.SourceCharacters));
+                            timeReached = true;
+                            omissions.Add(ModelVisibleStructuredFact.Exact(
+                                "The code exploration time limit was reached during flow composition."));
                         }
                     }
 
-                    if (CanUseProjectedSectionAsArtifactOrigin(projected))
+                    if (!timeReached && projection is not null)
                     {
-                        selectedArtifactOrigins.Add(candidate);
+                        var omitUnrequestedTestSource = naturalLanguageIntent is not null
+                            && !HasTestFocus(operationInterpretation);
+                        if (omitUnrequestedTestSource
+                            && candidates.Any(candidate => IsTestSourceCandidate(candidate)
+                                && !IsExactSelectedSourceCandidate(candidate, selectedRelevance, operationInterpretation)))
+                        {
+                            omissions.Add(ModelVisibleStructuredFact.Exact(
+                                "Unrequested test source was omitted; compact test dependencies remain available in blast-radius evidence."));
+                        }
+
+                        await ProjectAvailableSourceAsync(
+                            candidate => !omitUnrequestedTestSource
+                                || !IsTestSourceCandidate(candidate)
+                                || IsExactSelectedSourceCandidate(candidate, selectedRelevance, operationInterpretation),
+                            "source projection");
                     }
 
-                    allocationFiles.Add(new CodeExploreAllocationFileSummary(
-                        projected.Section.FilePath,
-                        sourceAllowance,
-                        projected.SourceCharacters,
-                        projected.Section.Source.Completeness,
-                        IsUsefulCodeExploreSection(projected.Section),
-                        projected.Section.Source.OmittedRanges.FirstOrDefault()));
-                    foreach (var continuation in projected.ContinuationTargets)
+                    async Task ProjectAvailableSourceAsync(
+                        Func<CodeExploreSectionCandidate, bool> predicate,
+                        string phase)
                     {
-                        AddOrMergeContinuation(continuations, continuation);
+                        if (projection is null)
+                        {
+                            return;
+                        }
+
+                        var activeProjection = projection;
+                        try
+                        {
+                            var allOrderedCandidates = candidates
+                                .Where(candidate => !seenSections.Contains(CreateSectionKey(candidate)))
+                                .OrderByDescending(candidate => candidate.IsFlowSpine)
+                                .ThenByDescending(candidate => candidate.Importance)
+                                .ThenBy(candidate => IsExactSelectedSourceCandidate(
+                                    candidate,
+                                    selectedRelevance,
+                                    operationInterpretation) ? 0 : 1)
+                                .ThenBy(candidate => candidate.Priority)
+                                .ThenBy(candidate => candidate.AllocationRank ?? int.MaxValue)
+                                .ThenBy(candidate => candidate.FilePath, PathComparer)
+                                .ThenBy(candidate => candidate.Location?.Range.StartLine ?? candidate.PreferredLine ?? 0)
+                                .ThenBy(candidate => candidate.Identity?.Id ?? string.Empty, StringComparer.Ordinal)
+                                .DistinctBy(CreateSectionKey, StringComparer.Ordinal)
+                                .ToArray();
+                            var eligibleCandidates = allOrderedCandidates
+                                .Where(predicate)
+                                .ToArray();
+                            var broadContainerKeys = GetBroadContainerSourceCandidateKeys(
+                                eligibleCandidates,
+                                selectedRelevance,
+                                operationInterpretation,
+                                request.Limits.MaximumPerFileSourceCharacters);
+                            foreach (var broadContainer in eligibleCandidates
+                                .Where(candidate => broadContainerKeys.Contains(CreateSectionKey(candidate))))
+                            {
+                                _ = seenSections.Add(CreateSectionKey(broadContainer));
+                                outputBoundReached = true;
+                                AddOrMergeContinuation(
+                                    continuations,
+                                    CreateSkippedCandidateContinuation(
+                                        snapshot,
+                                        broadContainer,
+                                        GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceOversizedContainerReplaced)));
+                                allocationFiles.Add(new CodeExploreAllocationFileSummary(
+                                    ToRepositoryRelativePath(broadContainer.FilePath, snapshot.RepositoryPath),
+                                    0,
+                                    0,
+                                    CodeExploreSourceCompleteness.Omitted,
+                                    false,
+                                    GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceOversizedContainerOmitted)));
+                            }
+
+                            var unclutteredCandidates = eligibleCandidates
+                                .Where(candidate => !broadContainerKeys.Contains(CreateSectionKey(candidate)))
+                                .ToArray();
+                            var orderedCandidates = await ClusterNearbySourceCandidatesAsync(
+                                unclutteredCandidates,
+                                selectedRelevance,
+                                operationInterpretation,
+                                request.Limits.MaximumPerFileSourceCharacters,
+                                token);
+
+                            // Inspect each relevant section once before reserving output. Actual demand releases
+                            // small, visible, and unavailable sections before file slots or source space are assigned.
+                            var sourceAllocationCandidates = CreateSourceAllocationCandidates(
+                                orderedCandidates,
+                                selectedRelevance,
+                                operationInterpretation);
+                            var relevancePlan = CodeExploreSourceAllocationPlanner.Create(
+                                sourceAllocationCandidates,
+                                int.MaxValue,
+                                int.MaxValue,
+                                int.MaxValue);
+                            var prepared = new Dictionary<string, ProjectedCodeExploreSection>(StringComparer.Ordinal);
+                            var reemissionKeys = new HashSet<string>(StringComparer.Ordinal);
+                            foreach (var candidate in orderedCandidates)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                if (timeout.IsCancellationRequested)
+                                {
+                                    timeReached = true;
+                                    break;
+                                }
+
+                                var key = CreateSectionKey(candidate);
+                                if (!seenSections.Add(key))
+                                {
+                                    continue;
+                                }
+
+                                if (!relevancePlan.Reservations.ContainsKey(CreateSourceAllocationKey(candidate)))
+                                {
+                                    outputBoundReached = true;
+                                    AddOrMergeContinuation(continuations, CreateSkippedCandidateContinuation(
+                                        snapshot,
+                                        candidate,
+                                        GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceAllocationStrongerEvidence)));
+                                    continue;
+                                }
+
+                                try
+                                {
+                                    dedupCandidateRanges++;
+                                    var priorCovered = await TryCreateCodeExploreBackReferenceAsync(
+                                    workspaceId,
+                                    snapshot,
+                                    sourceReader,
+                                    visibleSourceFrontier,
+                                    candidate,
+                                    token);
+                                    if (priorCovered.BackReference is not null)
+                                    {
+                                        selectedArtifactOrigins.Add(candidate);
+                                        coveredRanges++;
+                                        suppressedRanges++;
+                                        reclaimedCharacters += priorCovered.SourceCharacters;
+                                        _ = ConsumeSourceCharacters(ref remainingSourceCharactersWithoutSuppression, priorCovered.SourceCharacters);
+                                        backReferences.Add(priorCovered.BackReference);
+                                        dedupReasons.Add("An unchanged complete source range already visible in the current request was replaced with a compact back-reference.");
+                                        continue;
+                                    }
+
+                                    if (priorCovered.DisqualificationReason is { } reason)
+                                    {
+                                        dedupReasons.Add(reason);
+                                        reemissionKeys.Add(key);
+                                    }
+
+                                    prepared[key] = await ProjectCodeExploreSectionAsync(
+                                    snapshot,
+                                    activeProjection,
+                                    sourceReader,
+                                    candidate,
+                                    request.Limits.MaximumPerFileSourceCharacters,
+                                    token);
+                                }
+                                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                                {
+                                    timeReached = true;
+                                    break;
+                                }
+                            }
+
+                            var demandByFile = orderedCandidates
+                                .GroupBy(CreateSourceAllocationKey, StringComparer.Ordinal)
+                                .ToDictionary(
+                                    group => group.Key,
+                                    group => (int)Math.Min(int.MaxValue, group.Sum(candidate => (long)(prepared.GetValueOrDefault(CreateSectionKey(candidate))?.SourceCharacters ?? 0))),
+                                    StringComparer.Ordinal);
+                            var allocationPlan = CodeExploreSourceAllocationPlanner.Create(
+                                sourceAllocationCandidates.Select(candidate => candidate with
+                                {
+                                    RequiredCharacters = demandByFile.GetValueOrDefault(candidate.StableKey),
+                                }).ToArray(),
+                                remainingSourceCharacters,
+                                Math.Max(0, request.Limits.MaximumFiles - selectedSourceFiles.Count),
+                                request.Limits.MaximumPerFileSourceCharacters);
+                            var remainingReservations = allocationPlan.Reservations.ToDictionary(item => item.Key, item => item.Value, StringComparer.Ordinal);
+                            var fittedSections = new Dictionary<string, ProjectedCodeExploreSection>(StringComparer.Ordinal);
+                            var allowances = new Dictionary<string, int>(StringComparer.Ordinal);
+                            var fileSpend = new Dictionary<string, int>(StringComparer.Ordinal);
+                            var bearingFiles = new HashSet<string>(selectedSourceFiles, PathComparer);
+                            var unspent = remainingSourceCharacters;
+                            foreach (var candidate in orderedCandidates)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                var key = CreateSectionKey(candidate);
+                                if (!prepared.TryGetValue(key, out var inspected))
+                                {
+                                    continue;
+                                }
+
+                                var allocationKey = CreateSourceAllocationKey(candidate);
+                                var allowance = Math.Min(unspent, remainingReservations.GetValueOrDefault(allocationKey));
+                                var fitted = inspected.SourceCharacters <= allowance
+                                    ? inspected
+                                    : FitPreparedSource(inspected, allowance, snapshot.Generation);
+                                fittedSections[key] = fitted;
+                                allowances[key] = allowance;
+                                remainingReservations[allocationKey] = allowance - fitted.SourceCharacters;
+                                fileSpend[allocationKey] = fileSpend.GetValueOrDefault(allocationKey) + fitted.SourceCharacters;
+                                unspent -= fitted.SourceCharacters;
+                                if (fitted.SourceCharacters > 0)
+                                {
+                                    bearingFiles.Add(fitted.Section.FilePath);
+                                }
+                            }
+
+                            // Whole-line fitting may leave slack or an empty file slot. Reconsider prepared
+                            // sections in the same relevance order, retaining all stronger source already fitted.
+                            foreach (var candidate in orderedCandidates)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                var key = CreateSectionKey(candidate);
+                                if (unspent <= 0 || !fittedSections.TryGetValue(key, out var previous))
+                                {
+                                    continue;
+                                }
+
+                                var inspected = prepared[key];
+                                if (previous.SourceCharacters >= inspected.SourceCharacters
+                                    || (!bearingFiles.Contains(inspected.Section.FilePath) && bearingFiles.Count >= request.Limits.MaximumFiles))
+                                {
+                                    continue;
+                                }
+
+                                var allocationKey = CreateSourceAllocationKey(candidate);
+                                var extra = Math.Min(unspent, request.Limits.MaximumPerFileSourceCharacters - fileSpend.GetValueOrDefault(allocationKey));
+                                var allowance = previous.SourceCharacters + extra;
+                                var fitted = inspected.SourceCharacters <= allowance
+                                    ? inspected
+                                    : FitPreparedSource(inspected, allowance, snapshot.Generation);
+                                var additional = fitted.SourceCharacters - previous.SourceCharacters;
+                                if (additional <= 0)
+                                {
+                                    continue;
+                                }
+
+                                fittedSections[key] = fitted;
+                                allowances[key] = allowance;
+                                fileSpend[allocationKey] = fileSpend.GetValueOrDefault(allocationKey) + additional;
+                                unspent -= additional;
+                                bearingFiles.Add(fitted.Section.FilePath);
+                            }
+
+                            foreach (var candidate in orderedCandidates)
+                            {
+                                cancellationToken.ThrowIfCancellationRequested();
+                                var key = CreateSectionKey(candidate);
+                                if (!fittedSections.TryGetValue(key, out var projected))
+                                {
+                                    continue;
+                                }
+
+                                var sourceAllowance = allowances[key];
+                                remainingSourceCharacters -= projected.SourceCharacters;
+                                var unreclaimedSourceCharacters = ConsumeSourceCharacters(ref remainingSourceCharactersWithoutSuppression, projected.SourceCharacters);
+                                usedForNewSourceCharacters += Math.Min(
+                                    projected.SourceCharacters - unreclaimedSourceCharacters,
+                                    Math.Max(0, reclaimedCharacters - usedForNewSourceCharacters));
+                                selectedSections.Add(projected.Section);
+                                if (projected.SourceCharacters > 0 && projected.Section.Source.NumberedLines.Count > 0)
+                                {
+                                    _ = selectedSourceFiles.Add(projected.Section.FilePath);
+                                    if (reemissionKeys.Contains(key))
+                                    {
+                                        reEmittedRanges++;
+                                    }
+
+                                    if (projected.Section.Source.FileSha256 is not null)
+                                    {
+                                        emissionRecords.Add(new CodeExploreEmissionRecord(
+                                            projected.Section.FilePath,
+                                            projected.Section.Source.Range,
+                                            projected.Section.Source.FileSha256,
+                                            projected.Section.Source.RangeSha256,
+                                            projected.SourceCharacters));
+                                    }
+                                }
+
+                                if (CanUseProjectedSectionAsArtifactOrigin(projected))
+                                {
+                                    selectedArtifactOrigins.Add(candidate);
+                                }
+
+                                allocationFiles.Add(new CodeExploreAllocationFileSummary(
+                                    projected.Section.FilePath,
+                                    sourceAllowance,
+                                    projected.SourceCharacters,
+                                    projected.Section.Source.Completeness,
+                                    IsUsefulCodeExploreSection(projected.Section),
+                                    projected.Section.Source.OmittedRanges.FirstOrDefault()));
+                                foreach (var continuation in projected.ContinuationTargets)
+                                {
+                                    AddOrMergeContinuation(continuations, continuation);
+                                }
+
+                                outputBoundReached |= projected.ContinuationTargets.Count > 0
+                                    || projected.Section.Source.OmittedRanges.Any(IsOutputBoundOmission);
+                            }
+                        }
+                        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                        {
+                            timeReached = true;
+                            omissions.Add(ModelVisibleStructuredFact.Exact(
+                                $"The code exploration time limit was reached during {phase}."));
+                        }
                     }
 
-                    outputBoundReached |= projected.ContinuationTargets.Count > 0
-                        || projected.Section.Source.OmittedRanges.Any(IsOutputBoundOmission);
-                }
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
-            {
-                timeReached = true;
-                omissions.Add(ModelVisibleStructuredFact.Exact(
-                    $"The code exploration time limit was reached during {phase}."));
-            }
-        }
+                    if (!timeReached
+                        && projection is not null
+                        && request.AssociatedArtifacts != CodeExploreAssociatedArtifactsMode.Disabled
+                        && sourceReader is ICodeExploreArtifactReader artifactReader
+                        && selectedArtifactOrigins.Count > 0)
+                    {
+                        try
+                        {
+                            artifactProjection = await BuildAssociatedArtifactsAsync(
+                                snapshot,
+                                artifactReader,
+                                request,
+                                operationInterpretation,
+                                selectedArtifactOrigins,
+                                token);
+                        }
+                        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
+                        {
+                            artifactProjection = CreateTimedOutAssociatedArtifactProjection(
+                                snapshot,
+                                request,
+                                selectedArtifactOrigins);
+                        }
+                    }
 
-        if (!timeReached
-            && projection is not null
-            && request.AssociatedArtifacts != CodeExploreAssociatedArtifactsMode.Disabled
-            && sourceReader is ICodeExploreArtifactReader artifactReader
-            && selectedArtifactOrigins.Count > 0)
-        {
-            try
-            {
-                artifactProjection = await BuildAssociatedArtifactsAsync(
-                    snapshot,
-                    artifactReader,
-                    request,
-                    queryInterpretation,
-                    selectedArtifactOrigins,
-                    timeout.Token);
-            }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
-            {
-                artifactProjection = CreateTimedOutAssociatedArtifactProjection(
-                    snapshot,
-                    request,
-                    selectedArtifactOrigins);
-            }
-        }
+                    var symbolResolutionComplete = !timeReached && omittedNamedFiles == 0
+                        && resolutions.Count == anchors.Count
+                        && resolutions.All(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Resolved);
+                    EnsureCurrent(engine, snapshot.Generation);
+                    var hasUnloadedSource = selectedSections.Any(section => string.IsNullOrWhiteSpace(section.ProjectName));
+                    if (snapshot.Confidence < SemanticConfidenceLevel.FullSemantic || hasUnloadedSource)
+                    {
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            "Compiled-project coverage is partial; unloaded or uncompilable projects may be absent."));
+                    }
 
-        var symbolResolutionComplete = !timeReached && omittedNamedFiles == 0
-            && resolutions.Count == anchors.Count
-            && resolutions.All(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Resolved);
-        EnsureCurrent(engine, snapshot.Generation);
-        var hasUnloadedSource = selectedSections.Any(section => string.IsNullOrWhiteSpace(section.ProjectName));
-        if (snapshot.Confidence < SemanticConfidenceLevel.FullSemantic || hasUnloadedSource)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact(
-                "Compiled-project coverage is partial; unloaded or uncompilable projects may be absent."));
-        }
+                    if (alternativesCapped)
+                    {
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            "One or more ambiguity alternative sets were capped by the request limits."));
+                    }
 
-        if (alternativesCapped)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact(
-                "One or more ambiguity alternative sets were capped by the request limits."));
-        }
+                    if (outputBoundReached)
+                    {
+                        omissions.Add(GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceSourceOutputBounds));
+                    }
 
-        if (outputBoundReached)
-        {
-            omissions.Add(GetPromptValue(PromptFileNames.ToolCodeExploreGuidanceSourceOutputBounds));
-        }
+                    if (suppressedRanges > 0)
+                    {
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            "Unchanged source already visible in the current request was replaced with compact code_explore back-references."));
+                    }
 
-        if (suppressedRanges > 0)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact(
-                "Unchanged source already visible in the current request was replaced with compact code_explore back-references."));
-        }
+                    var missingSourceForResolvedAnchor = resolutions
+                        .Where(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Resolved)
+                        .Any(resolution => !candidates.Any(candidate => candidate.AnchorKind == resolution.Kind
+                            && string.Equals(candidate.Anchor, resolution.Input, StringComparison.Ordinal)));
+                    if (missingSourceForResolvedAnchor)
+                    {
+                        omissions.Add(ModelVisibleStructuredFact.Exact(
+                            "One or more resolved anchors had no source-bearing declaration or path section."));
+                    }
 
-        var missingSourceForResolvedAnchor = resolutions
-            .Where(resolution => resolution.Outcome == CodeExploreResolutionOutcome.Resolved)
-            .Any(resolution => !candidates.Any(candidate => candidate.AnchorKind == resolution.Kind
-                && string.Equals(candidate.Anchor, resolution.Input, StringComparison.Ordinal)));
-        if (missingSourceForResolvedAnchor)
-        {
-            omissions.Add(ModelVisibleStructuredFact.Exact(
-                "One or more resolved anchors had no source-bearing declaration or path section."));
+                    var sourceComplete = !timeReached
+                        && !missingSourceForResolvedAnchor
+                        && selectedSections.All(section => section.Source.Completeness == CodeExploreSourceCompleteness.Complete)
+                        && selectedSections.Sum(section => Math.Max(1, section.SemanticIdentities.Count))
+                            + backReferences.Count
+                            == candidates.Select(CreateSectionKey).Distinct(StringComparer.Ordinal).Count();
+                    var sourceOmissions = selectedSections
+                        .SelectMany(section => section.Source.OmittedRanges)
+                        .Distinct(StringComparer.Ordinal);
+                    flow = AttachCodeExploreSourceSections(flow, selectedSections);
+                    var coverageOmissions = omissions
+                        .Concat(sourceOmissions)
+                        .Concat(resolutions
+                            .Where(resolution => resolution.Outcome != CodeExploreResolutionOutcome.Resolved)
+                            .Select(resolution => resolution.Reason))
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray();
+                    var coverage = new CodeExploreCoverage(
+                        symbolResolutionComplete,
+                        snapshot.Confidence == SemanticConfidenceLevel.FullSemantic && !hasUnloadedSource,
+                        sourceComplete,
+                        !timeReached && !outputBoundReached && !alternativesCapped && omittedNamedFiles == 0,
+                        coverageOmissions);
+                    var spentSourceCharacters = availableSourceCharacters - remainingSourceCharacters;
+                    var allocation = new CodeExploreAllocationSummary(
+                        request.Limits.MaximumSourceCharacters,
+                        reservedCharacters,
+                        spentSourceCharacters,
+                        CreateAllocationBudgetSource(operationBudget),
+                        allocationFiles);
+                    var deduplication = visibleSourceFrontier is null || dedupCandidateRanges == 0
+                        ? null
+                        : new CodeExploreDedupSummary(
+                            dedupCandidateRanges,
+                            coveredRanges,
+                            suppressedRanges,
+                            reEmittedRanges,
+                            reclaimedCharacters,
+                            usedForNewSourceCharacters,
+                            dedupReasons.Order(StringComparer.Ordinal).ToArray());
+                    var emittedFileDigests = emissionRecords
+                        .DistinctBy(emission => emission.FilePath, PathComparer)
+                        .ToDictionary(emission => emission.FilePath, emission => emission.FileSha256, PathComparer);
+                    var continuationTargets = continuations
+                        .Select(target => target.ExpectedFileSha256 is null
+                            && emittedFileDigests.TryGetValue(target.FilePath ?? target.Anchor, out var digest)
+                                ? target with { ExpectedFileSha256 = digest, WorkspaceGeneration = snapshot.Generation }
+                                : target)
+                        .DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}")
+                        .ToArray();
+                    operationBudget = UpdateAdaptiveBudgetScale(
+                        operationBudget,
+                        discovery,
+                        artifactProjection?.Coverage);
+                    var availability = CreateCodeExploreAvailability(
+                        snapshot,
+                        coverage,
+                        resolutions,
+                        selectedSections,
+                        backReferences,
+                        continuationTargets,
+                        timeReached);
+                    var presentation = CreateCodeExplorePresentation(
+                        availability,
+                        selectedSections,
+                        backReferences,
+                        continuationTargets,
+                        coverageOmissions,
+                        artifactProjection?.Coverage,
+                        operationBudget.PresentationVerbosity);
+                    var fileRelevance = CreateCodeExploreFileRelevanceSummaries(
+                        candidateSummaries,
+                        allocationFiles,
+                        selectedSections,
+                        backReferences,
+                        continuationTargets,
+                        operationInterpretation);
+                    return new CodeExploreResult(
+                        snapshot.Generation,
+                        snapshot.Confidence,
+                        resolutions,
+                        selectedSections,
+                        coverage,
+                        coverageOmissions,
+                        continuationTargets,
+                        flow,
+                        blastRadius,
+                        operationInterpretation,
+                        discovery,
+                        candidateSummaries,
+                        allocation,
+                        backReferences,
+                        deduplication,
+                        emissionRecords,
+                        artifactProjection?.Artifacts,
+                        artifactProjection?.Coverage,
+                        availability,
+                        presentation,
+                        operationBudget,
+                        fileRelevance)
+                    {
+                        IsSourceContinuation = request.IsSourceContinuation,
+                    };
+                },
+                timeout.Token,
+                cancellationToken);
         }
-
-        var sourceComplete = !timeReached
-            && !missingSourceForResolvedAnchor
-            && selectedSections.All(section => section.Source.Completeness == CodeExploreSourceCompleteness.Complete)
-            && selectedSections.Sum(section => Math.Max(1, section.SemanticIdentities.Count))
-                + backReferences.Count
-                == candidates.Select(CreateSectionKey).Distinct(StringComparer.Ordinal).Count();
-        var sourceOmissions = selectedSections
-            .SelectMany(section => section.Source.OmittedRanges)
-            .Distinct(StringComparer.Ordinal);
-        flow = AttachCodeExploreSourceSections(flow, selectedSections);
-        var coverageOmissions = omissions
-            .Concat(sourceOmissions)
-            .Concat(resolutions
-                .Where(resolution => resolution.Outcome != CodeExploreResolutionOutcome.Resolved)
-                .Select(resolution => resolution.Reason))
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        var coverage = new CodeExploreCoverage(
-            symbolResolutionComplete,
-            snapshot.Confidence == SemanticConfidenceLevel.FullSemantic && !hasUnloadedSource,
-            sourceComplete,
-            !timeReached && !outputBoundReached && !alternativesCapped && omittedNamedFiles == 0,
-            coverageOmissions);
-        var spentSourceCharacters = availableSourceCharacters - remainingSourceCharacters;
-        var allocation = new CodeExploreAllocationSummary(
-            request.Limits.MaximumSourceCharacters,
-            reservedCharacters,
-            spentSourceCharacters,
-            CreateAllocationBudgetSource(adaptiveBudget),
-            allocationFiles);
-        var deduplication = visibleSourceFrontier is null || dedupCandidateRanges == 0
-            ? null
-            : new CodeExploreDedupSummary(
-                dedupCandidateRanges,
-                coveredRanges,
-                suppressedRanges,
-                reEmittedRanges,
-                reclaimedCharacters,
-                usedForNewSourceCharacters,
-                dedupReasons.Order(StringComparer.Ordinal).ToArray());
-        var emittedFileDigests = emissionRecords
-            .DistinctBy(emission => emission.FilePath, PathComparer)
-            .ToDictionary(emission => emission.FilePath, emission => emission.FileSha256, PathComparer);
-        var continuationTargets = continuations
-            .Select(target => target.ExpectedFileSha256 is null
-                && emittedFileDigests.TryGetValue(target.FilePath ?? target.Anchor, out var digest)
-                    ? target with { ExpectedFileSha256 = digest, WorkspaceGeneration = snapshot.Generation }
-                    : target)
-            .DistinctBy(target => $"{target.Kind}:{target.Anchor}:{target.FilePath}:{target.StartLine}:{target.EndLine}:{target.StartAtLine}:{target.SelectionMode}:{target.ExpectedFileSha256}:{target.WorkspaceGeneration}:{target.Reason}")
-            .ToArray();
-        adaptiveBudget = UpdateAdaptiveBudgetScale(
-            adaptiveBudget,
-            discovery,
-            artifactProjection?.Coverage);
-        var availability = CreateCodeExploreAvailability(
-            snapshot,
-            coverage,
-            resolutions,
-            selectedSections,
-            backReferences,
-            continuationTargets,
-            timeReached);
-        var presentation = CreateCodeExplorePresentation(
-            availability,
-            selectedSections,
-            backReferences,
-            continuationTargets,
-            coverageOmissions,
-            artifactProjection?.Coverage,
-            adaptiveBudget.PresentationVerbosity);
-        var fileRelevance = CreateCodeExploreFileRelevanceSummaries(
-            candidateSummaries,
-            allocationFiles,
-            selectedSections,
-            backReferences,
-            continuationTargets,
-            queryInterpretation);
-        return new CodeExploreResult(
-            snapshot.Generation,
-            snapshot.Confidence,
-            resolutions,
-            selectedSections,
-            coverage,
-            coverageOmissions,
-            continuationTargets,
-            flow,
-            blastRadius,
-            queryInterpretation,
-            discovery,
-            candidateSummaries,
-            allocation,
-            backReferences,
-            deduplication,
-            emissionRecords,
-            artifactProjection?.Artifacts,
-            artifactProjection?.Coverage,
-            availability,
-            presentation,
-            adaptiveBudget,
-            fileRelevance)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && timeout.IsCancellationRequested)
         {
-            IsSourceContinuation = request.IsSourceContinuation,
-        };
+            EnsureCurrent(engine, snapshot.Generation);
+            return CreateUnavailableCodeExploreResult(readiness, request, fallbackInterpretation, CreateInitialTimeoutCodeExploreAvailability(readiness), fallbackBudget);
+        }
     }
 
     /// <summary>Discovers bounded syntax/path ownership without preparing compilations or generated documents.</summary>
@@ -7595,6 +7662,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         SemanticSourceProjection projection,
         CancellationToken cancellationToken)
     {
+        var engine = _registry.GetEngine(workspaceId);
+        EnsureCurrent(engine, snapshot.Generation);
         var key = CreateCodeExploreCatalogKey(workspaceId, snapshot);
         CodeExploreDeclarationCatalog? cachedCatalog = null;
         SharedCodeExploreBuild<CodeExploreDeclarationCatalog>? build = null;
@@ -7620,12 +7689,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 if (!_codeExploreCatalogBuilds.TryGetValue(key, out build))
                 {
                     var buildCancellation = new CancellationTokenSource();
-                    var buildTask = Task.Run(
-                        () => BuildCodeExploreCatalogAsync(
-                            key,
-                            snapshot,
-                            projection,
-                            buildCancellation.Token),
+                    var buildTask = engine.RunSnapshotOperationAsync(
+                        snapshot.SourceSolution,
+                        token => BuildCodeExploreCatalogAsync(key, snapshot, new SemanticSourceProjection(snapshot.Solution, token), token),
                         buildCancellation.Token);
                     build = new SharedCodeExploreBuild<CodeExploreDeclarationCatalog>(
                         workspaceId.Value,
@@ -7633,7 +7699,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         buildCancellation,
                         buildTask);
                     _codeExploreCatalogBuilds.Add(key, build);
-                    _ = CompleteCodeExploreCatalogBuildAsync(key, build);
+                    _ = CompleteCodeExploreCatalogBuildAsync(key, build, engine);
                 }
 
                 build.WaiterCount++;
@@ -7658,7 +7724,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
 
     private async Task CompleteCodeExploreCatalogBuildAsync(
         string key,
-        SharedCodeExploreBuild<CodeExploreDeclarationCatalog> build)
+        SharedCodeExploreBuild<CodeExploreDeclarationCatalog> build,
+        SemanticEngine engine)
     {
         CodeExploreDeclarationCatalog catalog;
         try
@@ -7681,7 +7748,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         lock (_catalogGate)
         {
             RemoveMatchingBuild(_codeExploreCatalogBuilds, key, build);
-            if (_latestCodeExploreCatalogGenerations.TryGetValue(build.WorkspaceId, out var latestGeneration)
+            if (engine.IsCurrentGeneration(build.Generation)
+                && _latestCodeExploreCatalogGenerations.TryGetValue(build.WorkspaceId, out var latestGeneration)
                 && latestGeneration == build.Generation)
             {
                 foreach (var staleKey in _codeExploreCatalogs.Keys
@@ -7816,7 +7884,10 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             return required;
         }
 
-        var candidates = await DiscoverCodeExploreCandidatesAsync(readiness, request, sourceReader, cancellationToken);
+        var candidates = await engine.RunSnapshotOperationAsync(
+            solution,
+            token => DiscoverCodeExploreCandidatesAsync(readiness, request, sourceReader, token),
+            cancellationToken);
         await engine.EnsureProjectsPreparedAsync(solution, candidates, "code-explore", requireSuccess: true, cancellationToken);
         return candidates;
     }
@@ -9058,6 +9129,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         IReadOnlyDictionary<string, CodeExploreDeclarationCatalogEntry[]> allowedById,
         CancellationToken cancellationToken)
     {
+        var engine = _registry.GetEngine(workspaceId);
+        EnsureCurrent(engine, snapshot.Generation);
         var catalogKey = CreateCodeExploreCatalogKey(workspaceId, snapshot);
         var cacheKey = $"{catalogKey}:{identity}";
         IReadOnlyList<string>? cachedResult = null;
@@ -9074,11 +9147,9 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                 if (!_naturalLanguageGraphBuilds.TryGetValue(cacheKey, out build))
                 {
                     var buildCancellation = new CancellationTokenSource();
-                    var buildTask = Task.Run(
-                        () => BuildNaturalLanguageConnectedSymbolIdsAsync(
-                            snapshot,
-                            identity,
-                            buildCancellation.Token),
+                    var buildTask = engine.RunSnapshotOperationAsync(
+                        snapshot.SourceSolution,
+                        token => BuildNaturalLanguageConnectedSymbolIdsAsync(snapshot, identity, token),
                         buildCancellation.Token);
                     build = new SharedCodeExploreBuild<IReadOnlyList<string>>(
                         workspaceId.Value,
@@ -9086,7 +9157,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
                         buildCancellation,
                         buildTask);
                     _naturalLanguageGraphBuilds.Add(cacheKey, build);
-                    _ = CompleteNaturalLanguageGraphBuildAsync(catalogKey, cacheKey, build);
+                    _ = CompleteNaturalLanguageGraphBuildAsync(catalogKey, cacheKey, build, engine);
                 }
 
                 build.WaiterCount++;
@@ -9114,7 +9185,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     private async Task CompleteNaturalLanguageGraphBuildAsync(
         string catalogKey,
         string cacheKey,
-        SharedCodeExploreBuild<IReadOnlyList<string>> build)
+        SharedCodeExploreBuild<IReadOnlyList<string>> build,
+        SemanticEngine engine)
     {
         IReadOnlyList<string> rawResult;
         try
@@ -9137,7 +9209,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         lock (_catalogGate)
         {
             RemoveMatchingBuild(_naturalLanguageGraphBuilds, cacheKey, build);
-            if (_latestCodeExploreCatalogGenerations.TryGetValue(build.WorkspaceId, out var latestGeneration)
+            if (engine.IsCurrentGeneration(build.Generation)
+                && _latestCodeExploreCatalogGenerations.TryGetValue(build.WorkspaceId, out var latestGeneration)
                 && latestGeneration == build.Generation
                 && _codeExploreCatalogs.ContainsKey(catalogKey))
             {
@@ -12625,7 +12698,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .Where(project => snapshot.CompiledProjects.Contains(project.Id))
             .OrderBy(project => project.Name, StringComparer.Ordinal))
         {
-            var compilation = await GetCompilationBoundedAsync(project, cancellationToken);
+            var compilation = await project.GetCompilationAsync(cancellationToken);
             var symbol = compilation is null
                 ? null
                 : DocumentationCommentId.GetFirstSymbolForDeclarationId(symbolId, compilation);
@@ -12664,7 +12737,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             .OrderBy(project => project.Name, StringComparer.Ordinal))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var compilation = await GetCompilationBoundedAsync(project, cancellationToken);
+            var compilation = await project.GetCompilationAsync(cancellationToken);
             var symbol = compilation is null
                 ? null
                 : DocumentationCommentId.GetFirstSymbolForDeclarationId(anchor, compilation);
@@ -14048,40 +14121,6 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
         }
     }
 
-    private static async Task<Compilation?> GetCompilationBoundedAsync(Project project, CancellationToken cancellationToken)
-    {
-        var task = project.GetCompilationAsync(cancellationToken);
-        try
-        {
-            return await task.WaitAsync(cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            var completed = await Task.WhenAny(
-                task,
-                Task.Delay(NonCooperativeCompilationBackstop, CancellationToken.None));
-            if (completed == task)
-            {
-                _ = task.Exception;
-            }
-            else
-            {
-                ObserveAbandonedCompilation(task);
-            }
-
-            throw;
-        }
-    }
-
-    private static void ObserveAbandonedCompilation(Task<Compilation?> task)
-    {
-        _ = task.ContinueWith(
-            faulted => _ = faulted.Exception,
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
     private void ValidateSymbolId(string symbolId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbolId);
@@ -14148,7 +14187,7 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
     {
         foreach (var project in solution.Projects)
         {
-            var compilation = await GetCompilationBoundedAsync(project, cancellationToken);
+            var compilation = await project.GetCompilationAsync(cancellationToken);
             var symbol = compilation is null ? null : DocumentationCommentId.GetFirstSymbolForDeclarationId(symbolId, compilation);
             if (symbol is not null)
             {
@@ -14708,4 +14747,8 @@ internal sealed record AdvancedSemanticSnapshot(
     SemanticConfidenceLevel Confidence,
     string RepositoryPath,
     string WorkspacePath,
-    long Generation);
+    long Generation)
+{
+    /// <summary>Original immutable input admitted before restricting analysis to candidate projects.</summary>
+    internal Solution SourceSolution { get; init; } = Solution;
+}

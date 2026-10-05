@@ -369,7 +369,7 @@ public sealed class DeployedPromptLoaderTests
         PromptAssetDefinition[] definitions =
         [
             PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt),
-            PromptAssetCatalog.Get(PromptFileNames.SystemPhaseEvidenceCollection),
+            PromptAssetCatalog.Get(PromptFileNames.SystemConversationGuidance),
         ];
         Assert.All(definitions, definition =>
         {

@@ -1,6 +1,6 @@
 # Direct editing with incremental semantic feedback
 
-**Status:** Planned — implementation and performance validation not started
+**Status:** Active — ordinary conversation/direct-edit composition implemented, live planning artifacts retired, and regression/source reviews verified; representative performance and remaining runtime acceptance evidence are outstanding
 
 **Delivery track:** Maintenance
 
@@ -14,7 +14,7 @@ Preserve semantic checks before and after edits, exact source preconditions, wri
 
 Immediate Roslyn feedback is advisory information for the implementing model: catch likely syntax, name-resolution, missing-using, missing-reference and related compiler problems before an eventual full build/test run. Some findings may already be known to the model. The model may act on a finding immediately, complete related edits first, or continue with an explanation. These checks do not create another approval gate, require a repair loop after every edit, or establish that the final build/tests will pass. Full build and test results remain authoritative for the validation they actually perform.
 
-This document is the implementation contract for replacing the mandatory planning workflow. The vertical slice is an early verification step, not the final deliverable. Completion includes production cutover, removal of obsolete code/configuration/prompts, migration, and documentation. No measured edit latency or implemented direct-editing path is claimed yet.
+This document is the implementation contract for replacing the mandatory planning workflow. The vertical slice is an early verification step, not the final deliverable. Completion includes production cutover, removal of obsolete code/configuration/prompts, migration, and documentation. The direct-edit path passes the solution build and regression suite. Clean-context source/artifact reviews and an implementation-contract alignment review found no remaining actionable findings in their assessed paths. Representative edit-latency measurements and remaining runtime acceptance evidence are still outstanding.
 
 ## 2 Architectural Context
 
@@ -123,7 +123,7 @@ Use immutable snapshot/version receipts and the existing refresh owner's dirty/a
 
 The edit tool returns a compact receipt: applied/conflict/denied status, changed paths, workspace version, semantic coverage, new/resolved/current error counts, a bounded diagnostic list, and pending analysis status. Compiler errors do not turn a successful write into a failed tool operation.
 
-Later diagnostics enter the existing conversation as fresh bounded host evidence at a provider-compatible boundary, before the next request when ready. Do not rewrite sealed tool results. Prefer new actionable diagnostics and resolved findings over repeated complete error lists. Delivery must also work when the next action is a final answer, without inventing an extra mandatory semantic-completion gate. The existing policy for full build/test validation governs validated completion; matching authoritative build results supersede pending advisory analysis of older snapshots. Avoid a model polling loop. Keep a bounded latest-result mailbox owned by the existing run/workspace coordination, rather than another durable diagnostic service.
+Later diagnostics enter the existing conversation as fresh bounded host evidence at a provider-compatible boundary, before the next request when ready. Do not rewrite sealed tool results. Prefer new actionable diagnostics and resolved findings over repeated complete error lists. Delivery must also work when the next action is a final answer, without inventing an extra mandatory semantic-completion gate. The model decides when to invoke full build/test validation, with guidance to resolve incremental compiler findings first; response completion does not trigger it automatically. Matching authoritative build results supersede pending advisory analysis of older snapshots. Avoid a model polling loop. Keep a bounded latest-result mailbox owned by the existing run/workspace coordination, rather than another durable diagnostic service.
 
 ### Ordering and lifecycle changes
 
@@ -205,6 +205,8 @@ Remove a test project, solution entry, helper, package or fixture only when all 
 These are implementation work packages for agents, not runtime phases imposed on the model. Execute dependencies in order; keep intermediate changes buildable. Read the C# guardrails and current call sites before modifying code. Do not introduce a permanent feature flag or second production execution path.
 
 ### A. Establish ownership and removal ledger
+
+Working inventory: [direct-editing removal ledger](maintenance-direct-editing-removal-ledger.md). Entries remain open until their actual callers, migration fixtures and replacement tests are verified.
 
 Confirm the active checkout and preserve unrelated working changes. Trace the section 8 symbols through registration, policy, frontend, persistence and tests. Inventory all plan settings across defaults, binders, schemas, examples, environment/CLI configuration and persistence. Record consumers of reusable mutation materialization, journal and approval code. Inspect the withdrawn source-evidence work item so its read loop is not reintroduced. Amend the relevant architectural decisions with the target protocol and compatibility boundary before cutover.
 

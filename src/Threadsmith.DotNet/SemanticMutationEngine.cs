@@ -52,11 +52,12 @@ public sealed class SemanticMutationEngine :
             throw new ArgumentException("The semantic request and file baseline target different workspaces.", nameof(request));
         }
 
+        var engine = _engines.GetEngine(request.WorkspaceId);
         SemanticMutationSnapshot snapshot;
         try
         {
-            var preparedSolution = await _engines.GetEngine(request.WorkspaceId).EnsurePreparedAsync(null, "rename", requireSuccess: true, cancellationToken);
-            snapshot = _engines.GetEngine(request.WorkspaceId).CaptureMutationSnapshot(preparedSolution);
+            var preparedSolution = await engine.EnsurePreparedAsync(null, "rename", requireSuccess: true, cancellationToken);
+            snapshot = engine.CaptureMutationSnapshot(preparedSolution);
         }
         catch (InvalidOperationException exception)
         {
@@ -68,136 +69,144 @@ public sealed class SemanticMutationEngine :
             throw;
         }
 
-        ISymbol? symbol = null;
-        foreach (var project in snapshot.Solution.Projects.Where(project =>
-            snapshot.CompiledProjects.Contains(project.Id)))
-        {
-            var compilation = await project.GetCompilationAsync(cancellationToken);
-            if (compilation is null)
+        var result = await engine.RunMutationOperationAsync(
+            snapshot,
+            async operationToken =>
             {
-                continue;
-            }
-
-            symbol = DocumentationCommentId.GetFirstSymbolForDeclarationId(
-                request.SymbolId,
-                compilation);
-            if (symbol is not null)
-            {
-                break;
-            }
-        }
-
-        if (symbol is null)
-        {
-            throw new KeyNotFoundException(
-                $"Semantic symbol '{request.SymbolId}' is not loaded in the compiled project subset.");
-        }
-
-        var renamed = await Renamer.RenameSymbolAsync(
-            snapshot.Solution,
-            symbol,
-            new SymbolRenameOptions(
-                RenameOverloads: false,
-                RenameInStrings: false,
-                RenameInComments: false,
-                RenameFile: false),
-            request.NewName,
-            cancellationToken);
-        var warnings = snapshot.Solution.Projects
-            .Where(project => !snapshot.CompiledProjects.Contains(project.Id))
-            .Select(project =>
-                $"Project '{project.Name}' was outside the compiled subset and was not included in the rename.")
-            .ToList();
-        var baselineByPath = request.Baseline.Files.ToDictionary(
-            item => NormalizeRelativePath(item.RelativePath),
-            item => item,
-            PathComparer);
-        var mutationsByPath = new Dictionary<string, Mutation>(PathComparer);
-        foreach (var project in renamed.Projects.Where(project =>
-            snapshot.CompiledProjects.Contains(project.Id)))
-        {
-            foreach (var document in project.Documents)
-            {
-                var oldDocument = snapshot.Solution.GetDocument(document.Id);
-                if (oldDocument is null || document.FilePath is null)
+                ISymbol? symbol = null;
+                foreach (var project in snapshot.Solution.Projects.Where(project =>
+                    snapshot.CompiledProjects.Contains(project.Id)))
                 {
-                    continue;
+                    var compilation = await project.GetCompilationAsync(operationToken);
+                    if (compilation is null)
+                    {
+                        continue;
+                    }
+
+                    symbol = DocumentationCommentId.GetFirstSymbolForDeclarationId(
+                        request.SymbolId,
+                        compilation);
+                    if (symbol is not null)
+                    {
+                        break;
+                    }
                 }
 
-                var oldText = await oldDocument.GetTextAsync(cancellationToken);
-                var newText = await document.GetTextAsync(cancellationToken);
-                if (oldText.ContentEquals(newText))
+                if (symbol is null)
                 {
-                    continue;
+                    throw new KeyNotFoundException(
+                        $"Semantic symbol '{request.SymbolId}' is not loaded in the compiled project subset.");
                 }
 
-                var relativePath = NormalizeUnderRoot(snapshot.RepositoryPath, document.FilePath);
-                if (!baselineByPath.TryGetValue(relativePath, out var baselineFile))
+                var renamed = await Renamer.RenameSymbolAsync(
+                    snapshot.Solution,
+                    symbol,
+                    new SymbolRenameOptions(
+                        RenameOverloads: false,
+                        RenameInStrings: false,
+                        RenameInComments: false,
+                        RenameFile: false),
+                    request.NewName,
+                    operationToken);
+                var warnings = snapshot.Solution.Projects
+                    .Where(project => !snapshot.CompiledProjects.Contains(project.Id))
+                    .Select(project =>
+                        $"Project '{project.Name}' was outside the compiled subset and was not included in the rename.")
+                    .ToList();
+                var baselineByPath = request.Baseline.Files.ToDictionary(
+                    item => NormalizeRelativePath(item.RelativePath),
+                    item => item,
+                    PathComparer);
+                var mutationsByPath = new Dictionary<string, Mutation>(PathComparer);
+                foreach (var project in renamed.Projects.Where(project =>
+                    snapshot.CompiledProjects.Contains(project.Id)))
                 {
-                    warnings.Add(
-                        $"Changed document '{relativePath}' was not in the mutation baseline and was omitted.");
-                    continue;
+                    foreach (var document in project.Documents)
+                    {
+                        var oldDocument = snapshot.Solution.GetDocument(document.Id);
+                        if (oldDocument is null || document.FilePath is null)
+                        {
+                            continue;
+                        }
+
+                        var oldText = await oldDocument.GetTextAsync(operationToken);
+                        var newText = await document.GetTextAsync(operationToken);
+                        if (oldText.ContentEquals(newText))
+                        {
+                            continue;
+                        }
+
+                        var relativePath = NormalizeUnderRoot(snapshot.RepositoryPath, document.FilePath);
+                        if (!baselineByPath.TryGetValue(relativePath, out var baselineFile))
+                        {
+                            warnings.Add(
+                                $"Changed document '{relativePath}' was not in the mutation baseline and was omitted.");
+                            continue;
+                        }
+
+                        var mutation = new Mutation
+                        {
+                            MutationId = MutationId.New(),
+                            Type = MutationType.RenameSymbol,
+                            RelativePath = relativePath,
+                            BaselineSha256 = baselineFile.Sha256,
+                            StartOffset = 0,
+                            Length = oldText.Length,
+                            ExpectedText = oldText.ToString(),
+                            ReplacementText = newText.ToString(),
+                            RelatedSymbolId = request.SymbolId,
+                        };
+                        if (mutationsByPath.TryGetValue(relativePath, out var existing)
+                            && !string.Equals(
+                                existing.ReplacementText,
+                                mutation.ReplacementText,
+                                StringComparison.Ordinal))
+                        {
+                            throw new InvalidOperationException(
+                                $"Linked document '{relativePath}' produced inconsistent rename results.");
+                        }
+
+                        mutationsByPath[relativePath] = mutation;
+                    }
                 }
 
-                var mutation = new Mutation
+                if (mutationsByPath.Count == 0)
                 {
-                    MutationId = MutationId.New(),
-                    Type = MutationType.RenameSymbol,
-                    RelativePath = relativePath,
-                    BaselineSha256 = baselineFile.Sha256,
-                    StartOffset = 0,
-                    Length = oldText.Length,
-                    ExpectedText = oldText.ToString(),
-                    ReplacementText = newText.ToString(),
-                    RelatedSymbolId = request.SymbolId,
+                    throw new InvalidOperationException("Roslyn produced no source changes for the requested rename.");
+                }
+
+                var mutationSet = new MutationSet
+                {
+                    MutationSetId = MutationSetId.New(),
+                    SessionId = request.SessionId,
+                    RunId = request.RunId,
+                    WorkspaceId = request.WorkspaceId,
+                    BaselineCapturedAt = request.Baseline.CapturedAt,
+                    BaselineRevision = request.Baseline.GitRevision,
+                    Mutations = mutationsByPath.Values
+                        .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
+                        .ToArray(),
+                    Rationale = request.Rationale,
+                    AffectedProjects = renamed.Projects
+                        .Where(project => snapshot.CompiledProjects.Contains(project.Id))
+                        .Select(project => project.Name)
+                        .Distinct(StringComparer.Ordinal)
+                        .OrderBy(item => item, StringComparer.Ordinal)
+                        .ToArray(),
+                    Risk = mutationsByPath.Count == 1 ? MutationRisk.Low : MutationRisk.Medium,
+                    RequiredApproval = MutationApprovalLevel.EntireSet,
+                    ValidationPolicy = "semantic-rename",
                 };
-                if (mutationsByPath.TryGetValue(relativePath, out var existing)
-                    && !string.Equals(
-                        existing.ReplacementText,
-                        mutation.ReplacementText,
-                        StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException(
-                        $"Linked document '{relativePath}' produced inconsistent rename results.");
-                }
-
-                mutationsByPath[relativePath] = mutation;
-            }
-        }
-
-        if (mutationsByPath.Count == 0)
-        {
-            throw new InvalidOperationException("Roslyn produced no source changes for the requested rename.");
-        }
-
-        var mutationSet = new MutationSet
-        {
-            MutationSetId = MutationSetId.New(),
-            SessionId = request.SessionId,
-            RunId = request.RunId,
-            WorkspaceId = request.WorkspaceId,
-            BaselineCapturedAt = request.Baseline.CapturedAt,
-            BaselineRevision = request.Baseline.GitRevision,
-            Mutations = mutationsByPath.Values
-                .OrderBy(item => item.RelativePath, StringComparer.Ordinal)
-                .ToArray(),
-            Rationale = request.Rationale,
-            AffectedProjects = renamed.Projects
-                .Where(project => snapshot.CompiledProjects.Contains(project.Id))
-                .Select(project => project.Name)
-                .Distinct(StringComparer.Ordinal)
-                .OrderBy(item => item, StringComparer.Ordinal)
-                .ToArray(),
-            Risk = mutationsByPath.Count == 1 ? MutationRisk.Low : MutationRisk.Medium,
-            RequiredApproval = MutationApprovalLevel.EntireSet,
-            ValidationPolicy = "semantic-rename",
-        };
+                engine.EnsureMutationSnapshotCurrent(snapshot);
+                return new SemanticMutationResult(mutationSet, warnings, snapshot.Confidence);
+            },
+            cancellationToken);
         _outcomes.Add(
             1,
             new("operation", "rename"),
             new("outcome", "succeeded"),
             new("confidence", snapshot.Confidence.ToString()));
-        return new SemanticMutationResult(mutationSet, warnings, snapshot.Confidence);
+        return result;
     }
 
     /// <inheritdoc />
@@ -221,11 +230,12 @@ public sealed class SemanticMutationEngine :
             throw new ArgumentException("The semantic request and file baseline target different workspaces.", nameof(request));
         }
 
+        var engine = _engines.GetEngine(request.WorkspaceId);
         SemanticMutationSnapshot snapshot;
         try
         {
-            var preparedSolution = await _engines.GetEngine(request.WorkspaceId).EnsurePreparedAsync(request.RelativePath, "syntax-replacement", requireSuccess: true, cancellationToken);
-            snapshot = _engines.GetEngine(request.WorkspaceId).CaptureMutationSnapshot(preparedSolution);
+            var preparedSolution = await engine.EnsurePreparedAsync(request.RelativePath, "syntax-replacement", requireSuccess: true, cancellationToken);
+            snapshot = engine.CaptureMutationSnapshot(preparedSolution);
         }
         catch (InvalidOperationException exception)
         {
@@ -240,109 +250,117 @@ public sealed class SemanticMutationEngine :
             throw;
         }
 
-        var relativePath = NormalizeRelativePath(request.RelativePath);
-        var fullPath = Path.GetFullPath(relativePath.Replace('/', Path.DirectorySeparatorChar), snapshot.RepositoryPath);
-        var document = snapshot.Solution.Projects
-            .Where(project => snapshot.CompiledProjects.Contains(project.Id))
-            .SelectMany(project => project.Documents)
-            .FirstOrDefault(candidate => candidate.FilePath is not null
-                && PathComparer.Equals(Path.GetFullPath(candidate.FilePath), fullPath))
-            ?? throw new KeyNotFoundException(
-                $"Document '{relativePath}' is not loaded in the compiled project subset.");
-        var root = await document.GetSyntaxRootAsync(cancellationToken)
-            ?? throw new InvalidOperationException($"Document '{relativePath}' has no syntax root.");
-        var span = new TextSpan(request.StartOffset, request.Length);
-        if (!root.FullSpan.Contains(span))
-        {
-            throw new ArgumentOutOfRangeException(nameof(request), "The syntax range is outside the document.");
-        }
+        var result = await engine.RunMutationOperationAsync(
+            snapshot,
+            async operationToken =>
+            {
+                var relativePath = NormalizeRelativePath(request.RelativePath);
+                var fullPath = Path.GetFullPath(relativePath.Replace('/', Path.DirectorySeparatorChar), snapshot.RepositoryPath);
+                var document = snapshot.Solution.Projects
+                    .Where(project => snapshot.CompiledProjects.Contains(project.Id))
+                    .SelectMany(project => project.Documents)
+                    .FirstOrDefault(candidate => candidate.FilePath is not null
+                        && PathComparer.Equals(Path.GetFullPath(candidate.FilePath), fullPath))
+                    ?? throw new KeyNotFoundException(
+                        $"Document '{relativePath}' is not loaded in the compiled project subset.");
+                var root = await document.GetSyntaxRootAsync(operationToken)
+                    ?? throw new InvalidOperationException($"Document '{relativePath}' has no syntax root.");
+                var span = new TextSpan(request.StartOffset, request.Length);
+                if (!root.FullSpan.Contains(span))
+                {
+                    throw new ArgumentOutOfRangeException(nameof(request), "The syntax range is outside the document.");
+                }
 
-        var node = root.FindNode(span, getInnermostNodeForTie: true);
-        if (node.Span != span)
-        {
-            throw new InvalidOperationException(
-                $"The requested range does not exactly identify one syntax node; Roslyn resolved {node.Kind()} at {node.Span}.");
-        }
+                var node = root.FindNode(span, getInnermostNodeForTie: true);
+                if (node.Span != span)
+                {
+                    throw new InvalidOperationException(
+                        $"The requested range does not exactly identify one syntax node; Roslyn resolved {node.Kind()} at {node.Span}.");
+                }
 
-        SyntaxNode replacement = node switch
-        {
-            ExpressionSyntax => SyntaxFactory.ParseExpression(request.ReplacementText),
-            StatementSyntax => SyntaxFactory.ParseStatement(request.ReplacementText),
-            MemberDeclarationSyntax => SyntaxFactory.ParseMemberDeclaration(request.ReplacementText)
-                ?? throw new InvalidOperationException("The replacement is not a valid member declaration."),
-            _ => throw new NotSupportedException(
-                $"M5 bounded syntax replacement supports expressions, statements, and members; {node.Kind()} is unsupported."),
-        };
-        if (replacement.ContainsDiagnostics)
-        {
-            throw new InvalidOperationException("The replacement text contains C# syntax errors.");
-        }
+                SyntaxNode replacement = node switch
+                {
+                    ExpressionSyntax => SyntaxFactory.ParseExpression(request.ReplacementText),
+                    StatementSyntax => SyntaxFactory.ParseStatement(request.ReplacementText),
+                    MemberDeclarationSyntax => SyntaxFactory.ParseMemberDeclaration(request.ReplacementText)
+                        ?? throw new InvalidOperationException("The replacement is not a valid member declaration."),
+                    _ => throw new NotSupportedException(
+                        $"M5 bounded syntax replacement supports expressions, statements, and members; {node.Kind()} is unsupported."),
+                };
+                if (replacement.ContainsDiagnostics)
+                {
+                    throw new InvalidOperationException("The replacement text contains C# syntax errors.");
+                }
 
-        replacement = replacement.WithTriviaFrom(node).WithAdditionalAnnotations(Formatter.Annotation);
-        var changedDocument = document.WithSyntaxRoot(root.ReplaceNode(node, replacement));
-        changedDocument = await Formatter.FormatAsync(
-            changedDocument,
-            Formatter.Annotation,
-            cancellationToken: cancellationToken);
-        var oldText = await document.GetTextAsync(cancellationToken);
-        var newText = await changedDocument.GetTextAsync(cancellationToken);
-        if (oldText.ContentEquals(newText))
-        {
-            throw new InvalidOperationException("The syntax replacement produced no source change.");
-        }
+                replacement = replacement.WithTriviaFrom(node).WithAdditionalAnnotations(Formatter.Annotation);
+                var changedDocument = document.WithSyntaxRoot(root.ReplaceNode(node, replacement));
+                changedDocument = await Formatter.FormatAsync(
+                    changedDocument,
+                    Formatter.Annotation,
+                    cancellationToken: operationToken);
+                var oldText = await document.GetTextAsync(operationToken);
+                var newText = await changedDocument.GetTextAsync(operationToken);
+                if (oldText.ContentEquals(newText))
+                {
+                    throw new InvalidOperationException("The syntax replacement produced no source change.");
+                }
 
-        var baselineByPath = request.Baseline.Files.ToDictionary(
-            item => NormalizeRelativePath(item.RelativePath),
-            item => item,
-            PathComparer);
-        if (!baselineByPath.TryGetValue(relativePath, out var baselineFile))
-        {
-            throw new InvalidOperationException(
-                $"Document '{relativePath}' is not present in the mutation baseline.");
-        }
+                var baselineByPath = request.Baseline.Files.ToDictionary(
+                    item => NormalizeRelativePath(item.RelativePath),
+                    item => item,
+                    PathComparer);
+                if (!baselineByPath.TryGetValue(relativePath, out var baselineFile))
+                {
+                    throw new InvalidOperationException(
+                        $"Document '{relativePath}' is not present in the mutation baseline.");
+                }
 
-        var relatedSymbolId = request.SymbolId;
-        if (relatedSymbolId is null)
-        {
-            var semanticModel = await document.GetSemanticModelAsync(cancellationToken);
-            var symbol = semanticModel?.GetDeclaredSymbol(node, cancellationToken)
-                ?? semanticModel?.GetSymbolInfo(node, cancellationToken).Symbol;
-            relatedSymbolId = symbol?.GetDocumentationCommentId();
-        }
+                var relatedSymbolId = request.SymbolId;
+                if (relatedSymbolId is null)
+                {
+                    var semanticModel = await document.GetSemanticModelAsync(operationToken);
+                    var symbol = semanticModel?.GetDeclaredSymbol(node, operationToken)
+                        ?? semanticModel?.GetSymbolInfo(node, operationToken).Symbol;
+                    relatedSymbolId = symbol?.GetDocumentationCommentId();
+                }
 
-        var mutation = new Mutation
-        {
-            MutationId = MutationId.New(),
-            Type = MutationType.ReplaceSyntaxNode,
-            RelativePath = relativePath,
-            BaselineSha256 = baselineFile.Sha256,
-            StartOffset = 0,
-            Length = oldText.Length,
-            ExpectedText = oldText.ToString(),
-            ReplacementText = newText.ToString(),
-            RelatedSymbolId = relatedSymbolId,
-        };
-        var mutationSet = new MutationSet
-        {
-            MutationSetId = MutationSetId.New(),
-            SessionId = request.SessionId,
-            RunId = request.RunId,
-            WorkspaceId = request.WorkspaceId,
-            BaselineCapturedAt = request.Baseline.CapturedAt,
-            BaselineRevision = request.Baseline.GitRevision,
-            Mutations = [mutation],
-            Rationale = request.Rationale,
-            AffectedProjects = [document.Project.Name],
-            Risk = MutationRisk.Medium,
-            RequiredApproval = MutationApprovalLevel.EntireSet,
-            ValidationPolicy = "semantic-syntax-replacement",
-        };
+                var mutation = new Mutation
+                {
+                    MutationId = MutationId.New(),
+                    Type = MutationType.ReplaceSyntaxNode,
+                    RelativePath = relativePath,
+                    BaselineSha256 = baselineFile.Sha256,
+                    StartOffset = 0,
+                    Length = oldText.Length,
+                    ExpectedText = oldText.ToString(),
+                    ReplacementText = newText.ToString(),
+                    RelatedSymbolId = relatedSymbolId,
+                };
+                var mutationSet = new MutationSet
+                {
+                    MutationSetId = MutationSetId.New(),
+                    SessionId = request.SessionId,
+                    RunId = request.RunId,
+                    WorkspaceId = request.WorkspaceId,
+                    BaselineCapturedAt = request.Baseline.CapturedAt,
+                    BaselineRevision = request.Baseline.GitRevision,
+                    Mutations = [mutation],
+                    Rationale = request.Rationale,
+                    AffectedProjects = [document.Project.Name],
+                    Risk = MutationRisk.Medium,
+                    RequiredApproval = MutationApprovalLevel.EntireSet,
+                    ValidationPolicy = "semantic-syntax-replacement",
+                };
+                engine.EnsureMutationSnapshotCurrent(snapshot);
+                return new SemanticMutationResult(mutationSet, [], snapshot.Confidence);
+            },
+            cancellationToken);
         _outcomes.Add(
             1,
             new("operation", "syntax-replacement"),
             new("outcome", "succeeded"),
             new("confidence", snapshot.Confidence.ToString()));
-        return new SemanticMutationResult(mutationSet, [], snapshot.Confidence);
+        return result;
     }
 
     /// <inheritdoc />
@@ -411,4 +429,5 @@ internal sealed record SemanticMutationSnapshot(
     Solution Solution,
     IReadOnlySet<ProjectId> CompiledProjects,
     SemanticConfidenceLevel Confidence,
-    string RepositoryPath);
+    string RepositoryPath,
+    long Generation);

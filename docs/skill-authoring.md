@@ -49,7 +49,6 @@ References (`$ref`), remote resolution, regex/pattern execution, custom formats,
 Version 1 supports only:
 
 - `invokeProcedure`, `collectEvidence`, `askUserInput`;
-- `proposePlan`, `awaitPlanApproval`, `executeApprovedPlan`;
 - `proposeDelegation`, `awaitDelegation`, `requestReviews`;
 - `validate`, `summarize`.
 
@@ -57,7 +56,7 @@ Dependencies must form a bounded DAG. `maximumIterations` is a fixed positive ce
 
 Procedure instructions should state a narrow objective, evidence expectations, structured output, stopping condition, uncertainties, and meaningful validation. Do not claim host policy precedence, approval, trust, write authority, or successful validation. Such prose has no authority and adversarial claims are ignored by the host.
 
-Host-action steps return typed proposals only. Repository changes still use the governed plan, exact-diff, approval, and validation flow; delegation and review still use host-owned bounded scheduling. A package must expect a durable wait followed by schema-validated host result continuation.
+Host-action steps return typed requests under the existing closed action contract. Source edits use the ordinary shared edit command, exact authorization and configured validation. Packages cannot revive removed planning or approved-execution actions.
 
 ## Signing and enablement
 
@@ -93,7 +92,7 @@ Before distribution:
 4. test signature/exact allowlist, disabled state, tamper, revocation, and ambiguity;
 5. test valid/invalid input and output schemas plus context pressure;
 6. test cancellation/wait/continue/resume with the exact digest pinned;
-7. test every proposed action through ordinary Plan-37/38 policy and validation;
+7. test every requested action through ordinary tool policy, exact authorization and shared validation;
 8. confirm events, logs, persistence, and diagnostic bundles contain no package body, secret, raw provider payload, or hidden reasoning.
 
 See [skill operations](operations/skills.md), [ADR-34](architecture/adr-34-governed-declarative-skills.md), and the source-repository [skills implementation plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/plan-39-governed-skills-reusable-workflows.md).

@@ -1049,8 +1049,6 @@ public sealed class SkillWorkflowOrchestrator : ISkillWorkflowOrchestrator, IAsy
     {
         return kind switch
         {
-            SkillWorkflowStepKind.ProposePlan => SkillHostActionKind.ProposePlan,
-            SkillWorkflowStepKind.ExecuteApprovedPlan => SkillHostActionKind.ExecuteApprovedPlan,
             SkillWorkflowStepKind.ProposeDelegation or SkillWorkflowStepKind.RequestReviews
                 => SkillHostActionKind.ProposeDelegation,
             SkillWorkflowStepKind.Validate => SkillHostActionKind.Validate,

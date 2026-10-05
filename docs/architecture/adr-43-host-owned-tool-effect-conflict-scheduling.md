@@ -1,5 +1,7 @@
 # ADR-43 — Host-Owned Tool Effect Metadata and Conflict Scheduling
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 **Status:** Accepted for planned Milestone 21
 
 ## Context
@@ -24,3 +26,7 @@ The product requires actual bounded execution overlap rather than merely asynchr
 ## Consequences
 
 Independent inspections can reduce wall-clock latency without letting the model authorize concurrency or making scheduler timing part of model semantics. Some apparently read-only calls remain sequential until their complete adapter/resource behavior is explicitly proven safe. Adding a tool now requires concurrency metadata review, but conservative defaults preserve compatibility. Operational events can reflect true overlap while canonical model continuations remain deterministic.
+
+## Direct-editing amendment (2026-10-05)
+
+Direct source writes use the existing effect scheduling and tool pipeline. Plan execution supplies no alternative scheduling path or mutation authority. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

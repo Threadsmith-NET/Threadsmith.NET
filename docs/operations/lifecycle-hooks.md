@@ -1,12 +1,12 @@
 # Lifecycle hooks
 
-Lifecycle hooks notify or consult configured automation at stable host boundaries. They do not replace Threadsmith's event stream, tools, plans, mutation policy, validation, extensions, MCP, skills, or execution state machine.
+Lifecycle hooks notify or consult configured automation at stable host boundaries. They do not replace Threadsmith's event stream, tools, mutation policy, validation, extensions, MCP, skills, or execution state machine.
 
 ## Safety model
 
 - Hooks are advisory and fail-open by default.
 - Repository declarations start disabled and require explicit external approval of the exact repository identity and configuration digest. They remain advisory/fail-open after approval.
-- Only repository-excluding managed organization, machine, or user policy can grant blocking/fail-closed authority, and only for eligible `Before*`, `PlanProposed`, or `MutationStaged` points and named denial codes.
+- Only repository-excluding managed organization, machine, or user policy can grant blocking/fail-closed authority, and only for eligible `Before*` or `MutationStaged` points and named denial codes.
 - A hook result never approves an operation, changes inputs/results, supplies commands or patches, grants trust/tools/secrets, or skips validation.
 - Executables and extensions run with host-process permissions. Timeouts and unload contexts are not security sandboxes. HTTP and MCP disclose the granted envelope to an external system.
 

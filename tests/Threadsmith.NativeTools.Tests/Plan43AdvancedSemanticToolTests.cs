@@ -1056,7 +1056,7 @@ public sealed class Plan43AdvancedSemanticToolTests
                 """);
             Write(repositoryPath, "tests/Higher.Tests/Tests.cs", "namespace Example.HigherTests; public sealed class HigherTest;");
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
             var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(

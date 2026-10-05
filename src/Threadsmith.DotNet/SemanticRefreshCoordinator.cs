@@ -1795,6 +1795,10 @@ public sealed class SemanticRefreshCoordinator :
 
             if (mode == SemanticRefreshMode.Full)
             {
+                var verifiedInputs = confirmedCurrentInputs.Concat(confirmedPreparedInputs)
+                    .GroupBy(pair => pair.Key, PathComparer)
+                    .ToDictionary(group => group.Key, group => group.Last().Value.Exists ? group.Last().Value.Identity : null, PathComparer);
+                _backend.ContinueEditAfterGraphRefresh(binding.Request.WorkspaceId, verifiedInputs);
                 try
                 {
                     binding.RestartWatching(
@@ -2095,7 +2099,7 @@ public sealed class SemanticRefreshCoordinator :
         AuthoritativeInputSnapshot preRefreshInputs,
         CancellationToken cancellationToken)
     {
-        await ReconcileBoundDocumentsAsync(binding, refreshedDocuments, cancellationToken);
+        var verifiedDocuments = await ReconcileBoundDocumentsAsync(binding, refreshedDocuments, cancellationToken);
         var postRefreshInputs = await CaptureAuthoritativeInputSnapshotAsync(
             binding,
             refreshedInventory,
@@ -2103,10 +2107,13 @@ public sealed class SemanticRefreshCoordinator :
             preRefreshInputs.BinaryPaths,
             includePotentialBinaryInputs: false,
             cancellationToken);
-        return ReconcileAuthoritativeInputSnapshots(
+        var verifiedInputs = ReconcileAuthoritativeInputSnapshots(
             binding,
             preRefreshInputs,
             postRefreshInputs);
+        return verifiedInputs.Concat(verifiedDocuments)
+            .GroupBy(pair => pair.Key, PathComparer)
+            .ToDictionary(group => group.Key, group => group.Last().Value, PathComparer);
     }
 
     private IReadOnlyDictionary<string, StableFileContent> ReconcileAuthoritativeInputSnapshots(
@@ -2739,11 +2746,12 @@ public sealed class SemanticRefreshCoordinator :
         return normalized is not null && PathComparer.Equals(normalized, path);
     }
 
-    private async Task ReconcileBoundDocumentsAsync(
+    private async Task<IReadOnlyDictionary<string, StableFileContent>> ReconcileBoundDocumentsAsync(
         WorkspaceBinding binding,
         IReadOnlyList<SemanticDocumentRefresh> loadedDocuments,
         CancellationToken cancellationToken)
     {
+        var verified = new Dictionary<string, StableFileContent>(PathComparer);
         foreach (var document in loadedDocuments)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -2775,7 +2783,13 @@ public sealed class SemanticRefreshCoordinator :
                         document.Path,
                         changeKind));
             }
+            else
+            {
+                verified[document.Path] = current with { Text = null };
+            }
         }
+
+        return verified;
     }
 
     private void RestoreFailedBatch(WorkspaceBinding binding, RefreshBatch batch)
@@ -3418,6 +3432,11 @@ internal sealed record SemanticBindingBeginResult(
 /// <summary>Test seam for semantic refresh execution without filesystem timing.</summary>
 internal interface ISemanticRefreshBackend
 {
+    /// <summary>Offers independently verified graph inputs to the existing advisory edit owner.</summary>
+    void ContinueEditAfterGraphRefresh(WorkspaceId workspaceId, IReadOnlyDictionary<string, string?> verifiedInputs)
+    {
+    }
+
     /// <summary>Stops preparation after the last workspace binding owner detaches.</summary>
     Task RetirePreparationAsync(WorkspaceId workspaceId, bool retainCurrentPreparation, CancellationToken cancellationToken) => Task.CompletedTask;
 
@@ -3484,6 +3503,12 @@ internal sealed class RegistrySemanticRefreshBackend : ISemanticRefreshBackend
     {
         ArgumentNullException.ThrowIfNull(semanticEngines);
         _semanticEngines = semanticEngines;
+    }
+
+    /// <inheritdoc />
+    public void ContinueEditAfterGraphRefresh(WorkspaceId workspaceId, IReadOnlyDictionary<string, string?> verifiedInputs)
+    {
+        _semanticEngines.GetEngine(workspaceId).ContinueEditAfterGraphRefresh(verifiedInputs);
     }
 
     /// <inheritdoc />

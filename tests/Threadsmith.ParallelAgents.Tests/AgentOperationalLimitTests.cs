@@ -131,7 +131,7 @@ public sealed partial class AgentOperationalLimitTests
         {
             Assignments = [assignment with { Scope = new AgentAssignmentScope { Files = ["../escape"] } }],
         }));
-        Assert.Throws<UnauthorizedAccessException>(() => DelegationPlanValidator.Validate(plan with
+        Assert.Throws<InvalidDataException>(() => DelegationPlanValidator.Validate(plan with
         {
             Assignments = [assignment with { Mode = AgentRunMode.IsolatedWorktreeMutation }],
         }));

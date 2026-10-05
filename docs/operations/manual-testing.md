@@ -17,7 +17,7 @@ Run `Threadsmith.App --tui` from a small repository you can safely inspect. Bare
 1. Start at inspection or read trust and confirm build- or mutation-requiring operations are unavailable or denied with a reason.
 2. Run `/tools`, inspect one non-essential tool, and cancel without changing its state.
 3. Ask a read-only repository question and confirm tool activity is bounded and the final response does not claim omitted evidence was inspected.
-4. If mutation testing is appropriate, use a disposable clean repository. Confirm plan review precedes implementation, the exact staged diff is shown before authorization, and rejection leaves the repository unchanged.
+4. If mutation testing is appropriate, use a disposable clean repository. Confirm direct edits show the exact staged diff when mutation policy requires authorization, rejection leaves the repository unchanged, and advisory compiler findings do not prevent an authorized intermediate edit.
 5. Cancel an active request with `Esc Esc` and confirm the shell returns to a usable composer without late output being presented as current.
 
 ## Management, agents, and usage

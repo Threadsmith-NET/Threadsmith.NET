@@ -23,9 +23,7 @@ internal static class ConversationToolAvailability
         ToolRegistration[] registrations =
         [
             .. (callerRegistrations ?? toolRegistry.GetRegistrations(sessionId, runId))
-                .Where(registration => (registration.Tool.Definition.SideEffect == ToolSideEffect.ReadOnly
-                    || registration.Tool.Definition.ConversationAvailable)
-                    && IsAdvertised(registration.Tool.Definition, invocationContext)),
+                .Where(registration => IsAdvertised(registration.Tool.Definition, invocationContext)),
         ];
         return new ConversationToolSnapshot(
             registrations.Select(registration => registration.Tool.Definition).ToArray(),
@@ -48,8 +46,7 @@ internal static class ConversationToolAvailability
             || context.DenyAllTools
             || context.DeniedToolIds.Contains(definition.Id, StringComparer.OrdinalIgnoreCase)
             || (context.AllowedToolIds.Count > 0
-                && !context.AllowedToolIds.Contains(definition.Id, StringComparer.OrdinalIgnoreCase))
-            || context.RequireApprovalToolIds.Contains(definition.Id, StringComparer.OrdinalIgnoreCase))
+                && !context.AllowedToolIds.Contains(definition.Id, StringComparer.OrdinalIgnoreCase)))
         {
             return false;
         }

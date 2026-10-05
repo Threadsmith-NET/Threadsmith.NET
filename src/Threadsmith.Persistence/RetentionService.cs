@@ -53,6 +53,7 @@ public sealed class RetentionService
     private readonly IConversationStore? _conversationStore;
     private readonly ILogger<RetentionService> _logger;
     private readonly SqliteSkillStateStore? _skillStateStore;
+    private readonly ExecutionCheckpointStore? _executionStore;
 
     /// <summary>Initializes a new instance of the <see cref="RetentionService"/> class.</summary>
     public RetentionService(
@@ -62,7 +63,8 @@ public sealed class RetentionService
         ILogger<RetentionService> logger,
         TimeProvider? timeProvider = null,
         IConversationStore? conversationStore = null,
-        SqliteSkillStateStore? skillStateStore = null)
+        SqliteSkillStateStore? skillStateStore = null,
+        ExecutionCheckpointStore? executionStore = null)
     {
         ArgumentNullException.ThrowIfNull(eventStore);
         ArgumentNullException.ThrowIfNull(artifactStore);
@@ -80,6 +82,7 @@ public sealed class RetentionService
         _timeProvider = timeProvider ?? TimeProvider.System;
         _conversationStore = conversationStore;
         _skillStateStore = skillStateStore;
+        _executionStore = executionStore;
     }
 
     /// <summary>Gets the configured retention options.</summary>
@@ -119,9 +122,12 @@ public sealed class RetentionService
         var artifacts = await _artifactStore.ListAsync(
             sessionId: null,
             cancellationToken);
+        var requiredArtifacts = _executionStore is null
+            ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            : await _executionStore.GetRequiredEffectArtifactsAsync(cancellationToken);
         foreach (var artifact in artifacts)
         {
-            if (artifact.RecordedAt < cutoff && ShouldRemoveArtifact(artifact.Kind))
+            if (artifact.RecordedAt < cutoff && !requiredArtifacts.Contains(artifact.ContentHash) && ShouldRemoveArtifact(artifact.Kind))
             {
                 if (await _artifactStore.DeleteAsync(artifact.ContentHash, cancellationToken))
                 {
@@ -160,6 +166,11 @@ public sealed class RetentionService
             return false;
         }
 
+        if (_executionStore is null && kind is "mutationEffectSnapshot" or "mutationOriginalTextV1")
+        {
+            return false;
+        }
+
         // Metadata-only mode retains no large artifacts regardless of kind.
         if (_options.MetadataOnly)
         {
@@ -172,7 +183,7 @@ public sealed class RetentionService
             "modelOutput" => !_options.RetainFullModelOutput,
             "processOutput" or "buildLog" or "testLog" => !_options.RetainProcessLogs,
             "sourceExcerpt" => !_options.RetainSourceExcerpts,
-            "diff" => !_options.RetainDiffs,
+            "diff" or "executionFinalDiff" => !_options.RetainDiffs,
             "telemetry" => !_options.RetainTelemetry,
             "sessionSummary" => !_options.RetainSessionSummaries,
             _ => true,

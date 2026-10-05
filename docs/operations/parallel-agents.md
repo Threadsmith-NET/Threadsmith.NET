@@ -1,6 +1,6 @@
 # Parallel-agent operations
 
-Threadsmith starts subagents only for model-requested `delegate_agents` tool calls. The host validates and schedules those requests; serial approved-plan execution never launches children automatically.
+Threadsmith starts subagents only for model-requested `delegate_agents` tool calls. The host validates and schedules those requests; ordinary parent execution never launches children automatically.
 
 For a component-by-component explanation of the conversation tool, see [`delegate_agents` under the hood](../architecture/delegate-agents-tool.md).
 
@@ -9,7 +9,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 - Child agents are in-process asynchronous .NET runs. No process hosts an agent.
 - Tools can opt out of subagent visibility with `ToolDefinition.SubagentAvailable = false`. `delegate_agents`, `invoke_skill`, and the parent-owned `pr_fetch` acquisition tool opt out, so child agents cannot launch further agents or skill workflows or reacquire a delegated PR.
 - Ordinary conversation delegation supports all seven roles. `inherit` uses `SharedWorkspace` mode with the parent's enabled, permitted tools; explicit `readOnly` selects a narrower inspection surface.
-- Approved implementation and correction use the parent run through `MutationProposalApplication`, retaining exact-diff approval, transactions, validation, and corrections.
+Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and configured validation. Ordinary delegated children do not receive `edit_source`.
 - Existing isolated-worker APIs require approved ownership and managed detached Git worktrees. Selecting `implementer` in conversation does not start a worktree worker or automatic parallel application.
 - Worktrees isolate file state but are not sandboxes. Trust, prohibited paths, reparse checks, tool policy, secrets, network, process, and approval gates still apply.
 - Ordinary final responses cross durable join boundaries with host-owned role, model, and status metadata. Their claims are not promoted to verified findings. Legacy structured outcomes and approved mutation packages remain separate supported contracts; hidden reasoning is not joined.
@@ -118,7 +118,7 @@ The repository example documents these conservative defaults:
 }
 ```
 
-These values limit resources; they do not grant delegation, mutation, process, network, secret, model, or trust authority. Child reservations must fit within the parent resource limits. Selected-model context and output capacity, tool-policy checks, transport and result-envelope bounds, and cancellation still apply. Approved-plan preparation failures cannot authorize staging or borrow authority from siblings.
+These values limit resources; they do not grant delegation, mutation, process, network, secret, model, or trust authority. Child reservations must fit within the parent resource limits. Selected-model context and output capacity, tool-policy checks, transport and result-envelope bounds, and cancellation still apply. Child failures cannot authorize source writes or borrow authority from siblings.
 
 Trusted machine/user configuration controls ordinary conversation delegation under `agents:delegation`. Existing defaults allow five children, 1,024 summary characters, and a five-minute deadline. Task and context text have no separate character caps; the complete assembled child request must fit the selected model's actual context window. Positive operational values enforce their remaining caps; zero disables a configurable cap. When a count or text cap is disabled, the advertised `delegate_agents` schema omits the matching `maxItems` or `maxLength` keyword instead of publishing a stale compiled limit. An unrestricted final body does not disable active scheduler, request, tool, transport, or provider controls. Mutation, process, build, and test tools can be inherited when the parent's advertised tools and permissions allow them; explicit `readOnly` excludes execution and writes. Every eligible parent evidence item and every resolved `AGENTS.md` and configured prompt append source is included in the child request. Repository configuration cannot replace these trusted settings, and none are model-authored fields.
 
@@ -132,7 +132,7 @@ Role keys and field names are case-sensitive; provider IDs and reasoning names a
 
 ## Parent-run mutation preparation
 
-Normal approved implementation and correction run directly through `MutationProposalApplication` with the parent run identity, current session model/reasoning preferences, and ordinary request-capacity checks. The application validates the proposal and can request bounded corrections before staging it for exact-diff approval. Provider failures, cancellation, invalid scope, or exhausted repairs prevent staging. Configuring an Implementer role model affects only model-requested delegation. Plan approval, preflight, and execution resume do not create child assignments.
+Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and configured validation. Ordinary delegated children do not receive `edit_source`.
 
 This path does not automatically partition, apply, or merge parallel worktree changes. The existing isolated-worker APIs and their integration checks remain separate. A role name, a proposed file change, or a clean review cannot authorize a repository write.
 
@@ -187,6 +187,6 @@ Failed attempts may still consume tokens. Count any usage chunks emitted before 
 
 SQLite migration 4 stores delegation run-tree checkpoints and worktree-lease recovery records. Durable boundaries include acceptance, queue/start, role-specific terminal joins (`ResearchJoined`, `WorkersFrozen`, or `ReviewsJoined`), integration decision, parent staging, aggregate validation, failure, and cancellation. Checkpoints carry monotonically increasing revisions; persistence ignores a stale lower revision, including an abandoned progress write that completes after terminal state, and rejected writes emit no lifecycle event.
 
-`Checkpoint.Assignments` preserves each role, contract marker, runner version, and configured/effective provider/profile/reasoning with selection source and fallback. The ordinary `agent-response/1` marker imposes no body shape. Outcomes retain model provenance and `Response`; an empty response is distinct from `null` in legacy structured checkpoints, which remain supported. These records support persisted inspection. The delegation coordinator has no automatic resume API for interrupted model loops. New delegated work requires a new attempt/generation and validation of the current baseline, worktrees where applicable, model/tool/trust policy, budgets, and artifacts. It does not reopen an interrupted task or provider stream, and earlier-generation results cannot become authoritative. Approved-plan execution keeps its existing [checkpoint and resume lifecycle](execution-resumption.md).
+`Checkpoint.Assignments` preserves each role, contract marker, runner version, and configured/effective provider/profile/reasoning with selection source and fallback. The ordinary `agent-response/1` marker imposes no body shape. Outcomes retain model provenance and `Response`; an empty response is distinct from `null` in legacy structured checkpoints, which remain supported. These records support persisted inspection. The delegation coordinator has no automatic resume API for interrupted model loops. New delegated work requires a new attempt/generation and validation of the current baseline, worktrees where applicable, model/tool/trust policy, budgets, and artifacts. It does not reopen an interrupted task or provider stream, and earlier-generation results cannot become authoritative. Historical execution records remain inspectable; unresolved legacy writes are reconciled or fenced without resuming plan steps.
 
 On shutdown, Threadsmith stops admission, links cancellation through active children, performs a bounded join, and records unresolved managed worktrees for recovery. Cleanup removes only worktrees owned by the current coordinator through the tracked Git adapter.

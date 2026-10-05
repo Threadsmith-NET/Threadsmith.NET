@@ -1,5 +1,7 @@
 # ADR-36 — Structured File Lifecycle Mutations
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 ## Status
 
 Accepted.
@@ -27,3 +29,7 @@ Create, delete, and move are versioned host-owned mutation operations in the exi
 ## Consequences
 
 The existing transaction, policy, validation, worker, persistence, TUI, and CLI boundaries remain authoritative. Both move endpoints contribute to affected-file promotion, semantic invalidation, worker ownership/conflict checks, aggregate diffs, and final outcomes. Case-only moves use repository-filesystem behavior, the same temporary-file transaction, and exact-name enumeration rather than an operating-system heuristic or platform rename behavior. Existing text-only mutation sets remain readable and executable; unknown operation schema versions fail validation before workspace access.
+
+## Direct-editing amendment (2026-10-05)
+
+Create/delete/move and text replacements are ordered exact operations in `edit_source`, using the existing lifecycle writer and recovery identities. An approved implementation plan is not a prerequisite. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

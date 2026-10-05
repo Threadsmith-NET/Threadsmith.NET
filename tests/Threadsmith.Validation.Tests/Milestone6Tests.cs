@@ -38,6 +38,25 @@ public sealed class Milestone6Tests
         Assert.False(result[1].IsBaselineDiagnostic);
     }
 
+    /// <summary>Final validation without a pre-edit build reports unknown origins and cannot accept remaining compiler errors.</summary>
+    [Fact]
+    public void DiagnosticClassifier_NoBaseline_ReportsUnknownOriginAndFailsRemainingErrors()
+    {
+        var diagnostic = CreateDiagnostic("current", "CS0246", "Type could not be found");
+        var classified = DiagnosticClassifier.Classify(null, [diagnostic], SemanticConfidenceLevel.FullSemantic);
+        Assert.Equal(DiagnosticClassification.OriginUnknown, Assert.Single(classified).Classification);
+        Assert.False(classified[0].IsBaselineDiagnostic);
+        var gate = AcceptanceGate.Evaluate(new AcceptanceGateRequest
+        {
+            Diagnostics = classified,
+            RequiredStagesCompleted = true,
+            FinalDiffAvailable = true,
+            RequiredApprovalsPresent = true,
+        });
+        Assert.Equal(AcceptanceGateStatus.Failed, gate.Status);
+        Assert.Contains(gate.Reasons, reason => reason.Contains("origins were not established", StringComparison.Ordinal));
+    }
+
     /// <summary>Degraded confidence prevents authoritative classification and requires human confirmation.</summary>
     [Fact]
     public void DiagnosticClassifier_PartialCompilation_RequiresHumanConfirmation()
@@ -832,10 +851,18 @@ public sealed class Milestone6Tests
     }
 
     /// <summary>The semantic stage keeps affected-project errors from unchanged dependent files.</summary>
-    [Fact]
-    public async Task ValidationPipeline_DefaultSemanticStage_KeepsUnchangedDependentErrors()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ValidationPipeline_DefaultSemanticStage_KeepsUnchangedDependentErrors(bool withoutBaseline)
     {
         await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
         var executor = new BuildExecutor(
             events,
             new DiagnosticNormalizer(),
@@ -899,14 +926,18 @@ public sealed class Milestone6Tests
 
         var result = await pipeline.ValidateAsync(
             request,
-            capture,
+            withoutBaseline ? null : capture,
             mutationSet,
             requiredApprovalsPresent: true,
             finalDiffAvailable: true);
 
         var diagnostic = Assert.Single(result.Diagnostics);
         Assert.Equal("CS1061", diagnostic.Code);
-        Assert.Equal(DiagnosticClassification.Introduced, diagnostic.Classification);
+        Assert.Equal(withoutBaseline ? DiagnosticClassification.OriginUnknown : DiagnosticClassification.Introduced, diagnostic.Classification);
+        Assert.Contains(observed.OfType<DiagnosticObserved>(), item => item.Code == "CS1061");
+        var completed = Assert.Single(observed.OfType<SemanticCheckCompleted>());
+        Assert.Equal(SemanticCheckOutcome.Failed, completed.Outcome);
+        Assert.Contains("1 blocking", completed.Detail, StringComparison.Ordinal);
         var requestedProjects = Assert.Single(resolver.ProjectPathRequests);
         Assert.Contains(directProject, requestedProjects);
         Assert.Contains(dependentProject, requestedProjects);
@@ -1391,7 +1422,7 @@ public sealed class Milestone6Tests
             new ProcessExecutionResult(
                 1,
                 0,
-                "xUnit.net v3 Microsoft.Testing.Platform v2 Runner v3.2.2 (64-bit .NET 10.0)\n\n  Example.Tests.Case\n\nTest discovery summary: found 1 test(s) - Tests.dll\n  duration: 10ms",
+                """{"tests":[{"uid":"example-case","displayName":"Example.Tests.Case"}]}""",
                 string.Empty,
                 false,
                 false,

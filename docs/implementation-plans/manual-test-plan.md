@@ -31,18 +31,13 @@
 
 Expected: prompt assets are complete, exact, immutable for the process lifetime, safely customizable only as model-facing prose, fully capacity-accounted, and consistently packaged. Invalid catalogs fail before activity, ordinary diagnostics never expose bodies, explicit raw logs retain provider-visible content, upgrades replace defaults, and no edit changes compiled authority or schemas.
 
-## MTP-256 — External semantic refresh, blocked admission, and manual recovery
+## MTP-256 — Semantic refresh during active runs
 
-1. Open a disposable `TrustedBuild` C# repository in the interactive terminal, select its solution, wait for semantic loading, and leave the composer empty. Outside Threadsmith, save several rapid edits to one existing loaded `.cs` file. Without pressing a key, focusing the Threadsmith window, or otherwise interacting with its console, confirm one settled `External changes detected; updating semantic model...` message and one completion appear with bounded repository-relative triggering file names. While the refresh is active, confirm an animated, elapsed-time refresh indicator remains visible without active agents; repeat after `/new` and with a child-agent pane selected.
-2. Begin typing an unsent multiline composer draft and repeat the external edit. Confirm lifecycle output waits while any draft text, including whitespace, remains and that the draft stays exact. Delete the draft back to empty without submitting it; confirm the queued lifecycle output then appears automatically. Run a symbol/reference/implementation or `code_explore` query and confirm it observes the new source without a complete solution reload.
-3. Hold another source edit in its settling or refresh phase and submit a prepared request. Instrument or inspect host lifecycle state and confirm the request waits before any `RunId`, budget, steering registration, conversation append, model call, or tool call is created. Change the file once more while refresh is in flight and confirm the request starts only after one converged follow-up reaches the latest dirty version.
-4. Change a project file or add/remove/rename a source document. Confirm the cycle reloads the graph, admits requests after current usable readiness, and warms remaining compilations in the background. Required scoped/global semantic operations must demand their actual coverage. Confirm the resulting graph/membership is visible. Repeat after simulating a watcher miss/error and confirm bounded recovery reloads authoritatively. Run `dotnet build` and `dotnet test` without source changes, once idle and once from a code-review skill; confirm generated editor-config/source files, restore outputs, compiled assemblies and test results do not start semantic refresh or delay the next request. Run `/semantic_refresh` and repeat to check that output-directory watcher roots are not recreated. Separately change a user-authored loaded analyzer config or additional file under `obj` and confirm it still refreshes.
-5. With the workspace clean, run `/semantic_refresh`. Confirm it forces and awaits a complete refresh, reports duration and resulting confidence once, and creates no model activity. Start it while an incremental cycle is active and confirm it joins that work and performs only one shared full follow-up.
-6. Inject a transient semantic load failure. Confirm failure output is bounded/actionable, the workspace remains dirty, and a new request is rejected before run allocation. Repair the failure, rerun `/semantic_refresh`, and confirm admission recovers. Separately introduce compiler diagnostics and confirm refresh succeeds with reduced confidence rather than reporting infrastructure failure.
-7. Apply one approved Threadsmith mutation and observe its watcher echo. Confirm it refreshes through the same coordinator without an external-change message or duplicate refresh. Add an overlapping external edit and confirm it remains externally attributed.
-8. Repeat the blocked-submission and forced-refresh checks through the headless command surface, then cancel one waiter, switch repositories, and exit during refresh. Confirm headless outcomes match, shared work is not cancelled by one waiter, obsolete results do not cross the binding, shutdown is bounded, and no source body, absolute changed path, secret, or exception dump appears in normal output.
-
-Expected: external edits become visible automatically through one draft-safe serialized lifecycle; proven existing C# edits update incrementally, graph/uncertain/manual/recovery changes reload completely, all triggers share one coordinator, request admission never starts from known-stale semantics, and manual/headless recovery remains local, bounded, and model-free.
+1. Start a conversation and change an existing loaded C# file.
+2. Verify operation-safe publication allows the active run to query the new immutable generation.
+3. Confirm admitted earlier queries retain their snapshot and stale results are discarded.
+4. Change project/generator inputs and verify visible graph refresh and degraded/unavailable coverage on failure.
+5. Confirm host-write attribution avoids duplicate reloads while independent external changes still invalidate.
 
 ## MTP-254 — Model-callable roles, fork/join, and policy narrowing
 
@@ -61,7 +56,7 @@ Expected: external edits become visible automatically through one draft-safe ser
 12. Have the ordinary implementer inspect source and return implementation advice in any format. Confirm repository bytes stay unchanged and no process or test runs. Even a response claiming applied changes or completed validation grants no permission and becomes no host verification. Exercise actual approved mutation preparation separately in MTP-169.
 13. Inspect `/agents <id>` and persisted `Checkpoint.Assignments`. Confirm the display shows role and effective provider/profile/reasoning/source/fallback; persisted assignments also retain configured selection, contract marker, and runner version. Confirm outcomes retain `Response`, including empty text, while missing/null responses remain compatible with legacy structured checkpoints. Restart and inspect again. Confirm this does not resume a child loop or provider stream; further delegation requires a new generation.
 
-Expected: ordinary model tool use supports all six roles in one read-only layer. Omitted role remains Explorer; any present response, including empty text, can complete, and failed siblings do not erase successful output. Roles amend instructions and select models/tools without grading or repairing the final body. Parent visibility, authority, routing, usage, checkpoint inspection, steering, real model capacity, and cancellation remain host-owned. Each frontend retains one serialized input owner and safe-boundary steering and cancellation. Legacy structured outcomes and actual approved mutation protocols remain separate supported paths.
+Expected: ordinary model tool use supports all six roles in one read-only layer. Omitted role remains Explorer; any present response, including empty text, can complete, and failed siblings do not erase successful output. Roles amend instructions and select models/tools without grading or repairing the final body. Parent visibility, authority, routing, usage, checkpoint inspection, steering, real model capacity, and cancellation remain host-owned. Each frontend retains one serialized input owner and safe-boundary steering and cancellation. Legacy structured outcomes remain readable. Parent writes use the ordinary `edit_source` path; child tools cannot bypass exact mutation authorization.
 
 
 ## MTP-253 — Conversation-native corrective turns and MCP tool-name aliasing
@@ -138,48 +133,24 @@ Expected: multi-anchor exploration composes existing Roslyn relationships into o
 
 Expected: exact symbol/path exploration is a read-only, repository-confined, generation-fenced Roslyn query that returns current usable source and honest ambiguity in one tool round. It performs no restore, build, generator execution, mutation, process, network, approval, or implicit text fallback.
 
-## MTP-242 — Plan approval policy and sanity checks
+## MTP-242 — Plan approval policy — Retired
 
-1. In a disposable trusted C# repository, set `/plan-policy ReviewRisky` and request a one-file source edit whose plan declares an exact existing repository-relative affected file.
-2. Confirm Threadsmith runs plan sanity checks before any review surface, classifies the plan as low risk, records policy auto-approval, shows concise auto-approved status, and proceeds to mutation proposal without a manual plan prompt.
-3. Set `/plan-policy ReviewAll` and repeat. Confirm the same sanity checks run before the plan is shown, then manual approval is required.
-4. Use a controlled model fixture that first proposes a plan for a non-existent affected file. Confirm the plan is not shown to the user, bounded plan-revision evidence is returned to the model, and a corrected plan can proceed within budget.
-5. Repeat with a bare ambiguous file name, empty `fileIntents` under strict policy, create target that already exists, protected/secret/Git path, generated/binary file, lifecycle delete/move, dependency/project change, and managed policy denial.
-6. Exercise `/plan-policy ReviewAll`, `/plan-policy ReviewRisky`, `/plan-policy TrustSession`, `/plan-policy AlwaysTrustRepo`, the strongest explicit auto-approval mode, `/plan-policy reset`, restart, and repository switch. Confirm every policy except `TrustSession` persists in repository settings, while `TrustSession` is session-only and does not rewrite repository settings.
-7. Let an auto-approved plan proceed to mutation proposal. Confirm mutations must still cite approved step ids and still pass exact text/hash validation, pre-mutation Roslyn screening, exact-diff mutation approval policy, transactional apply, build/test validation, correction, cancellation, and resume gates.
-8. Inspect interactive/headless output, activity, logs, events, telemetry, durable records, context/model continuations, and support bundles.
+**Retired.** Plan approval commands/settings cannot authorize source edits. Use Scenario AL for legacy configuration migration and MTP-068/MTP-069 for exact diff decisions.
 
-Expected: plan sanity checks apply to every plan before manual review or policy auto-approval. Repairable invalid plans revise with the model instead of interrupting the user. Auto-approval policy is distinct from mutation approval policy; every plan policy except `TrustSession` persists in repository settings, `AlwaysTrustRepo` requires an identity-fenced user grant, and auto-approved plans remain structured execution contracts without approving exact diffs or writes.
+## MTP-241 — Advisory incremental compiler feedback
 
+1. Apply syntax-error and unresolved-symbol source edits; confirm applied writes plus advisory findings.
+2. Perform rapid edits across independent projects, including a conflicted second edit.
+3. Verify earlier findings persist or unavailable coverage is explicitly delivered.
+4. Repair and verify the matching generation; graph-affecting changes must show refresh/omissions.
+5. Run final authoritative validation without treating pending advisory results as passed checks.
 
-## MTP-241 — Roslyn-based pre-mutation analysis
+## MTP-240 — Tool and diff presentation
 
-1. In a disposable C# repository with semantic discovery loaded, request a governed change whose first model mutation proposal contains malformed C# syntax such as an invalid member declaration or unmatched brace.
-2. Confirm the host reports pre-mutation Roslyn syntax diagnostics, maps them to the changed hunk and containing type/member where possible, asks the model for a repaired proposal, and does not present a mutation approval prompt or write repository files for the bad candidate.
-3. Repeat with syntactically valid but semantically invalid code, such as a missing symbol or wrong overload. Confirm proposal screening does not compile or block against stale semantic state; final cumulative validation must catch unresolved errors.
-4. Repeat with an analyzer/code-style violation. Confirm proposal screening explicitly reports deferred compiler/analyzer checks and configured final validation reports applicable errors.
-5. Exercise degraded cases: unloaded project, orphan `.cs` file, generated/linked file, multi-TFM/source-generator-dependent diagnostics, and baseline pre-existing diagnostics.
-6. Exhaust repair rounds and cancel during analysis; restart/resume from any recorded safe boundary.
-7. Let a repaired candidate pass cheap gates, approve the exact diff, and confirm normal transactional apply plus authoritative build/test validation still runs.
-8. Inspect interactive/headless output, activity, logs, events, telemetry, durable records, and support bundle canary checks.
-
-Expected: pre-mutation analysis is read-only and in-memory, catches syntax errors before approval and defers compilation/analyzer checks until final validation, returns bounded diff-local diagnostics to the model, and repairs proposals within budget. Degraded checks disclose omissions without claiming certainty. Approval, disk mutation, build/test authority, cancellation, resume safety, canonical continuations, and redaction remain unchanged.
-
-
-## MTP-240 — Codex-style TUI lifecycle and diff presentation
-
-1. In Windows Terminal, run an interactive session that completes a built-in tool, an MCP-imported tool, and an extension-backed tool with operation durations enabled, then repeat with `tui:showOperationDurations=false`.
-2. Exercise completed, failed, cancelled, and timed-out tool outcomes, including bounded activity detail and sanitized failure detail.
-3. Propose a structured plan and inspect the visible `PLAN: revision <n>` block, guided summary, `Steps:` label, ordered step rows, and absence of redundant approval-boundary prose.
-4. Set a plan policy that auto-approves a valid plan, then verify the `PLAN: auto-approved` block shows revision, risk, any available concise risk basis, policy, and reason without implying mutation approval.
-5. Continue through semantic baseline capture after preview but before mutation application and confirm the semantic-check text is understandable as pre-apply baseline capture.
-6. Propose a mutation preview containing multiple files and hunks with context, added, and removed lines. Repeat with a theme that explicitly styles `DiffContext` separately from `DiffAdded` and `DiffRemoved`.
-7. Trigger a repairable mutation proposal failure and verify the preparation and retry notices render as `MUTATION:` lifecycle blocks with muted attempt/reason rows.
-8. Apply an approved mutation and verify the applied notice renders as a `MUTATION:` lifecycle block with path/detail. With semantic validation enabled, the redundant `Validating applied mutation...` line is absent before the following semantic-check block; with `validation:stages` narrowed to compile/diagnostics/tests, verify a `MUTATION: Validating applied mutation` block appears so the wait is not silent.
-9. Copy the transcript with native mouse/keyboard selection and compare durable mutation artifacts/session records with the canonical raw diff.
-
-Expected: completed tools, semantic checks, plan proposals, plan auto-approval notices, mutation proposal status notices, and applied mutation notices render through one consistent one-character-indented lifecycle block family with closed outcome/status text, optional host-measured elapsed time where applicable, bounded sanitized detail/provenance including auto-approval risk basis when available, and exactly one blank line between adjacent visible lifecycle blocks. MCP and extension completions do not render separate `MCP:` or provider-specific completion blocks. Mutation previews show compact hunks with bounded unchanged context, presentation-owned hidden-line markers, and one presentation-owned blank line after each hunk header; context/file/header/blank/hidden-marker diff lines use `DiffContext`, added lines use `DiffAdded`, and removed lines use `DiffRemoved`. Native selection, paste, `Ctrl+C`, event ordering, timing authority, plan approval, mutation approval, durable raw diff authority, and transcript safety remain unchanged.
-
+1. Run supporting reads and `edit_source`.
+2. Verify visible starts, exact review, commit, semantic progress and completion remain correlated.
+3. Toggle preview and approve a subset; compare the displayed applied IDs with the writer receipt.
+4. Decline/cancel and verify honest non-applied status.
 
 ## MTP-235 — MCP profile lifecycle and selectors
 
@@ -776,30 +747,13 @@ Expected:
 
 - Invalid schema/data never becomes a plan/mutation and causes no side effect.
 
-### MTP-043 - Review and approve plan (positive)
+### MTP-043 — Plan review — Retired
 
-1. Return a valid schema-1 plan from the controlled endpoint.
-2. Review summary, steps, files, outcomes, evidence, and token pressure.
-3. Enter `1` at the plan-review prompt.
+**Retired.** Executable plan review was removed. Use [MTP-160](#mtp-160--direct-source-editing) and [MTP-068](#mtp-068---approve-mutation-preview-positive) for direct editing and exact diff authorization.
 
-Expected:
+### MTP-044 — Plan revision — Retired
 
-- Phase waits for explicit approval and performs no mutation beforehand.
-- Approval starts a governed mutation-preparation pass for the accepted plan.
-- The exact mutation preview is printed before the separate mutation-review prompt.
-- Plan approval does not approve or apply any mutation; entering `2` at the mutation prompt leaves every file unchanged.
-
-### MTP-044 - Reject/revise plan and invalid revision (positive and negative)
-
-1. At a pending plan enter `2` and a reason.
-2. At another pending plan enter `3` and non-empty instructions.
-3. At another plan enter `3`, then cancel or submit empty instructions.
-
-Expected:
-
-- Reject records denial and applies nothing.
-- Valid revision creates another reviewable revision.
-- Empty/cancelled revision makes no revision call and authorizes nothing.
+**Retired.** Executable plan revision was removed. Use MTP-160 and MTP-161 for ordinary continuation, declined edits and conflicts.
 
 ### MTP-045 - Prompt append is untrusted (positive and negative)
 
@@ -840,38 +794,17 @@ Expected:
 - The runtime profile is shown and the level resets to `none`.
 - Returning to the original profile does not restore its former level.
 
-### MTP-049 - Reasoning transcript phases and mutation visibility (positive)
+### MTP-049 — Conversation and edit activity
 
-1. Stream multiple reasoning deltas followed by answer content while `/thinking` is off.
-2. Confirm a transient `THINKING` spinner is visible while hidden reasoning streams.
-3. Run `/thinking on`, stream another reasoning answer, then run `/thinking off` and stream a third reasoning answer.
-4. Repeat the same on/off transitions with `Ctrl+T` on an empty composer and with `/thinking` without arguments.
-5. Repeat with reasoning-only completion and with mutation reasoning followed by valid mutation JSON.
-6. In the default TUIKit frontend, enable `/thinking on` and use a controlled provider that pauses after its last reasoning chunk, then pauses again after sending buffered answer text. Confirm the `THINKING` row stays visible throughout both pauses and clears before the completed answer appears. Repeat after a tool call completes, and cancel a paused turn to confirm the row clears.
-7. Use a controlled provider that emits many small answer fragments and then pauses with a partial batch. Repeat in headless mode and with `execution:maxModelOutputBatchCharacters=64` and `execution:modelOutputFlushIntervalMilliseconds=100`. Confirm the first fragment appears promptly and later text flushes during the pause. Follow buffered text with reasoning and a tool call, then repeat with completion, provider failure, and cancellation. Restore the session and compare answer text for omission, duplication, and ordering.
+1. Inspect source and call `edit_source` in one conversation.
+2. Verify reasoning display policy, normal tool activity, exact review, transaction events and semantic progress remain correlated and visible.
+3. Confirm no plan-generation activity is required and declined edits remain non-applied.
 
-Expected:
+### MTP-049A — Ordinary responses and source-edit continuation
 
-- Reasoning content is hidden by default, transient `THINKING` disappears before final output, and the completed transcript contains no host-generated `THINKING` marker or redundant assistant label.
-- `/thinking on` streams future sanitized reasoning chunks using the `Reasoning` semantic style, `/thinking off` suppresses future reasoning chunks, and `/thinking` plus `Ctrl+T` toggle the same in-session state without enabling mouse capture.
-- Turning streaming off does not remove reasoning already present in the visible transcript.
-- The TUIKit activity row remains active alongside visible reasoning until the answer is displayed or a completion, cancellation, review, or steering boundary ends the activity.
-- Reasoning-only completion emits no empty `Threadsmith:` label.
-- Mutation reasoning remains sanitized and separated from structured JSON, which stages normally.
-- Main-chat answer batching preserves exact sanitized text and flushes before subsequent reasoning, tools, and termination. Pending text appears without another provider chunk; timer latency excludes subscriber delivery time. Restored text matches delivered durable output, and reasoning remains absent from persistence.
-
-### MTP-049A - Conversational turn versus governed planning (positive and negative)
-
-1. Submit `hello` with a configured model and repository open.
-2. Submit a read-only repository question that requires an approved read-only tool.
-3. Submit a repository change request.
-
-Expected:
-
-- `hello` receives ordinary assistant text without a context-status line or plan-review prompt.
-- The repository question may call only host-authorized read-only tools and returns a conversational answer.
-- The change request calls the host-owned `propose_plan` function in the same model turn, then enters the existing plan-review workflow.
-- No classifier request or mutation tool call occurs before approval.
+1. Submit a greeting/read-only question and verify an ordinary answer.
+2. Request a source change and verify the same loop uses inspection and `edit_source`.
+3. Confirm written advice alone grants no write authority and ordinary final text ends continuation with actual outcome evidence.
 
 ### MTP-050 - Read-only tool activity is visible and collapsed (positive)
 
@@ -944,14 +877,12 @@ Expected:
 
 Use named mutation tests where direct mutation authoring is not yet exposed by CLI/TUI. Inspect the disposable repository before and after each case.
 
-### MTP-060 - Model proposal stages but cannot self-apply (positive and negative)
+### MTP-060 — Exact source review before application
 
-1. Run the governed mutation proposal test.
-
-Expected:
-
-- Proposal is bounded against immutable baseline and staged privately.
-- Model approval claims are ignored; public files remain unchanged before host approval.
+1. Request a source edit under ReviewAll.
+2. Confirm preview is private until exact authorization; toggle preview without changing candidate bytes.
+3. Authorize a valid subset and compare applied IDs/paths with the writer receipt.
+4. Decline another edit and verify unchanged source and continued conversation.
 
 ### MTP-061 - Preview, selective visibility, commit, rollback (positive)
 
@@ -987,13 +918,11 @@ Expected:
 
 - Private preview is allowed; public write is denied without Trusted Mutation.
 
-### MTP-065 - Invalid mutation output rejected before workspace (negative)
+### MTP-065 — Malformed source-edit arguments
 
-1. Run bounded mutation-output validator tests.
-
-Expected:
-
-- Malformed/oversized/duplicate/escaping output creates no staging or write.
+1. Supply missing operation fields, invalid discriminators, oversized arguments and ambiguous anchors to `edit_source`.
+2. Verify bounded sanitized feedback and no admitted write.
+3. Retry valid instructions through normal tools; verify stable host effect ownership and no repeated application.
 
 ### MTP-066 - Git worktree isolation is explicit and bounded (positive and negative)
 
@@ -1004,44 +933,26 @@ Expected:
 - Disposable worktree is used only when available/selected and stays under managed root.
 - Dirty/unsupported/escaping cases fail without damaging the primary checkout.
 
-### MTP-067 - Model mutation stays inside the accepted plan (negative)
+### MTP-067 — Accepted-plan scope — Retired
 
-1. Use a controlled model response that proposes a valid plan affecting only `src/Example.cs`.
-2. Configure its mutation response to edit `src/Unplanned.cs` instead.
-3. Submit the request, approve the plan, and inspect the transcript and both files.
+**Retired.** Plan membership no longer grants mutation authority. Use MTP-161 and MTP-200 for trust, path and source-precondition enforcement.
 
-Expected:
+### MTP-068 - Mutation approval policies
 
-- Mutation preparation rejects the out-of-plan path before staging.
-- No mutation preview or apply prompt is shown for the rejected set.
-- `src/Unplanned.cs` remains unchanged and no mutation-set command can commit it.
+1. Select `ReviewAll`, `ReviewRisky`, `TrustSession` and `AlwaysTrustRepo` through `/policy` and submit exact direct edits.
+2. Verify each policy's risk and session/repository scope against the resulting mutation authorization. A written plan supplies no authority.
+3. Attempt to select `TrustPlan`; verify rejection. Load legacy `TrustPlan` configuration and verify conservative exact review.
+4. Check interactive/headless parity, exact per-change selection, denial and cancellation.
 
-### MTP-068 - Mutation approval policies and `/policy` (positive)
+Expected: supported mutation policies authorize only the actual staged changes. No plan approval or plan-policy setting participates.
 
-1. Open a disposable repository with `TrustedMutation` and run `/policy`.
-2. Select each policy and run `/policy current`; verify all five descriptions and trust warnings.
-3. Under `ReviewRisky`, submit one ordinary source edit and one deletion/config/dependency or >500-line change.
-4. Under `TrustPlan`, approve a plan and allow its declared-file mutation to stage.
-5. Select `AlwaysTrustRepo`, restart, verify it remains active, then select `ReviewAll` and restart again.
+### MTP-069 - Direct-edit path and source preconditions
 
-Expected:
+1. Submit a valid exact edit inside the trusted repository without a prior plan.
+2. Repeat with a prohibited path, escaping path, missing or ambiguous anchor, stale source bytes and invalid lifecycle destination.
+3. Verify invalid instructions cannot stage or write and policy failures retain normal tool/error visibility.
 
-- `ReviewAll` prompts for every exact diff; `ReviewRisky` auto-applies only the ordinary edit.
-- `TrustPlan` applies the accepted-plan mutation without a second mutation prompt.
-- `AlwaysTrustRepo` writes `mutation.approvalPolicy: alwaysTrustRepo` while preserving unrelated config; selecting another policy removes the persistent opt-in.
-- Every auto-applied diff is printed and retained in session projection/event history before application.
-
-### MTP-069 - Mutation policy hard guardrails remain invariant (negative)
-
-1. Run the mutation-policy risk tests.
-2. Under `AlwaysTrustRepo`, attempt an escaping absolute/`..` path, `.git/config`, `.threadsmith/secrets/`, `.env`, and a stale-baseline write.
-3. Attempt auto-application without `TrustedMutation`.
-
-Expected:
-
-- Every path, Git-metadata, secret-path, stale-baseline, and insufficient-trust case fails before a public write.
-- No policy performs Git commit/push/reset/clean or broadens approved roots.
-- Scope expansion under `TrustPlan` requires review; governed model mutation output outside the accepted plan remains rejected before staging.
+Expected: repository path policy, exact source identities and mutation authorization constrain edits. Accepted-plan scope is not a gate.
 
 ### MTP-070 - Rename and syntax replacement become transactional patches (positive)
 
@@ -1360,7 +1271,7 @@ Expected: one identity and one dynamic client registration are cached per profil
 
 ## 16. Current limitations
 
-- Interactive plan approval starts model mutation preparation only when the session has a selected solution baseline. Semantic authoring remains available at application-command/component boundaries; dedicated public authoring commands are not yet exposed.
+- The ordinary conversation exposes `edit_source` for trusted workspaces and uses exact mutation review when required. Semantic authoring remains available through the established semantic mutation engine.
 - Build/test orchestration is available at the validation component boundary and projects classified diagnostics, explained test scope, and results into CLI/TUI state; a dedicated interactive/headless command that initiates a full mutation-validation turn is not yet exposed.
 - Test selection is intentionally project-level. Coverage-based method selection, flaky-test policy, explicit parallel scheduling, and analyzer execution remain outside the current selection contract.
 - Stdio, SSE, and streamable-HTTP transports, interactive OAuth, dynamic client registration for explicit HTTP authentication, and shared `/mcp` lifecycle management are implemented. Live HTTP/IdP/revocation verification remains opt-in because no external endpoint or identity provider is assumed in CI. MCP retains one replaceable identity per profile and intentionally excludes stdio OAuth. Diagnostic bundle generation still has no CLI/TUI command.
@@ -1395,57 +1306,46 @@ Current limitation: live-provider smoke verification is operator-initiated and r
 
 ## Execution orchestration
 
-### MTP-160 — Approved plan continues through implementation
+### MTP-160 — Direct source editing
 
-1. In the disposable repository, request a bounded change that edits one existing file and has one affected test.
-2. Review and approve the structured plan.
-3. Confirm the TUI immediately shows mutation-preview preparation status while the model generates `propose_mutations`; for a C# symbol rename, confirm the proposal uses semantic `RenameSymbol` when semantic confidence is partial or full.
-4. Inspect implementation tool activity and the model's mutation proposal.
-5. Review the exact staged diff and approve it under `ReviewAll`.
-6. Confirm the host builds the exact pre-mutation affected workspace and durably records its `BaselineCapture` before applying repository bytes.
-7. Allow post-mutation affected build and test validation to complete.
+**Prerequisites:** mutation trust and the intended mutation approval policy.
 
-Expected: plan approval continues the same run rather than reporting a planning-only completion, and the terminal is not silent during mutation-preview preparation. Implementation advertises only bounded phase-eligible read tools and `propose_mutations`; the model cannot stage, approve, or apply directly. Semantic C# renames are expanded through the semantic mutation engine before staging, with any declaration-file rename represented as an explicit lifecycle move. The exact diff and complete pre-mutation `BaselineCapture` exist before application. Post-mutation diagnostics classify against that preserved capture. The final result lists authoritative files, behavior, affected projects, diagnostics, selected-test rationale/outcomes, approval provenance, rollback availability, assumptions, and residual risks.
+1. Request a change requiring two supporting reads outside the target file.
+2. Confirm the model inspects source and invokes `edit_source` without required planning/approval of a plan.
+3. Review the exact diff, authorize it, and verify committed bytes and the applied receipt.
+4. Continue related repairs in the ordinary loop, then inspect cumulative diff and actual final validation.
 
-### MTP-161 — Mutation proposal denial and policy invariants
+### MTP-161 — Source denial and policy invariants
 
-1. Repeat MTP-160 with malformed mutation JSON, a file outside the approved plan, a prohibited/secret/Git-metadata path, a stale exact-match value, and a duplicate `propose_mutations` call.
-2. Reject a valid exact diff at the review prompt.
-3. Repeat under `TrustPlan`, `TrustSession`, and `AlwaysTrustRepo`.
+1. Exercise malformed instructions, protected/secret/Git-metadata paths, insufficient trust, conflicting move destinations and stale exact anchors.
+2. Decline an exact review and confirm no write and no completion claim.
+3. Verify supporting evidence never expands write authority and legacy planning settings cannot auto-authorize edits.
 
-Expected: malformed, duplicate, broadened, prohibited, stale, or rejected proposals never change repository bytes. Trust policies may remove a prompt only where documented; no policy bypasses plan scope, path/baseline/external-change checks, exact diff recording, transactionality, or validation.
+### MTP-162 — Compiler repair and final validation
 
-### MTP-162 — Build and test correction remain bounded
+1. Apply an authorized edit introducing compiler errors; verify applied status plus advisory findings.
+2. Repair through an ordinary edit call.
+3. Exercise explicitly requested build/test failure and omitted stages; verify actual results are visible. End an edit-only response and confirm no build or test starts automatically.
+4. Verify malformed-call limits remain independent of compiler findings.
 
-1. Use a deterministic model script whose first approved mutation changes one file, creates another, and introduces a compiler error; have the correction edit both resulting files.
-2. Repeat with a selected-test failure.
-3. Repeat with corrections that remain invalid through the configured attempt limit.
+### MTP-163 — Cancellation at durable boundaries
 
-Expected: each failure enters a minimal structured correction turn correlated to its plan step and mutation. After the first apply, the transactional mutation baseline advances so the correction can edit both previously changed and newly created files without treating the host's own write as external; the original diagnostic baseline and its pre-mutation `BaselineCapture` remain immutable for cumulative classification. Every correction repeats proposal validation, baseline-capture eligibility, staging, exact diff, policy, write-ahead transactional application, and build/test validation. Clean correction completes honestly; exhaustion stops at the exact budget and reports failure, last validation evidence, rollback availability, and remaining risk.
+1. Cancel before authorization, before durable intent, during publication and after verified application.
+2. Verify private staging is discarded before application and proven disk effects are retained afterwards.
+3. Compare durable receipts and actual bytes; mixed identities must require recovery and preserve external changes.
 
-### MTP-163 — Cancellation is safe at every durable boundary
+### MTP-164 — Recovery without duplicate effects
 
-1. Cancel separately before mutation staging, while exact-diff approval is pending, during transaction application, during affected build, during selected tests, and during correction.
-2. Inspect repository bytes, event timeline, process tree, checkpoint, and reported resume eligibility after each case.
+1. Interrupt a direct edit after intent and reopen the session.
+2. Verify exact original/final identities classify the outcome without repeating a proven write.
+3. Change an endpoint externally and verify explicit recovery fencing.
+4. Reopen legacy plan history and verify readable records, visible pending-effect warning, and no remaining-step execution.
 
-Expected: pre-apply cancellation leaves repository bytes unchanged; staged state is discarded safely; a pending commit intent reconciles to exactly one completed or rolled-back transaction; build/test process trees terminate and late results are not authoritative; every case is inspectable and exposes only a legal resume/fresh-run action.
+### MTP-165 — Frontend parity and authoritative completion
 
-### MTP-164 — Interrupted run resumes without duplicate effects
-
-1. Use deterministic fault injection to terminate immediately before and after every execution side effect and durable checkpoint, including after repository bytes change but before the apply result/checkpoint is recorded.
-2. Restart Threadsmith, inspect the restored run, and explicitly resume it.
-3. Verify pending operation intents, reconciliation results, model calls, approval requests/decisions, mutation commits, validation results, correction attempts, and terminal events by stable identity.
-4. Repeat after changing repository bytes, selected solution, trust/policy, or one referenced artifact while Threadsmith is stopped.
-
-Expected: each valid restore first reconciles any pending operation from actual/pre/result state, exposes exactly one legal next action, and completes without duplicating a model call, approval, repository effect, validation result, correction attempt, or terminal event. A proven already-applied transaction is recorded rather than replayed; an ambiguous result fails closed. Changed or corrupt state fails resume closed with a sanitized explanation and requires a fresh plan/rebase path.
-
-### MTP-165 — Interactive/headless parity and authoritative completion
-
-1. Execute the same scripted successful, denied, failed, cancelled, and resumed workflows through TUI and headless surfaces.
-2. Make the model claim that an unselected test ran or that a recorded failure passed.
-
-Expected: both surfaces enforce identical phases, tools, policies, transactions, validation, cancellation, and resume behavior. Host-rendered outcomes retain authoritative records and cannot be overridden by contradictory model prose.
-
+1. Perform equivalent direct edits in interactive and headless modes.
+2. Compare actual disk outcomes, authorization policy, activity, cumulative diff and final validation.
+3. Verify unavailable headless review fails visibly and no synthetic applied subset is reported.
 
 ## First-class parallel agents and isolated workers
 
@@ -1467,36 +1367,18 @@ Expected: children are asynchronous tasks inside the Threadsmith host process; n
 
 Expected: explorers observe the same immutable baseline and receive a role system-prompt amendment with governed context, not parent/sibling transcripts. Every present final body, including empty text, can complete and join without a required template, citation GUID, or semantic grade. Null remains distinct for legacy structured outcomes. Transport failures and cancellation remain unsuccessful, and late/stale responses cannot join authoritatively. Host role/model/status metadata is not inferred from prose. Explorers cannot mutate, approve, revise the parent plan, or spawn children.
 
-### MTP-168 — Conservative partitioning and serial fallback
+### MTP-168 — Bounded delegation and parent integration
 
-1. Partition an approved plan containing independent files/projects plus a shared central package file, solution file, generated output, and ambiguous partial class/symbol ownership.
-2. Attempt to force overlapping directory/path, rename/delete, test-fixture, shared configuration, and low-confidence semantic assignments.
-3. Reduce the assignments to two provably independent ownership sets.
-4. Submit scope paths containing leading, embedded, and trailing `.` or `..` segments, including `src/..`.
+1. Delegate independent inspection/review questions explicitly through `delegate_agents`.
+2. Verify bounded visible children, cancellation and durable joins.
+3. Confirm ordinary children lack `edit_source`; apply advice through the parent shared edit application and exact authorization.
 
-Expected: shared/ambiguous/generated/overlapping work is rejected or serialized and cannot be forced parallel by model/user text. Dot segments are rejected before path canonicalization can widen scope. The host presents normalized path/symbol/project ownership and rationale. Only proven independent assignments become implementation workers; otherwise execution runs serially.
+### MTP-169 — Exact anchors, newlines and source preview
 
-### MTP-169 — Isolated worktree implementation workers
-
-Prerequisite: use a controlled host harness for the existing isolated-worker APIs. Ordinary `delegate_agents` implementer requests do not create worktree workers or automatically apply parallel changes.
-
-1. Through those APIs, approve two non-overlapping workers and inspect their managed detached worktrees and parent/child run tree.
-2. Have each perform assigned mutations, build/tests, and one bounded correction.
-3. Attempt primary/peer-worktree access, an out-of-assignment edit, prohibited/secret/Git-metadata path access, direct commit, and direct merge.
-4. Attempt worktree acquisition with an implementer object that reuses an explorer assignment ID or mismatches the frozen child-run identity.
-
-Expected: agent control flow remains in-process while each worker's file state is isolated in a confined worktree at the exact parent baseline. Worktree authorization resolves the stored plan assignment and rejects forged/mismatched role, mode, or child-run identity before Git executes. Every mutation follows the governed proposal, exact diff, policy, transaction, validation, correction, and cancellation rules. Worker output is a frozen structured change set with provenance; no worker touches the primary/peer worktree, creates required commits, merges, or exceeds ownership.
-
-Separately verify parent-run mutation preparation:
-
-1. With configured models, approve a small plan through normal application execution. Confirm implementation and correction requests keep the parent run identity and current session model/reasoning settings. No delegation announcement or child checkpoint appears. Repeat with an Implementer role model configured and with a multi-step plan.
-2. Return a repairable proposal and confirm bounded corrections stay in the parent run. Cancel or fail the provider before staging in separate runs.
-3. Allow a valid proposal to complete. Review the exact diff, deny it once, then repeat and authorize it. Exercise validation failure, governed correction, and execution resume.
-4. Have the model explicitly call `delegate_agents` and confirm child execution and inspection still work. Attempt direct host, CLI, skill, and hook tool invocation and confirm rejection before any child starts.
-5. Apply a one-line field edit, manually restore the file, enter `/new`, and repeat. Confirm `MUTATION: Generating edits` covers the model wait, the approved file baseline reflects the restoration, and the exact preview succeeds. Edit the file externally after preview and confirm approval cannot overwrite that edit.
-6. With a scripted proposal, omit offsets for a unique multiline anchor; repeat with LF/CRLF differences. Confirm one proposal stages the correct bytes. Repeat with repeated anchors, an empty insertion without an offset, malformed double-escaped strings, and real backslash sequences in source. Confirm ambiguity and invalid input are rejected and matching literal escapes remain unchanged. Compare provider usage/timing separately from host screening; no fixed live latency is promised.
-
-Expected: only a model-requested delegation tool call launches subagents. Ordinary proposal generation retains exact-diff approval, scope/baseline checks, transactional writes, validation, and cancellation. Failed or cancelled proposal generation does not stage or apply a candidate. Headless interfaces can inspect or cancel existing delegations but cannot start them directly.
+1. Edit LF, CRLF, CR-only and mixed-ending fixtures with optional offsets for unique anchors, including emoji and literal backslashes.
+2. Verify text outside the match remains unchanged.
+3. Submit repeated/empty anchors without exact offsets and unsafe escaped-newline recovery; verify no write.
+4. Review exact staged bytes and verify conflict detection after an external edit.
 
 ### MTP-170 — Independent specialist reviewers
 
@@ -1536,10 +1418,10 @@ Expected: trusted role configuration is strict, requires restart, and cannot be 
 ### MTP-173 — Cancellation, restoration, cleanup, and provenance
 
 1. Interrupt after every delegation checkpoint: accepted, queued/started, child terminal, research join, worktree frozen, review join, integration decision, parent stage/apply, and aggregate validation.
-2. Restart and inspect durable delegation records, including role, contract marker, runner version, configured/effective routing, source, fallback, and `Response`. Verify an empty ordinary response remains distinct from a missing/null response in supported legacy structured checkpoints. Confirm inspection does not restart a child model loop; use a new attempt/generation for further delegation. Separately exercise approved-plan execution resume through its existing lifecycle.
+2. Restart and inspect durable delegation records, including role, contract marker, runner version, configured/effective routing, source, fallback, and `Response`. Verify an empty ordinary response remains distinct from a missing/null response in supported legacy structured checkpoints. Confirm inspection does not restart a child model loop; use a new attempt/generation for further delegation. Separately inspect historical execution records without resuming plan steps.
 3. Cancel during worker mutation/build/test and simulate Git worktree cleanup failure.
 
-Expected: persisted delegation inspection preserves recorded state and makes no automatic resume claim. A new generation revalidates current repository/worktrees/models/tools/trust/budgets/artifacts/policy and discards late earlier-generation results. Approved-plan resume preserves its normal side-effect reconciliation and validation rules without replaying writes. Cancellation observes all tasks and tracked processes. Cleanup remains bounded/confined, records blockers, and never deletes user paths directly.
+Expected: persisted delegation inspection preserves recorded state and makes no automatic resume claim. A new generation revalidates current repository/worktrees/models/tools/trust/budgets/artifacts/policy and discards late earlier-generation results. Legacy execution records retain side-effect reconciliation safeguards without replaying uncertain writes. Cancellation observes all tasks and tracked processes. Cleanup remains bounded/confined, records blockers, and never deletes user paths directly.
 
 
 ## Host-owned skills and reusable workflows
@@ -1566,7 +1448,7 @@ Expected: only the valid signed and exact-digest-allowlisted packages become inv
 2. Invoke a compatible skill containing required and optional step assets near the context limit.
 3. Inspect context provenance and ordering.
 
-Expected: incompatible skills remain metadata-discoverable with stable denial reasons but their bodies do not load. Compatible invocation verifies hashes again, loads only the current step's confined sanitized assets, omits optional material deterministically under pressure, and fails explicitly if required content cannot fit. Skill text is provenance-linked and ordered below host policy, repository rules, accepted plans, trust, and phase contracts.
+Expected: incompatible skills remain metadata-discoverable with stable denial reasons but their bodies do not load. Compatible invocation verifies hashes again, loads only the current step's confined sanitized assets, omits optional material deterministically under pressure, and fails explicitly if required content cannot fit. Skill text is provenance-linked and ordered below host policy, repository rules, trust, tool and host contracts.
 
 ### MTP-177 — Typed invocation cannot escalate authority
 
@@ -1577,14 +1459,12 @@ Expected: incompatible skills remain metadata-discoverable with stable denial re
 
 Expected: only bounded supported schemas and known host-owned action proposals are accepted. Every actual tool/action is rechecked against current phase, availability, trust, model, policy, and budget. Skill prose cannot grant capabilities, approve itself, mutate directly, bypass exact diff/validation, or override authoritative outcomes. Invalid phase/duplicate calls fail deterministically.
 
-### MTP-178 — Maintained skill workflows use the governed pipeline
+### MTP-178 — Maintained skill procedures
 
-1. Run `fix-analyzer-warnings` against a fixture containing baseline and fixable analyzer warnings.
-2. Run `upgrade-package` against a Central Package Management fixture, with restore/network authorization both denied and explicitly allowed.
-3. Run `review` against a deterministic bounded change-set fixture and inspect its security, test, performance, bug, and architecture specialist coverage.
-4. Run a custom signed skill whose procedure prompt calls `delegate_agents`, then repeat with assignment counts below and above trusted `agents:delegation:maximumAgents`.
-
-Expected: analyzer remediation groups authoritative diagnostics and does not introduce blanket suppression outside an explicitly approved plan. Package upgrade preserves central versioning and never restores/accesses the network implicitly. The maintained review uses the ordinary delegation lifecycle and returns an evidence-backed Markdown report without publishing, approving, merging, or mutating. Skill manifests expose no per-skill agent templates or child-count limits. The host accepts or rejects each tool call using `maximumAgents`, ordinary scheduling, and per-child model/tool/trust/sensitivity/budget policy. Any requested mutation follows structured plan approval, exact diff, mutation policy, transaction, affected build/test validation, correction, and authoritative completion.
+1. Verify/enable maintained analyzer and package-upgrade skills.
+2. Confirm their procedures return typed advisory findings rather than executable plans.
+3. Apply requested changes through normal direct-edit authorization.
+4. Verify removed planning host actions/node kinds are rejected.
 
 ### MTP-179 — Workflow cancellation, resumption, version pinning, and revocation
 
@@ -1604,17 +1484,11 @@ Expected: valid restoration resumes exactly one legal next action without duplic
 
 Expected: both surfaces enforce identical selection, verification, compatibility, action, and workflow rules. Records carry immutable provenance and bounded metrics without hidden reasoning, secrets, raw model payloads, or full private skill bodies. Diagnostic export identifies the skill invocation and verification outcome without copying protected content.
 
-### MTP-181 — Skill examples, model routing, and delegated workers
+### MTP-181 — Skills, model routing and delegated inspection
 
-1. At `TrustedRead`, run the documented one-line JSON examples for `fix-analyzer-warnings`, `upgrade-package`, and `review`; verify required fields, optional fields, selectors, typed outputs, and waiting actions match the user guide.
-2. Configure three model profiles: a compatible default, a cheaper compatible alternative, and an otherwise compatible provider that prohibits sensitive data. Exercise empty `allowedProfiles`, a strict ordered allowlist, `deniedProfiles`, insufficient context, missing tool-call/structured-output capability, workload mismatch, and sensitive input.
-3. Inspect compatibility before body loading, invoke the accepted case, inspect persisted selected profile/requirements/budget, interrupt it, change the configured default, and resume.
-4. Invoke a signed custom skill whose procedure calls `delegate_agents` for Explorer, SecurityReviewer, and TestReviewer assignments; inspect the ordinary joined response and `/agents <delegation-id>` state.
-5. Attempt package-selected unconfigured model IDs, child model/trust/tool/sensitivity elevation, a call above `maximumAgents`, recursive children, direct task scheduling, nested skills, overlapping implementation scope, budget borrowing, and schema-invalid or wrong-action `/skills continue` input.
-6. Run an implementation-agent variant first without an approved plan and then with a approved non-overlapping plan.
-
-Expected: documented maintained examples run without undocumented fields. Host selection chooses only configured compatible profiles, records its rationale/identity, honors strict allow/deny and sensitivity constraints, and keeps the checkpoint's selected profile across resume instead of switching to the new default. Skill text cannot switch models or reasoning, and package preferences only narrow host choices. Denied delegation creates no children. Accepted delegation remains one level, receives narrower per-child authority and hierarchical budgets, and exposes durable status through `/agents`. Per-skill agent templates and limits are rejected as unknown manifest properties. Implementation children are rejected without an approved plan; accepted workers use host-managed isolated worktrees, parent restaging, fresh diff approval, and aggregate validation. Invalid continuation, nested invocation/delegation, elevation, overlap, and budget borrowing fail closed.
-
+1. Run maintained skill examples with configured model/reasoning preferences.
+2. Verify ordinary advertised tools and explicit bounded delegation retain policy/trust.
+3. Confirm findings grant no write permission and parent edits use the shared transaction/validation path.
 
 ## Lifecycle hooks and policy automation
 
@@ -1646,9 +1520,9 @@ Expected: no shell interpolation, command-line secret, ambient environment inher
 
 1. Register an already-connected MCP capability and active extension hook capability; invoke each through its existing policy/lease/budget identity.
 2. Have the MCP handler invoke an internal tool and have each handler attempt the same hook recursively.
-3. Open a repository, invoke a tool, propose/approve a repository-scoped plan, stage a multi-file mutation and toggle an individual preview, apply it, validate/correct, complete/fail a run, activate an extension, and auto-connect MCP.
+3. Open a repository, invoke a tool, submit an ordinary `edit_source` call, stage a multi-file mutation and toggle an individual preview, apply it, validate/correct, complete/fail a run, activate an extension, and auto-connect MCP.
 
-Expected: internal MCP execution suppresses ordinary tool hooks while retaining nested hook audit. Same operation/handler/point recursion and depth overflow are suppressed deterministically. Plan hooks carry the open repository identity. Initial staging emits one `MutationStaged`; preview toggles emit none. The multi-file transaction emits one `MutationApplied` after completion. Successful MCP auto-connect emits one `McpConnected` after imported tools are published. Completed boundaries cannot be rewritten.
+Expected: internal MCP execution suppresses ordinary tool hooks while retaining nested hook audit. Same operation/handler/point recursion and depth overflow are suppressed deterministically. Retired plan hook points have no live producer. Initial staging emits one `MutationStaged`; preview toggles emit none. The multi-file transaction emits one `MutationApplied` after completion. Successful MCP auto-connect emits one `McpConnected` after imported tools are published. Completed boundaries cannot be rewritten.
 
 ### MTP-186 — Persistence, restoration, management parity, and redaction
 
@@ -1763,40 +1637,31 @@ Expected: the model-visible result contains bounded file/range matches and omiss
 Expected: only already-loaded classified documents appear. Origin is `FileConvention`, `SourceGenerator`, `CompilerOrSdk`, or explicitly `Unknown`; missing provenance is never inferred from content. Content/document truncation and omissions are explicit, linked classification is retained, stale generations are rejected, and interactive/headless normalized JSON is equivalent.
 
 
-### MTP-199 — Structured lifecycle success, exact preview, and rollback
+### MTP-199 — Lifecycle preview and rollback
 
-1. In a disposable trusted-mutation repository, approve a plan that declares a new UTF-8/BOM CRLF file, deletion of an existing LF file, and movement of another file with an explicit content edit; include both move endpoints in the plan step.
-2. Inspect the shared interactive preview, then repeat through the headless boundary.
-3. Approve, allow authoritative affected build/test validation to complete, and inspect the final outcome.
-4. Request rollback before making any external edit.
-
-Expected: one aggregate preview shows exact add, delete, source removal, destination add, and move content edit; lifecycle kind, source/destination, encoding/newline, risk, and case-only metadata remain inspectable. Both surfaces agree. Application reports one `Applied` reconciliation per lifecycle operation, validation includes both endpoints, and rollback removes the create/destination while restoring exact original delete/source bytes.
+1. Create, move, delete and replace source through ordered `edit_source` operations.
+2. Review exact lifecycle diff/risk and authorize a valid subset.
+3. Verify final bytes, encoding/BOM and applied paths.
+4. Roll back the latest retained edit; confirm original bytes and truthful outcome.
 
 ### MTP-200 — Lifecycle conflict and hard-path denial
 
-1. Repeat create against an existing destination; delete/move with a stale SHA-256 or byte count; move onto an existing path; exact same-path move; path traversal; outside-root, `.git`, secret, prohibited, and reparse-point source/destination paths.
-2. Repeat under every mutation approval policy, including `TrustSession` and `AlwaysTrustRepo`.
-3. Attempt directory, glob, symlink, hard-link, alternate-stream, and overwrite-style lifecycle input.
+1. Exercise existing create/move destinations, missing sources, path escapes and protected roots.
+2. Introduce external changes during exact review.
+3. Verify no unauthorized write; rollback/compensation must preserve unexpected bytes and report recovery when needed.
 
-Expected: each request fails before filesystem effect and identifies the conflicting endpoint or invariant. No policy bypasses plan scope, exact identity, destination absence, repository confinement, Git/secret/prohibited/reparse denial, or the closed file-only operation vocabulary.
+### MTP-201 — Case-only moves and filesystem semantics
 
-### MTP-201 — Case-only move and cross-platform filesystem behavior
+1. On each supported filesystem, move a source through an intermediate path to a differently cased original name.
+2. Follow the move with replacement and verify spelling, encoding and final bytes.
+3. Exercise compensation and rollback with external changes; one physical baseline identity must have one owner.
 
-1. On Windows, Linux, and macOS runners, move `src/Name.cs` to `src/name.cs` with unchanged content, then repeat with explicit content and newline change.
-2. Test non-case-only moves within one directory and across directories, including Unicode names.
-3. Roll back each successful transaction and compare byte hashes.
+### MTP-202 — Lifecycle interruption and frontend parity
 
-Expected: case-only moves are identified explicitly, never collapse into a same-path rejection, and finish with exactly one destination identity. No duplicate/lost file remains. Cross-directory and Unicode moves behave consistently, and rollback restores the exact original spelling and bytes subject to the host filesystem's case semantics.
-
-### MTP-202 — Lifecycle interruption, compensation, worker integration, and parity
-
-1. Inject cancellation/process termination immediately before and after each temporary write, source deletion, destination publication, compensation step, write-ahead result, and checkpoint.
-2. Restart, inspect reconciliation, and resume only where the host reports a legal action.
-3. Produce non-overlapping worker change sets containing lifecycle endpoints, then try overlapping move/delete/create endpoints and a destination outside frozen assignment ownership.
-4. Compare interactive and headless conflict, approval, recovery, validation, and outcome projections.
-
-Expected: restoration reaches exactly one `NotStarted`, `Applied`, `Compensated`, `Conflicted`, or `Indeterminate` result without blind replay, duplicate moves, data loss, or fabricated success. Indeterminate/conflicted state fails closed for explicit recovery. Parent restaging requires both endpoints, rejects overlap/scope excess, presents a fresh aggregate diff, and reruns aggregate authoritative validation. Both surfaces are equivalent.
-
+1. Interrupt multi-file lifecycle edits at temporary write, removal, publication and verification boundaries.
+2. Verify compensation touches only owned effects, preserving unexpected external changes.
+3. Reopen unresolved effects and verify recovery fencing and retention of required evidence.
+4. Compare interactive/headless receipts and final validation.
 
 ### MTP-203 — Release output, cross-publish, and Linux ownership safety
 
@@ -2201,28 +2066,9 @@ Expected: all outcomes use shared host commands and existing trust rules; failed
 
 **Limitations:** Live Atlassian account, token-expiry timing, organization custom-domain and physical-terminal evidence require operator environments. Deterministic handlers cover exact routing, error and rotation behavior but do not substitute for these live rows; unavailable rows remain explicitly unassessed.
 
-### MTP-273 - Incremental approved-plan execution
+### MTP-273 — Incremental approved-plan execution — Retired
 
-**Prerequisites:** Disposable `TrustedMutation` repository with at least four independently editable files and a validation target; deterministic model/provider fixture that records complete requests and can emit controlled `stepComplete` values; the retained TUIKit frontend and headless surface. For optional live measurement, use an explicitly authorized configured model and non-sensitive synthetic files. Configure mutation auto-approval only when the exact-diff decisions are intentionally automated for this procedure.
-
-1. Request a change whose next cohesive structured plan tranche has two ordered steps, with the first step covering at least three independently editable files and the second covering another file. Capture the planning request and response. Confirm one `propose_plan` call contains the complete tranche before approval; no step in that tranche is generated lazily during implementation. Review and approve the whole tranche once.
-2. Configure `execution:mutationBatching:targetMutations`, `targetFiles`, and `targetMutationCharacters` to small positive values, restart, and confirm the effective settings. Begin implementation. Confirm the host selects step 1 and the first implementation request contains the fixed approved-plan identity, active-step scope, current source evidence, progress, and effective soft targets without accumulated prior raw diffs.
-3. Have the fixture produce three valid one-file batches for step 1 with completion hints `false`, omitted, and `true`. For each batch, confirm proposal admission, pre-mutation screening where applicable, private staging, a distinct exact-diff policy decision, transactional application, and promoted current bytes, with no compilation/test validation between batches. Confirm the first reviewable diff appears before mutation generation for step 2 and that false or missing completion keeps step 1 active.
-4. After the third batch is applied, confirm only step 1 becomes complete and the host selects step 2 without another plan proposal or plan approval. Complete step 2 with a separately authorized batch. Confirm the host records `PlanContinuationPending`, archives authoritative progress, and re-enters evidence/planning on the same run. Have the model call `complete_objective` with `{}`; confirm the host reuses the durable cumulative validation result without another compiler pass, then reports every completed step, cumulative changed paths, final validation evidence, approval provenance, and one net final diff relative to objective-start bytes rather than concatenated historical patches. Repeat with an unexpected completion argument and confirm actionable corrective feedback, then make the plan-final cumulative validation fail and confirm no successful terminal outcome is recorded.
-5. Repeat step 1 with one tightly coupled or indivisible semantic edit that exceeds a soft target but remains inside approved scope and hard workspace limits. Confirm the candidate is admitted and reviewed normally. Then exceed a hard mutation/content limit and confirm rejection with actionable bounded feedback and no staged or repository effect.
-6. After a fully applied batch, return an empty mutation list with `stepComplete: true` for the same active step and confirm completion can proceed. Attempt the same response before any fully applied same-step batch, and after only another step has applied work; confirm bounded corrective feedback and no completion. Fail final validation after all steps are applied and confirm no successful plan boundary or objective completion is recorded.
-7. Partially authorize a multi-file or multi-mutation candidate. Confirm only authorized changes apply, validation remains deferred, the run records `ContinuationPending`, the stale candidate is no longer reviewable, and no rejected work is regenerated automatically. Invoke `/validation retry`; confirm a fresh candidate uses promoted current bytes and requires a fresh exact-diff decision.
-8. Interrupt after one accepted batch during the next `ImplementationModelTurn`, restart, inspect the checkpoint, and resume. Confirm approved plan identity, active/completed steps, batch ordinal, promoted baseline generation, original diagnostic basis, and consumed budget survive; no prior model proposal, approval, transaction, or validation is replayed. Repeat around apply/promotion and use normal write-ahead reconciliation.
-9. Trigger a post-apply validation correction for a batch that originally claimed completion. Have the correction omit or contradict the hint. Confirm correction stays within the active approved step, retains the original completion intent, uses current source, repeats exact-diff authorization and validation, and cannot complete another step. Exercise one safely normalizable mutation shape and conflicting/invalid aliases; confirm only lossless unambiguous structure is normalized and other failures receive same-conversation corrective feedback.
-10. Configure small positive `planning:incrementalPlans:targetSteps` and `targetFiles` values. Use a larger objective that needs a second tranche, confirm the continuation request contains the original objective, cumulative authoritative receipt even with history disabled, current repository tools, plans-used count (including interrupted plans), and configured targets, then approve and execute the second ordinary plan. Confirm plan revision and ordinal advance while cumulative original-file/diff evidence and budget use remain on the same run. Continue beyond twelve plans and confirm `propose_plan` remains available while existing execution budgets, cancellation, and approval policy remain enforced. Return an ordinary explanation of remaining work or a question: neither may record success. Resume that boundary both in-process and after restart and confirm planning restarts without repeating mutations. Fail a later tranche and confirm the final receipt still reports previously completed steps, summaries, risks, and changed files.
-11. With incremental planning enabled, return `request_replan` alone with `{"reason":"Inspect the missing dependency before continuing."}` before the first mutation, after a partial step's fully authorized batch, and from a failed-validation correction. Confirm no new mutation is staged or applied, a visible `PlanReplanningPending` checkpoint retains current changes/progress/failures/budget, and ordinary evidence tools are available in the same planning conversation but not inside mutation generation. Confirm `complete_objective` is withheld and an attempted call receives existing corrective feedback. Inspect evidence, propose a replacement, and verify ordinary plan display/approval plus fresh exact-diff authorization before writes. Confirm retained diagnostic evidence prevents failed changes from becoming ignored baseline failures; cumulative scope/diff and completed steps survive. Pause and restart at this boundary without replaying mutations. Reject mixed mutation/replan decisions, duplicate reason properties, and empty reasons through the existing correction mechanism. Repeat replacement plans beyond twelve without count-based refusal. Disable incremental planning and confirm `request_replan` is not advertised.
-12. Repeat the successful, partial, corrected, interrupted, cancelled, and hard-limit cases through TUIKit and headless execution. Confirm ordinary next-batch review is not labeled as a correction, plan completion is labeled as remaining-objective assessment, partial authorization reports the existing resume command, batch success is not terminal success, pending-review versus terminal state is consistent, and cancellation prevents future model requests.
-13. Add an API in an early batch and use it from a dependent project in a later batch. Verify syntax screening stays responsive while workspace refresh is queued, no compilation/test validation runs between batches or steps (including after restart), and one cumulative validation runs after all approved edits. Have final validation fail in an earlier step and verify its existing scope is reopened for repair. Confirm objective completion reuses the durable final result instead of compiling again.
-14. Restore default mutation targets (`8` mutations, `3` distinct paths, and `24000` mutation-content characters) and plan targets (`4` steps and `8` paths). Run the maintained build and focused orchestration/mutation/core/architecture suites. When a live model is authorized, record profile/reasoning, time to first exact diff, total duration, request count, plan/batch counts, actual mutation/path counts, completion hints, corrections, and final content verification without recording prompts, source bodies, credentials, or provider payloads.
-
-**Expected:** Threadsmith proposes and approves one complete plan tranche before implementing it, then exposes useful exact diffs incrementally by host-selected approved step. A validated tranche or explicit replan request returns to the same ordinary planning loop. Only a validated tranche can offer objective completion; an unfinished tranche requires a replacement plan or a resumable pause. Soft targets guide but do not authorize or hard-reject coherent work. Every tranche and batch uses the existing formatter, proposal, correction, approval, exact-diff policy, transaction, validation, checkpoint, and shared presentation paths. Partial consent and interruption preserve honest durable progress, later work requires fresh authorization, and terminal success plus final net diff represent the complete multi-plan objective.
-
-**Limitations:** Soft targets cannot guarantee that every model chooses the requested size, so record actual batch sizes rather than treating a target miss as a correctness failure. A single authorized live profile does not establish cross-provider latency or cross-platform filesystem behavior; unavailable environments remain explicitly unassessed.
+**Retired.** Tranche and completion-tool execution was removed. Use MTP-160, MTP-164 and MTP-241 for ordinary direct editing, recovery and advisory feedback.
 
 ### MTP-274 - Session scratchpad lifecycle and authority
 
@@ -2260,11 +2106,8 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 
 ### MTP-277 — Progressive concept recall and native deployment
 
-Prerequisites: disposable notes with known concepts, concept recall plus reranking enabled with recorded candidate limits and fuzzy edit-cost bound (default 1), ordinary multi-round model request and a plan with multiple tranches.
-
-1. Begin with a note outside text-search results. Issue an admitted native tool call with a matching concept and verify it is considered before the next normal model request. Inspect successful complete reranking, eligibility of negative scores, reserved candidate limit and final capacity. Verify no added generative request. Change only hints on a duplicate operational call; it remains a duplicate. Denied/invalid calls contribute no hints.
-2. Continue through tool rounds, compaction and another plan tranche. Verify selected notes retain bounded slots; update/delete them and inspect the actual next request for stale current memory. Steer the task, change repository, start a new run and execute a child; verify appropriate re-evaluation and state isolation. Repeat with recall disabled, Stateless and memory denied.
-3. Exercise exact concepts, typo/noisy-short-term queries and repository vocabulary changes. Enable the scenario’s `Fuzzy:Enabled` lookup with an exercise distance and bounded expansions; verify both recall and reconciliation find a misspelled text query while exact candidates retain their scores. Confirm alternatives for one original term cannot satisfy two required terms. Corrupt/remove the native asset in an isolated installation: exact recall remains available with degradation, while enabled reconciliation cannot write after incomplete configured discovery. Restore it and verify recovery on a subsequent lookup.
-4. On every supported RID, use the published payload to load spellfix1 into SQLite, create/query a vocabulary and record the native digest and result. Run representative held-out memory notes/queries with shipped embeddings/reranker; record false collisions, missed collisions, concept admissions, omissions and cold/warm latency to evaluate production ranking quality and candidate limits.
-
-Expected: tool hints remain bounded metadata, all discovered notes pass ordinary relevance/context policy, and partial native/quality evidence is explicitly reported rather than treated as full release verification.
+1. Exercise ordinary tool continuations with concept recall enabled and disabled.
+2. Verify signed provider tool-use/tool-result correlation survives memory inclusion.
+3. Revise/remove a memory and verify append-only current snapshots preserve earlier replay prefixes.
+4. Start another ordinary run and verify concepts/retained inclusions reset.
+5. Verify native deployed prompt assets and bounded memory authority.

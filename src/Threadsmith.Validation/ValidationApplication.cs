@@ -59,7 +59,6 @@ public sealed class ValidationApplication :
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(command.Request);
-        ArgumentNullException.ThrowIfNull(command.BaselineCapture);
         ArgumentNullException.ThrowIfNull(command.MutationSet);
         await InvokeBeforeAsync(command.Request, "mutation", cancellationToken);
         var result = await _pipeline.ValidateAsync(

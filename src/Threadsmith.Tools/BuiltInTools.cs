@@ -267,7 +267,11 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             ApprovalLevel.None,
             ToolSideEffect.ReadOnly,
             TimeSpan.FromSeconds(10),
-            (int)Math.Min(int.MaxValue, outputBytes));
+            (int)Math.Min(int.MaxValue, outputBytes)) with
+        {
+            // The same range can contain new source after a host or external edit.
+            AllowDuplicateInvocations = true,
+        };
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaximumBytes, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileDefaultLines, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(_limits.ReadFileMaxLines, 1);
@@ -1732,7 +1736,6 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         IProcessManager processManager,
         IPromptLoader promptLoader,
         ToolLimits? limits = null,
-        IEnumerable<string>? allowedExecutables = null,
         bool requireApproval = true,
         string? shellExecutable = null)
     {
@@ -1744,17 +1747,6 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         _shellExecutable = string.IsNullOrWhiteSpace(shellExecutable)
             ? OperatingSystem.IsWindows() ? "powershell" : "bash"
             : shellExecutable.Trim();
-        var shellFileName = Path.GetFileName(_shellExecutable);
-        var shellBasename = Path.GetFileNameWithoutExtension(shellFileName);
-        var shellSupported = string.Equals(
-                shellFileName,
-                _shellExecutable,
-                StringComparison.Ordinal)
-            && IsSupportedShell(shellBasename);
-        var shellAllowed = shellSupported
-            && (allowedExecutables?.Contains(
-                shellBasename,
-                StringComparer.OrdinalIgnoreCase) ?? false);
         _definition = ToolDefinitionFactory.WithNonNegativeIntegerHint(
             ToolDefinitionFactory.Create<RunProcessInput, ProcessExecutionResult>(
                 "run_process",
@@ -1769,10 +1761,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
                 requireApproval ? ApprovalLevel.User : ApprovalLevel.None,
                 ToolSideEffect.ExecutesCode,
                 TimeSpan.FromSeconds(_limits.RunProcessMaxTimeoutSeconds),
-                256 * 1024) with
-            {
-                ConversationAvailable = shellAllowed && !requireApproval,
-            },
+                256 * 1024),
             "timeoutSeconds");
     }
 
@@ -1852,12 +1841,6 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
         "(?i)((?:^|\\s)(?:--?|/)(?:api[-_]?key|authorization|token|access[-_]?token|refresh[-_]?token|client[-_]?secret|password|passwd|pwd)(?:\\s+|[=:]\\s*))(?:\"[^\"]*\"|'[^']*'|[^\\s;&|]+)",
         RegexOptions.CultureInvariant)]
     private static partial Regex CommandCredentialPattern();
-
-    private static bool IsSupportedShell(string shellBasename)
-    {
-        return shellBasename.ToLowerInvariant() is
-            "pwsh" or "powershell" or "bash" or "sh" or "zsh" or "cmd";
-    }
 
     private static string GetShellLanguage(string shellExecutable)
     {

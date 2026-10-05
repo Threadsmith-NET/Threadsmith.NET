@@ -79,14 +79,6 @@
       "maximumModelMessageCharacters": 2048,
       "maximumModelOutputCharacters": 16384
     },
-    "plan": {
-      "maximumSteps": 100,
-      "maximumMetadataItems": 100,
-      "maximumSummaryCharacters": 4096,
-      "maximumTitleCharacters": 256,
-      "maximumDescriptionCharacters": 8192,
-      "maximumPathCharacters": 1024
-    },
     "process": {
       "maximumEnvironmentVariables": 16,
       "maximumEnvironmentNameCharacters": 128,
@@ -368,7 +360,6 @@
   "execution": {
     "maxRetainedToolCalls": 256,
     "maxSourceFrontierEntries": 256,
-    "maxPlanSanityIssues": 32,
     "maxSteeringCharacters": 100000,
     "maxAgentDisplayFragments": 256,
     "maxAgentDisplayFragmentCharacters": 4096,

@@ -190,44 +190,6 @@ public sealed class ParallelAgentTests
         Assert.Throws<UnauthorizedAccessException>(() => DelegationPlanValidator.Validate(plan));
     }
 
-    /// <summary>Verifies conservative partitioning rejects path and shared-surface ambiguity.</summary>
-    [Fact]
-    public void Partitioner_OverlappingAndSharedAssignments_FallBackToSerial()
-    {
-        // Arrange
-        var first = CreateAssignment(AgentRole.Implementer, "src/A.cs");
-        var second = CreateAssignment(AgentRole.Implementer, "src/A.cs");
-        var shared = CreateAssignment(AgentRole.Implementer, "Directory.Packages.props");
-        var plan = CreatePlan(first, second, shared) with { ImplementationAuthorized = true };
-
-        // Act
-        var decision = new AssignmentPartitioner().Partition(plan);
-
-        // Assert
-        Assert.False(decision.IsParallelSafe);
-        Assert.Equal(3, decision.SerialAssignments.Count);
-        Assert.Contains(decision.Conflicts, item => item.Code == "assignment-overlap");
-        Assert.Contains(decision.Conflicts, item => item.Code == "shared-surface");
-    }
-
-    /// <summary>Verifies disjoint proven implementation ownership can run in parallel.</summary>
-    [Fact]
-    public void Partitioner_DisjointAssignments_AreParallelSafe()
-    {
-        // Arrange
-        var first = CreateAssignment(AgentRole.Implementer, "src/A.cs");
-        var second = CreateAssignment(AgentRole.Implementer, "tests/B.cs");
-        var plan = CreatePlan(first, second) with { ImplementationAuthorized = true };
-
-        // Act
-        var decision = new AssignmentPartitioner().Partition(plan);
-
-        // Assert
-        Assert.True(decision.IsParallelSafe);
-        Assert.Equal(2, decision.ParallelAssignments.Count);
-        Assert.Empty(decision.Conflicts);
-    }
-
     /// <summary>Verifies child tool policy can narrow but never widen parent authority.</summary>
     [Fact]
     public void ToolPolicy_NarrowsTrustToolsNetworkAndProcesses()
@@ -488,119 +450,6 @@ public sealed class ParallelAgentTests
         }
     }
 
-    /// <summary>Verifies integration rejects stale parent state, out-of-scope paths, and worker overlap.</summary>
-    [Fact]
-    public void Integration_DetectsStaleScopeAndWorkerConflicts()
-    {
-        // Arrange
-        var first = CreateAssignment(AgentRole.Implementer, "src/A.cs");
-        var second = CreateAssignment(AgentRole.Implementer, "tests/B.cs");
-        var plan = CreatePlan(first, second) with { ImplementationAuthorized = true };
-        var left = CreateChangeSet(plan, first, ["src/A.cs", "outside.txt"]);
-        var right = CreateChangeSet(plan, second, ["src/A.cs"]);
-
-        // Act
-        var conflicts = new WorkerIntegrationCoordinator().DetectConflicts(
-            plan,
-            [left, right],
-            "changed-parent");
-
-        // Assert
-        Assert.Contains(conflicts, item => item.Code == "stale-parent-baseline");
-        Assert.Contains(conflicts, item => item.Code == "assignment-scope-exceeded");
-        Assert.Contains(conflicts, item => item.Code == "worker-path-conflict");
-    }
-
-    /// <summary>Verifies worker path aliases cannot escape scope or evade overlap detection.</summary>
-    [Theory]
-    [InlineData("src/../outside.cs")]
-    [InlineData("./src/A.cs")]
-    [InlineData("/src/A.cs")]
-    public void Integration_RejectsNonCanonicalWorkerPaths(string path)
-    {
-        // Arrange
-        var assignment = CreateAssignment(AgentRole.Implementer, "src/A.cs");
-        var plan = CreatePlan(assignment) with { ImplementationAuthorized = true };
-        var changeSet = CreateChangeSet(plan, assignment, [path]);
-
-        // Act
-        var conflicts = new WorkerIntegrationCoordinator().DetectConflicts(
-            plan,
-            [changeSet],
-            plan.Provenance.BaselineIdentity);
-
-        // Assert
-        Assert.Contains(conflicts, item => item.Code == "invalid-worker-path");
-    }
-
-    /// <summary>Verifies real detached worker worktrees are confined, frozen, and explicitly removed.</summary>
-    [Fact]
-    public async Task WorktreeCoordinator_CreatesFreezesAndRemovesRealDetachedWorktree()
-    {
-        // Arrange
-        var repository = Path.Combine(Path.GetTempPath(), $"threadsmith-parent-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(repository);
-        try
-        {
-            await RunGitAsync(repository, "init");
-            await File.WriteAllTextAsync(Path.Combine(repository, "A.txt"), "baseline\n");
-            await RunGitAsync(repository, "add", "A.txt");
-            await RunGitAsync(repository, "-c", "user.name=Threadsmith", "-c", "user.email=test@example.invalid", "commit", "-m", "baseline");
-            var revision = (await RunGitAsync(repository, "rev-parse", "HEAD")).Trim();
-            var assignment = CreateAssignment(AgentRole.Implementer, "A.txt");
-            var plan = CreatePlan(assignment) with { ImplementationAuthorized = true };
-            var coordinator = new WorkerWorktreeCoordinator(new GitWorktreeManager());
-
-            // Act
-            var lease = await coordinator.CreateAsync(
-                plan,
-                assignment,
-                repository,
-                revision);
-            var frozen = await coordinator.FreezeAsync(lease);
-            await coordinator.RemoveAsync(frozen);
-
-            // Assert
-            Assert.True(frozen.IsFrozen);
-            Assert.False(Directory.Exists(frozen.RepositoryPath));
-        }
-        finally
-        {
-            if (Directory.Exists(repository))
-            {
-                foreach (var file in Directory.EnumerateFiles(repository, "*", SearchOption.AllDirectories))
-                {
-                    File.SetAttributes(file, FileAttributes.Normal);
-                }
-
-                Directory.Delete(repository, recursive: true);
-            }
-        }
-    }
-
-    /// <summary>Verifies callers cannot forge implementer authority with another assignment's id.</summary>
-    [Fact]
-    public async Task WorktreeCoordinator_RejectsForgedImplementerAssignment()
-    {
-        // Arrange
-        var explorer = CreateAssignment(AgentRole.Explorer, "src/A.cs");
-        var plan = CreatePlan(explorer) with { ImplementationAuthorized = true };
-        var forged = explorer with
-        {
-            ChildRunId = RunId.New(),
-            Role = AgentRole.Implementer,
-            Mode = AgentRunMode.IsolatedWorktreeMutation,
-        };
-        var coordinator = new WorkerWorktreeCoordinator(new GitWorktreeManager());
-
-        // Act / Assert
-        _ = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => coordinator.CreateAsync(
-            plan,
-            forged,
-            Environment.CurrentDirectory,
-            "HEAD"));
-    }
-
     private static DelegationPlan CreatePlan(params AgentAssignment[] assignments)
     {
         var budget = new AgentResourceBudget
@@ -637,7 +486,6 @@ public sealed class ParallelAgentTests
 
     private static AgentAssignment CreateAssignment(AgentRole role, string path)
     {
-        var implementer = role == AgentRole.Implementer;
         var reviewer = role is AgentRole.SecurityReviewer
             or AgentRole.TestReviewer
             or AgentRole.PerformanceReviewer
@@ -648,15 +496,12 @@ public sealed class ParallelAgentTests
             AssignmentId = AgentAssignmentId.New(),
             ChildRunId = RunId.New(),
             Role = role,
-            Mode = implementer
-                ? AgentRunMode.IsolatedWorktreeMutation
-                : reviewer ? AgentRunMode.ReadOnlyReview : AgentRunMode.ReadOnlyBaseline,
+            Mode = reviewer ? AgentRunMode.ReadOnlyReview : AgentRunMode.ReadOnlyBaseline,
             Objective = $"Inspect {path}",
             Tasks = ["Return structured evidence"],
             OutputSchema = role switch
             {
                 AgentRole.Explorer => "agent-findings/1",
-                AgentRole.Implementer => "worker-change-set/1",
                 _ => "review-findings/1",
             },
             StoppingCondition = "Stop after the assigned scope is covered.",
@@ -674,14 +519,13 @@ public sealed class ParallelAgentTests
                 EvidenceItems = 8,
                 Files = 8,
                 Bytes = 1_024,
-                Mutations = implementer ? 2 : 0,
-                Processes = implementer ? 1 : 0,
-                Builds = implementer ? 1 : 0,
-                Tests = implementer ? 1 : 0,
-                Corrections = implementer ? 1 : 0,
+                Mutations = 0,
+                Processes = 0,
+                Builds = 0,
+                Tests = 0,
+                Corrections = 0,
                 WallTime = TimeSpan.FromMinutes(5),
             },
-            PlanStepIds = implementer ? [StepId.New()] : [],
         };
     }
 

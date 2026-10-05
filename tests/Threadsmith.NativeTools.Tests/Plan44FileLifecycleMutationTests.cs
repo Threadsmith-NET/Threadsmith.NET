@@ -209,7 +209,7 @@ public sealed class Plan44FileLifecycleMutationTests
 
         Assert.True(destinationConflict.Conflicts.HasConflicts);
         Assert.Contains(destinationConflict.Conflicts.Conflicts, conflict =>
-            conflict.RelativePath == "src/Destination.cs");
+            conflict.RelativePath == "src/Source.cs" && conflict.Reason.Contains("destination", StringComparison.OrdinalIgnoreCase));
         Assert.True(identityConflict.Conflicts.HasConflicts);
         Assert.Contains(identityConflict.Conflicts.Conflicts, conflict =>
             conflict.Reason.Contains("baseline identity", StringComparison.Ordinal));
@@ -604,7 +604,6 @@ public sealed class Plan44FileLifecycleMutationTests
                 BaselineCapturedAt = Baseline.CapturedAt,
                 Mutations = mutations,
                 Rationale = "Verify structured lifecycle changes.",
-                IsWithinApprovedPlan = true,
             };
         }
 

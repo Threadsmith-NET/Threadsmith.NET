@@ -234,7 +234,7 @@ Grant `TrustedBuild` or above only to repositories whose build scripts, analyzer
 
 Startup displays the Threadsmith identity, repository and solution state, effective model, trust, target frameworks, semantic confidence, and terminal mode. The composer uses `Threadsmith >`; the repository appears in the fixed footer.
 
-Ordinary prompts are conversational. A greeting or question can complete as a normal assistant response. A repository-change request remains in the same model turn, but the model must call the host-owned `propose_plan` tool before each governed plan tranche begins. After a validated tranche, `complete_objective` with `{}` explicitly confirms the whole objective is complete and triggers cumulative-scope validation; ordinary text, questions, and blockers leave it resumable.
+Ordinary prompts and repository-change requests use the same conversation. The model can inspect source, call `edit_source`, receive advisory compiler feedback and continue implementation. An ordinary final answer ends model continuation without launching a build or tests. The model chooses when to invoke validation tools after resolving incremental compiler findings.
 
 ### Commands
 
@@ -264,7 +264,6 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/models [status\|refresh <provider-id>]` | Select the active repository model, inspect discovery, or refresh metadata for the next startup. |
 | `/new` | Checkpoint the current session and activate a fresh empty session. |
 | `/open [path]` | Open or switch repositories. |
-| `/plan-policy [name\|current\|reset\|revoke]` | Select, report, or revoke the plan approval policy. |
 | `/policy [name\|current]` | Select or report the mutation approval policy for exact staged diffs. |
 | `/quit` | Exit cleanly. |
 | `/reasoning [level]` | Show or set the reasoning level supported by the active model. |
@@ -277,7 +276,6 @@ Ordinary prompts are conversational. A greeting or question can complete as a no
 | `/thinking [on\|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
 | `/tools` | Browse and toggle non-essential repository tools. |
 | `/trust [inspect\|read\|build\|mutation\|automation]` | Show or change repository trust. |
-| `/validation retry` | Resume interrupted post-apply validation or explicitly continue approved work after partial mutation authorization. |
 
 
 ### Durable session lifecycle
@@ -552,127 +550,15 @@ Configure bounded cross-turn conversation budgets under `context:conversation` i
 
 ## How repository changes are governed
 
-Threadsmith treats the model as a reasoning component, not as the owner of control flow.
+The model inspects relevant source and chooses the implementation sequence in an ordinary conversation. It calls `edit_source` with a rationale and ordered create, replace, delete, move or supported symbol-rename operations. Related changes can span several files; supporting reads are independent of the write set.
 
-A typical change follows this sequence:
+The host validates instructions, repository trust, confined paths and exact source anchors, then stages an exact diff. Existing mutation policy determines whether review is required. Review can authorize the entire diff or a valid subset. Declining an edit lets the conversation continue; a source conflict requires fresh evidence.
 
-1. **Evidence collection** — authorized read-only tools gather bounded repository context. Tool availability and invocation policy determine what can be advertised or called.
-2. **Complete plan-tranche proposal** — the model calls the host-owned `propose_plan` tool with the complete summary, ordered steps, file intents, expected outcomes, validation, risks and questions for one cohesive, independently valid tranche. The host assigns schema version, revision and step IDs. Steps within that tranche are not generated lazily during implementation, and text that merely describes edits is not enough to enter mutation flow. The model does not need to predict every later tranche.
-3. **Whole-tranche sanity and approval policy** — the host validates plan schema 2, runs cheap repository sanity checks over every structured `fileIntent` (`Modify`, `Create`, `Delete`, `Move`, or `Rename`), classifies risk, and either returns repairable scope failures to the model for a bounded complete-plan revision, prompts for review, or auto-approves according to `/plan-policy` / `planning:approvalPolicy`. Approval covers the whole proposed tranche and authorizes implementation work only, not repository writes or later tranches.
-4. **Focused implementation proposal** — after plan approval, the host refreshes approved file endpoints, selects the earliest incomplete step, and asks for one exclusive implementation decision: that step's next small coherent mutation batch through proposal-only `propose_mutations`, or `request_replan` when incremental planning is enabled and the approved plan cannot be continued responsibly. The complete approved plan and its identity remain fixed unless replanning returns the run to the ordinary evidence, planning, and approval cycle. Configurable mutation, file, and content-size targets guide batch size, but tightly coupled edits may exceed those soft targets while remaining within hard limits and active-step scope. The TUI shows `MUTATION: Generating edits` while the parent model receives current eligible source evidence and these phase-gated decision tools.
-5. **Proposal validation before Roslyn** — for every batch, the host assigns identities and validates schema, active-step correlation, scope, paths, trust, current mutation baseline, baseline hashes, exact replacement text, lifecycle preconditions, structured-output size, and budgets. The host binds byte lengths, lifecycle classification, validation policy, and replacement lengths. C# `RenameSymbol` proposals expand through the loaded semantic workspace. For a unique nonempty `expectedText`, `startOffset` may be omitted; empty insertions and repeated anchors require an exact offset. Unique CRLF/LF/CR-only anchor differences are normalized without changing text outside the matched region, while ambiguous or otherwise different text receives actionable same-conversation feedback. New files default to UTF-8 without BOM and LF when formatting is omitted; moves preserve source bytes unless explicit replacement content is proposed. Non-repairable policy, trust, and path failures fail closed.
-6. **Pre-mutation Roslyn screening** — before staging or authorization, proposed `.cs` changes are applied only to an in-memory overlay. Threadsmith parses the would-be source and, when a loaded project is available at sufficient semantic confidence, runs fast compilation diagnostics without `dotnet build`. Blocking diagnostics are mapped to changed files/ranges and returned for proposal-phase repair. Trusted or isolated analyzer/code-style checks may participate; ordinary repository-supplied third-party analyzers and source generators remain deferred and are reported as omissions. Repository files remain unchanged.
-7. **Private staging and exact diff** — only a batch that passes host validation and cheap pre-mutation gates enters the private staged workspace. Threadsmith records its exact bounded diff. Interactive TUI presentation shows compact changed hunks with bounded unchanged context, hidden-line markers, and presentation-only spacing without changing canonical diff content.
-8. **Mutation approval policy** — depending on `/policy` and `mutation:approvalPolicy`, Threadsmith either prompts for this exact staged batch or applies the host-authorized set automatically. Approval of the plan or an earlier batch never authorizes a later diff. Every policy preserves the exact diff and invariant guardrails.
-9. **Authoritative pre-write baseline** — under the configured validation stages, Threadsmith captures the required affected pre-mutation diagnostic evidence before write-ahead mutation intent. Semantic-only validation uses the loaded semantic workspace without launching a build; compile/diagnostics stages build affected projects. The original diagnostic basis remains separate from later promoted transactional mutation baselines.
-10. **Transactional application** — after authorization and baseline capture, the host records write-ahead intent, hash- and path-checks authorized files, applies atomic replacements or lifecycle operations, reconciles the result, and promotes the mutation baseline. Later proposals therefore use current bytes without rereading the whole repository.
-11. **Per-batch validation and continuation** — configured validation stages run after each applied batch. A passing fully applied batch with `stepComplete: true` completes only the active step; `false` or an omitted hint requests another batch for that step. Once a step completes, the host advances to the next approved step without another plan proposal or plan approval. A no-change completion claim is accepted only when current passing evidence already supports that same step.
-12. **Partial authorization and resume** — when only selected files or mutations are authorized, Threadsmith validates what actually applied and pauses at `ContinuationPending`. It does not treat the original candidate as complete or immediately regenerate rejected work. `/validation retry` explicitly resumes from current bytes and produces a fresh exact diff requiring a fresh policy decision.
-13. **Correction or plan completion** — introduced compiler/test failures can stage a bounded correction against the active step and promoted transactional baseline while retaining the original diagnostic basis and batch completion intent. Every correction repeats proposal validation, screening, diff, policy, transaction, and validation. After every approved step has supported completion, the host records a validated plan boundary and re-enters evidence collection on the same run.
-14. **Remaining-objective assessment** — the model receives the original objective, the latest cumulative authoritative receipt as current-run context regardless of history mode, current repository tools, and configured soft plan-tranche targets. It either calls the same `propose_plan` tool once for the next tranche or calls `complete_objective` with exactly `{}` when nothing remains. A new tranche repeats the existing sanity, approval, mutation, and validation flow. Completion reruns the configured validation stages over the cumulative affected path/project scope and records success only if that final pass succeeds. Extra completion arguments receive ordinary corrective feedback. Questions, blockers, and ordinary text leave the objective resumable without reporting success; the final diff is the cumulative net result relative to objective-start bytes.
+After authorization, bounded candidate compiler feedback is advisory. Temporary syntax or semantic errors can apply as part of an unfinished change. The existing transactional writer rechecks source preconditions and verifies the committed bytes; the durable effect journal records the actual outcome. Candidate analysis is reused when inputs match, with broader analysis and unavailable coverage reported explicitly.
 
-During implementation or validation correction, the model may call `request_replan` alone with `{"reason":"..."}` when further investigation or changed scope/approach is needed. With incremental planning enabled, this records `PlanReplanningPending` and returns to the same evidence/planning conversation and repository tools. It does not grant inspection tools inside mutation generation. Applied changes, completed work, cumulative budget, and unresolved validation evidence survive; nothing is automatically rolled back or declared complete. The model proposes a complete replacement tranche for remaining work, using ordinary plan formatting, sanity checks, and approval. Replacement mutations require fresh exact-diff authorization. A blocker or question pauses the objective for explicit resume, including after restart.
+The model uses receipts and later diagnostics to continue edits. The model decides when to invoke build and test tools, guided to resolve incremental compiler findings first. Completing a response does not automatically run validation. Pending advisory analysis does not establish build/test success. A user may request a written plan as an ordinary response; no executable plan or plan approval is required.
 
-Approval is fail-closed. The model cannot expose mutation tools to itself before the host has accepted the plan, and plan scope does not authorize destructive Git operations or writes outside approved repository roots.
-
-### Pre- and post-mutation validation controls
-
-Threadsmith has two validation layers around mutations:
-
-| Layer | When it runs | What it does | How to enable or disable |
-|---|---|---|---|
-| Plan sanity checks | Before plan review or auto-approval | Checks structured plan `fileIntents` for repository-relative path safety, empty or ambiguous scope, modify/delete/move/rename sources that are missing, create/move/rename destinations that already exist, protected/secret/`.git` paths, generated/binary files, lifecycle/delete/move risk, dependency/configuration changes, and bounded scope size. Repairable failures are returned to the model for plan revision. | Always on when a plan is proposed. `execution:maxCorrectiveTurns` bounds repair attempts. `/plan-policy` controls approval after checks pass; it cannot disable checks. |
-| Proposal/schema/path/baseline validation | Before staging | Validates typed mutation shape, plan-step correlation, scope, trust, repository-relative paths, baseline identities, exact replacement text, lifecycle preconditions, size limits, and budgets. | Always on. It cannot be disabled by repository configuration or approval policy. |
-| Pre-mutation Roslyn syntax screening | Before staging and before approval | Parses proposed `.cs` overlay text in memory and returns blocking syntax diagnostics for model repair. It does not write files or run a build. | Automatic for proposed `.cs` mutations when the pre-mutation analyzer is available. There is no separate user/repository toggle. Non-C# changes skip this layer. |
-| Pre-mutation Roslyn semantic/compilation screening | Before staging and before approval | Uses the loaded semantic workspace to run fast overlay compilation diagnostics without `dotnet build` when confidence permits. Unknown/orphan `.cs` files degrade to syntax-only analysis. | Enabled by having a loaded solution/project with semantic confidence. It degrades explicitly when the workspace is absent, stale, unloaded, or below required confidence. It is not controlled by `validation:stages`. |
-| Pre-mutation analyzer/code-style screening | Before staging and before approval | May run only host-owned, allowlisted, trusted-policy-approved, or isolated analyzer/code-style checks. | Ordinary repository-supplied third-party analyzers/source generators are not loaded pre-approval. They degrade to omissions and remain covered by post-approval build/analyzer validation. |
-| Exact diff and mutation approval | After staging, before writes | Shows/records the exact diff and applies `/policy` / `mutation:approvalPolicy`. | Select interactively with `/policy`; configure defaults with `mutation:approvalPolicy` and `mutation:largeDiffThreshold`. Invariant guardrails remain always on. |
-| Pre-write diagnostic baseline | After approval, before writes | Captures the authoritative diagnostic baseline used to distinguish baseline from introduced failures. | Controlled by `validation:stages`; semantic-only avoids build, compile/diagnostics uses affected `dotnet build --no-restore`. |
-| Post-mutation compile/diagnostic validation | After transactional apply | Builds affected projects and classifies/correlates diagnostics. | Include `compile` and/or `diagnostics` in `validation:stages`. Removing them narrows validation and is not the recommended default. |
-| Post-mutation affected tests | After successful affected build/diagnostics | Selects and runs relevant tests with host-authored rationale. | Include `tests` in `validation:stages`; configure `validation:testScope` where supported. |
-| Correction loop | After failed post-mutation validation | Lets the model propose a bounded correction; every correction repeats all proposal, pre-mutation, diff, policy, transaction, and post-validation gates. | Bounded by `execution:maxCorrectiveTurns`; cannot bypass approval, transaction, or validation. |
-
-The default repository configuration leaves post-mutation validation broad:
-
-```json
-{
-  "validation": {
-    "stages": [ "semantic", "compile", "diagnostics", "tests" ],
-    "ignoreBaselineDiagnostics": true,
-    "testScope": "affected"
-  }
-}
-```
-
-`validation:stages` controls the authoritative post-approval validation gate, not the automatic pre-mutation Roslyn proposal screening. Stages run in order and a failing stage blocks later stages. Supported stage names are:
-
-- `semantic` — fast in-process semantic diagnostics from the loaded workspace without launching a build;
-- `compile` — affected project compilation through direct `dotnet build --no-restore`;
-- `diagnostics` — normalized compiler diagnostic classification and mutation correlation;
-- `tests` — affected test discovery and execution.
-
-Semantic activity is visible in the interactive transcript as `SEMANTIC CHECKS` rows with elapsed time when duration display is enabled. Pre-mutation rows cover overlay syntax and compilation checks; semantic-only validation rows cover baseline and post-mutation diagnostics. Details are bounded host-authored summaries such as file/project counts, diagnostic counts, blocking diagnostics, omissions, and completion state. If post-apply validation is configured without the `semantic` stage, the TUI shows a `MUTATION: Validating applied mutation` lifecycle block so compile/diagnostics/test waits are not silent.
-
-A repository may narrow `validation:stages`, for example to `[ "semantic" ]` for a fast local experiment, but doing so reduces the authoritative gate. Use this only when another trusted process supplies the missing build/test assurance. Pre-mutation screening remains active for `.cs` proposals where possible even when post-mutation stages are narrowed.
-
-Mutation-related controls:
-
-```json
-{
-  "planning": {
-    "approvalPolicy": "reviewAll",
-    "incrementalPlans": {
-      "enabled": true,
-      "targetSteps": 4,
-      "targetFiles": 8
-    }
-  },
-  "mutation": {
-    "approvalPolicy": "reviewAll",
-    "largeDiffThreshold": 500
-  },
-  "execution": {
-    "maxCorrectiveTurns": 3,
-    "maxModelRounds": 0,
-    "maxPlanningToolRounds": 0,
-    "maxStructuredOutputCharacters": 8388608,
-    "mutationBatching": {
-      "targetMutations": 8,
-      "targetFiles": 3,
-      "targetMutationCharacters": 24000
-    }
-  },
-  "formatting": {
-    "style": "editorconfig",
-    "applyOnMutation": true
-  }
-}
-```
-
-- `planning:approvalPolicy` sets plan approval behavior; `/plan-policy` saves every choice except `TrustSession` only in the active repository’s `.threadsmith/config.json`, including `AlwaysTrustRepo`. No user-side trust record is needed.
-- `planning:incrementalPlans` controls objective-level plan continuation and implementation-requested replanning. `targetSteps` and `targetFiles` are positive soft guidance. There is no plan-count limit; the model can propose as many cohesive tranches as needed within existing execution budgets. Each tranche still uses the ordinary plan policy and formatter. The former `maximumPlansPerObjective` setting is ignored and can be removed.
-- `TrustSession` for either approval command applies in memory only and leaves the saved repository policy untouched. Restarting or switching back to the repository restores its configured policy.
-- `mutation:approvalPolicy` sets exact-diff mutation approval behavior; `/policy` saves `ReviewAll`, `ReviewRisky`, `TrustPlan`, and `AlwaysTrustRepo` only in the active repository’s `.threadsmith/config.json`.
-- `mutation:largeDiffThreshold` controls when `ReviewRisky` treats an exact diff as large.
-- `execution:maxCorrectiveTurns` bounds active-turn correction attempts for recoverable malformed or invalid model-authored requests, including malformed `propose_plan` arguments, invalid pre-execution tool batches, repairable plan revisions, mutation-proposal retries, and post-validation correction attempts.
-- Main-chat text publishes immediately on its first fragment, then batches sanitized text through the shared event stream. `execution:maxModelOutputBatchCharacters` defaults to 4096 characters (minimum 2), and `execution:modelOutputFlushIntervalMilliseconds` defaults to 50 ms (positive). The timer flushes even while the provider is idle; subscriber delivery time can extend visible latency. Text is drained before reasoning, tool, and response boundaries and before run termination. Cancellation drains already accepted text with bounded delivery; subscriber failures fail the run rather than retrying possibly delivered text. Raw response text, usage accounting, and reasoning privacy are unchanged.
-- `execution:maxModelRounds` optionally bounds total model continuation rounds for a request, and `0` disables that separate cutoff; `execution:maxPlanningToolRounds` optionally bounds the initial planning rounds that advertise inspection tools before only `propose_plan` remains, and `0` disables that separate cutoff so exploration can use the full model-round budget; `execution:maxStructuredOutputCharacters` bounds mutation proposal output when positive, and `0` disables that configured output cap.
-- `execution:mutationBatching` supplies positive soft targets for operations, distinct paths, and mutation-content characters in each active-step proposal. These settings tune mutation batches inside a plan step and do not replace plan-tranche guidance or hard workspace limits.
-- `formatting:applyOnMutation` controls configured formatting around proposed mutations where formatting support is available; formatting does not bypass exact diff review.
-
-### Plan approval policies
-
-`/plan-policy` opens a numbered selector; `/plan-policy current` reports the active choice, `/plan-policy reset` saves `ReviewAll` in repository configuration, and `/plan-policy <name>` selects directly:
-
-| Policy | Behavior |
-|---|---|
-| `ReviewAll` | Default. Prompt for every valid sanity-checked plan. Persisted in repository settings when selected through `/plan-policy`. |
-| `ReviewRisky` | Auto-approve low-risk valid plans; prompt for moderate or high risk. Persisted in repository settings when selected through `/plan-policy`. |
-| `TrustSession` | Auto-approve low- and moderate-risk valid plans for the current process session. Session-only; does not rewrite repository settings. |
-| `AlwaysTrustRepo` | Persistently auto-approve low- and moderate-risk valid plans for this repository. Saved only in repository configuration. |
-| `AutoApproveAllValid` | Strongest explicit mode. Auto-approve every valid non-blocked plan after sanity checks, subject to repository trust and hard guardrails. Persisted in repository settings when selected through `/plan-policy`. |
-
-Plan policy is distinct from mutation policy. Auto-approved plans still appear in the transcript as `PLAN: auto-approved`, remain durable structured contracts, and only allow the implementation proposal phase to start. They do not approve exact staged diffs, writes, process execution, validation results, commits, pushes, or external-system effects.
+See [conversation flow](operations/conversation-loop.md), [recovery](operations/execution-resumption.md), and [validation](architecture/validation-pipeline.md).
 
 ### Mutation approval policies
 
@@ -682,7 +568,6 @@ Plan policy is distinct from mutation policy. Auto-approved plans still appear i
 |---|---|
 | `ReviewAll` | Default. Prompt for every staged mutation set. |
 | `ReviewRisky` | Auto-apply ordinary edits; prompt for moves, deletions, configuration or dependency changes, diffs over `mutation:largeDiffThreshold`, and invalid/outside-repository targets. |
-| `TrustPlan` | Auto-apply only mutations contained by the accepted plan's declared files. Scope expansion still requires review. |
 | `TrustSession` | Auto-apply valid in-repository mutations until the process session ends. Leaves the saved repository policy untouched. |
 | `AlwaysTrustRepo` | Auto-apply valid in-repository mutations and save `mutation.approvalPolicy` only in this repository. |
 
@@ -692,25 +577,19 @@ Optional Git-worktree isolation may be used by configured workflows, but Threads
 
 ### Structured file lifecycle mutations
 
-File creation, deletion, and movement are explicit versioned mutation operations, not ordinary tools or inferred shell commands. They are advertised only through `propose_mutations` during eligible implementation/correction phases and retain the same accepted-plan, exact-diff, approval, transaction, validation, and resume authority as text edits.
+`edit_source` supports ordered `CreateFile`, `DeleteFile` and `MoveFile` instructions alongside exact text replacements. The host assigns identities and captures both move endpoints. Review shows lifecycle changes and their risk. Destination absence, source identity, approved roots, protected paths and resource bounds remain enforced. Valid create/move-then-replace chains use the preceding operation's candidate text.
 
-- **Create** requires an absent path and bounded text content. The proposal may select UTF-8 with or without BOM and LF or CRLF newlines.
-- **Delete** requires the exact baseline SHA-256 and byte count. Baseline bytes remain privately available for compensation and rollback; deleted content is not logged.
-- **Move** requires an exact source identity and an absent destination. Both endpoints must be declared by the accepted plan and worker assignment. A content descriptor makes move-plus-edit explicit; no namespace, project, or reference rewrite is inferred.
-- **Case-only move** is represented explicitly and committed through the same private temporary-file transaction so case-insensitive filesystems do not lose or duplicate the file.
-- **Project inclusion** is metadata only. Threadsmith never hides a project-file edit; an explicit project change must be part of the reviewed mutation set.
-
-The aggregate preview always includes exact add/delete source and destination diffs and exposes lifecycle kind, risk, destination, and case-only status. `ReviewRisky` prompts for every move or delete and for project-system lifecycle changes. Commit detects the repository filesystem's casing behavior, removes baseline identities before publishing final identities, attempts every compensation cleanup/restore effect without honoring caller cancellation, and verifies final hashes before reporting `Applied`; incomplete compensation is aggregated and fails closed. Recovery distinguishes `NotStarted`, `Applied`, `Compensated`, `Conflicted`, and `Indeterminate`; ambiguous state fails closed rather than replaying the move. Rollback refuses to overwrite any file changed after commit.
-
-Directory/glob operations, directory-tree deletion/movement, links, alternate streams, permissions, implicit project/namespace rewrites, overwrite moves, and Git staging/commit/move remain unsupported. Outside-root, traversal, `.git`, secret, prohibited, and reparse-point paths are denied under every policy.
+Only authorized operations are applied. The writer preserves source encoding for moves and subsequent replacements, verifies final bytes, and compensates owned effects after failure. Conflicts and incomplete recovery are reported explicitly. See [mutation model](architecture/mutation-model.md).
 
 ### Cancellation, checkpoints, and resume
 
-Execution writes versioned checkpoints at safe phase boundaries and write-ahead mutation-commit intent before repository effects. Cancellation before application leaves repository bytes unchanged. Interrupted builds/tests do not admit late output as authoritative. Explicit `ResumeRunCommand` uses the same host boundary for interactive and headless adapters. Resume fails closed for terminal runs, session/checkpoint identity mismatch, missing or corrupt continuation artifacts, unsupported schema, or an unresolved pending side effect; normal workspace baseline and external-change guards still apply before any later mutation commit. See [execution resumption operations](operations/execution-resumption.md).
+Cancellation before application discards private staging. After durable write intent, the host records the proven disk outcome even if the caller cancels. Retrying an effect does not repeat an established write. Unexpected or mixed endpoint identities require recovery and fence further source edits.
+
+Historical sessions remain readable; continuing their objective uses current source in an ordinary conversation. Remaining legacy plan steps are never resumed. See [execution recovery](operations/execution-resumption.md).
 
 ### Parallel agents and isolated workers
 
-Threadsmith starts subagents only when the model invokes `delegate_agents`. Plan approval, mutation preparation, corrections, preflight, and execution resume never launch subagents automatically. Normal implementation stays under the parent run and session model settings, with existing approval and validation controls. Requested subagents can explore code, suggest implementation approaches, or provide independent security, test, performance, and architecture reviews; all conversation-delegated roles are read-only. There is one delegation layer: a subagent cannot start another subagent. Child agents are asynchronous runs inside the Threadsmith process; they are never separate agent executables. Existing Git, build, test, MCP, and authorized tool processes remain tracked infrastructure and do not host an agent.
+Threadsmith starts subagents only when the model invokes `delegate_agents`. Plan approval, mutation preparation, corrections, preflight, and execution resume never launch subagents automatically. Normal implementation stays under the parent run and session model settings, with existing approval and validation controls. Requested subagents can explore code, suggest implementation approaches, or provide independent security, test, performance, and architecture reviews; conversation-delegated roles use their inherited or explicit read-only workspace authority; the parent `edit_source` tool is unavailable to children. There is one delegation layer: a subagent cannot start another subagent. Child agents are asynchronous runs inside the Threadsmith process; they are never separate agent executables. Existing Git, build, test, MCP, and authorized tool processes remain tracked infrastructure and do not host an agent.
 
 During an ordinary trusted conversation with an open semantic workspace, the model can call `delegate_agents` to fork one to five assignments by default and wait for their joined result. The tool is advertised only when a configured model can satisfy the actual child request's capability and capacity requirements; sensitive assignments repeat selection with the frozen sensitivity policy. Trusted machine/user configuration controls child admission. Each child request contains `task`, `context`, `toolAccess`, and an optional `role`:
 
@@ -770,13 +649,9 @@ Trusted user/machine `agents:roleModels` configuration may select an existing pr
 
 Role keys and field names are case-sensitive; provider IDs and supported reasoning names are case-insensitive. Invalid role configuration stops startup. Only a selection from a trusted role mapping uses the repository-excluding catalog and credentials with user-owned or higher authority. Application pins, inherited preferences, and defaults use ordinary model routing, including its normal repository settings and eligible secret sources. Choosing `toolAccess: inherit` does not change model routing or trust.
 
-#### Approved implementation and isolated workers
+#### Source editing and isolated workers
 
-The approved-plan workflow is separate from an ordinary `implementer` assignment. When models are configured, implementation and correction turns use an Implementer child to prepare a mutation proposal for the accepted plan. Threadsmith validates that proposal, and the parent stages it only after the child result has been saved and joined. The existing exact-diff approval, transactional application, validation, and correction steps still apply; the child cannot independently approve or apply changes. Failed or cancelled preparation does not stage changes. This path does not automatically apply parallel worktree changes. With no configured models, the deterministic offline flow keeps the direct mutation proposal path.
-
-The existing isolated-worker APIs require an approved plan and host-proven non-overlapping ownership. Ambiguous paths, directories, symbols, projects, generated outputs, solution files, central package/build configuration, or other shared surfaces fall back to serial execution. An authorized worktree worker uses a detached worktree under the host-managed temporary root and the normal mutation proposal, exact-diff, approval, transaction, validation, correction, and cancellation gates. A worktree isolates file state; it is not a security sandbox.
-
-Worker results are frozen structured change sets, not branches to merge. Before selected changes enter the primary worktree, Threadsmith rejects incomplete or stale packages, out-of-scope paths, worker overlap, and changed parent baselines. The parent converts and restages selected changes through the existing transactional workspace, presents one fresh aggregate diff under the current mutation policy, and reruns aggregate affected builds/tests. Threadsmith does not merge, commit, rebase, cherry-pick, push, or resolve conflicts automatically.
+The parent conversation applies source edits through the registered `edit_source` tool and shared edit application. Ordinary delegated children do not receive this write tool. Delegation remains explicitly model-requested and subject to inherited authority, trust and the actual advertised tool surface. Worker integration, where separately supported and authorized, cannot bypass parent exact-diff review or the shared writer.
 
 #### Subagent history and evidence
 
@@ -823,7 +698,7 @@ Child summaries default `compaction:summary:maximumInputTokens` to `0`, meaning 
 
 #### Inspecting and cancelling subagents
 
-Accepted children appear as person/role tabs in TUIKit. MAIN shows each child’s current status inside the live `delegate_agents` tool block, then retains final rows below its completion timer. The TUI omits automatic delegation-GUID and inspection-hint messages. Use bare `/agents` for a bounded, active-first list of delegations observed in the current interactive session; assignment IDs appear as child lifecycle events arrive. The list is a convenience index rather than durable history. Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The detailed display contains stable IDs, phase, generation, role, terminal status, effective provider/profile/reasoning, selection source and fallback reason, bounded usage, lifecycle reason, and next legal action. Final child replies return through the joined result, not as interleaved child transcripts or hidden reasoning. Persisted assignments also retain the contract marker, runner version, and configured model preference. These records support inspection; there is no automatic resume API for an interrupted delegated model loop. Further delegation starts in a new generation. Approved-plan execution retains its separate [resume lifecycle](operations/execution-resumption.md).
+Accepted children appear as person/role tabs in TUIKit. MAIN shows each child’s current status inside the live `delegate_agents` tool block, then retains final rows below its completion timer. The TUI omits automatic delegation-GUID and inspection-hint messages. Use bare `/agents` for a bounded, active-first list of delegations observed in the current interactive session; assignment IDs appear as child lifecycle events arrive. The list is a convenience index rather than durable history. Use `/agents <delegation-id>` to inspect the latest durable checkpoint. `/agents <delegation-id> cancel` requests hierarchical delegation cancellation; `/agents <delegation-id> cancel-child <assignment-id>` cancels one child and policy-declared dependents. The detailed display contains stable IDs, phase, generation, role, terminal status, effective provider/profile/reasoning, selection source and fallback reason, bounded usage, lifecycle reason, and next legal action. Final child replies return through the joined result, not as interleaved child transcripts or hidden reasoning. Persisted assignments also retain the contract marker, runner version, and configured model preference. These records support inspection; there is no automatic resume API for an interrupted delegated model loop. Further delegation starts in a new generation. Historical execution records remain inspectable; unresolved legacy writes are reconciled or fenced without resuming plan steps.
 
 Headless callers use `GetDelegationCommand`, `CancelDelegationCommand`, and `CancelAgentAssignmentCommand` through the same dispatcher to inspect or cancel model-requested delegations. There is no direct headless delegation-start command. Configure scheduler admission under `agents` as documented in `.threadsmith/config.example` and ordinary delegation through trusted machine/user `agents:delegation` settings. Existing finite defaults and active request, tool, transport, and result-envelope controls remain distinct from response-format freedom. See [parallel-agent operations](operations/parallel-agents.md) and [`delegate_agents` under the hood](architecture/delegate-agents-tool.md).
 
@@ -867,7 +742,7 @@ These settings narrow runtime use independently of availability:
 - `tools:allowedExecutables`;
 - `tools:allowedNetworkHosts`.
 
-`run_process` exposes a general `command` plus optional `timeoutSeconds`, executes through `tools:runProcess:shellExecutable`, and is available during ordinary conversation only when that bare shell name appears in `tools:allowedExecutables`. `timeoutSeconds` is a nonnegative hint: zero uses the host default and oversized positive values run at the configured ceiling. The shell runs in the repository root and supports its normal composition language, including pipelines. Allowing a shell therefore also permits nested commands launched by that shell; the allowlist governs the outer shell boundary, not tokens inside a command. Threadsmith resolves the shell only from absolute host `PATH` entries, never from the repository working directory. Cancellation terminates the complete tracked process tree. Process calls require approval by default and are withheld from ordinary conversation because that pipeline cannot prompt interactively. To advertise and permit unattended shell calls, set `tools:runProcess:requireApproval` to `false` in machine or user configuration. Repository configuration cannot grant that exemption, but it can reimpose approval by including `run_process` in `tools:requireApproval`; because ordinary conversation cannot prompt, that withholds the tool. Results retain bounded stdout and stderr.
+`run_process` exposes a general `command` plus optional `timeoutSeconds` and executes through `tools:runProcess:shellExecutable`. Enabled tools are advertised under current trust and tool allow/deny policy; execution side effects and required approval do not hide them. `timeoutSeconds` is a nonnegative hint: zero uses the host default and oversized positive values run at the configured ceiling. The shell runs in the repository root and supports its normal composition language, including pipelines. Allowing a shell therefore also permits nested commands launched by that shell; `tools:allowedExecutables` governs the outer shell at invocation, not tokens inside a command. Threadsmith resolves the shell only from absolute host `PATH` entries, never from the repository working directory. Cancellation terminates the complete tracked process tree. Process calls require approval by default, enforced by the normal invocation pipeline. Machine or user configuration can set `tools:runProcess:requireApproval` to `false` for unattended calls; repository configuration cannot grant that exemption and can require approval through `tools:requireApproval`. An unapproved invocation is denied rather than silently executed. Results retain bounded stdout and stderr.
 
 ### Built-in tools
 
@@ -1587,7 +1462,7 @@ Set `tui:renderMarkdown=false` to restore terminal-safe model-source chunk caden
 
 The setting follows normal layered configuration precedence and is snapshotted by the interactive shell. It does not affect reasoning, tool/MCP markers, diffs, status, historical transcript restoration, or headless output.
 
-When a model emits recoverable malformed or invalid tool, plan, mutation, pre-mutation, or post-apply validation output, Threadsmith appends bounded corrective feedback to the active turn and asks the model to retry rather than silently repairing the request. If one sibling in a tool batch is invalid before execution, the whole batch is rejected before any sibling runs; after a successful correction, rejected corrective messages are removed from future model history while successful executed evidence remains. `execution:maxCorrectiveTurns` is the single correction budget; exhaustion fails closed without approving, staging, or executing invalid output.
+When a model emits recoverable malformed tool arguments, Threadsmith appends bounded corrective feedback to the active turn. A malformed sibling rejects the entire tool batch before execution; executed evidence remains in subsequent context. `execution:maxCorrectiveTurns` bounds these retries. Source instruction failures return through the ordinary correlated tool result. Advisory compiler findings are information for subsequent edits, not a malformed-output correction gate.
 
 Operation durations are enabled by default through `tui:showOperationDurations`. One Boolean controls interactive request, ordinary-tool, extension-tool, and MCP duration text together. Active request timing covers the complete accepted turn and resumes from the original start after a tool continuation. Ordinary-tool completion timing covers only `ITool.ExecuteAsync`; MCP completion timing covers the remote transport invocation. Completed rows use compact invariant formatting (`47ms`, `8.6s`, `1:02`, `1:02:03`). Missing or invalid legacy timing is omitted rather than shown as zero.
 
@@ -1601,39 +1476,7 @@ Tool activity also includes concise context when a built-in explicitly defines a
    └ dotnet test src/Threadsmith.sln
 ```
 
-Structured plan proposals, plan auto-approval notices, mutation proposal status, generic correction status, and applied mutation notices use the same one-character-indented interactive lifecycle block family. Proposal bodies, steps, mutation-attempt rows, correction reasons, and applied-mutation detail are guided muted text; auto-approval shows plan-approval provenance and, when prior TUI context explains the classification, a concise risk basis. It does not imply mutation approval.
-
-```text
- PLAN: revision 1
- │ Update the formatter output.
- │
- │ Steps:
- └ 1. Add shared lifecycle blocks - Tool, plan, and semantic-check output align.
-
- PLAN: auto-approved
- │ Revision: 1
- │ Risk: High
- │ Risk basis: model declared 1 risk; 1 file affected
- │ Policy: AutoApproveAllValid
- └ Reason: Policy AutoApproveAllValid approved a High risk plan after sanity checks.
-
- MUTATION: Generating edits
- └ Attempt: 1/4
-
- CORRECTION: Retrying model request
- │ Attempt: 1/3
- ├ Category: MutationProposal
- └ Reason: ReplaceText expectedText was not found in 'src/File.cs'.
-
- MUTATION: Applied under the active approval policy
- │ Mutation applied: src/File.cs
- └ The expression uses the approved value.
-
- MUTATION: Validating applied mutation
- └ Stages: compile, diagnostics, tests
-```
-
-Adjacent visible lifecycle blocks are separated by exactly one presentation-owned blank line. Semantic baseline checks may be labeled as pre-apply baseline capture when they occur after preview but before mutation application.
+Direct edits appear as ordinary `edit_source` tool activity, exact mutation preview/review, applied mutation notices, advisory semantic checks and final validation. Adjacent visible lifecycle blocks use one presentation-owned blank line. Historical sessions may display their original plan or proposal notices during replay.
 
 ```json
 {
@@ -1717,7 +1560,7 @@ Verification re-reads the manifest, validates every declared hash/length/path, r
 
 Maintained packages are enabled after their shipped integrity verifies:
 
-- `fix-analyzer-warnings` — investigates supplied analyzer diagnostics and proposes a governed remediation plan;
+- `fix-analyzer-warnings` — investigates supplied analyzer diagnostics and returns remediation guidance;
 - `upgrade-package` — assesses one Central Package Management upgrade and proposes compatibility/rollback/validation steps;
 - `review` — reviews branch changes or a focused request with security, test, performance, bug, and architecture specialists, then synthesizes a Markdown report;
 - `threadsmith-docs-help` — answers Threadsmith product and authoring questions from the installed local documentation bundle with exact path, heading, line, and snippet citations.
@@ -1735,13 +1578,7 @@ Start at `TrustedRead`, inspect the exact package, and use one-line JSON because
 /skills use Maintained:fix-analyzer-warnings@1.0.0 {"diagnostics":["CA1822: Member 'Normalize' does not access instance data","IDE0058: Expression value is never used"],"scope":["src/Example/Normalizer.cs","tests/Example.Tests/NormalizerTests.cs"]}
 ```
 
-A successful analyzer procedure returns flat `propose_plan` content without schema version, revision or step IDs and pauses with a typed `ProposePlan` action. Review and submit that action through the ordinary planning boundary, which assigns those host-owned fields. Do not manufacture a successful continuation. Only after the host has accepted the plan should the adapter continue the workflow with the actual host result, for example:
-
-```text
-/skills continue <invocation-id> {"accepted":true,"planId":"<host-plan-id>"}
-```
-
-Accepting the proposed plan still does not apply edits. The normal approval, implementation, exact-diff policy, transaction, build/test validation, and correction flow follows.
+A successful analyzer procedure returns advisory findings and remediation guidance. The model can then read and edit through ordinary tools; each `edit_source` call follows mutation policy and exact authorization. The maintained package has no plan-approval continuation or write authority.
 
 For conversational use, describe the task naturally, for example: `Use a review skill to review this PR: <URL>`. Users do not need to prepare JSON or spell the skill name exactly. The model uses the same `inspect_skill` tool for discovery and detailed inspection:
 
@@ -1840,7 +1677,7 @@ Invocation validates bounded JSON input and current host/tool/trust/model/phase 
 
 A skill's tool declarations cannot expand `tools:allow` or override `tools:deny`. Each procedure turn offers only the intersection of the skill's declared tools and current tool-ID policy, then checks current policy again before executing a call. No overlap means no tools are permitted. An absent or empty configured `tools:allow` keeps its existing meaning of no additional allowlist restriction; this is different from an empty computed intersection. The same checks apply after `continue` or `resume`, including policy narrowed while the workflow was paused. Calling a skill through the model also requires permission for the outer `invoke_skill` tool.
 
-A workflow may pause with a typed host action such as `ProposePlan`, `ExecuteApprovedPlan`, `ProposeDelegation`, `Validate`, or `AskUserInput`. The proposal does not perform the action. Normal planning, approval, exact-diff, transaction, build/test validation, Plan-38 scheduling/worktrees/reviews, cancellation, and authoritative outcomes remain mandatory. `continue` accepts the result only after the corresponding host action completes and validates it against the declared step-result schema.
+A workflow may pause with supported typed host actions such as `ProposeDelegation`, `Validate`, or `AskUserInput`. The proposal does not perform the action. The ordinary host policy, tool execution, exact authorization, validation, delegation scheduling, cancellation and outcome boundaries remain mandatory. `continue` accepts the actual host result after the action completes and validates its declared result schema. Retired plan actions are rejected.
 
 Workflow checkpoints pin package identity, input, selected model/tools, budget, completed steps, attempt/generation, and next action. Resume revalidates the exact package and current policy; it never switches to a newer version or replays a completed effect. See [governed skills operations](operations/skills.md) for catalog locations, trusted configuration, import/quarantine behavior, detailed commands, and recovery.
 
@@ -1854,7 +1691,7 @@ In TUIKit, `/hooks` or `/hooks list` opens the checkbox dialog. Space enables/di
 
 Repository handlers are always advisory and fail-open. Only repository-excluding managed organization/machine/user configuration can grant blocking or fail-closed authority, and only at eligible pre-action points for an immutable handler identity and allowlisted denial codes. Completed/terminal hooks cannot undo or invalidate completed work. No result is an approval or a command.
 
-Every invocation is bounded by timeout, input/output size, concurrency, retry, call-chain depth, effective data scope, and logical-secret scope. The host abandons and discards late results when a handler ignores cancellation. `MutationStaged` runs once after exact-diff staging, `MutationApplied` runs once after the completed transaction rather than once per file, repository plan hooks receive the open repository identity, and `McpConnected` runs after successful auto-connect publishes imported capabilities. HTTP requires HTTPS except literal loopback development endpoints and does not follow redirects. Executable arguments are never shell interpolated. MCP must already be connected, and extension invocation retains existing lease/budget ownership.
+Every invocation is bounded by timeout, input/output size, concurrency, retry, call-chain depth, effective data scope, and logical-secret scope. The host abandons and discards late results when a handler ignores cancellation. `MutationStaged` runs once after exact-diff staging, `MutationApplied` runs once after the completed transaction rather than once per file, `McpConnected` runs after successful auto-connect publishes imported capabilities. HTTP requires HTTPS except literal loopback development endpoints and does not follow redirects. Executable arguments are never shell interpolated. MCP must already be connected, and extension invocation retains existing lease/budget ownership.
 
 See [Lifecycle hook operations](operations/lifecycle-hooks.md), [hook authoring](hook-authoring.md), and [ADR-35](architecture/adr-35-host-owned-lifecycle-hooks.md).
 

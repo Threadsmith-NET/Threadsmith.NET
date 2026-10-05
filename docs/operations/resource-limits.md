@@ -159,18 +159,7 @@ Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.
 | `maximumModelMessageCharacters` | `2048` | Maximum Model Message Characters in validation projections. |
 | `maximumModelOutputCharacters` | `16384` | Maximum Model Output Characters in validation projections. |
 
-### `limits:plan`
 
-Ordinary configuration. Implementation: `src/Threadsmith.Core/OperationalLimits.cs`.
-
-| Field | Default | Purpose |
-|---|---:|---|
-| `maximumSteps` | `100` | Maximum steps in a structured plan. |
-| `maximumMetadataItems` | `100` | Maximum risks, questions, file intents, or validation expectations. |
-| `maximumSummaryCharacters` | `4096` | Maximum summary, risk, question, or expected-outcome characters. |
-| `maximumTitleCharacters` | `256` | Maximum step title characters. |
-| `maximumDescriptionCharacters` | `8192` | Maximum step description characters. |
-| `maximumPathCharacters` | `1024` | Maximum plan path characters. |
 
 ### `limits:process`
 
@@ -498,30 +487,13 @@ Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimi
 |---|---:|---|
 | `maxRetainedToolCalls` | `256` | Conversation tool-call count; zero disables this cap. |
 | `maxSourceFrontierEntries` | `256` | Maximum model-visible source references. |
-| `maxPlanSanityIssues` | `32` | Maximum plan sanity findings. |
 | `maxSteeringCharacters` | `100000` | Maximum steering input characters. |
 | `maxAgentDisplayFragments` | `256` | Maximum pending child display fragments. |
 | `maxAgentDisplayFragmentCharacters` | `4096` | Maximum characters per display fragment. |
 | `maxAgentDisplayLineCharacters` | `16384` | Maximum characters per child sanitizer line. |
-| `mutationBatching:targetMutations` | `8` | Soft preferred maximum model-authored operations in one incremental active-step proposal. |
-| `mutationBatching:targetFiles` | `3` | Soft preferred maximum distinct source and destination paths in one incremental active-step proposal. |
-| `mutationBatching:targetMutationCharacters` | `24000` | Soft preferred aggregate mutation-content characters in one incremental active-step proposal. |
 
-Mutation-batching values must be positive. They are model guidance, not admission ceilings or plan-step controls: the model still proposes every step of the current plan tranche before implementing it, and tightly coupled or indivisible edits may exceed these targets. `limits:workspace:maximumMutations` and `maximumMutationCharacters` remain hard per-set bounds, while approved plan scope, path policy, trust, exact-diff authorization, and validation remain unchanged.
 
-### `planning:incrementalPlans`
 
-Ordinary configuration. Implementation: `src/Threadsmith.Execution/ExecutionLimits.cs`.
-
-| Field | Default | Purpose |
-|---|---:|---|
-| `enabled` | `true` | Return a validated plan or an implementation `request_replan` decision to ordinary planning on the same objective run. |
-| `targetSteps` | `4` | Soft preferred maximum steps in one cohesive, independently valid plan tranche. |
-| `targetFiles` | `8` | Soft preferred maximum distinct affected paths in one plan tranche. |
-
-Step and file targets must be positive and are model guidance, not admission ceilings: atomic work may exceed them. There is no plan-count limit; continuation and replacement plans consume the existing execution budget and remain subject to cancellation, plan approval, mutation authorization, and validation. The former `maximumPlansPerObjective` setting is no longer read and can be removed from existing configuration.
-
-`request_replan` accepts one nonempty `reason` string. The host sanitizes it and truncates it to the existing `limits:plan:maximumSummaryCharacters` bound. Structured output and corrective retries use the existing execution limits; there is no separate replanning budget or correction loop.
 
 ### `agents:delegation`
 

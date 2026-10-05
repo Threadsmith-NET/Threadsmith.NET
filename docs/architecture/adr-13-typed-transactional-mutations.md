@@ -1,5 +1,7 @@
 # ADR-13: Typed Transactional Mutations with Text-Patch Materialization
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 - **Status:** Accepted
 - **Date:** 2026-08-02
 - **Strategy source:** §5.4, §10.7, §15, §29 (strategy decision 8)
@@ -25,3 +27,7 @@ Raw unified diffs remain preview artifacts in M5. The host does not execute mode
 - Model output remains data and cannot self-authorize a write.
 - Exact baselines make later baseline-versus-introduced validation well-defined.
 - Whole-document semantic replacements may be larger than minimal ranges, but their exact diff remains reviewable and formatting stays localized by Roslyn before materialization.
+
+## Direct-editing amendment (2026-10-05)
+
+Typed exact changes are materialized by the shared materializer and applied by the existing transactional workspace. Plan scope supplies no authority. Cumulative effects and final validation are owned by the direct-edit application and effect journal. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

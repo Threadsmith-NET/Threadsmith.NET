@@ -38,7 +38,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             var processes = new InheritedProcessManager();
             var configuration = new ConfigurationBuilder().Build();
             var registry = new ToolRegistry([
-                new RunProcessTool(processes, TestPromptLoader.Instance, allowedExecutables: ["bash"], requireApproval: false, shellExecutable: "bash"),
+                new RunProcessTool(processes, TestPromptLoader.Instance, requireApproval: false, shellExecutable: "bash"),
                 new WriteFileTool(new WriteFileConfiguration(configuration, configuration, repository), new UnusedInheritedConversationStore(), TestPromptLoader.Instance),
                 new InspectMetadataTool(),
                 new InspectMetadataTool(subagentAvailable: false, toolId: "parent_only_metadata"),

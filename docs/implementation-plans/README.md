@@ -166,6 +166,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-skills-management-dialog.md` | Hierarchical skill verification and enablement dialog |
 | Maintenance | `maintenance-mid-tranche-replanning.md` | Implementation-requested replanning through the ordinary conversation cycle |
 | Maintenance | [maintenance-current-implementation-source-evidence.md](maintenance-current-implementation-source-evidence.md) | Current implementation source evidence and bounded file-read continuations |
+| Maintenance | [maintenance-direct-editing-incremental-semantics.md](maintenance-direct-editing-incremental-semantics.md) | Direct model editing with incremental advisory semantic feedback |
 | Maintenance | `maintenance-test-suite-runtime-and-signal.md` | Incremental test runtime, reliability, and assertion-signal improvements |
 | Maintenance | `maintenance-retire-original-tui.md` | Retire the original scrollback frontend and its product dependencies |
 | Maintenance | `maintenance-semantic-refresh-readiness-and-visibility.md` | Share startup readiness and retain visible refresh activity with trigger files |

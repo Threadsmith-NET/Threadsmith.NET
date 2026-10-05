@@ -339,7 +339,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
                 NextSnapshotOffset = end < bytes.Length ? end : null,
                 ContentDigest = digest,
             };
-            return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", relativePath)]);
+            return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", ToolPathRules.IsWithinScratchpad(path, context.Invocation) ? path : relativePath)]);
         }
 
         var sourceBytes = await File.ReadAllBytesAsync(path, cancellationToken);
@@ -381,7 +381,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         var sourceLocation = endLine is null
             ? $"L{input.StartLine}"
             : $"L{input.StartLine}-L{endLine.Value}";
-        var source = new ToolProvenanceSource("file", relative, sourceLocation);
+        var source = new ToolProvenanceSource("file", ToolPathRules.IsWithinScratchpad(path, context.Invocation) ? path : relative, sourceLocation);
         return new ToolExecution<ReadFileOutput>(
             new ReadFileOutput(
                 relative,

@@ -44,6 +44,9 @@ public enum EvidenceSensitivity
 /// <summary>Host-owned provenance for one evidence item.</summary>
 public sealed record EvidenceProvenance
 {
+    /// <summary>Repository root used to normalize file dependencies.</summary>
+    public string? RepositoryPath { get; init; }
+
     /// <summary>Repository-relative source path when applicable.</summary>
     public string? SourcePath { get; init; }
 
@@ -74,6 +77,9 @@ public sealed record EvidenceProvenance
     /// <summary>Immutable baseline identity observed by the child.</summary>
     public string? BaselineIdentity { get; init; }
 }
+
+/// <summary>File version and optional range on which source evidence depends.</summary>
+public sealed record EvidenceFileDependency(string Path, string? Sha256, SourceRange? Range = null);
 
 /// <summary>One governed evidence item with provenance, relevance, and invalidation state.</summary>
 public sealed record Evidence
@@ -107,6 +113,9 @@ public sealed record Evidence
 
     /// <summary>Sensitivity used by model-selection policy.</summary>
     public EvidenceSensitivity Sensitivity { get; init; }
+
+    /// <summary>All source file dependencies; missing digests are not verified baseline evidence.</summary>
+    public IReadOnlyList<EvidenceFileDependency> FileDependencies { get; init; } = [];
 
     /// <summary>Keys whose invalidation makes this evidence stale.</summary>
     public IReadOnlyList<string> InvalidationKeys { get; init; } = [];
@@ -156,6 +165,12 @@ public interface IEvidenceStore
 
     /// <summary>Queues a session-scoped invalidation without changing the current turn snapshot.</summary>
     void QueueInvalidation(SessionId sessionId, string key, string reason);
+
+    /// <summary>Invalidates only evidence collected before the authoritative change boundary.</summary>
+    void QueueInvalidation(SessionId sessionId, string key, string reason, DateTimeOffset changedAt)
+    {
+        QueueInvalidation(sessionId, key, reason);
+    }
 
     /// <summary>Applies one session's queued invalidations and returns the newly stale item count.</summary>
     Task<int> ApplyInvalidationsAsync(

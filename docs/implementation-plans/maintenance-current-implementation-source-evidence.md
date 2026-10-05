@@ -1,10 +1,16 @@
 # Current source evidence during incremental implementation
 
-**Status:** Proposed
+**Status:** Partially retained; implementation read workflow withdrawn
 
 **Delivery track:** Maintenance
 
 **Prerequisites:** Existing incremental mutation execution in [Plan 112](plan-112-incremental-approved-plan-execution.md), [mid-tranche replanning](maintenance-mid-tranche-replanning.md), governed context assembly, transactional baseline promotion, and the central tool invocation pipeline.
+
+## Disposition — October 5, 2026
+
+The implementation-specific supporting-read loop, automatic refresh, frozen-context reservation, and mutation-baseline membership filter were withdrawn after the real workload failed. The host rejected independent read batches, and its active-step baseline could not establish validity for supporting files outside mutation scope. The small live fixture and deterministic tests did not exercise those production boundaries.
+
+Retained work is limited to file dependency provenance, session/path-indexed supersession, and timestamp-aware mutation/rollback invalidation, with regression tests. The prior mutation workflow remains in place. The original proposal below records the withdrawn design; its continuation/refresh scope and completion criteria are not active implementation instructions. The [direct-editing and incremental-semantic analysis](maintenance-direct-editing-incremental-semantics.md) defines the proposed replacement; it has not been implemented.
 
 ## 1 Objective
 

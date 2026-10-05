@@ -576,17 +576,43 @@
       // The context count limits situational memories only; zero disables their retrieval.
       "memories": {
         "MaxNumberOfRepoMemories": 20,
-        "MaxRepoMemoriesInContext": 3,
-        // Semantic matches must score strictly above this finite cosine minimum (-1 to 1).
-        // Lexical matches qualify independently; 1 excludes all semantic matches.
-        "SemanticMinimum": 0.47,
-        // Local CPU cross-encoder reranking is opt-in. Candidate limit accepts any positive count.
-        "RerankerEnabled": false,
-        "RerankerCandidateLimit": 8,
-        // Optional strict raw-logit floor; null preserves the top ranked candidates.
-        "RerankerMinimumScore": null,
-        // Warn at startup, after additions or type promotions, above this nonnegative count.
-        "standingPreferenceWarningThreshold": 3
+        "standingPreferenceWarningThreshold": 3,
+        "Recall": {
+          "MaximumResults": 3,
+          "SemanticMinimum": 0.47,
+          "RerankerEnabled": false,
+          "RerankerCandidateLimit": 8,
+          "Concepts": {
+            "Enabled": false,
+            "CandidateLimit": 4
+          },
+          "Fuzzy": {
+            "Enabled": false,
+            "MaximumDistance": 1
+          },
+          "Lexical": {
+            "MaximumExpansionsPerTerm": 3,
+            "MaximumExpansions": 16
+          }
+        },
+        "Reconciliation": {
+          "Enabled": false,
+          "SemanticMinimum": 0.47,
+          "RerankerEnabled": true,
+          "RerankerCandidateLimit": 20,
+          "Concepts": {
+            "Enabled": true,
+            "CandidateLimit": 4
+          },
+          "Fuzzy": {
+            "Enabled": false,
+            "MaximumDistance": 1
+          },
+          "Lexical": {
+            "MaximumExpansionsPerTerm": 3,
+            "MaximumExpansions": 16
+          }
+        }
       },
       "csharp_script": {
         "timeout_ms": "5000",

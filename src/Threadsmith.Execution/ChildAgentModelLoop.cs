@@ -733,9 +733,9 @@ internal sealed class ChildAgentModelLoop
             semanticToolAttempted |= SemanticFirstSearchPolicy.IsSemanticInspectionTool(request.ToolName);
         }
 
-        foreach (var request in requests)
+        for (var ordinal = 0; ordinal < requests.Count; ordinal++)
         {
-            toolCalls.TryAdd(request.ToolName, request.ArgumentsJson);
+            toolCalls.TryAdd(resolvedRegistrations[ordinal].Tool.Definition, requests[ordinal].ArgumentsJson);
         }
 
         var results = new List<ToolBatchResult>();
@@ -771,6 +771,7 @@ internal sealed class ChildAgentModelLoop
                 assignment,
                 modelProfileId,
                 result.Result,
+                childContext.RepositoryPath,
                 ledger,
                 evidenceProgress,
                 cancellationToken);
@@ -799,6 +800,7 @@ internal sealed class ChildAgentModelLoop
         AgentAssignment assignment,
         ModelProfileId modelProfileId,
         ToolInvocationResult result,
+        string repositoryPath,
         AgentBudgetLedger ledger,
         ChildAgentEvidenceProgressTracker evidenceProgress,
         CancellationToken cancellationToken)
@@ -836,6 +838,7 @@ internal sealed class ChildAgentModelLoop
                 Content = content,
                 Provenance = new EvidenceProvenance
                 {
+                    RepositoryPath = repositoryPath,
                     Source = $"tool:{result.ToolId}",
                     SourcePath = source?.Identifier,
                     ToolInvocationId = result.ToolInvocationId,
@@ -844,6 +847,7 @@ internal sealed class ChildAgentModelLoop
                     ModelProfileId = modelProfileId,
                     BaselineIdentity = plan.Provenance.BaselineIdentity,
                 },
+                FileDependencies = ToolEvidenceAdmission.GetFileDependencies(result, repositoryPath),
                 CollectedAt = DateTimeOffset.UtcNow,
                 Relevance = result.Succeeded ? 0.8 : 1,
                 EstimatedTokens = Math.Max(1, TokenEstimator.Estimate(content)),

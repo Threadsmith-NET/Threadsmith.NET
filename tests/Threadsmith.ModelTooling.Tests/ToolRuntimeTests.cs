@@ -326,7 +326,7 @@ public static partial class ToolRuntimeTests
             .EnumerateObject()
             .Select(property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
-        Assert.True(properties.SetEquals(["query", "maxFiles"]));
+        Assert.True(properties.SetEquals(["query", "maxFiles", "concepts"]));
         Assert.Equal(
             "query",
             Assert.Single(schema.RootElement.GetProperty("required").EnumerateArray()).GetString());
@@ -350,7 +350,7 @@ public static partial class ToolRuntimeTests
             .EnumerateObject()
             .Select(property => property.Name)
             .ToHashSet(StringComparer.Ordinal);
-        Assert.True(strictProperties.SetEquals(["query", "maxFiles"]));
+        Assert.True(strictProperties.SetEquals(["query", "maxFiles", "concepts"]));
         Assert.Equal(
             query.GetProperty("description").GetString(),
             strictSchema.RootElement.GetProperty("properties").GetProperty("query").GetProperty("description").GetString());
@@ -2471,7 +2471,7 @@ public static partial class ToolRuntimeTests
         Assert.True(properties.TryGetProperty("timeoutSeconds", out var timeoutSchema));
         Assert.Equal(0, timeoutSchema.GetProperty("minimum").GetInt32());
         Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
-        Assert.Equal(2, properties.EnumerateObject().Count());
+        Assert.Equal(3, properties.EnumerateObject().Count());
         Assert.False(tool.Definition.ConversationAvailable);
         Assert.Equal(ApprovalLevel.User, tool.Definition.RequiredApproval);
     }

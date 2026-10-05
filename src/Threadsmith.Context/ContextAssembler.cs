@@ -797,6 +797,7 @@ public sealed class ContextAssembler : IContextAssembler
             CompactedThroughMessageSequence = null,
             ConversationItems = conversation.CreateProjections(),
             RepositoryMemoryItems = repositoryMemory.CreateProjections(),
+            RepositoryMemorySearch = repositoryMemory.SearchDetails,
             ContextPressurePercent = contextPressurePercent,
             CompactionRecommended = compactionRecommended,
             CompactionRationale = compactionRecommended
@@ -869,7 +870,8 @@ public sealed class ContextAssembler : IContextAssembler
             toolInventoryDigest,
             instructionBundle.Digest,
             providerInstructions,
-            repositoryMemory.CreateInclusions());
+            repositoryMemory.CreateInclusions(),
+            repositoryMemory.ConceptResolutionPending);
     }
 
     /// <inheritdoc />
@@ -1089,6 +1091,8 @@ public sealed class ContextAssembler : IContextAssembler
                 CurrentInstruction = _sanitizer.Sanitize(request.RepositoryMemoryCurrentInstruction ?? conversation.CurrentTurnContent),
                 TaskIntent = task.Intent,
                 Options = request.RepositoryMemoryOptions ?? new RepositoryMemoryOptions(),
+                Concepts = request.RepositoryMemoryConcepts,
+                RetainedMemories = request.RetainedRepositoryMemories,
             },
             cancellationToken);
         foreach (var entry in retrieval.StandingPreferences)
@@ -1108,6 +1112,8 @@ public sealed class ContextAssembler : IContextAssembler
             }
         }
 
+        assembly.ConceptResolutionPending = retrieval.ConceptResolutionPending;
+        assembly.SearchDetails = retrieval.SearchDetails;
         assembly.Reductions.AddRange(retrieval.Diagnostics);
         assembly.Reductions.Add($"Memory query cache reused: {retrieval.QueryEmbeddingCacheHit}; ranking cache reused: {retrieval.RankingCacheHit}.");
         return assembly;
@@ -1569,6 +1575,10 @@ public sealed class ContextAssembler : IContextAssembler
 
     private sealed class RepositoryMemoryAssemblyState
     {
+        public bool ConceptResolutionPending { get; set; }
+
+        public RepositoryMemorySearchDetails? SearchDetails { get; set; }
+
         private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _included = [];
         private readonly List<RepositoryMemoryContextItemProjection> _excluded = [];
         private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _standingPreferences = [];

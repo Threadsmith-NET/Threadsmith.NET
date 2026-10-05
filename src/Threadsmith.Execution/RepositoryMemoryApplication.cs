@@ -4,7 +4,7 @@ using Threadsmith.Core;
 
 /// <summary>Routes explicit user commands through the same memory service as the model tool.</summary>
 public sealed class RepositoryMemoryApplication :
-    ICommandHandler<RememberRepositoryMemoryCommand, RepositoryMemoryEntry>,
+    ICommandHandler<RememberRepositoryMemoryCommand, RepositoryMemoryOperationResult>,
     ICommandHandler<ListRepositoryMemoryCommand, RepositoryMemoryReadSnapshot>,
     ICommandHandler<InspectRepositoryMemoryCommand, RepositoryMemoryEntry?>,
     ICommandHandler<UpdateRepositoryMemoryCommand, RepositoryMemoryEntry>,
@@ -25,9 +25,23 @@ public sealed class RepositoryMemoryApplication :
     }
 
     /// <inheritdoc />
-    public Task<RepositoryMemoryEntry> HandleAsync(RememberRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+    public Task<RepositoryMemoryOperationResult> HandleAsync(RememberRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
     {
-        return WriteAsync(command.SessionId, command.RepositoryIdentity, "add", null, command.Text, command.MemoryType, cancellationToken);
+        return _memories.ExecuteAsync(
+            new RepositoryMemoryOperationRequest
+        {
+            RepositoryIdentity = command.RepositoryIdentity,
+            Action = "add",
+            Text = command.Text,
+            MemoryType = command.MemoryType,
+            Kind = command.Kind,
+            Concepts = command.Concepts,
+            ConfirmDistinctFrom = command.ConfirmDistinctFrom,
+            Origin = RepositoryMemoryOrigin.Manual,
+            SourceSessionId = command.SessionId.Value.ToString("D"),
+            Options = _options.Capture(command.RepositoryIdentity),
+        },
+            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -46,13 +60,13 @@ public sealed class RepositoryMemoryApplication :
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(UpdateRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
     {
-        return WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
+        return WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, command.ExpectedRevision, command.Kind, command.Concepts, cancellationToken);
     }
 
     /// <inheritdoc />
     public Task<RepositoryMemoryEntry> HandleAsync(SupersedeRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
     {
-        return WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, cancellationToken);
+        return WriteAsync(command.SessionId, command.RepositoryIdentity, "update", command.MemoryId, command.ReplacementText, command.MemoryType, null, null, null, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -79,7 +93,7 @@ public sealed class RepositoryMemoryApplication :
         throw new InvalidOperationException("Memory validation and categories have been retired. Use /memory list, inspect <id>, update <id> <text>, or forget <id>.");
     }
 
-    private async Task<RepositoryMemoryEntry> WriteAsync(SessionId sessionId, string repositoryIdentity, string action, RepositoryMemoryId? id, string text, RepositoryMemoryType? memoryType, CancellationToken cancellationToken)
+    private async Task<RepositoryMemoryEntry> WriteAsync(SessionId sessionId, string repositoryIdentity, string action, RepositoryMemoryId? id, string text, RepositoryMemoryType? memoryType, long? expectedRevision, ManagedRepositoryMemoryKind? kind, IReadOnlyList<string>? concepts, CancellationToken cancellationToken)
     {
         var result = await _memories.ExecuteAsync(
             new RepositoryMemoryOperationRequest
@@ -89,6 +103,9 @@ public sealed class RepositoryMemoryApplication :
                 Id = id,
                 Text = text,
                 MemoryType = memoryType,
+                ExpectedRevision = expectedRevision,
+                Kind = kind,
+                Concepts = concepts,
                 Origin = RepositoryMemoryOrigin.Manual,
                 SourceSessionId = sessionId.Value.ToString("D"),
                 Options = _options.Capture(repositoryIdentity),

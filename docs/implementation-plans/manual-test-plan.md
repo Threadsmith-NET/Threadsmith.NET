@@ -2246,3 +2246,25 @@ Expected: all outcomes use shared host commands and existing trust rules; failed
 3. Supply matching expectations and verify a single preflight report precedes the normal request. Confirm the check does not rewrite repository preferences. Cancel startup and verify exit 130.
 
 **Expected:** effective values are reported through shared selection policy, and failed assertions prevent request submission.
+
+### MTP-276 — Memory reconciliation and superseding
+
+Prerequisites: disposable repository, deployed local models, tool-capable provider, reconciliation enabled with recorded candidate limits.
+
+1. Through the real model tool and manual commands, create a situational note and a standing preference. List their IDs/revisions and verify relevant context; standing preferences also appear on unrelated non-Stateless turns.
+2. Ask the model to save a similar correction. Inspect the actual `memories` call/result: `reconciliationRequired`, no new row/eviction, current candidate text/ID/revision. Have it update that ID with expectedRevision; verify revision advances, replacement text appears in context and no duplicate remains. Repeat for both types and manually.
+3. Repeat with a related but distinct note and explicit current id/revision confirmations. Verify one new entry and an unchanged original. Change a candidate after the response and retry the old confirmation; expect a fresh collision. Add another candidate concurrently; expect a refreshed decision or bounded conflict.
+4. Supply concepts with a proposed add that misses text discovery; exercise exact/fuzzy concept matches using `Reconciliation:Concepts` and verify full proposed-text scores order candidates independently of recall settings for caller review. Cancel/fail required inference and overflow a complete model-pair window at capacity one. Verify no write/eviction. Exercise duplicate no-ops, kind/concept changes and clearing, stale update revisions, bounded candidate omissions and both removal paths. Removed notes must leave subsequent context.
+
+Expected: the host exposes the decision and the model/user chooses superseding or distinctness; successful superseding replaces the same ID. Normal policy, lifecycle events, cancellation and receipt accounting remain intact.
+
+### MTP-277 — Progressive concept recall and native deployment
+
+Prerequisites: disposable notes with known concepts, concept recall plus reranking enabled with recorded candidate limits and fuzzy edit-cost bound (default 1), ordinary multi-round model request and a plan with multiple tranches.
+
+1. Begin with a note outside text-search results. Issue an admitted native tool call with a matching concept and verify it is considered before the next normal model request. Inspect successful complete reranking, eligibility of negative scores, reserved candidate limit and final capacity. Verify no added generative request. Change only hints on a duplicate operational call; it remains a duplicate. Denied/invalid calls contribute no hints.
+2. Continue through tool rounds, compaction and another plan tranche. Verify selected notes retain bounded slots; update/delete them and inspect the actual next request for stale current memory. Steer the task, change repository, start a new run and execute a child; verify appropriate re-evaluation and state isolation. Repeat with recall disabled, Stateless and memory denied.
+3. Exercise exact concepts, typo/noisy-short-term queries and repository vocabulary changes. Enable the scenario’s `Fuzzy:Enabled` lookup with an exercise distance and bounded expansions; verify both recall and reconciliation find a misspelled text query while exact candidates retain their scores. Confirm alternatives for one original term cannot satisfy two required terms. Corrupt/remove the native asset in an isolated installation: exact recall remains available with degradation, while enabled reconciliation cannot write after incomplete configured discovery. Restore it and verify recovery on a subsequent lookup.
+4. On every supported RID, use the published payload to load spellfix1 into SQLite, create/query a vocabulary and record the native digest and result. Run representative held-out memory notes/queries with shipped embeddings/reranker; record false collisions, missed collisions, concept admissions, omissions and cold/warm latency to evaluate production ranking quality and candidate limits.
+
+Expected: tool hints remain bounded metadata, all discovered notes pass ordinary relevance/context policy, and partial native/quality evidence is explicitly reported rather than treated as full release verification.

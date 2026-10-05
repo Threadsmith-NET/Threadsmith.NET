@@ -71,12 +71,43 @@ Configure these settings through ordinary machine, user, repository, session, CL
     "config": {
       "memories": {
         "MaxNumberOfRepoMemories": 20,
-        "MaxRepoMemoriesInContext": 3,
-        "SemanticMinimum": 0.47,
-        "RerankerEnabled": false,
-        "RerankerCandidateLimit": 8,
-        "RerankerMinimumScore": null,
-        "standingPreferenceWarningThreshold": 3
+        "standingPreferenceWarningThreshold": 3,
+        "Recall": {
+          "MaximumResults": 3,
+          "SemanticMinimum": 0.47,
+          "RerankerEnabled": false,
+          "RerankerCandidateLimit": 8,
+          "Concepts": {
+            "Enabled": false,
+            "CandidateLimit": 4
+          },
+          "Fuzzy": {
+            "Enabled": false,
+            "MaximumDistance": 1
+          },
+          "Lexical": {
+            "MaximumExpansionsPerTerm": 3,
+            "MaximumExpansions": 16
+          }
+        },
+        "Reconciliation": {
+          "Enabled": false,
+          "SemanticMinimum": 0.47,
+          "RerankerEnabled": true,
+          "RerankerCandidateLimit": 20,
+          "Concepts": {
+            "Enabled": true,
+            "CandidateLimit": 4
+          },
+          "Fuzzy": {
+            "Enabled": false,
+            "MaximumDistance": 1
+          },
+          "Lexical": {
+            "MaximumExpansionsPerTerm": 3,
+            "MaximumExpansions": 16
+          }
+        }
       }
     }
   }
@@ -85,9 +116,9 @@ Configure these settings through ordinary machine, user, repository, session, CL
 
 Storage capacity must be positive; the situational context limit may be zero to disable situational retrieval and cannot effectively exceed storage capacity. A lower capacity is enforced only when the next repository bind/configuration refresh succeeds. Failed repository opens preserve the target repository's stored memories and pending memory migration. `SemanticMinimum` must be a finite double in `[-1, 1]`. Raising it makes semantic retrieval more selective; lowering it permits weaker semantic matches. At `1`, no semantic candidate can pass the strict comparison, while lexical retrieval still works. Memory configuration is captured per operation and user turn when the repository is bound. Threadsmith does not watch configuration files for live reload: restart or reopen the repository after a file edit. A threshold-only change reranks cached retrieval for the next request while reusing query vectors; it does not rebuild note vectors or change `SpaceId`. Tool enable/deny controls withhold model operations and automatic memory injection together; explicit manual management remains available. Old `context:repositoryMemory` settings are ignored with a deprecation diagnostic.
 
-Set `tools:config:memories:RerankerEnabled` to `true` to enable optional local cross-encoder reranking after hybrid lexical/semantic qualification and before the final context cap. It is disabled by default. `RerankerCandidateLimit` defaults to 8 and accepts any positive count; a smaller pool can return fewer memories than the context maximum. A successful score uses a raw relevance logit: higher ranks first, with hybrid score and stable ID breaking ties. `RerankerMinimumScore` defaults to `null` (no rejection); an explicitly supplied finite value requires a score strictly above it. This is a separate scale from cosine similarity. A repository JSON `null` clears an inherited reranker cutoff. `standingPreferenceWarningThreshold` defaults to 3 and accepts nonnegative values. At startup, after a successful manual or model addition, or after an update explicitly selecting standingPreference, following any eviction, Threadsmith warns only when the standing-preference count is greater than that threshold: `You now have {n} preference memories. You may want to consider adding some of these to AGENTS.md for the repo.` No rejection default has been calibrated for repository memories.
+Set `tools:config:memories:Recall:RerankerEnabled` to `true` to enable optional local cross-encoder reranking after hybrid lexical/semantic qualification and before the final context cap. It is disabled by default. `RerankerCandidateLimit` defaults to 8 and accepts any positive count; a smaller pool can return fewer memories than the context maximum. A successful score uses a raw relevance logit: higher ranks first, with hybrid score and stable ID breaking ties. Raw logits are used only for ordering discovered candidates, including negative scores. Candidate and context limits bound selection. `standingPreferenceWarningThreshold` defaults to 3 and accepts nonnegative values. At startup, after a successful manual or model addition, or after an update explicitly selecting standingPreference, following any eviction, Threadsmith warns only when the standing-preference count is greater than that threshold: `You now have {n} preference memories. You may want to consider adding some of these to AGENTS.md for the repo.`
 
-`reranking:cpuThreads` is a startup-only setting, default 8, any positive count. Restart to change it. The model is loaded lazily and reused; disabling reranking or having no candidates avoids inference. Source users run `eng/Stage-RerankerAssets.ps1` to stage the pinned model and vocabulary; releases bundle them. Runtime performs no downloads. Missing assets, inference errors, invalid scores or any truncated query-memory pair retain the original hybrid selection and produce diagnostics. Failed reranking is cached only within an identified user turn and retried later. The reranker does not rewrite the query or memories.
+`reranking:cpuThreads` is a startup-only setting, default 8, any positive count. Restart to change it. The model is loaded lazily and reused; disabling ordinary reranking or having no recall candidates avoids conversational reranking inference; enabled reconciliation scores independently. Source users run `eng/Stage-RerankerAssets.ps1` to stage the pinned model and vocabulary; releases bundle them. Runtime performs no downloads. Missing assets, inference errors, invalid scores or any truncated query-memory pair retain the original hybrid selection and produce diagnostics. Failed reranking is cached only within an identified user turn and retried later. The reranker does not rewrite the query or memories.
 
 Included situational memories carry the caption **Repository memories that may be helpful**, followed by guidance to use them only when relevant. Standing preferences have a separate **Standing preferences** caption and guidance that they apply across requests. Both remain untrusted reference data. Standing preferences bypass the 2,000-token situational framing budget; all content and captions still count toward the model input capacity.
 
@@ -111,6 +142,56 @@ The bundled CPU encoder works locally and independently of the conversational mo
 - the before/after complete-request token estimates and active-turn outcome. The shared headless inspection projection additionally carries exact-source candidate, removed, retained, and opaque counts; source characters reclaimed before receipt overhead; and whether projection avoided a summary.
 
 Inspection contains metadata, bounded sanitized memory content only in the assembled prompt, and no secret/provider/tool payloads.
+
+## Reconciliation and concept recall
+
+Reconciliation applies to both manual and model adds and searches both standing preferences and situational notes. It is independently configurable from conversational recall, including when `Recall:MaximumResults` is zero. A sufficiently similar note returns a non-writing collision response with its stable ID, current revision and text. Choose an update of that ID or explicitly confirm that the proposed note is distinct. The model receives the same decision through the ordinary `memories` tool result.
+
+```text
+/memory remember --type situational --kind constraint --concepts cancellation Pass cancellation tokens through async boundaries.
+/memory update <id> --expected-revision 1 --concepts cancellation,async Include async iterators in this convention.
+/memory remember --confirm-distinct-from <id>@1 This is a separate convention.
+/memory update <id> --concepts [] Keep the note but clear its concepts.
+```
+
+Use `--` before text beginning with option-like syntax. `kind` is `unspecified`, `constraint`, `decision`, `convention`, `requirement`, or `finding`; it describes content independently of memory type. Omitted/null metadata on update preserves the existing values, while an empty concept list clears them. Concepts normalize with Unicode NFKC, trimming, invariant lowercasing and ordinal deduplication. At most eight inputs are accepted, each up to 48 Unicode scalar values comprising letters/digits and single internal hyphens. Kind and concepts do not boost ranks or grant authority.
+
+Superseding replaces the existing ID and advances its revision. A stale expected revision fails without overwriting newer content. A distinctness retry must acknowledge the current revisions of every returned collision; concurrent new/changed candidates trigger another decision. The transaction fences the searched repository revision and permits one search retry before reporting conflict. Failed, cancelled, truncated or incomplete required comparisons never permit a write or capacity eviction. Exact text duplicates still return the existing ID. Collision output is bounded; omitted candidates are reported and cannot be silently acknowledged. Search uses an independent result bound: reconciliation does not inherit the conversational context cap or storage capacity. Structured search details report lexical, semantic, reranker and concept branch states (`Disabled`, `NotRequired`, `Completed`, `Unavailable`, `Incomplete`), discovered candidate counts, comparison-window omissions, result-limit omissions and pair truncation. Comparison-window omissions are separate from serialized-output omissions; the bounded check is not exhaustive duplicate detection. Manual collision feedback reports the comparison-window count, and model results carry the same search details.
+
+The settings below are relative to `tools:config:memories`:
+
+Each scenario has its own block under `tools:config:memories`. These search settings have the same meaning in both blocks:
+
+| Setting within block | Recall default | Reconciliation default | Meaning |
+|---|---|---|---|
+| `SemanticMinimum` | `0.47` | `0.47` | Strict cosine discovery minimum in `[-1,1]`. |
+| `RerankerEnabled` | `false` | `true` | Order discovered candidates with complete cross-encoder scores. Required when reconciliation is enabled. |
+| `RerankerCandidateLimit` | `8` | `20` | Positive hybrid comparison window. |
+| `Concepts:Enabled` | `false` | `true` | Discover additional candidates from tool hints (recall) or supplied memory concepts (reconciliation). |
+| `Concepts:CandidateLimit` | `4` | `4` | Additional reserved concept-only comparison slots. |
+| `Fuzzy:Enabled` | `false` | `false` | Use spelling alternatives for both unmatched memory-text terms and unmatched concepts. |
+| `Fuzzy:MaximumDistance` | `1` | `1` | Positive native spellfix weighted edit-cost bound. |
+| `Lexical:MaximumExpansionsPerTerm` | `3` | `3` | One to three alternatives per unmatched text term of at least five characters. |
+| `Lexical:MaximumExpansions` | `16` | `16` | Positive total additional text-term bound per query. |
+
+`Recall:MaximumResults` defaults to 3; zero disables situational recall without suppressing standing preferences. `Recall:MaximumQueryCharacters` defaults to 8,000. `Reconciliation:Enabled` defaults to false; its returned candidate bound is the hybrid window plus enabled concept slots. Storage capacity, standing-preference warnings, memory text/list limits and shared query-term/cache/diagnostic bounds remain top-level because they apply across operations.
+
+Configuration migration: move top-level recall search keys into `Recall`, rename `MaxRepoMemoriesInContext` to `Recall:MaximumResults`, and move `ConceptRecall` into `Recall:Concepts`. Rename reconciliation `CandidateLimit` to `RerankerCandidateLimit`. Copy former top-level lexical expansion limits into each scenario’s `Lexical` block, and replace separate text/concept fuzzy switches with one `Fuzzy` block per scenario. Retired paths are rejected with migration guidance rather than silently ignored. Repository overrides inherit only the corresponding scenario’s values; reopening another repository restores the fallback values.
+
+Cross-encoder scores only order discovered candidates; they are not absolute relevance probabilities. Candidate and result limits bound output. Fuzzy distance defaults to 1 in native spellfix weighted edit-cost units, not unit-cost character edits. Evaluate ranking quality and fuzzy coverage with representative notes. Concept admission also requires `Recall:RerankerEnabled=true`; otherwise concept-only discovery is deferred with a diagnostic. Reconciliation uses `Reconciliation:RerankerEnabled`, default true; validation rejects false while reconciliation is enabled. `MaximumListBytes` defaults to 48 KiB and must be at least 24 KiB with reconciliation enabled. Restart or reopen the repository after editing these settings.
+
+Native tool concepts are ephemeral applicability hints, not new memories. Up to 64 distinct hints accumulate per active run, in deterministic order, and refresh memory before the next ordinary model continuation. Selected situational memories retain slots within the existing context cap across tool rounds and plan tranches; updated entries are re-evaluated and removed entries disappear. Steering changes relevance, and repository changes or a new run clear the state. Child loops keep independent state. Hints are not inferred from tool results, persisted in conversation archives, or used to request another model call.
+
+When a provider continuation is bound to previously delivered history, memory refresh preserves that history and appends a current snapshot after completed tool results through the existing continuation path. The snapshot supersedes earlier memory context; an empty snapshot indicates that no memories are currently included. Updated or removed text in earlier delivered snapshots remains historical. Current inclusion metadata and receipt accounting follow the refreshed selection.
+
+Exact concept lookup uses stored normalized metadata. Both consumers can discover concept-only candidates; reconciliation uses concepts supplied with an add and compares full proposed text against existing memory text to rank candidates for caller review. Its concept slots supplement its hybrid candidate window, and the result bound covers both windows. Explicit updates still replace the identified revision without running a new add check.
+
+Optional spellfix1 supports two separate vocabularies in one persistence-owned native connection: stored concepts and indexed memory-text terms. Lexical expansion uses the repository's FTS vocabulary in the same read transaction as content, revision and matches. It expands only unmatched terms of at least five characters, keeps original terms and exact BM25 results, and appends fuzzy-only matches after exact lexical matches. Alternatives count once per original query term, preserving the existing multi-term qualification rule. The original full text still supplies semantic inference and reranking. No repository files are scanned.
+
+The native owner retains at most these two vocabularies, reusing them for the same repository/revision/vocabulary and replacing changed state. Cancellation or native failure discards derived state; owner disposal releases the connection. Context hint caches distinguish vocabulary scope. Degraded fuzzy results are retried rather than cached as success. Missing/invalid assets preserve exact conversational recall with visible degradation; an enabled reconciliation check with incomplete configured discovery cannot authorize a write. Structured inspection/tool results report separate exact and fuzzy lexical branch states and bounded expansion mappings, alongside concept outcomes and comparison/result omissions. No extra inspector or vector output is introduced.
+
+Migration 12 defaults existing rows to unspecified kind and empty concepts, rebuilds text FTS membership for both types, and preserves IDs, types, text, vectors and usage. Since adding standing preferences changes BM25 corpus statistics, lexical ranks can change. Metadata-only updates preserve vector bytes and attach them to the new content revision. Removing a note cascades its concept rows. The repository-bound store forwards concept resolution through the same active binding.
+
 
 ## Active-turn tool continuation compaction
 
@@ -249,11 +330,10 @@ Compiled defaults:
 | `compactionPressurePercent` | 75 |
 | `artifactThresholdCharacters` | 16,384 |
 | `tools:config:memories:MaxNumberOfRepoMemories` | 20 |
-| `tools:config:memories:MaxRepoMemoriesInContext` | 3 |
-| `tools:config:memories:SemanticMinimum` | 0.47; finite `[-1, 1]`, with strict semantic score comparison |
-| `tools:config:memories:RerankerEnabled` | `false` |
-| `tools:config:memories:RerankerCandidateLimit` | 8; any positive count |
-| `tools:config:memories:RerankerMinimumScore` | `null`; optional finite raw-logit strict minimum |
+| `tools:config:memories:Recall:MaximumResults` | 3 |
+| `tools:config:memories:Recall:SemanticMinimum` | 0.47; finite `[-1, 1]`, with strict semantic score comparison |
+| `tools:config:memories:Recall:RerankerEnabled` | `false` |
+| `tools:config:memories:Recall:RerankerCandidateLimit` | 8; any positive count |
 | `tools:config:memories:standingPreferenceWarningThreshold` | 3; nonnegative, warns when count is greater |
 | `reranking:cpuThreads` | 8; startup-only, any positive count |
 | `activeTurnCompaction.summaryBudgetTokens` | 16,384 trusted-only |

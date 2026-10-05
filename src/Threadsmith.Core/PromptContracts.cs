@@ -206,6 +206,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextActiveRunSteering prompt asset.</summary>
     public const string ContextActiveRunSteering = "Context-ActiveRun-Steering.md";
 
+    /// <summary>Gets the current memory snapshot wrapper appended at a replay-compatible continuation boundary.</summary>
+    public const string ContextRepositoryMemoryRefresh = "Context-RepositoryMemory-Refresh.md";
+
     /// <summary>Gets the stable filename for the ContextExecutionOutcome prompt asset.</summary>
     public const string ContextExecutionOutcome = "Context-ExecutionOutcome.md";
 
@@ -1115,6 +1118,7 @@ public static class PromptFileNames
         ContextActiveTurnSummaryUntrustedWrapper,
         ContextActiveTurnSummaryHostFileLists,
         ContextActiveRunSteering,
+        ContextRepositoryMemoryRefresh,
         ContextExecutionOutcome,
         ContextIncrementalPlanning,
         ContextReplanning,
@@ -1547,6 +1551,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolDelegateAgentsDelegationOmission,
             PromptFileNames.ToolDelegateAgentsSteering,
             PromptFileNames.ContextActiveRunSteering,
+            PromptFileNames.ContextRepositoryMemoryRefresh,
             PromptFileNames.ContextExecutionOutcome,
             PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
             PromptFileNames.ToolToolInvocationCompleted,
@@ -1690,6 +1695,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper] = Set("Version", "SummaryContent"),
                     [PromptFileNames.ContextActiveTurnSummaryHostFileLists] = Set("FilesRead", "FilesChanged"),
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
+                    [PromptFileNames.ContextRepositoryMemoryRefresh] = Set("Text"),
                     [PromptFileNames.ContextExecutionOutcome] = Set("OutcomeJson"),
                     [PromptFileNames.ContextIncrementalPlanning] = Set(
                         "PlansUsed",

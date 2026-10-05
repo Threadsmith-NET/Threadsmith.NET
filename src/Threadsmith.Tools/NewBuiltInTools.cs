@@ -80,8 +80,11 @@ public enum ScriptKind
 }
 
 /// <summary>Input for bounded isolated C# script execution.</summary>
-public sealed record CSharpScriptInput
+public sealed record CSharpScriptInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>C# expression or statement sequence.</summary>
     public required string Code { get; init; }
 

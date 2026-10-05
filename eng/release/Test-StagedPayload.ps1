@@ -5,6 +5,18 @@ Assert-ReleaseRid $RuntimeIdentifier
 & (Join-Path $PSScriptRoot 'Test-EmbeddingPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
 & (Join-Path $PSScriptRoot 'Test-RerankerPayload.ps1') -StageDirectory $StageDirectory -RuntimeIdentifier $RuntimeIdentifier
 $stage = (Resolve-Path -LiteralPath $StageDirectory).Path
+$spellfixSuffix = if ($RuntimeIdentifier.StartsWith('win-')) { '.dll' } elseif ($RuntimeIdentifier.StartsWith('osx-')) { '.dylib' } else { '.so' }
+$spellfixDirectory = Join-Path $stage 'native/spellfix'
+foreach ($name in @("spellfix$spellfixSuffix", "spellfix$spellfixSuffix.sha256", 'SOURCE.json', 'LICENSE.txt')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $spellfixDirectory $name) -PathType Leaf)) { throw "Staged spellfix payload is missing $name." }
+}
+$spellfixSource = Get-Content -LiteralPath (Join-Path $spellfixDirectory 'SOURCE.json') -Raw | ConvertFrom-Json
+$spellfixHash = (Get-FileHash -LiteralPath (Join-Path $spellfixDirectory "spellfix$spellfixSuffix") -Algorithm SHA256).Hash
+if ($spellfixSource.runtimeIdentifier -ne $RuntimeIdentifier -or $spellfixSource.sha256 -ne $spellfixHash -or
+    (Get-Content -LiteralPath (Join-Path $spellfixDirectory "spellfix$spellfixSuffix.sha256") -Raw).Trim() -ne $spellfixHash) {
+    throw 'Staged spellfix identity/hash mismatch.'
+}
+
 $suffix = if ($RuntimeIdentifier.StartsWith('win-')) { '.exe' } else { '' }
 $ripgrepRelativePath = "tools/rg$suffix"
 foreach ($name in @("Threadsmith.App$suffix", "Threadsmith.Scripting.Worker$suffix", $ripgrepRelativePath, 'third-party/ripgrep/LICENSE-MIT', 'third-party/ripgrep/UNLICENSE', 'third-party/ripgrep/SOURCE.json', 'third-party/THIRD-PARTY-NOTICES.txt', 'third-party/sbom.spdx.json', 'third-party/dotnet-runtime/LICENSE.txt', 'third-party/dotnet-runtime/THIRD-PARTY-NOTICES.txt', 'third-party/dotnet-runtime/PROVENANCE.json', 'release-compliance.json', 'LICENSE', 'config.example', 'providers.example.json', 'ThreadsmithDocs/manifest.json')) {

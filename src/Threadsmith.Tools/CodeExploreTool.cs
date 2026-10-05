@@ -7,8 +7,11 @@ using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Minimal model-facing arguments for C# code exploration.</summary>
-public sealed record CodeExploreInput
+public sealed record CodeExploreInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Natural-language question, symbol, file, or code term to explore.</summary>
     public required string Query { get; init; }
 

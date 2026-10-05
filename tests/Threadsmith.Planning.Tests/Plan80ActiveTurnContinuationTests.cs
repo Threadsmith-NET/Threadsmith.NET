@@ -550,8 +550,8 @@ public static class Plan80ActiveTurnContinuationTests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            // Preserve continuation headroom with the expanded deployed planning tool description.
-            var profile = CreateProfile() with { ContextWindow = 4_230 };
+            // The expanded system prompt must leave room for summary admission, while the final continuation still requires delivered-result reduction.
+            var profile = CreateProfile() with { ContextWindow = 4_300 };
             var assembler = CreateAssembler(
                 events,
                 evidence,
@@ -848,7 +848,7 @@ public static class Plan80ActiveTurnContinuationTests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var profile = CreateProfile();
+            var profile = CreateProfile() with { ContextWindow = 4_500 };
             var usage = new SessionUsageProjection();
             var model = new BaselineProjectionProvider();
             var application = new SessionApplication(
@@ -927,14 +927,14 @@ public static class Plan80ActiveTurnContinuationTests
             var cumulativeReplay = replayRequests.Sum(item => (long)item.WireInputTokens);
             var failedRetryCumulative = retryAttempt.WireInputTokens * 2L;
 
-            Assert.Equal(1_822, overlapping.WireInputTokens);
-            Assert.Equal(3_295, unique.WireInputTokens);
-            Assert.Equal(1_822, replayRequests[^1].WireInputTokens);
-            Assert.Equal(4_837, cumulativeReplay);
-            Assert.Equal(1_190, overlapping.NativeToolTokens);
+            Assert.Equal(1_808, overlapping.WireInputTokens);
+            Assert.Equal(3_281, unique.WireInputTokens);
+            Assert.Equal(1_808, replayRequests[^1].WireInputTokens);
+            Assert.Equal(4_795, cumulativeReplay);
+            Assert.Equal(1_176, overlapping.NativeToolTokens);
             Assert.Equal(12, overlapping.FramingTokens);
-            Assert.Equal(3_331, model.Requests[1].WireEstimate?.WireInputTokens);
-            Assert.Equal(3_905, model.Requests[2].WireEstimate?.WireInputTokens);
+            Assert.Equal(3_473, model.Requests[1].WireEstimate?.WireInputTokens);
+            Assert.Equal(4_047, model.Requests[2].WireEstimate?.WireInputTokens);
             Assert.True(unique.WireInputTokens > overlapping.WireInputTokens);
             Assert.True(cumulativeReplay > replayRequests[^1].WireInputTokens);
             Assert.Equal(retryAttempt.WireInputTokens * 2L, failedRetryCumulative);

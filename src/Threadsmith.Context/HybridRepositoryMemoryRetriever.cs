@@ -7,7 +7,7 @@ using System.Text;
 using Threadsmith.Core;
 
 /// <summary>Small exact hybrid search with snapshot-consistent candidates and bounded turn-query caches.</summary>
-public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRetriever, IDisposable
+public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryMemoryRetriever, IRepositoryMemorySearch, IDisposable
 {
     private const double FusionConstant = 60;
     private static readonly HashSet<string> StopWords = new(
@@ -19,6 +19,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
     private readonly ITextCrossEncoder? _crossEncoder;
     private readonly Dictionary<string, TextEmbeddingResult> _queryCache = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RepositoryMemoryRetrievalResult> _rankingCache = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, IReadOnlyList<string>> _conceptCache = new(StringComparer.Ordinal);
     private readonly IManagedRepositoryMemoryStore _store;
 
     /// <summary>Initializes a new instance of the <see cref="HybridRepositoryMemoryRetriever"/> class.</summary>
@@ -35,16 +36,40 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
     }
 
     /// <inheritdoc />
-    public async Task<RepositoryMemoryRetrievalResult> RetrieveAsync(
+    public Task<RepositoryMemoryRetrievalResult> RetrieveAsync(
         RepositoryMemoryRetrievalRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        request.Options.Validate();
+        var query = BuildQuery(request, out var bounded);
+        return SearchAsync(
+            new RepositoryMemorySearchRequest
+        {
+            RepositoryIdentity = request.RepositoryIdentity,
+            Query = query,
+            QueryBounded = bounded,
+            Options = RepositoryMemorySearchOptions.ForRecall(request.Options),
+            UserTurnId = request.UserTurnId,
+            Concepts = request.Concepts,
+            RetainedMemories = request.RetainedMemories,
+        },
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<RepositoryMemoryRetrievalResult> SearchAsync(
+        RepositoryMemorySearchRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryIdentity);
         request.Options.Validate();
-        var semanticMinimum = request.Options.SemanticMinimum;
         cancellationToken.ThrowIfCancellationRequested();
-        var query = BuildQuery(request, out var bounded);
+        var concepts = request.Options.ConceptRecallEnabled ? request.Concepts.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(MemoryConcepts.MaximumPerTurn).ToArray() : [];
+        var semanticMinimum = request.Options.SemanticMinimum;
+        var query = request.Query;
+        var bounded = request.QueryBounded;
         IReadOnlyList<RepositoryMemoryEntry> standingPreferences = [];
         long? memorySetRevision = null;
         var timer = Stopwatch.StartNew();
@@ -52,20 +77,29 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         try
         {
             var terms = Tokenize(query).Where(term => !StopWords.Contains(term)).Take(request.Options.MaximumQueryTerms).ToArray();
-            var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, cancellationToken);
+            var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, cancellationToken);
             memorySetRevision = snapshot.Revision;
             standingPreferences = SelectStandingPreferences(snapshot);
-            snapshot = SelectSituationalSnapshot(snapshot);
-            if (request.Options.EffectiveContextMaximum == 0 || string.IsNullOrWhiteSpace(query) || snapshot.Entries.Count == 0)
+            snapshot = request.IncludeStandingPreferences ? snapshot : SelectSituationalSnapshot(snapshot);
+            if (request.Options.MaximumResults == 0 || string.IsNullOrWhiteSpace(query) || snapshot.Entries.Count == 0)
             {
-                var earlyDiagnostics = request.Options.EffectiveContextMaximum == 0
-                    ? [.. snapshot.Warnings, "Automatic situational-memory retrieval is disabled by the context limit."]
+                var earlyDiagnostics = request.Options.MaximumResults == 0
+                    ? [.. snapshot.Warnings, "Memory selection is disabled by the search result limit."]
                     : string.IsNullOrWhiteSpace(query)
                         ? [.. snapshot.Warnings, "The current situational-memory query is empty."]
                         : snapshot.Warnings;
                 return new RepositoryMemoryRetrievalResult([], earlyDiagnostics, snapshot.Revision)
                 {
                     StandingPreferences = standingPreferences,
+                    SearchDetails = new RepositoryMemorySearchDetails
+                    {
+                        Lexical = RepositoryMemorySearchBranchStatus.Completed,
+                        FuzzyLexical = snapshot.FuzzyLexicalStatus,
+                        LexicalExpansions = snapshot.LexicalExpansions,
+                        Semantic = RepositoryMemorySearchBranchStatus.NotRequired,
+                        Reranker = request.Options.RerankerEnabled ? RepositoryMemorySearchBranchStatus.NotRequired : RepositoryMemorySearchBranchStatus.Disabled,
+                        Concepts = request.Options.ConceptRecallEnabled ? RepositoryMemorySearchBranchStatus.NotRequired : RepositoryMemorySearchBranchStatus.Disabled,
+                    },
                 };
             }
 
@@ -77,9 +111,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             var diagnostics = new List<string>(snapshot.Warnings.Take(request.Options.MaximumDiagnostics));
             var crossEncoderModel = request.Options.RerankerEnabled ? GetCrossEncoderModel(diagnostics) : null;
             var rerankerKey = request.Options.RerankerEnabled
-                ? string.Join(':', crossEncoderModel?.ModelId ?? "unavailable", crossEncoderModel?.MaxInputTokens, crossEncoderModel?.MaxBatchSize, request.Options.RerankerCandidateLimit, request.Options.RerankerMinimumScore?.ToString("R", CultureInfo.InvariantCulture) ?? "none")
+                ? string.Join(':', crossEncoderModel?.ModelId ?? "unavailable", crossEncoderModel?.MaxInputTokens, crossEncoderModel?.MaxBatchSize, request.Options.RerankerCandidateLimit)
                 : "disabled";
-            var rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey, rerankerKey);
+            var rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
             var degradedKey = request.UserTurnId is { } turn ? rankKey + ":degraded:" + turn.Value.ToString("D") : null;
             if (_rankingCache.TryGetValue(rankKey, out var cached)
                 || (degradedKey is not null && _rankingCache.TryGetValue(degradedKey, out cached)))
@@ -88,7 +122,20 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             }
 
             var queryCacheHit = _queryCache.TryGetValue(queryKey, out var embedding);
-            if (!queryCacheHit)
+            if (!queryCacheHit && request.PreparedEmbedding is { } prepared
+                && request.PreparedEmbeddingSpaceId == model.SpaceId)
+            {
+                if (prepared.WasTruncated || prepared.InputTokenCount > model.MaxInputTokens
+                    || !EmbeddingValidation.IsValid(model, prepared))
+                {
+                    throw new ArgumentException("Prepared memory query embedding must represent the complete query.", nameof(request));
+                }
+
+                embedding = prepared;
+                AddBounded(_queryCache, queryKey, embedding, request.Options.MaximumCacheEntries);
+            }
+
+            if (embedding is null)
             {
                 try
                 {
@@ -118,15 +165,15 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 if (rebuilt)
                 {
                     // Both rankings must observe precisely the same content and vector generation after rebuild.
-                    snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, cancellationToken);
+                    snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, cancellationToken);
                     memorySetRevision = snapshot.Revision;
                     standingPreferences = SelectStandingPreferences(snapshot);
-                    snapshot = SelectSituationalSnapshot(snapshot);
-                    rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, queryKey, request.Options.MaxNumberOfRepoMemories, request.Options.EffectiveContextMaximum, minimumKey, rerankerKey);
+                    snapshot = request.IncludeStandingPreferences ? snapshot : SelectSituationalSnapshot(snapshot);
+                    rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
                 }
             }
 
-            var lexical = snapshot.LexicalMatches.OrderBy(match => match.Bm25).ThenBy(match => match.Id.Value)
+            var lexical = snapshot.LexicalMatches.OrderBy(match => match.IsFuzzy).ThenBy(match => match.Bm25).ThenBy(match => match.Id.Value)
                 .Select((match, index) => (match.Id, Rank: index + 1)).ToDictionary(match => match.Id, match => match.Rank);
             var semantic = embedding is null
                 ? []
@@ -136,7 +183,61 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     .OrderByDescending(match => match.Similarity).ThenBy(match => match.Id.Value)
                     .Select((match, index) => (match.Id, match.Similarity, Rank: index + 1))
                     .ToDictionary(match => match.Id, match => (match.Similarity, match.Rank));
-            var ranked = snapshot.Entries.Where(entry => lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id))
+            var resolvedConcepts = new HashSet<string>(StringComparer.Ordinal);
+            var vocabulary = snapshot.Entries.SelectMany(entry => entry.Concepts).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+            var pending = new List<string>();
+            string ConceptKey(string concept) => string.Join(':', request.RepositoryIdentity, snapshot.Revision, request.IncludeStandingPreferences, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, concept);
+            foreach (var concept in concepts)
+            {
+                if (_conceptCache.TryGetValue(ConceptKey(concept), out var resolved))
+                {
+                    resolvedConcepts.UnionWith(resolved);
+                }
+                else if (vocabulary.Contains(concept, StringComparer.Ordinal))
+                {
+                    resolvedConcepts.Add(concept);
+                    AddBounded(_conceptCache, ConceptKey(concept), (IReadOnlyList<string>)[concept], request.Options.MaximumCacheEntries);
+                }
+                else
+                {
+                    pending.Add(concept);
+                }
+            }
+
+            MemoryTermResolution resolution = new([]);
+            if (pending.Count > 0 && request.Options.ConceptFuzzyEnabled && _store is IRepositoryMemoryTermResolver resolver)
+            {
+                resolution = await resolver.ResolveTermsAsync(new RepositoryMemoryVocabularySnapshot(request.RepositoryIdentity, snapshot.Revision, vocabulary), pending, request.Options.ConceptFuzzyMaximumDistance, cancellationToken);
+            }
+            else if (pending.Count > 0 && request.Options.ConceptFuzzyEnabled)
+            {
+                resolution = new MemoryTermResolution([], "Concept fuzzy resolver unavailable; using exact concept matches only.");
+            }
+
+            if (resolution.DegradedReason is { } reason)
+            {
+                diagnostics.Add(reason);
+            }
+
+            foreach (var concept in pending)
+            {
+                var resolved = resolution.Matches.Where(match => match.Query == concept).Select(match => match.Term).ToArray();
+                resolvedConcepts.UnionWith(resolved);
+                if (resolution.DegradedReason is null)
+                {
+                    AddBounded(_conceptCache, ConceptKey(concept), (IReadOnlyList<string>)resolved, request.Options.MaximumCacheEntries);
+                }
+            }
+
+            foreach (var match in resolution.Matches)
+            {
+                diagnostics.Add($"Concept {match.Query} -> {match.Term}: spellfix distance={match.Distance}.");
+            }
+
+            var conceptMatches = snapshot.Entries
+                .Select(entry => (entry.Id, Matches: entry.Concepts.Intersect(resolvedConcepts, StringComparer.Ordinal).ToArray()))
+                .Where(item => item.Matches.Length > 0).ToDictionary(item => item.Id, item => item.Matches);
+            var ranked = snapshot.Entries.Where(entry => lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id) || conceptMatches.ContainsKey(entry.Id))
                 .Select(entry =>
                 {
                     int? lexicalRank = lexical.TryGetValue(entry.Id, out var rank) ? rank : null;
@@ -144,12 +245,44 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     int? semanticRank = hasSemantic ? vectorMatch.Rank : null;
                     var score = (lexicalRank is { } left ? 1d / (FusionConstant + left) : 0)
                         + (semanticRank is { } right ? 1d / (FusionConstant + right) : 0);
-                    return new RepositoryMemoryRetrievalCandidate(entry, score, lexicalRank, semanticRank, hasSemantic ? vectorMatch.Similarity : null);
+                    return new RepositoryMemoryRetrievalCandidate(entry, score, lexicalRank, semanticRank, hasSemantic ? vectorMatch.Similarity : null)
+                    {
+                        ConceptMatches = conceptMatches.GetValueOrDefault(entry.Id) ?? [],
+                    };
                 })
-                .OrderByDescending(candidate => candidate.Score).ThenBy(candidate => candidate.Entry.Id.Value)
-                .Take(Math.Max(request.Options.EffectiveContextMaximum, request.Options.RerankerEnabled ? request.Options.RerankerCandidateLimit : 0)).ToArray();
-            var (selected, rerankerDegraded) = await RerankAsync(
+                .OrderByDescending(candidate => candidate.Score).ThenBy(candidate => candidate.Entry.Id.Value).ToArray();
+            var hybridCandidates = ranked.Count(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null);
+            var conceptOnlyCandidates = ranked.Length - hybridCandidates;
+            var comparedCandidates = request.Options.RerankerEnabled
+                ? Math.Min(hybridCandidates, request.Options.RerankerCandidateLimit)
+                    + Math.Min(conceptOnlyCandidates, request.Options.ConceptRecallEnabled ? request.Options.ConceptCandidateLimit : 0)
+                : 0;
+            var (selected, rerankerStatus, pairTruncated) = await RerankAsync(
                 ranked, query, request.Options, crossEncoderModel, diagnostics, cancellationToken);
+            if (request.Options.ConceptRecallEnabled && request.RetainedMemories.Count > 0)
+            {
+                var entriesById = snapshot.Entries.ToDictionary(entry => entry.Id);
+                var qualifiedById = selected.ToDictionary(candidate => candidate.Entry.Id);
+                var retained = request.RetainedMemories
+                    .Where(item => entriesById.TryGetValue(item.Id, out var entry) && entry.Revision == item.Revision)
+                    .Select(item => qualifiedById.GetValueOrDefault(item.Id)
+                        ?? new RepositoryMemoryRetrievalCandidate(entriesById[item.Id], 0, null, null, null));
+                selected = [.. retained.Concat(selected).DistinctBy(candidate => candidate.Entry.Id)];
+            }
+
+            var resultLimitOmissions = Math.Max(0, selected.Length - request.Options.MaximumResults);
+            selected = [.. selected.Take(request.Options.MaximumResults)];
+
+            foreach (var expansion in snapshot.LexicalExpansions)
+            {
+                diagnostics.Add($"Lexical {expansion.Query} -> {expansion.Term}: spellfix distance={expansion.Distance}.");
+            }
+
+            if (concepts.Length > 0)
+            {
+                diagnostics.Add($"Active memory concepts: {string.Join(", ", concepts)}; concept-qualified candidates={conceptMatches.Count}.");
+            }
+
             var truncated = bounded || embedding?.WasTruncated == true || embedding?.InputTokenCount > model.MaxInputTokens;
             if (truncated)
             {
@@ -164,16 +297,36 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
 
             IReadOnlyList<string> boundedDiagnostics = diagnostics.Count <= request.Options.MaximumDiagnostics
                 ? diagnostics : [.. diagnostics.Take(request.Options.MaximumDiagnostics - 1), $"Omitted {diagnostics.Count - request.Options.MaximumDiagnostics + 1} additional memory diagnostics."];
+            var degraded = snapshot.FuzzyLexicalStatus == RepositoryMemorySearchBranchStatus.Unavailable || embedding is null || rerankerStatus is RepositoryMemorySearchBranchStatus.Unavailable or RepositoryMemorySearchBranchStatus.Incomplete || resolution.DegradedReason is not null || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
             var result = new RepositoryMemoryRetrievalResult(selected, boundedDiagnostics, snapshot.Revision, truncated, queryCacheHit, false)
             {
                 StandingPreferences = standingPreferences,
+                IsComplete = !degraded && !truncated,
+                SearchDetails = new RepositoryMemorySearchDetails
+                {
+                    Lexical = RepositoryMemorySearchBranchStatus.Completed,
+                    FuzzyLexical = snapshot.FuzzyLexicalStatus,
+                    LexicalExpansions = snapshot.LexicalExpansions,
+                    Semantic = embedding is null ? RepositoryMemorySearchBranchStatus.Unavailable
+                        : truncated || snapshot.Entries.Any(entry => !IsCompatible(entry, model)) ? RepositoryMemorySearchBranchStatus.Incomplete
+                        : RepositoryMemorySearchBranchStatus.Completed,
+                    Reranker = rerankerStatus,
+                    Concepts = !request.Options.ConceptRecallEnabled ? RepositoryMemorySearchBranchStatus.Disabled
+                        : resolution.DegradedReason is not null ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Completed,
+                    HybridCandidates = hybridCandidates,
+                    ConceptOnlyCandidates = conceptOnlyCandidates,
+                    ComparedCandidates = comparedCandidates,
+                    CandidateWindowOmissions = request.Options.RerankerEnabled ? hybridCandidates + conceptOnlyCandidates - comparedCandidates : 0,
+                    ResultLimitOmissions = resultLimitOmissions,
+                    PairTruncated = pairTruncated,
+                },
+                ConceptResolutionPending = resolution.DegradedReason is not null || snapshot.FuzzyLexicalStatus == RepositoryMemorySearchBranchStatus.Unavailable,
             };
-            var degraded = embedding is null || rerankerDegraded || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
             if (!degraded)
             {
                 AddBounded(_rankingCache, rankKey, result, request.Options.MaximumCacheEntries);
             }
-            else if (request.UserTurnId is { } userTurn)
+            else if (resolution.DegradedReason is null && snapshot.FuzzyLexicalStatus != RepositoryMemorySearchBranchStatus.Unavailable && request.UserTurnId is { } userTurn)
             {
                 AddBounded(_rankingCache, rankKey + ":degraded:" + userTurn.Value.ToString("D"), result, request.Options.MaximumCacheEntries);
             }
@@ -203,8 +356,17 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 }
             }
 
-            return new RepositoryMemoryRetrievalResult([], [$"Repository memory search failed ({exception.GetType().Name}); situational matches were omitted."], memorySetRevision)
+            return new RepositoryMemoryRetrievalResult([], [$"Repository memory search failed ({exception.GetType().Name}); matches were omitted."], memorySetRevision)
             {
+                IsComplete = false,
+                SearchDetails = new RepositoryMemorySearchDetails
+                {
+                    Lexical = RepositoryMemorySearchBranchStatus.Unavailable,
+                    FuzzyLexical = request.Options.Lexical.FuzzyEnabled ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Disabled,
+                    Semantic = RepositoryMemorySearchBranchStatus.Unavailable,
+                    Reranker = request.Options.RerankerEnabled ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Disabled,
+                    Concepts = request.Options.ConceptRecallEnabled ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Disabled,
+                },
                 StandingPreferences = standingPreferences,
             };
         }

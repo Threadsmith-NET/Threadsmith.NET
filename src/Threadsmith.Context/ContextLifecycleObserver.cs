@@ -43,6 +43,27 @@ public sealed class ContextLifecycleObserver
             _promptAppendLoader.QueueRepositoryInvalidation(repository.Path);
         }
 
+        if (domainEvent is MutationApplied mutation)
+        {
+            if (mutation.RelativePath is { } source)
+            {
+                _evidenceStore.QueueInvalidation(mutation.SessionId, source, "Source changed after an applied mutation.", mutation.OccurredAt);
+            }
+
+            if (mutation.DestinationRelativePath is { } destination)
+            {
+                _evidenceStore.QueueInvalidation(mutation.SessionId, destination, "Move destination changed after an applied mutation.", mutation.OccurredAt);
+            }
+        }
+
+        if (domainEvent is MutationSetRolledBack rollback)
+        {
+            foreach (var path in rollback.RestoredFiles)
+            {
+                _evidenceStore.QueueInvalidation(rollback.SessionId, path, "Source changed after rollback.", rollback.OccurredAt);
+            }
+        }
+
         return Task.CompletedTask;
     }
 }

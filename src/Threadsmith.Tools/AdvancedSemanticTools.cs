@@ -60,8 +60,11 @@ public sealed class CallHierarchyTool : AdvancedSemanticTool<CallHierarchyInput,
 }
 
 /// <summary>Model-facing simplified input for <c>call_hierarchy</c>.</summary>
-public sealed record CallHierarchyInput
+public sealed record CallHierarchyInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Stable semantic symbol id returned by semantic discovery.</summary>
     public required string SymbolId { get; init; }
 
@@ -117,8 +120,11 @@ public sealed class SymbolImpactTool : AdvancedSemanticTool<SymbolImpactInput, S
 }
 
 /// <summary>Model-facing minimal input for <c>symbol_impact</c>.</summary>
-public sealed record SymbolImpactInput
+public sealed record SymbolImpactInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Stable semantic symbol id returned by semantic discovery.</summary>
     public required string SymbolId { get; init; }
 }
@@ -246,8 +252,11 @@ public sealed class CSharpPatternSearchTool : AdvancedSemanticTool<CSharpPattern
 }
 
 /// <summary>Model-facing flat input for <c>csharp_pattern_search</c>.</summary>
-public sealed record CSharpPatternSearchInput
+public sealed record CSharpPatternSearchInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Required closed C# syntax shape.</summary>
     public required CSharpPatternKind Kind { get; init; }
 

@@ -94,7 +94,7 @@ public static class RepoConfigTests
     public static void RepositoryMemoryAdmissionSettingsBind()
     {
         var config = LoadConfigExample();
-        var policy = config.GetSection("tools:config:memories").Get<RepositoryMemoryOptions>();
+        var policy = new Threadsmith.Tools.RepositoryMemoryConfiguration(config, new ConfigurationBuilder().Build(), Path.GetTempPath()).CaptureCurrent();
 
         Assert.NotNull(policy);
         Assert.Equal(20, policy.MaxNumberOfRepoMemories);
@@ -102,7 +102,9 @@ public static class RepoConfigTests
         Assert.Equal(RepositoryMemoryOptions.DefaultSemanticMinimum, policy.SemanticMinimum);
         Assert.False(policy.RerankerEnabled);
         Assert.Equal(8, policy.RerankerCandidateLimit);
-        Assert.Null(policy.RerankerMinimumScore);
+        Assert.Equal(1, policy.Lexical.FuzzyMaximumDistance);
+        Assert.Equal(1, policy.ConceptFuzzyMaximumDistance);
+        Assert.Equal(1, policy.ReconciliationConceptFuzzyMaximumDistance);
         Assert.Equal(8, config.GetValue("reranking:cpuThreads", 0));
         Assert.False(config.GetSection("context:repositoryMemory").Exists());
     }

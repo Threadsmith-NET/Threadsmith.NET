@@ -4,7 +4,7 @@ using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
 /// <summary>Rebinds explicit memories to the active repository database with an identity fence per operation.</summary>
-public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, IDisposable
+public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, IRepositoryMemoryTermResolver, IDisposable
 {
     private readonly TimeProvider _timeProvider;
     private readonly SqliteEventStore? _retentionOwner;
@@ -69,7 +69,7 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
             await new SqliteEventStore(connectionString).InitializeAsync(cancellationToken);
             var migrations = new MigrationRunner(connectionString, DefaultMigrations.ForRepositoryMemoryCapacity(maximumMemoryCount));
             var previousVersion = await migrations.ReadCurrentVersionAsync(cancellationToken);
-            var store = new SqliteManagedRepositoryMemoryStore(connectionString, _timeProvider);
+            var store = new SqliteManagedRepositoryMemoryStore(connectionString, _timeProvider, _initialBinding.Store);
             await migrations.RunAsync(cancellationToken);
             if (previousVersion >= 10)
             {
@@ -95,6 +95,13 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
     public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, IReadOnlyList<string> lexicalTerms, CancellationToken cancellationToken = default)
     {
         return GetStore(repositoryIdentity).GetSnapshotAsync(repositoryIdentity, lexicalTerms, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
+        string repositoryIdentity, IReadOnlyList<string> lexicalTerms, RepositoryMemoryLexicalOptions lexicalOptions, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).GetSnapshotAsync(repositoryIdentity, lexicalTerms, lexicalOptions, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -168,8 +175,21 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
     }
 
     /// <inheritdoc />
+    public Task<MemoryTermResolution> ResolveTermsAsync(
+        RepositoryMemoryVocabularySnapshot snapshot, IReadOnlyList<string> queries, int maximumDistance, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _ = GetBinding(snapshot.RepositoryIdentity);
+
+        // Native lookup uses detached data, not the bound database. The initial store owns
+        // bounded replaceable vocabularies across repository bindings and is disposed with this router.
+        return _initialBinding.Store.ResolveTermsAsync(snapshot, queries, maximumDistance, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public void Dispose()
     {
+        _initialBinding.Store.Dispose();
         _bindGate.Dispose();
     }
 

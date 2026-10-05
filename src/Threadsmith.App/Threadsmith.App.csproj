@@ -144,6 +144,15 @@
           CopyToOutputDirectory="PreserveNewest"
           CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
+  <PropertyGroup>
+    <ThreadsmithSpellfixRid Condition="'$(RuntimeIdentifier)' != ''">$(RuntimeIdentifier)</ThreadsmithSpellfixRid>
+    <ThreadsmithSpellfixRid Condition="'$(RuntimeIdentifier)' == ''">$(NETCoreSdkRuntimeIdentifier)</ThreadsmithSpellfixRid>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../artifacts/spellfix-assets/$(ThreadsmithSpellfixRid)/native/spellfix/*.dll;../../artifacts/spellfix-assets/$(ThreadsmithSpellfixRid)/native/spellfix/*.so;../../artifacts/spellfix-assets/$(ThreadsmithSpellfixRid)/native/spellfix/*.dylib;../../artifacts/spellfix-assets/$(ThreadsmithSpellfixRid)/native/spellfix/*.sha256;../../artifacts/spellfix-assets/$(ThreadsmithSpellfixRid)/native/spellfix/*.json;../../artifacts/spellfix-assets/$(ThreadsmithSpellfixRid)/native/spellfix/LICENSE.txt"
+          Condition="Exists('../../artifacts/spellfix-assets/$(ThreadsmithSpellfixRid)/native/spellfix/LICENSE.txt')" Link="native/spellfix/%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('..\..\artifacts\reranker-assets\crossencoders\ms-marco-MiniLM-L6-v2\model.onnx')">
     <ThreadsmithCrossEncoderAssetName Include="model.onnx;vocab.txt;crossencoder-assets.json;LICENSE.txt" />
     <None Include="@(ThreadsmithCrossEncoderAssetName->'..\..\artifacts\reranker-assets\crossencoders\ms-marco-MiniLM-L6-v2\%(Identity)')"

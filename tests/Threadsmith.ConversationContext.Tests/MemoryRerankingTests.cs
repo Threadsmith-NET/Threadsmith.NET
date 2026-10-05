@@ -71,32 +71,27 @@ public static class MemoryRerankingTests
         Assert.Equal(baseline.Selected.Take(2).Select(item => item.Entry.Id), result.Selected.Select(item => item.Entry.Id));
     }
 
-    /// <summary>Raw negative logits remain eligible without a cutoff and a supplied cutoff is strict.</summary>
+    /// <summary>Raw negative logits order candidates; result limits bound selection.</summary>
     [Fact]
-    public static async Task Optional_raw_logit_cutoff_is_strict_and_can_select_zero_memories()
+    public static async Task Negative_logits_remain_eligible_and_result_limits_control_selection()
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var generator = await SeedAsync(fixture);
         var encoder = new TestCrossEncoder
         {
-            Score = (_, texts) => [.. texts.Select((_, index) => new TextCrossEncoderScore(index - 1, 12, false))],
+            Score = (_, texts) => [.. texts.Select((_, index) => new TextCrossEncoderScore(index - 3, 12, false))],
         };
         using var retriever = CreateRetriever(fixture, generator, encoder);
         var all = await retriever.RetrieveAsync(Query());
-        var positive = await retriever.RetrieveAsync(Query() with
+        var limited = await retriever.RetrieveAsync(Query() with
         {
-            Options = new RepositoryMemoryOptions { RerankerEnabled = true, RerankerMinimumScore = 0 },
-        });
-        var none = await retriever.RetrieveAsync(Query() with
-        {
-            Options = new RepositoryMemoryOptions { RerankerEnabled = true, RerankerMinimumScore = 1 },
+            Options = new RepositoryMemoryOptions { RerankerEnabled = true, MaxRepoMemoriesInContext = 1 },
         });
 
-        Assert.Equal(3, all.Selected.Count);
-        Assert.Equal(1, Assert.Single(positive.Selected).CrossEncoderScore);
-        Assert.Empty(none.Selected);
-        Assert.True(none.QueryEmbeddingCacheHit);
-        Assert.False(none.RankingCacheHit);
+        Assert.Equal(new double?[] { -1, -2, -3 }, all.Selected.Select(candidate => candidate.CrossEncoderScore));
+        Assert.Equal(-1, Assert.Single(limited.Selected).CrossEncoderScore);
+        Assert.True(limited.QueryEmbeddingCacheHit);
+        Assert.False(limited.RankingCacheHit);
     }
 
     /// <summary>Enabled state, limits, model identity and content revisions never reuse stale rankings.</summary>
@@ -137,7 +132,7 @@ public static class MemoryRerankingTests
         Assert.Equal(4, encoder.Calls);
     }
 
-    /// <summary>Failures or partial/invalid scores preserve the full hybrid fallback, ignoring an unusable cutoff.</summary>
+    /// <summary>Failures or partial/invalid scores preserve the full hybrid fallback.</summary>
     [Theory]
     [InlineData("failure")]
     [InlineData("count")]
@@ -166,7 +161,7 @@ public static class MemoryRerankingTests
 
         var result = await retriever.RetrieveAsync(Query() with
         {
-            Options = new RepositoryMemoryOptions { RerankerEnabled = true, RerankerCandidateLimit = 1, RerankerMinimumScore = 1_000 },
+            Options = new RepositoryMemoryOptions { RerankerEnabled = true, RerankerCandidateLimit = 1, },
         });
 
         Assert.Equal(

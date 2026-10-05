@@ -40,13 +40,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System and phase prompts | 29 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 19 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
+| Context prompts | 20 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 53 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
 | Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **320** | Complete deployed catalog. |
+| **Total** | **321** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -114,7 +114,7 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-SystemPrompt.md` | Main-agent host authority, planning, skill routing, and artifact guidance. | `None` |
+| `System-SystemPrompt.md` | Main-agent host authority, planning, skill routing, artifact guidance, and native-tool concept hints. | `None` |
 | `System-RepositoryInspection.md` | Shared parent/child inspection, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
 | `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
@@ -134,6 +134,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
+| `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
 | `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
 | `Context-IncrementalPlanning.md` | Plans used, soft tranche targets, compilable step and batch boundaries, atomic API migrations, explicit completion, and resumable blockers; no plan-count limit. | [`PlansUsed`](#placeholder-plansused), [`TargetSteps`](#placeholder-targetsteps), [`TargetFiles`](#placeholder-targetfiles) |
 | `Context-Replanning.md` | Carries unfinished-plan investigation, retained applied work/failures, replacement scope, and unavailable completion into ordinary planning. | `None` |
@@ -638,7 +639,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-memories-Description.md` | Advertised description for `memories`. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
+| `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, and revision-aware collision resolution. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
 | `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
 
 #### `propose_mutations` family

@@ -769,6 +769,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         IDomainEventStream events,
         ILoggerFactory loggerFactory)
     {
+        var memoryOptions = new RepositoryMemoryConfiguration(configuration, configuration, paths.RepositoryRoot).CaptureCurrent();
         var databasePath = Path.GetFullPath(
             configuration.GetValue<string>("persistence:path") ?? ".threadsmith/threadsmith.db",
             paths.RepositoryRoot);
@@ -776,8 +777,6 @@ internal sealed class HostFoundation : IAsyncDisposable
             ?? throw new InvalidOperationException("The persistence path has no parent directory."));
         var eventStore = new SqliteEventStore($"Data Source={databasePath}");
         await eventStore.InitializeAsync();
-        var memoryOptions = configuration.GetSection(RepositoryMemoryConfiguration.SectionName).Get<RepositoryMemoryOptions>() ?? new RepositoryMemoryOptions();
-        memoryOptions.Validate();
         var migrations = new MigrationRunner($"Data Source={databasePath}", DefaultMigrations.ForRepositoryMemoryCapacity(memoryOptions.MaxNumberOfRepoMemories));
         await migrations.RunAsync();
         if (migrations.LastBackupPath is { } backupPath)

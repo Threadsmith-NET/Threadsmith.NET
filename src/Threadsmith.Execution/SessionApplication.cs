@@ -2440,6 +2440,20 @@ public sealed partial class SessionApplication :
 
         public string? MemoryCurrentInstruction { get; set; }
 
+        public long? MemorySetRevision { get; set; }
+
+        public SortedSet<string> MemoryConcepts { get; } = new(StringComparer.Ordinal);
+
+        public IReadOnlyList<RepositoryMemoryInclusion> RetainedMemories { get; set; } = [];
+
+        public string? MemoryRepositoryIdentity { get; set; }
+
+        public int ConceptResolutionRetries { get; set; }
+
+        public bool ConceptOverflowReported { get; set; }
+
+        public bool MemoriesEnabled { get; set; }
+
         public SessionId SessionId { get; }
 
         public ConversationMessage? SourceMessage { get; set; }

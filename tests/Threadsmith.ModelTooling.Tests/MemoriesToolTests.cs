@@ -18,6 +18,139 @@ using Xunit;
 /// <summary>Exercises explicit memory admission and actual conversation dispatch boundaries.</summary>
 public static class MemoriesToolTests
 {
+    /// <summary>Memory operations may repeat across rounds, but identical siblings remain invalid.</summary>
+    [Fact]
+    public static void Memory_call_reuse_preserves_batch_duplicate_rejection()
+    {
+        var definition = new MemoriesTool(new MemoryService(), new Options(), TestPromptLoader.Instance).Definition;
+        var history = new ToolCallHistory();
+        const string arguments = "{\"action\":\"list\"}";
+        Assert.True(history.TryAdd(definition, arguments));
+
+        var batch = new ToolCallHistory(history);
+        Assert.True(batch.TryAdd(definition, arguments));
+        Assert.False(batch.TryAdd(definition, arguments));
+    }
+
+    /// <summary>All fuzzy consumers share a usable default without score cutoffs.</summary>
+    [Fact]
+    public static void Fuzzy_consumers_default_to_one_and_enable_without_extra_settings()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:Recall:RerankerEnabled"] = "true",
+            ["tools:config:memories:Reconciliation:Enabled"] = "true",
+            ["tools:config:memories:Recall:Concepts:Enabled"] = "true",
+            ["tools:config:memories:Recall:Fuzzy:Enabled"] = "true",
+            ["tools:config:memories:Reconciliation:Fuzzy:Enabled"] = "true",
+        }).Build();
+        var source = new RepositoryMemoryConfiguration(config, new ConfigurationBuilder().Build(), Path.GetTempPath());
+        var options = source.CaptureCurrent();
+        Assert.Equal(1, options.Lexical.FuzzyMaximumDistance);
+        Assert.Equal(1, RepositoryMemorySearchOptions.ForRecall(options).ConceptFuzzyMaximumDistance);
+        Assert.Equal(1, RepositoryMemorySearchOptions.ForReconciliation(options).ConceptFuzzyMaximumDistance);
+        options.Validate();
+    }
+
+    /// <summary>Layered policy keeps both scenarios independent and shares fuzzy policy within each.</summary>
+    [Fact]
+    public static void Scenario_search_settings_follow_configuration_layers()
+    {
+        var fallback = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:Recall:Fuzzy:Enabled"] = "true",
+            ["tools:config:memories:Recall:Fuzzy:MaximumDistance"] = "20",
+            ["tools:config:memories:Reconciliation:Enabled"] = "true",
+            ["tools:config:memories:Reconciliation:Concepts:CandidateLimit"] = "7",
+            ["tools:config:memories:Reconciliation:Fuzzy:Enabled"] = "true",
+            ["tools:config:memories:Reconciliation:Fuzzy:MaximumDistance"] = "10",
+        }).Build();
+        var current = new ConfigurationBuilder().AddConfiguration(fallback).AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:Recall:Lexical:MaximumExpansions"] = "2",
+            ["tools:config:memories:Recall:Concepts:CandidateLimit"] = "3",
+        }).Build();
+        var options = new RepositoryMemoryConfiguration(current, fallback, Path.GetTempPath()).CaptureCurrent();
+        var recall = RepositoryMemorySearchOptions.ForRecall(options);
+        var reconciliation = RepositoryMemorySearchOptions.ForReconciliation(options);
+        Assert.NotEqual(recall.Lexical, reconciliation.Lexical);
+        Assert.Equal(20, recall.ConceptFuzzyMaximumDistance);
+        Assert.Equal(20, recall.Lexical.FuzzyMaximumDistance);
+        Assert.Equal(10, reconciliation.Lexical.FuzzyMaximumDistance);
+        Assert.Equal(16, reconciliation.Lexical.MaximumExpansions);
+        Assert.True(recall.ConceptFuzzyEnabled);
+        Assert.True(recall.Lexical.FuzzyEnabled);
+        Assert.Equal(2, recall.Lexical.MaximumExpansions);
+        Assert.Equal(3, recall.ConceptCandidateLimit);
+        Assert.Equal(7, reconciliation.ConceptCandidateLimit);
+        Assert.True(reconciliation.ConceptRecallEnabled);
+        Assert.True(reconciliation.ConceptFuzzyEnabled);
+        Assert.Equal(10, reconciliation.ConceptFuzzyMaximumDistance);
+        Assert.False(recall.ConceptRecallEnabled);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new RepositoryMemoryLexicalOptions { MaximumExpansions = 0 }.Validate());
+        Assert.Throws<ArgumentException>(() => new RepositoryMemoryLexicalOptions { FuzzyEnabled = true, FuzzyMaximumDistance = 0 }.Validate());
+    }
+
+    /// <summary>Required reconciliation ranking cannot be silently overridden or bypassed.</summary>
+    [Fact]
+    public static void Reconciliation_reranker_is_explicit_and_invalid_changes_preserve_binding()
+    {
+        var root = Path.GetTempPath();
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:Recall:RerankerEnabled"] = "false",
+            ["tools:config:memories:Recall:SemanticMinimum"] = "0.6",
+            ["tools:config:memories:Recall:MaximumResults"] = "0",
+            ["tools:config:memories:Reconciliation:Enabled"] = "true",
+            ["tools:config:memories:Reconciliation:RerankerEnabled"] = "true",
+            ["tools:config:memories:Reconciliation:SemanticMinimum"] = "0.3",
+            ["tools:config:memories:Reconciliation:RerankerCandidateLimit"] = "12",
+        }).Build();
+        var source = new RepositoryMemoryConfiguration(config, config, root);
+        var before = source.CaptureCurrent();
+        var recall = RepositoryMemorySearchOptions.ForRecall(before);
+        var reconciliation = RepositoryMemorySearchOptions.ForReconciliation(before);
+        Assert.False(recall.RerankerEnabled);
+        Assert.Equal(0, recall.MaximumResults);
+        Assert.Equal(0.6, recall.SemanticMinimum);
+        Assert.True(reconciliation.RerankerEnabled);
+        Assert.Equal(0.3, reconciliation.SemanticMinimum);
+        Assert.Equal(12, reconciliation.RerankerCandidateLimit);
+        Assert.Throws<ArgumentException>(() => source.BindRepository(root, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:Reconciliation:RerankerEnabled"] = "false",
+        }).Build()));
+        Assert.Same(before, source.CaptureCurrent());
+        source.BindRepository(root, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:Recall:Fuzzy:Enabled"] = "true",
+            ["tools:config:memories:Recall:Fuzzy:MaximumDistance"] = "5",
+        }).Build());
+        Assert.True(source.CaptureCurrent().ConceptFuzzyEnabled);
+        Assert.False(source.CaptureCurrent().ReconciliationLexical.FuzzyEnabled);
+        source.BindRepository(root, new ConfigurationBuilder().Build());
+        Assert.False(source.CaptureCurrent().Lexical.FuzzyEnabled);
+    }
+
+    /// <summary>Retired ambiguous keys must not silently fall back to different defaults.</summary>
+    [Theory]
+    [InlineData("SemanticMinimum", "0.8")]
+    [InlineData("RerankerEnabled", "true")]
+    [InlineData("MaxRepoMemoriesInContext", "2")]
+    [InlineData("ConceptRecall:Enabled", "true")]
+    [InlineData("Lexical:FuzzyEnabled", "true")]
+    [InlineData("Reconciliation:CandidateLimit", "8")]
+    [InlineData("Reconciliation:Concepts:FuzzyEnabled", "true")]
+    public static void Retired_search_settings_report_migration(string key, string value)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"tools:config:memories:{key}"] = value,
+        }).Build();
+        var error = Assert.Throws<ArgumentException>(() => new RepositoryMemoryConfiguration(config, new ConfigurationBuilder().Build(), Path.GetTempPath()));
+        Assert.Contains("Recall and Reconciliation", error.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>Repository switches refresh advertised limits without changing runtime registration identity.</summary>
     [Fact]
     public static void Description_FollowsRepositoryLimitsThroughRuntimeOverride()
@@ -60,7 +193,7 @@ public static class MemoriesToolTests
         var definition = Assert.Single(definitions);
         using var schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
         var fields = schema.RootElement.GetProperty("properties");
-        Assert.Equal(["action", "id", "memoryType", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
+        Assert.Equal(["action", "concepts", "confirmDistinctFrom", "expectedRevision", "id", "kind", "memoryType", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
         Assert.Equal(["add", "update", "remove", "list"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
         Assert.Contains("null", fields.GetProperty("id").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
@@ -70,6 +203,12 @@ public static class MemoriesToolTests
             fields.GetProperty("memoryType").GetProperty("enum").EnumerateArray()
                 .Where(value => value.ValueKind == JsonValueKind.String)
                 .Select(value => value.GetString()).OrderBy(value => value));
+        Assert.Equal(8, fields.GetProperty("concepts").GetProperty("maxItems").GetInt32());
+        Assert.Contains("null", fields.GetProperty("concepts").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
+        var confirmation = fields.GetProperty("confirmDistinctFrom").GetProperty("items");
+        Assert.False(confirmation.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(["id", "revision"], confirmation.GetProperty("required").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(1, fields.GetProperty("expectedRevision").GetProperty("minimum").GetInt32());
         Assert.Equal(ToolSideEffect.WritesRepositoryMemory, tool.Definition.SideEffect);
         Assert.Equal(ToolConcurrencyMode.SerializedPerResource, tool.Definition.Scheduling.ConcurrencyMode);
     }
@@ -82,10 +221,60 @@ public static class MemoriesToolTests
     [InlineData("{\"action\":\"add\",\"text\":\"x\",\"origin\":\"manual\"}")]
     [InlineData("{\"action\":\"update\",\"text\":\"x\"}")]
     [InlineData("{\"action\":\"remove\",\"id\":\"not-an-id\"}")]
+    [InlineData("{\"action\":\"add\",\"text\":\"x\",\"expectedRevision\":1}")]
+    [InlineData("{\"action\":\"list\",\"concepts\":[\"cancellation\"]}")]
+    [InlineData("{\"action\":\"add\",\"text\":\"x\",\"kind\":\"authority\"}")]
+    [InlineData("{\"action\":\"add\",\"text\":\"x\",\"concepts\":[\"invalid space\"]}")]
+    [InlineData("{\"action\":\"add\",\"text\":\"x\",\"confirmDistinctFrom\":[{\"id\":\"not-an-id\",\"revision\":1}]}")]
+    [InlineData("{\"action\":\"add\",\"text\":\"x\",\"confirmDistinctFrom\":[{\"id\":\"11111111-1111-1111-1111-111111111111\",\"revision\":0}]}")]
     public static void InvalidArguments_AreRejected(string json)
     {
         var tool = new MemoriesTool(new MemoryService(), new Options(), TestPromptLoader.Instance);
         Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(json));
+    }
+
+    /// <summary>Collision previews bound escaped entry bytes while preserving a truthful non-write response.</summary>
+    [Fact]
+    public static async Task Collision_output_reports_truncation_and_omissions_without_false_success()
+    {
+        var memory = new MemoryService();
+        var candidates = Enumerable.Range(0, 12)
+            .Select(_ => memory.Entry with { Id = RepositoryMemoryId.New(), Text = new string('<', 3000) })
+            .ToArray();
+        memory.OperationResult = new RepositoryMemoryOperationResult("reconciliationRequired", null, null, candidates, [])
+        {
+            SearchDetails = new RepositoryMemorySearchDetails
+            {
+                Lexical = RepositoryMemorySearchBranchStatus.Completed,
+                Reranker = RepositoryMemorySearchBranchStatus.Completed,
+                HybridCandidates = 15,
+                ComparedCandidates = 12,
+                CandidateWindowOmissions = 3,
+            },
+        };
+        var tool = new MemoriesTool(memory, new Options(), TestPromptLoader.Instance);
+        var output = await tool.ExecuteAsync(
+            new MemoriesInput("add", Text: "Proposed convention"),
+            new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(Path.GetTempPath())),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(output.Value.Added);
+        Assert.Equal("reconciliationRequired", output.Value.Outcome);
+        Assert.NotEmpty(output.Value.Entries);
+        Assert.True(output.Value.OmittedEntries > 0);
+        Assert.Equal(candidates.Length, output.Value.Entries.Count + output.Value.OmittedEntries);
+        Assert.Equal(3, output.Value.SearchDetails?.CandidateWindowOmissions);
+        Assert.Contains("omitted 3 discovered candidates", output.Value.Resolution, StringComparison.Ordinal);
+        Assert.Contains("Completed", JsonSerializer.Serialize(output.Value.SearchDetails), StringComparison.Ordinal);
+        Assert.All(output.Value.Entries, entry =>
+        {
+            Assert.True(entry.TextTruncated);
+            Assert.Equal(2000, entry.Text.Length);
+            Assert.Contains(candidates, candidate => candidate.Id.Value.ToString("D") == entry.Id && candidate.Revision == entry.Revision);
+        });
+        Assert.True(output.Value.Entries.Sum(entry => JsonSerializer.SerializeToUtf8Bytes(entry).Length) <= 48 * 1024);
+        Assert.Contains("expectedRevision", output.Value.Resolution, StringComparison.Ordinal);
+        Assert.Contains("confirmDistinctFrom", output.Value.Resolution, StringComparison.Ordinal);
     }
 
     /// <summary>Optional nulls and omitted fields resolve identically and never generate list embeddings.</summary>
@@ -198,51 +387,40 @@ public static class MemoriesToolTests
         var fallback = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["tools:config:memories:MaxNumberOfRepoMemories"] = "7",
-            ["tools:config:memories:SemanticMinimum"] = "0.35",
-            ["tools:config:memories:RerankerEnabled"] = "true",
-            ["tools:config:memories:RerankerCandidateLimit"] = "6",
-            ["tools:config:memories:RerankerMinimumScore"] = "-2.5",
+            ["tools:config:memories:Recall:SemanticMinimum"] = "0.35",
+            ["tools:config:memories:Recall:RerankerEnabled"] = "true",
+            ["tools:config:memories:Recall:RerankerCandidateLimit"] = "6",
             ["tools:config:memories:standingPreferenceWarningThreshold"] = "5",
         }).Build();
         var initial = new ConfigurationBuilder().AddConfiguration(fallback).AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["tools:config:memories:MaxRepoMemoriesInContext"] = "2",
-            ["tools:config:memories:SemanticMinimum"] = "0.65",
-            ["tools:config:memories:RerankerEnabled"] = "false",
-            ["tools:config:memories:RerankerCandidateLimit"] = "4",
+            ["tools:config:memories:Recall:MaximumResults"] = "2",
+            ["tools:config:memories:Recall:SemanticMinimum"] = "0.65",
+            ["tools:config:memories:Recall:RerankerEnabled"] = "false",
+            ["tools:config:memories:Recall:RerankerCandidateLimit"] = "4",
         }).Build();
         var source = new RepositoryMemoryConfiguration(initial, fallback, first);
         Assert.Equal(2, source.Capture(RepositoryIdentity.Create(first)).MaxRepoMemoriesInContext);
         Assert.Equal(0.65, source.Capture(RepositoryIdentity.Create(first)).SemanticMinimum);
         Assert.False(source.Capture(RepositoryIdentity.Create(first)).RerankerEnabled);
         Assert.Equal(4, source.Capture(RepositoryIdentity.Create(first)).RerankerCandidateLimit);
-        Assert.Equal(-2.5, source.Capture(RepositoryIdentity.Create(first)).RerankerMinimumScore);
         Assert.Equal(5, source.Capture(RepositoryIdentity.Create(first)).StandingPreferenceWarningThreshold);
         source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["tools:config:memories:RerankerEnabled"] = "false",
-            ["tools:config:memories:RerankerCandidateLimit"] = "3",
-            ["tools:config:memories:RerankerMinimumScore"] = "0.25",
+            ["tools:config:memories:Recall:RerankerEnabled"] = "false",
+            ["tools:config:memories:Recall:RerankerCandidateLimit"] = "3",
         }).Build());
         Assert.False(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
         Assert.Equal(3, source.Capture(RepositoryIdentity.Create(next)).RerankerCandidateLimit);
-        Assert.Equal(0.25, source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
-        using var explicitNull = new MemoryStream(Encoding.UTF8.GetBytes("""
-            { "tools": { "config": { "memories": { "RerankerMinimumScore": null } } } }
-            """));
-        source.BindRepository(next, new ConfigurationBuilder().AddJsonStream(explicitNull).Build());
-        Assert.Null(source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
         source.BindRepository(next, new ConfigurationBuilder().Build());
         Assert.Equal(7, source.Capture(RepositoryIdentity.Create(next)).MaxNumberOfRepoMemories);
         Assert.Equal(3, source.Capture(RepositoryIdentity.Create(next)).MaxRepoMemoriesInContext);
         Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);
         Assert.True(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
         Assert.Equal(6, source.Capture(RepositoryIdentity.Create(next)).RerankerCandidateLimit);
-        Assert.Equal(-2.5, source.Capture(RepositoryIdentity.Create(next)).RerankerMinimumScore);
         Assert.Equal(5, source.Capture(RepositoryIdentity.Create(next)).StandingPreferenceWarningThreshold);
-        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:SemanticMinimum"] = "1.1" }).Build()));
-        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerCandidateLimit"] = "0" }).Build()));
-        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:RerankerMinimumScore"] = "NaN" }).Build()));
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:Recall:SemanticMinimum"] = "1.1" }).Build()));
+        Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:Recall:RerankerCandidateLimit"] = "0" }).Build()));
         Assert.Throws<ArgumentOutOfRangeException>(() => source.BindRepository(next, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["tools:config:memories:standingPreferenceWarningThreshold"] = "-1" }).Build()));
         Assert.Equal(0.35, source.Capture(RepositoryIdentity.Create(next)).SemanticMinimum);
         Assert.True(source.Capture(RepositoryIdentity.Create(next)).RerankerEnabled);
@@ -252,19 +430,20 @@ public static class MemoriesToolTests
 
     /// <summary>Retries/tool rounds account one run; deleted context resets provider history; denial withholds injection.</summary>
     [Theory]
-    [InlineData(false, false, false, false)]
-    [InlineData(true, false, false, false)]
-    [InlineData(false, true, false, false)]
-    [InlineData(false, false, true, false)]
-    [InlineData(false, false, false, true)]
-    public static async Task Conversation_AccountsSubmittedMemoryAndInvalidatesDeletedContext(bool remove, bool denied, bool accountingFails, bool explicitList)
+    [InlineData(false, false, false, false, false)]
+    [InlineData(true, false, false, false, false)]
+    [InlineData(false, true, false, false, false)]
+    [InlineData(false, false, true, false, false)]
+    [InlineData(false, false, false, true, false)]
+    [InlineData(true, false, false, false, true)]
+    public static async Task Conversation_AccountsSubmittedMemoryAndInvalidatesDeletedContext(bool remove, bool denied, bool accountingFails, bool explicitList, bool verifyRemoval)
     {
         var repository = Path.Combine(Path.GetTempPath(), "memory-runtime-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(repository);
         try
         {
             await using var events = new DomainEventStream();
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var ct = TestContext.Current.CancellationToken;
             var sanitizer = new SecretOutputSanitizer();
             var memory = new MemoryService { FailAccounting = accountingFails, SuppressRetrieval = explicitList };
             var options = new Options();
@@ -274,7 +453,7 @@ public static class MemoriesToolTests
             var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget);
             var evidence = new EvidenceStore(events, sanitizer);
             var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, TestPromptLoader.Instance, repositoryMemoryRetriever: new Retriever(memory));
-            var model = new RecordingProvider(remove, memory.Entry.Id, explicitList);
+            var model = new RecordingProvider(remove, memory.Entry.Id, explicitList, verifyRemoval);
             var application = new SessionApplication(
                 events,
                 model,
@@ -291,12 +470,24 @@ public static class MemoriesToolTests
                 repositoryMemories: memory,
                 repositoryMemoryOptions: options);
             var dispatcher = new CommandDispatcher([application]);
-            var session = await dispatcher.DispatchAsync(new CreateSessionCommand("memory runtime"), timeout.Token);
-            var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "Which release branch convention applies?"), timeout.Token);
-            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), timeout.Token));
-            Assert.Equal(2, model.Requests.Count);
-            Assert.True(model.Requests[1].ContainsSensitiveData);
-            Assert.True(model.Requests[1].SelectionConstraints.ContainsSensitiveData);
+            var session = await dispatcher.DispatchAsync(new CreateSessionCommand("memory runtime"), ct);
+            var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "Which release branch convention applies?"), ct);
+            Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+            Assert.Equal(verifyRemoval ? 4 : 2, model.Requests.Count);
+            Assert.True(model.Requests[^1].ContainsSensitiveData);
+            Assert.True(model.Requests[^1].SelectionConstraints.ContainsSensitiveData);
+            if (verifyRemoval)
+            {
+                Assert.Equal(["list", "remove", "list"], memory.Actions);
+                var results = model.Requests[^1].Messages.Where(message => message.SectionId == "tool-result").ToArray();
+                Assert.Equal(3, results.Length);
+                using var before = JsonDocument.Parse(results[0].GetModelVisibleContent());
+                using var after = JsonDocument.Parse(results[2].GetModelVisibleContent());
+                Assert.Equal("listed", after.RootElement.GetProperty("Outcome").GetString());
+                Assert.Equal(1, before.RootElement.GetProperty("Entries").GetArrayLength());
+                Assert.Equal(0, after.RootElement.GetProperty("Entries").GetArrayLength());
+            }
+
             if (explicitList)
             {
                 Assert.False(model.Requests[0].ContainsSensitiveData);
@@ -310,15 +501,15 @@ public static class MemoriesToolTests
 
             Assert.Equal(denied || explicitList ? 0 : 1, memory.Receipts);
             Assert.Equal(!denied && !explicitList, model.Requests[0].Messages.Any(message => message.SectionId == "repository-memory"));
-            Assert.Equal(!denied && !remove && !explicitList, model.Requests[1].Messages.Any(message => message.SectionId == "repository-memory"));
+            Assert.Equal(!denied && !remove && !explicitList, model.Requests[^1].Messages.Any(message => message.SectionId == "repository-memory"));
             Assert.Equal(!denied, model.Requests[0].Tools.Any(definition => definition.Name == "memories"));
             if (remove)
             {
-                Assert.True(model.Requests[1].HistoryRewriteGeneration > model.Requests[0].HistoryRewriteGeneration);
+                Assert.True(model.Requests[^1].HistoryRewriteGeneration > model.Requests[0].HistoryRewriteGeneration);
             }
             else
             {
-                Assert.Equal(model.Requests[0].HistoryRewriteGeneration, model.Requests[1].HistoryRewriteGeneration);
+                Assert.Equal(model.Requests[0].HistoryRewriteGeneration, model.Requests[^1].HistoryRewriteGeneration);
             }
         }
         finally
@@ -413,7 +604,7 @@ public static class MemoriesToolTests
         using var body = JsonDocument.Parse(handler.Body);
         var function = Assert.Single(body.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
         var schema = function.GetProperty("parameters");
-        Assert.Equal(4, schema.GetProperty("properties").EnumerateObject().Count());
+        Assert.Equal(8, schema.GetProperty("properties").EnumerateObject().Count());
         Assert.Equal(4, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
         Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
         Assert.DoesNotContain("SubmissionObserver", handler.Body, StringComparison.OrdinalIgnoreCase);
@@ -480,20 +671,25 @@ public static class MemoriesToolTests
 
         public int? StandingPreferenceCount { get; init; }
 
+        public RepositoryMemoryOperationResult? OperationResult { get; set; }
+
         public int Receipts => _runs.Count;
 
         public RepositoryMemoryOperationRequest? LastOperation { get; private set; }
 
+        public List<string> Actions { get; } = [];
+
         public Task<RepositoryMemoryOperationResult> ExecuteAsync(RepositoryMemoryOperationRequest request, CancellationToken cancellationToken = default)
         {
             LastOperation = request;
+            Actions.Add(request.Action);
             if (FailOperation)
             {
                 return Task.FromException<RepositoryMemoryOperationResult>(new IOException("simulated memory operation failure"));
             }
 
             Removed = request.Action == "remove" || Removed;
-            return Task.FromResult(new RepositoryMemoryOperationResult(Removed ? "removed" : "listed", request.Id, null, Removed ? [] : [Entry], [])
+            return Task.FromResult(OperationResult ?? new RepositoryMemoryOperationResult(request.Action == "remove" ? "removed" : "listed", request.Id, null, Removed ? [] : [Entry], [])
             {
                 StandingPreferenceCount = StandingPreferenceCount,
             });
@@ -535,12 +731,14 @@ public static class MemoriesToolTests
     {
         private readonly bool _remove;
         private readonly bool _explicitList;
+        private readonly bool _verifyRemoval;
         private readonly RepositoryMemoryId _id;
 
-        public RecordingProvider(bool remove, RepositoryMemoryId id, bool explicitList = false)
+        public RecordingProvider(bool remove, RepositoryMemoryId id, bool explicitList = false, bool verifyRemoval = false)
         {
             _remove = remove;
             _explicitList = explicitList;
+            _verifyRemoval = verifyRemoval;
             _id = id;
         }
 
@@ -551,7 +749,14 @@ public static class MemoriesToolTests
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
             await Task.Yield();
-            if (Requests.Count == 1)
+            if (_verifyRemoval && Requests.Count <= 3)
+            {
+                var arguments = Requests.Count == 2
+                    ? JsonSerializer.Serialize(new { action = "remove", id = _id.Value.ToString("D") })
+                    : "{\"action\":\"list\"}";
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("memories", arguments) };
+            }
+            else if (Requests.Count == 1)
             {
                 yield return new ModelChunk { Output = new ToolRequestModelOutput(_remove || _explicitList ? "memories" : "datetime", _remove ? JsonSerializer.Serialize(new { action = "remove", id = _id.Value.ToString("D") }) : _explicitList ? "{\"action\":\"list\"}" : "{}") };
             }

@@ -564,12 +564,15 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             cancellationToken);
         timeoutCancellation.CancelAfter(tool.Definition.Timeout);
         var executionStarted = _timeProvider.GetTimestamp();
+        IReadOnlyList<string> observedConcepts = [];
         try
         {
             using var sourceLease = await _sourceConcurrencyLimiter.AcquireAsync(
                 source,
                 tool.Definition.Scheduling.MaximumSourceConcurrency,
                 timeoutCancellation.Token);
+            observedConcepts = input is IConceptToolInput conceptInput && ConfiguredTool.Unwrap(tool).GetType().Assembly == typeof(MemoriesTool).Assembly
+                ? MemoryConcepts.Normalize(conceptInput.Concepts).Where(concept => _sanitizer.Sanitize(concept) == concept).ToArray() : [];
             var execution = await tool.ExecuteAsync(
                 input,
                 executionContext,
@@ -596,7 +599,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     startedAt,
                     isTruncated: true,
                     source,
-                    authoritativeElapsedMilliseconds);
+                    authoritativeElapsedMilliseconds,
+                    concepts: observedConcepts);
             }
 
             var resultJson = JsonOutputSanitizer.Sanitize(
@@ -613,7 +617,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     startedAt,
                     isTruncated: true,
                     source,
-                    authoritativeElapsedMilliseconds);
+                    authoritativeElapsedMilliseconds,
+                    concepts: observedConcepts);
             }
 
             string? modelResultContent = null;
@@ -631,7 +636,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                         startedAt,
                         isTruncated: true,
                         source,
-                        authoritativeElapsedMilliseconds);
+                        authoritativeElapsedMilliseconds,
+                        concepts: observedConcepts);
                 }
             }
 
@@ -658,7 +664,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                         startedAt,
                         isTruncated: true,
                         source,
-                        authoritativeElapsedMilliseconds);
+                        authoritativeElapsedMilliseconds,
+                        concepts: observedConcepts);
                 }
             }
 
@@ -701,6 +708,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 Succeeded = succeeded,
                 ResultJson = resultJson,
                 ModelResultContent = modelResultContent,
+                Concepts = observedConcepts,
                 Sources = execution.Sources,
                 IsTruncated = isTruncated,
                 ErrorClassification = classification,
@@ -717,7 +725,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 "The tool invocation timed out.",
                 startedAt,
                 source: source,
-                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted));
+                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
+                concepts: observedConcepts);
         }
         catch (OperationCanceledException)
         {
@@ -728,7 +737,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 "The tool invocation was cancelled.",
                 startedAt,
                 source: source,
-                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted));
+                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
+                concepts: observedConcepts);
             if (returnCancellationResult)
             {
                 return cancelledResult;
@@ -748,7 +758,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 startedAt,
                 source: source,
                 elapsedMilliseconds: elapsedMilliseconds,
-                transientError: exception.TransientError);
+                transientError: exception.TransientError,
+                concepts: observedConcepts);
         }
         catch (TimeoutException exception)
         {
@@ -759,7 +770,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 exception.Message,
                 startedAt,
                 source: source,
-                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted));
+                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
+                concepts: observedConcepts);
         }
         catch (Exception exception)
         {
@@ -787,7 +799,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 sanitizedError,
                 startedAt,
                 source: source,
-                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted));
+                elapsedMilliseconds: GetElapsedMilliseconds(executionStarted),
+                concepts: observedConcepts);
         }
     }
 
@@ -964,7 +977,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         bool isTruncated = false,
         ToolActivitySource? source = null,
         long? elapsedMilliseconds = null,
-        string? transientError = null)
+        string? transientError = null,
+        IReadOnlyList<string>? concepts = null)
     {
         var sanitizedError = _sanitizer.Sanitize(error);
         var returnedError = transientError is null
@@ -1011,6 +1025,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
         return new ToolInvocationResult
         {
+            Concepts = concepts ?? [],
             ToolInvocationId = invocationId,
             ToolId = request.ToolId,
             Succeeded = false,

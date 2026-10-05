@@ -4,7 +4,12 @@ using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Explicit repository memory action with action-specific optional arguments.</summary>
-public sealed record MemoriesInput(string Action, string? Id = null, string? Text = null, string? MemoryType = null);
+public sealed record MemoriesInput(string Action, string? Id = null, string? Text = null, string? MemoryType = null,
+    string? Kind = null, IReadOnlyList<string>? Concepts = null,
+    IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null, long? ExpectedRevision = null) : IConceptToolInput;
+
+/// <summary>A stored revision explicitly acknowledged as distinct.</summary>
+public sealed record MemoryDistinctnessConfirmation(string Id, long Revision);
 
 /// <summary>Inspectable memory metadata without embedding components or internal provenance.</summary>
 public sealed record MemoryInfo(
@@ -16,10 +21,24 @@ public sealed record MemoryInfo(
     DateTimeOffset UpdatedAt,
     long InclusionCount,
     DateTimeOffset? LastIncludedAt,
-    string? EmbeddingSpaceId);
+    string? EmbeddingSpaceId,
+    long Revision = 1,
+    string Kind = "unspecified",
+    IReadOnlyList<string>? Concepts = null,
+    bool TextTruncated = false);
 
 /// <summary>A bounded operation outcome with explicit list omissions.</summary>
-public sealed record MemoriesOutput(string Action, string Outcome, string? Id, bool? Removed, IReadOnlyList<MemoryInfo> Entries, int OmittedEntries, string? StandingPreferenceWarning = null);
+public sealed record MemoriesOutput(string Action, string Outcome, string? Id, bool? Removed, IReadOnlyList<MemoryInfo> Entries, int OmittedEntries, string? StandingPreferenceWarning = null)
+{
+    /// <summary>True only when this operation inserted an entry.</summary>
+    public bool Added => Outcome == "added";
+
+    /// <summary>Actionable collision resolution; no memory was written.</summary>
+    public string? Resolution { get; init; }
+
+    /// <summary>Collision-check branch status and comparison-window omissions, separate from output omissions.</summary>
+    public RepositoryMemorySearchDetails? SearchDetails { get; init; }
+}
 
 /// <summary>Admits explicit memory changes through the shared repository memory service.</summary>
 public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransientToolActivityDetail
@@ -54,10 +73,13 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         {
             DisplayName = "Memories",
             ConversationAvailable = true,
+
+            // Lists must observe intervening writes; repeated mutations retain service-owned fences.
+            AllowDuplicateInvocations = true,
             InputSchema = definition.InputSchema with
             {
                 JsonSchema = """
-                    {"type":"object","properties":{"action":{"type":"string","enum":["add","update","remove","list"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]}},"required":["action"],"additionalProperties":false}
+                    {"type":"object","properties":{"action":{"type":"string","enum":["add","update","remove","list"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]},"kind":{"type":["string","null"],"enum":["unspecified","constraint","decision","convention","requirement","finding",null]},"concepts":{"type":["array","null"],"items":{"type":"string","maxLength":96},"maxItems":8},"confirmDistinctFrom":{"type":["array","null"],"items":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id","revision"],"additionalProperties":false}},"expectedRevision":{"type":["integer","null"],"minimum":1}},"required":["action"],"additionalProperties":false}
                     """,
             },
             Scheduling = new ToolSchedulingDescriptor
@@ -101,6 +123,10 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
                 Id = input.Id is null ? null : new RepositoryMemoryId(Guid.Parse(input.Id)),
                 Text = input.Text,
                 MemoryType = ParseMemoryType(input.MemoryType),
+                Kind = ParseKind(input.Kind),
+                Concepts = input.Concepts,
+                ConfirmDistinctFrom = input.ConfirmDistinctFrom?.Select(item => new RepositoryMemoryInclusion(new RepositoryMemoryId(Guid.Parse(item.Id)), item.Revision)).ToArray() ?? [],
+                ExpectedRevision = input.ExpectedRevision,
                 Origin = RepositoryMemoryOrigin.Model,
                 SourceSessionId = context.SessionId.Value.ToString("D"),
                 SourceRunId = context.RunId.Value.ToString("D"),
@@ -113,9 +139,9 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         var source = result.Entry is { } entry ? (IReadOnlyList<RepositoryMemoryEntry>)[entry] : result.Entries;
         foreach (var item in source)
         {
-            var info = new MemoryInfo(item.Id.Value.ToString("D"), item.Text, item.Origin.ToString().ToLowerInvariant(), FormatMemoryType(item.MemoryType), item.CreatedAt, item.UpdatedAt, item.InclusionCount, item.LastIncludedAt, item.EmbeddingSpaceId);
+            var info = new MemoryInfo(item.Id.Value.ToString("D"), result.Outcome == "reconciliationRequired" && item.Text.Length > 2000 ? item.Text[..2000] : item.Text, item.Origin.ToString().ToLowerInvariant(), FormatMemoryType(item.MemoryType), item.CreatedAt, item.UpdatedAt, item.InclusionCount, item.LastIncludedAt, item.EmbeddingSpaceId, item.Revision, item.Kind.ToString().ToLowerInvariant(), item.Concepts, result.Outcome == "reconciliationRequired" && item.Text.Length > 2000);
             bytes += JsonSerializer.SerializeToUtf8Bytes(info).Length;
-            if (bytes > options.MaximumListBytes)
+            if (bytes > Math.Min(options.MaximumListBytes, 48 * 1024))
             {
                 break;
             }
@@ -133,7 +159,14 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             input.Action == "remove" ? result.Outcome == "removed" : null,
             entries,
             source.Count - entries.Count,
-            preferenceWarning);
+            preferenceWarning)
+        {
+            SearchDetails = result.SearchDetails,
+            Resolution = result.Outcome == "reconciliationRequired"
+                ? "Not added. Update an existing ID with its expectedRevision, or retry add with confirmDistinctFrom entries containing the displayed IDs and revisions to confirm that the proposed memory is distinct."
+                    + $" The bounded comparison window omitted {result.SearchDetails?.CandidateWindowOmissions ?? 0} discovered candidates; this is not exhaustive duplicate detection."
+                : null,
+        };
         return new ToolExecution<MemoriesOutput>(output, [], output.OmittedEntries > 0);
     }
 
@@ -147,12 +180,21 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     protected override void ValidateInput(MemoriesInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
+        _ = MemoryConcepts.Normalize(input.Concepts);
+        _ = ParseKind(input.Kind);
+        if (input.ExpectedRevision is <= 0 || (input.ExpectedRevision is not null && input.Action != "update")
+            || (input.ConfirmDistinctFrom is not null && input.Action != "add")
+            || input.ConfirmDistinctFrom?.Any(item => item is null || !IsId(item.Id) || item.Revision <= 0) == true)
+        {
+            throw new ToolArgumentValidationException("Confirm distinct memory IDs/revisions only on add; expectedRevision requires update.");
+        }
+
         var valid = input.Action switch
         {
             "add" => input.Id is null && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "update" => IsId(input.Id) && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
-            "remove" => IsId(input.Id) && input.Text is null && input.MemoryType is null,
-            "list" => input.Id is null && input.Text is null && input.MemoryType is null,
+            "remove" => IsId(input.Id) && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
+            "list" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
             _ => false,
         };
         if (!valid)
@@ -187,6 +229,21 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         return value is null
         || string.Equals(value, "standingPreference", StringComparison.Ordinal)
         || string.Equals(value, "situational", StringComparison.Ordinal);
+    }
+
+    private static ManagedRepositoryMemoryKind? ParseKind(string? value)
+    {
+        return value switch
+        {
+            null => null,
+            "unspecified" => ManagedRepositoryMemoryKind.Unspecified,
+            "constraint" => ManagedRepositoryMemoryKind.Constraint,
+            "decision" => ManagedRepositoryMemoryKind.Decision,
+            "convention" => ManagedRepositoryMemoryKind.Convention,
+            "requirement" => ManagedRepositoryMemoryKind.Requirement,
+            "finding" => ManagedRepositoryMemoryKind.Finding,
+            _ => throw new ToolArgumentValidationException("kind is unspecified, constraint, decision, convention, requirement or finding."),
+        };
     }
 
     private static RepositoryMemoryType? ParseMemoryType(string? value)

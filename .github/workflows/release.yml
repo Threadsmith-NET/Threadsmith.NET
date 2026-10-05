@@ -74,6 +74,9 @@ jobs:
         if: startsWith(matrix.rid, 'win-')
         shell: pwsh
         run: ./eng/release/Install-WindowsPackagingTools.ps1 -InstallDirectory '${{ runner.temp }}/threadsmith-windows-packaging-tools'
+      - name: Install Linux ARM64 native compiler
+        if: matrix.rid == 'linux-arm64'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build platform artifact
         shell: pwsh
         run: ./eng/release/${{ matrix.script }} -Version $env:RELEASE_VERSION -RuntimeIdentifier '${{ matrix.rid }}' -OutputRoot '${{ runner.temp }}/threadsmith-release'

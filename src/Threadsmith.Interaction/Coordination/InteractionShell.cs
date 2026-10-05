@@ -793,7 +793,7 @@ public class InteractionPresenter
     }
 
     /// <summary>Creates an explicit repository-scoped memory item through the host boundary.</summary>
-    public Task<RepositoryMemoryEntry> RememberRepositoryMemoryAsync(
+    public Task<RepositoryMemoryOperationResult> RememberRepositoryMemoryAsync(
         SessionId sessionId,
         string repositoryIdentity,
         string text,
@@ -803,7 +803,7 @@ public class InteractionPresenter
     }
 
     /// <summary>Creates an explicit repository-scoped memory item with an optional type.</summary>
-    public Task<RepositoryMemoryEntry> RememberRepositoryMemoryAsync(
+    public Task<RepositoryMemoryOperationResult> RememberRepositoryMemoryAsync(
         SessionId sessionId,
         string repositoryIdentity,
         string text,
@@ -813,6 +813,20 @@ public class InteractionPresenter
         return _dispatcher.DispatchAsync(
             new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text, memoryType),
             cancellationToken);
+    }
+
+    /// <summary>Runs a manual add including explicit collision confirmations and metadata.</summary>
+    public Task<RepositoryMemoryOperationResult> RememberRepositoryMemoryAsync(
+        RememberRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(command, cancellationToken);
+    }
+
+    /// <summary>Updates a displayed revision with optional metadata.</summary>
+    public Task<RepositoryMemoryEntry> UpdateRepositoryMemoryAsync(
+        UpdateRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(command, cancellationToken);
     }
 
     /// <summary>Lists repository-scoped memory through the host boundary.</summary>

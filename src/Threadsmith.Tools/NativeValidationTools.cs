@@ -204,8 +204,11 @@ public sealed class DotNetFormatCheckTool : Tool<FormatCheckRequest, ValidationT
 }
 
 /// <summary>Flat model-facing diagnostic filters.</summary>
-public sealed record DiagnosticQueryInput
+public sealed record DiagnosticQueryInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Optional exact invocation identity.</summary>
     public string? InvocationId { get; init; }
 
@@ -419,8 +422,11 @@ public sealed class TestDiscoveryTool : Tool<TestDiscoveryRequest, TestDiscovery
 }
 
 /// <summary>Flat model-facing request for one host-issued test identity.</summary>
-public sealed record TargetedTestInput
+public sealed record TargetedTestInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Host-issued discovery identity.</summary>
     public required string TestId { get; init; }
 

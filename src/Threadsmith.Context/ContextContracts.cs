@@ -200,6 +200,12 @@ public sealed record ContextAssemblyRequest
     /// <summary>Current user request including steering, when more recent than the archived user message.</summary>
     public string? RepositoryMemoryCurrentInstruction { get; init; }
 
+    /// <summary>Normalized applicability hints observed during this user turn.</summary>
+    public IReadOnlyList<string> RepositoryMemoryConcepts { get; init; } = [];
+
+    /// <summary>Previously admitted current memory revisions.</summary>
+    public IReadOnlyList<RepositoryMemoryInclusion> RetainedRepositoryMemories { get; init; } = [];
+
     /// <summary>Configured prohibited repository paths.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
 
@@ -266,7 +272,8 @@ public sealed record ContextAssemblyResult(
     string? ToolInventoryDigest = null,
     string? InstructionBundleDigest = null,
     ModelProviderInstructions? ProviderInstructions = null,
-    IReadOnlyList<RepositoryMemoryInclusion>? RepositoryMemoryInclusions = null);
+    IReadOnlyList<RepositoryMemoryInclusion>? RepositoryMemoryInclusions = null,
+    bool MemoryConceptResolutionPending = false);
 
 /// <summary>Assembles model input from explicit state rather than transcript replay.</summary>
 public interface IContextAssembler

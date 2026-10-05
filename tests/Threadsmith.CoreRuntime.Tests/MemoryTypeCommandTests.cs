@@ -45,7 +45,7 @@ public static class MemoryTypeCommandTests
         Assert.Equal(RepositoryMemoryType.StandingPreference, updates[0].MemoryType);
         Assert.Null(updates[1].MemoryType);
         Assert.Equal(RepositoryMemoryType.StandingPreference, dispatcher.Entries.Single(entry => entry.Id == target.Id).MemoryType);
-        Assert.Contains("Usage: /memory remember", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("Memory type is standingPreference or situational.", surface.Output, StringComparison.Ordinal);
         Assert.Contains("standing preference", surface.Output, StringComparison.Ordinal);
         Assert.Contains("situational", surface.Output, StringComparison.Ordinal);
     }
@@ -130,6 +130,39 @@ public static class MemoryTypeCommandTests
         Assert.Contains($"\n\nWarning: {warning}\n\n", visibleBeforeInput, StringComparison.Ordinal);
     }
 
+    /// <summary>Manual collisions show no-write guidance and retain structured retry/update metadata.</summary>
+    [Fact]
+    public static async Task Reconciliation_output_and_manual_resolution_flags_are_actionable()
+    {
+        await using var events = new DomainEventStream();
+        var dispatcher = new MemoryDispatcher(0) { Reconcile = true };
+        var existing = dispatcher.Seed(RepositoryMemoryType.Situational);
+        var surface = new RecordingSurface([
+            "/memory remember --kind constraint --concepts cancellation New convention",
+            $"/memory remember --confirm-distinct-from {existing.Id.Value:D}@1 Distinct convention",
+            $"/memory update {existing.Id.Value:D} --expected-revision 1 --concepts [] Replacement",
+            "/quit"]);
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
+        await coordinator.RunAsync(
+            "memory-command-fixture",
+            requestedTrust: RepositoryTrustLevel.UntrustedInspection,
+            repositoryConfigurationDirectoryExistedAtStartup: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var adds = dispatcher.Commands.OfType<RememberRepositoryMemoryCommand>().ToArray();
+        Assert.Equal(2, adds.Length);
+        Assert.Equal(ManagedRepositoryMemoryKind.Constraint, adds[0].Kind);
+        Assert.Equal(["cancellation"], adds[0].Concepts);
+        Assert.Equal(new RepositoryMemoryInclusion(existing.Id, 1), Assert.Single(adds[1].ConfirmDistinctFrom));
+        var update = Assert.Single(dispatcher.Commands.OfType<UpdateRepositoryMemoryCommand>());
+        Assert.Equal(1, update.ExpectedRevision);
+        Assert.Empty(update.Concepts!);
+        Assert.Contains("Memory was not added", surface.Output, StringComparison.Ordinal);
+        Assert.Contains(existing.Id.Value.ToString("D") + "@1", surface.Output, StringComparison.Ordinal);
+        Assert.Contains("--confirm-distinct-from", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Remembered repository memory", surface.Output, StringComparison.Ordinal);
+        Assert.Single(dispatcher.Entries);
+    }
+
     private sealed class MemoryDispatcher : ICommandDispatcher
     {
         private readonly SessionId _sessionId = SessionId.New();
@@ -141,6 +174,8 @@ public static class MemoryTypeCommandTests
                 Seed(RepositoryMemoryType.StandingPreference);
             }
         }
+
+        public bool Reconcile { get; init; }
 
         internal List<object> Commands { get; } = [];
 
@@ -187,11 +222,16 @@ public static class MemoryTypeCommandTests
             return entry;
         }
 
-        private RepositoryMemoryEntry Add(RememberRepositoryMemoryCommand command)
+        private RepositoryMemoryOperationResult Add(RememberRepositoryMemoryCommand command)
         {
+            if (Reconcile)
+            {
+                return new RepositoryMemoryOperationResult("reconciliationRequired", null, null, Entries.ToArray(), []);
+            }
+
             var entry = Seed(command.MemoryType ?? RepositoryMemoryType.Situational) with { Text = command.Text };
             Entries[^1] = entry;
-            return entry;
+            return new RepositoryMemoryOperationResult("added", entry.Id, entry, [], []);
         }
 
         private RepositoryMemoryEntry Update(UpdateRepositoryMemoryCommand command)

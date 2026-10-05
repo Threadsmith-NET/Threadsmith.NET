@@ -1,5 +1,8 @@
 namespace Threadsmith.Tools;
 
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
 /// <summary>Tracks identical model tool calls across an execution and within one pending response batch.</summary>
 public sealed class ToolCallHistory
 {
@@ -35,6 +38,27 @@ public sealed class ToolCallHistory
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(argumentsJson);
+        if (definition.ConceptsAreHints)
+        {
+            try
+            {
+                if (JsonNode.Parse(argumentsJson) is JsonObject arguments)
+                {
+                    foreach (var key in arguments.Select(pair => pair.Key).Where(key => string.Equals(key, "concepts", StringComparison.OrdinalIgnoreCase)).ToArray())
+                    {
+                        arguments.Remove(key);
+                    }
+
+                    argumentsJson = arguments.ToJsonString();
+                }
+            }
+            catch (Exception exception) when (exception is JsonException or ArgumentException)
+            {
+                // Ordinary input validation owns malformed JSON and duplicate properties.
+                // Preserve the original arguments when hint normalization cannot complete.
+            }
+        }
+
         var call = (definition.Id.ToUpperInvariant(), argumentsJson);
         if (!TrackCurrentBatch(call))
         {

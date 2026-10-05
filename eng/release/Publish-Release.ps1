@@ -17,6 +17,7 @@ $review = & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1')
 $runtimeVersion = [string]$review.windowsSelfContainedDecision.runtimeVersion
 & (Join-Path $root 'eng/Stage-EmbeddingAssets.ps1') | Out-Null
 & (Join-Path $root 'eng/Stage-RerankerAssets.ps1') | Out-Null
+& (Join-Path $PSScriptRoot '../Stage-SpellfixAssets.ps1') -RuntimeIdentifier $RuntimeIdentifier
 
 dotnet restore (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') --runtime $RuntimeIdentifier "-p:RuntimeFrameworkVersion=$runtimeVersion"
 if ($LASTEXITCODE -ne 0) { throw 'Application restore failed.' }

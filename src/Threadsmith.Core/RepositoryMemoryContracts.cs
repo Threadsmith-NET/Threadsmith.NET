@@ -181,7 +181,17 @@ public sealed record RepositoryMemoryItem
 
 /// <summary>Creates an explicit manual repository memory.</summary>
 public sealed record RememberRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, string Text, RepositoryMemoryType? MemoryType = null)
-    : ICommand<RepositoryMemoryEntry>;
+    : ICommand<RepositoryMemoryOperationResult>
+{
+    /// <summary>Exact revisions explicitly confirmed distinct.</summary>
+    public IReadOnlyList<RepositoryMemoryInclusion> ConfirmDistinctFrom { get; init; } = [];
+
+    /// <summary>Optional content classification.</summary>
+    public ManagedRepositoryMemoryKind? Kind { get; init; }
+
+    /// <summary>Optional normalized applicability hints.</summary>
+    public IReadOnlyList<string>? Concepts { get; init; }
+}
 
 /// <summary>Lists current repository memories.</summary>
 public sealed record ListRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity)
@@ -193,7 +203,17 @@ public sealed record InspectRepositoryMemoryCommand(SessionId SessionId, string 
 
 /// <summary>Corrects an existing entry in place, preserving its stable ID.</summary>
 public sealed record UpdateRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText, RepositoryMemoryType? MemoryType = null)
-    : ICommand<RepositoryMemoryEntry>;
+    : ICommand<RepositoryMemoryEntry>
+{
+    /// <summary>Revision observed by the caller.</summary>
+    public long? ExpectedRevision { get; init; }
+
+    /// <summary>Optional content classification.</summary>
+    public ManagedRepositoryMemoryKind? Kind { get; init; }
+
+    /// <summary>Optional concept replacement.</summary>
+    public IReadOnlyList<string>? Concepts { get; init; }
+}
 
 /// <summary>Compatibility alias for an in-place update; no supersession record is created.</summary>
 public sealed record SupersedeRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, RepositoryMemoryId MemoryId, string ReplacementText, RepositoryMemoryType? MemoryType = null)

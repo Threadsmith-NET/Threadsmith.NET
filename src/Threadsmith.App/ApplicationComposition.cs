@@ -273,7 +273,7 @@ internal static class ApplicationComposition
             Conversation = conversationPolicy,
         };
         var memoryOptions = new RepositoryMemoryConfiguration(host.Configuration, host.TrustedConfiguration, host.Paths.RepositoryRoot);
-        var memoryService = new RepositoryMemoryService(persistence.RepositoryMemoryStore, embeddings, host.Sanitizer, host.LoggerFactory.CreateLogger<RepositoryMemoryService>());
+        var memoryService = new RepositoryMemoryService(persistence.RepositoryMemoryStore, embeddings, host.Sanitizer, host.LoggerFactory.CreateLogger<RepositoryMemoryService>(), memoryRetriever);
         var initialRepositoryIdentity = RepositoryIdentity.Create(host.Paths.RepositoryRoot);
         var initialMemoryOptions = memoryOptions.Capture(initialRepositoryIdentity);
         await memoryService.EnforceCapacityAsync(initialRepositoryIdentity, initialMemoryOptions);
@@ -285,7 +285,7 @@ internal static class ApplicationComposition
         if (host.Configuration.GetSection("context:repositoryMemory").Exists())
         {
             host.LoggerFactory.CreateLogger<RepositoryMemoryService>().LogWarning(
-                "context:repositoryMemory is retired and ignored. Configure tools:config:memories:MaxNumberOfRepoMemories (20) and MaxRepoMemoriesInContext (3), and SemanticMinimum (0.47) instead.");
+                "context:repositoryMemory is retired and ignored. Configure tools:config:memories:MaxNumberOfRepoMemories (20) and Recall:MaximumResults (3), and Recall:SemanticMinimum (0.47) instead.");
         }
 
         var scratchpad = new ScratchpadLifecycle(

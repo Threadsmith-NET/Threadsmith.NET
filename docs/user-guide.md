@@ -375,12 +375,43 @@ Configure these memory settings through ordinary machine, user, repository, sess
     "config": {
       "memories": {
         "MaxNumberOfRepoMemories": 20,
-        "MaxRepoMemoriesInContext": 3,
-        "SemanticMinimum": 0.47,
-        "RerankerEnabled": false,
-        "RerankerCandidateLimit": 8,
-        "RerankerMinimumScore": null,
-        "standingPreferenceWarningThreshold": 3
+        "standingPreferenceWarningThreshold": 3,
+        "Recall": {
+          "MaximumResults": 3,
+          "SemanticMinimum": 0.47,
+          "RerankerEnabled": false,
+          "RerankerCandidateLimit": 8,
+          "Concepts": {
+            "Enabled": false,
+            "CandidateLimit": 4
+          },
+          "Fuzzy": {
+            "Enabled": false,
+            "MaximumDistance": 1
+          },
+          "Lexical": {
+            "MaximumExpansionsPerTerm": 3,
+            "MaximumExpansions": 16
+          }
+        },
+        "Reconciliation": {
+          "Enabled": false,
+          "SemanticMinimum": 0.47,
+          "RerankerEnabled": true,
+          "RerankerCandidateLimit": 20,
+          "Concepts": {
+            "Enabled": true,
+            "CandidateLimit": 4
+          },
+          "Fuzzy": {
+            "Enabled": false,
+            "MaximumDistance": 1
+          },
+          "Lexical": {
+            "MaximumExpansionsPerTerm": 3,
+            "MaximumExpansions": 16
+          }
+        }
       }
     }
   }
@@ -391,7 +422,11 @@ Storage capacity must be positive; the situational context limit may be zero to 
 
 The bundled CPU encoder works locally and independently of the conversational model. If it is unavailable, writes that change text fail visibly and situational retrieval falls back to qualified lexical matches. Type-only updates reuse the stored vector. A failed search index preserves readable standing preferences; if the memory database cannot be read, context assembly fails with an explicit error. Imported older manual notes remain inspectable even when too long for the encoder and can be corrected with `update`. See [conversation context operations](operations/conversation-context.md) for migration backups and recovery.
 
-Optional local memory reranking is enabled with `tools:config:memories:RerankerEnabled=true`. It is disabled by default, scores up to `RerankerCandidateLimit` qualified candidates (default 8, any positive count), and preserves hybrid retrieval if the cross-encoder is unavailable or a query-memory pair is truncated. `RerankerMinimumScore` is an optional finite raw-logit cutoff; its default `null` applies no rejection threshold. `reranking:cpuThreads` controls the startup CPU thread budget (default 8, any positive count). Restart for CPU changes; reopen the repository or restart after editing memory settings. See [conversation context operations](operations/conversation-context.md) for staging and configuration details. Retrieved situational notes are introduced as **Repository memories that may be helpful**, with guidance to use them only when relevant. Use `/memory remember [--type standingPreference|situational] <text>` or `/memory update <id> [--type standingPreference|situational] <text>` to set a type; omitted `remember` defaults to situational and omitted `update` preserves the type. When standing preferences after eviction exceed `standingPreferenceWarningThreshold` (default 3), startup, additions, and explicit type promotions warn that some may belong in `AGENTS.md`.
+Optional local memory reranking is enabled with `tools:config:memories:Recall:RerankerEnabled=true`. It is disabled by default, scores up to `RerankerCandidateLimit` qualified candidates (default 8, any positive count), and preserves hybrid retrieval if the cross-encoder is unavailable or a query-memory pair is truncated. Raw logits only order discovered candidates; no absolute score cutoff is applied. `reranking:cpuThreads` controls the startup CPU thread budget (default 8, any positive count). Restart for CPU changes; reopen the repository or restart after editing memory settings. See [conversation context operations](operations/conversation-context.md) for staging and configuration details. Retrieved situational notes are introduced as **Repository memories that may be helpful**, with guidance to use them only when relevant. Use `/memory remember [--type standingPreference|situational] <text>` or `/memory update <id> [--type standingPreference|situational] <text>` to set a type; omitted `remember` defaults to situational and omitted `update` preserves the type. When standing preferences after eviction exceed `standingPreferenceWarningThreshold` (default 3), startup, additions, and explicit type promotions warn that some may belong in `AGENTS.md`.
+
+Reconciliation can interrupt both manual and model adds when a similar note exists. It is disabled by default. The collision response provides IDs, revisions and text: update the existing ID with `--expected-revision <revision>` to supersede it, or repeat the add with `--confirm-distinct-from <id>@<revision>` to confirm a separate note. An unresolved collision writes nothing. Both memory types participate. Supplied concepts can discover additional collision candidates, using `Reconciliation:Concepts` settings and complete proposed-text reranking. Per-scenario `Lexical` expansion limits and `Fuzzy` settings optionally correct unmatched memory-text query terms for both reconciliation and conversation recall, with bounded expansion that preserves exact matches. See [memory search settings](operations/conversation-context.md#reconciliation-and-concept-recall) for defaults.
+
+Add/update also accept `--kind constraint|decision|convention|requirement|finding|unspecified` and `--concepts cancellation,async`. Omitted metadata is preserved on update; `--concepts []` clears concepts. With separately enabled concept recall and reranking, hints from native tool calls can bring relevant notes into later continuations of the same run. Optional spellfix1 handles concept typos and, through the scenario Fuzzy settings, bounded typo recovery for indexed memory text. See [reconciliation and concept recall](operations/conversation-context.md#reconciliation-and-concept-recall) for all configuration defaults, limits, syntax and calibration requirements.
 
 #### How context optimization works
 

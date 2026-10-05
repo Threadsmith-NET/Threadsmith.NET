@@ -11,18 +11,21 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
     private readonly ITextEmbeddingGenerator _generator;
     private readonly IOutputSanitizer _sanitizer;
     private readonly IManagedRepositoryMemoryStore _store;
+    private readonly IRepositoryMemorySearch? _search;
 
     /// <summary>Initializes a new instance of the <see cref="RepositoryMemoryService"/> class.</summary>
     public RepositoryMemoryService(
         IManagedRepositoryMemoryStore store,
         ITextEmbeddingGenerator generator,
         IOutputSanitizer sanitizer,
-        ILogger<RepositoryMemoryService>? logger = null)
+        ILogger<RepositoryMemoryService>? logger = null,
+        IRepositoryMemorySearch? search = null)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(generator);
         ArgumentNullException.ThrowIfNull(sanitizer);
         _store = store;
+        _search = search;
         _generator = generator;
         _sanitizer = sanitizer;
         _logger = logger ?? NullLogger<RepositoryMemoryService>.Instance;
@@ -63,12 +66,20 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
             return new RepositoryMemoryOperationResult("notFound", request.Id, null, [], []);
         }
 
+        if (existing is not null && request.ExpectedRevision is { } expected && existing.Revision != expected)
+        {
+            return new RepositoryMemoryOperationResult("conflict", existing.Id, existing, [], []);
+        }
+
+        var kind = request.Kind ?? existing?.Kind ?? ManagedRepositoryMemoryKind.Unspecified;
+        var concepts = request.Concepts is null ? existing?.Concepts ?? [] : MemoryConcepts.Normalize(request.Concepts.Select(_sanitizer.Sanitize).ToArray());
         var memoryType = request.MemoryType
             ?? existing?.MemoryType
             ?? RepositoryMemoryType.Situational;
         var duplicate = snapshot.Entries.FirstOrDefault(entry => string.Equals(entry.Text, text, StringComparison.Ordinal));
         if (duplicate is not null
-            && (duplicate.Id != request.Id || duplicate.MemoryType == memoryType))
+            && (duplicate.Id != request.Id || (duplicate.MemoryType == memoryType && duplicate.Kind == kind
+                && duplicate.Concepts.SequenceEqual(concepts, StringComparer.Ordinal))))
         {
             return new RepositoryMemoryOperationResult(
                 duplicate.Id == request.Id ? "unchanged" : "duplicate", duplicate.Id, duplicate, [], []);
@@ -83,8 +94,11 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
             SourceRunId = request.SourceRunId,
             SourceInvocationId = request.SourceInvocationId,
             MemoryType = memoryType,
+            Kind = kind,
+            Concepts = concepts,
         };
         RepositoryMemoryWriteResult result;
+        RepositoryMemorySearchDetails? searchDetails = null;
         if (existing is not null && existing.Text == text)
         {
             // A metadata-only change retains the complete stored vector without running inference.
@@ -106,9 +120,54 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
                 throw new InvalidOperationException("Embedding generation returned an invalid vector. No memory was changed; retry after fixing local embeddings.");
             }
 
-            result = existing is null
-                ? await _store.AddAsync(request.RepositoryIdentity, write, model, embedding, request.Options, cancellationToken)
-                : await _store.UpdateAsync(request.RepositoryIdentity, existing.Id, existing.Revision, write, model, embedding, request.Options, cancellationToken);
+            if (existing is null && request.Options.ReconciliationEnabled)
+            {
+                var search = _search ?? throw new InvalidOperationException("Memory reconciliation search is unavailable. No memory was added.");
+                result = new RepositoryMemoryWriteResult(RepositoryMemoryWriteStatus.Conflict, null, []);
+                for (var attempt = 0; attempt < 2; attempt++)
+                {
+                    var matches = await search.SearchAsync(
+                        new RepositoryMemorySearchRequest
+                    {
+                        RepositoryIdentity = request.RepositoryIdentity,
+                        Query = text,
+                        Concepts = concepts,
+                        IncludeStandingPreferences = true,
+                        PreparedEmbedding = embedding,
+                        PreparedEmbeddingSpaceId = model.SpaceId,
+                        Options = RepositoryMemorySearchOptions.ForReconciliation(request.Options),
+                    },
+                        cancellationToken);
+                    searchDetails = matches.SearchDetails;
+                    if (!matches.IsComplete || matches.MemorySetRevision is null)
+                    {
+                        throw new InvalidOperationException("Memory reconciliation could not compare complete inputs. No memory was added. Check local inference and shorten oversized memories before retrying.");
+                    }
+
+                    var collisions = matches.Selected.Where(candidate => !request.ConfirmDistinctFrom.Contains(
+                        new RepositoryMemoryInclusion(candidate.Entry.Id, candidate.Entry.Revision))).Select(candidate => candidate.Entry).ToArray();
+                    if (collisions.Length > 0)
+                    {
+                        return new RepositoryMemoryOperationResult("reconciliationRequired", null, null, collisions, [])
+                        {
+                            Diagnostics = matches.Diagnostics,
+                            SearchDetails = searchDetails,
+                        };
+                    }
+
+                    result = await _store.AddAsync(request.RepositoryIdentity, write with { ExpectedRepositoryRevision = matches.MemorySetRevision }, model, embedding, request.Options, cancellationToken);
+                    if (result.Status != RepositoryMemoryWriteStatus.Conflict)
+                    {
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                result = existing is null
+                    ? await _store.AddAsync(request.RepositoryIdentity, write, model, embedding, request.Options, cancellationToken)
+                    : await _store.UpdateAsync(request.RepositoryIdentity, existing.Id, existing.Revision, write, model, embedding, request.Options, cancellationToken);
+            }
         }
 
         LogEvictions(result.EvictedIds);
@@ -116,6 +175,7 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
             result.Status.ToString().ToLowerInvariant(), result.Entry?.Id ?? request.Id, result.Entry, [], result.EvictedIds)
         {
             StandingPreferenceCount = result.StandingPreferenceCount,
+            SearchDetails = searchDetails,
         };
     }
 
@@ -163,13 +223,27 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
 
     private static void ValidateArguments(RepositoryMemoryOperationRequest request)
     {
-        var validType = request.MemoryType is null || Enum.IsDefined(request.MemoryType.Value);
+        var validType = (request.MemoryType is null || Enum.IsDefined(request.MemoryType.Value))
+            && (request.Kind is null || Enum.IsDefined(request.Kind.Value));
+        if (request.ExpectedRevision is <= 0 || (request.ExpectedRevision is not null && request.Action != "update")
+            || request.ConfirmDistinctFrom.Count > request.Options.MaxNumberOfRepoMemories
+            || (request.ConfirmDistinctFrom.Count > 0 && request.Action != "add")
+            || request.ConfirmDistinctFrom.Any(item => item.Id.Value == Guid.Empty || item.Revision <= 0))
+        {
+            throw new ArgumentException("Distinctness confirmations require valid IDs/revisions on add; expectedRevision is valid only on update.");
+        }
+
+        if (request.Concepts is not null)
+        {
+            _ = MemoryConcepts.Normalize(request.Concepts);
+        }
+
         var valid = request.Action switch
         {
             "add" => request.Id is null && request.Text is not null && validType,
             "update" => request.Id is not null && request.Text is not null && validType,
-            "remove" => request.Id is not null && request.Text is null && request.MemoryType is null,
-            "list" => request.Id is null && request.Text is null && request.MemoryType is null,
+            "remove" => request.Id is not null && request.Text is null && request.MemoryType is null && request.Kind is null && request.Concepts is null,
+            "list" => request.Id is null && request.Text is null && request.MemoryType is null && request.Kind is null && request.Concepts is null,
             _ => false,
         };
         if (!valid)

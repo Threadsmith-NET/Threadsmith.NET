@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param()
 . (Join-Path $PSScriptRoot 'Release.Common.ps1')
+$contractRid = [Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier
+Assert-ReleaseRid $contractRid
 $failures = [Collections.Generic.List[string]]::new()
 function Test-Contract([string] $Name, [scriptblock] $Test) {
     try { & $Test; Write-Host "PASS $Name" } catch { $failures.Add("${Name}: $($_.Exception.Message)") }
@@ -138,19 +140,20 @@ Test-Contract 'release-license evidence is closed, current, and fail-closed' {
 }
 Test-Contract 'legal artifacts are deterministic and cover the exact restore closure' {
     $root = Get-RepositoryRoot
+    & (Join-Path $PSScriptRoot '../Stage-SpellfixAssets.ps1') -RuntimeIdentifier $contractRid | Out-Null
     $assets = Join-Path $root 'src/Threadsmith.App/obj/project.assets.json'
     $review = & (Join-Path $PSScriptRoot 'Test-ReleaseLicenseEvidence.ps1')
     $runtimeVersion = $review.windowsSelfContainedDecision.runtimeVersion
-    $hasRuntimePack = (Test-Path $assets) -and @(Get-RestoredRuntimePacks (Get-Content -LiteralPath $assets -Raw | ConvertFrom-Json) | Where-Object { $_.id -eq 'Microsoft.NETCore.App.Runtime.linux-x64' -and $_.version -eq $runtimeVersion }).Count -gt 0
+    $hasRuntimePack = (Test-Path $assets) -and @(Get-RestoredRuntimePacks (Get-Content -LiteralPath $assets -Raw | ConvertFrom-Json) | Where-Object { $_.id -eq "Microsoft.NETCore.App.Runtime.$contractRid" -and $_.version -eq $runtimeVersion }).Count -gt 0
     if (-not $hasRuntimePack) {
-        dotnet restore (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') --runtime linux-x64 "-p:RuntimeFrameworkVersion=$runtimeVersion" | Out-Null
+        dotnet restore (Join-Path $root 'src/Threadsmith.App/Threadsmith.App.csproj') --runtime $contractRid "-p:RuntimeFrameworkVersion=$runtimeVersion" | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not restore the recorded runtime version for release contract verification.' }
     }
     $temp = Join-Path ([IO.Path]::GetTempPath()) "threadsmith-legal-contract-$([Guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory (Join-Path $temp 'a'), (Join-Path $temp 'b') -Force | Out-Null
     try {
-        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile $assets -OutputDirectory (Join-Path $temp 'a') -RuntimeIdentifier linux-x64
-        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile $assets -OutputDirectory (Join-Path $temp 'b') -RuntimeIdentifier linux-x64
+        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile $assets -OutputDirectory (Join-Path $temp 'a') -RuntimeIdentifier $contractRid
+        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile $assets -OutputDirectory (Join-Path $temp 'b') -RuntimeIdentifier $contractRid
         foreach ($name in @('THIRD-PARTY-NOTICES.txt', 'sbom.spdx.json')) {
             if ((Get-FileHash (Join-Path $temp "a/$name")).Hash -ne (Get-FileHash (Join-Path $temp "b/$name")).Hash) { throw "$name is not deterministic." }
         }
@@ -167,11 +170,11 @@ Test-Contract 'runtime legal staging binds exact RID and rejects omissions' {
         Set-Content (Join-Path $temp 'source/LICENSE.txt') 'runtime license' -NoNewline
         Set-Content (Join-Path $temp 'source/THIRD-PARTY-NOTICES.TXT') 'runtime notices' -NoNewline
         $assets = Join-Path (Get-RepositoryRoot) 'src/Threadsmith.App/obj/project.assets.json'
-        & (Join-Path $PSScriptRoot 'Stage-DotNetRuntimeLegal.ps1') -RuntimeIdentifier linux-x64 -StageDirectory (Join-Path $temp 'stage') -AssetsFile $assets -RuntimeLegalDirectory (Join-Path $temp 'source')
+        & (Join-Path $PSScriptRoot 'Stage-DotNetRuntimeLegal.ps1') -RuntimeIdentifier $contractRid -StageDirectory (Join-Path $temp 'stage') -AssetsFile $assets -RuntimeLegalDirectory (Join-Path $temp 'source')
         $provenance = Get-Content (Join-Path $temp 'stage/third-party/dotnet-runtime/PROVENANCE.json') -Raw | ConvertFrom-Json
-        if ($provenance.runtimeIdentifier -ne 'linux-x64' -or $provenance.files.Count -ne 2) { throw 'Runtime provenance did not bind both files to the RID.' }
+        if ($provenance.runtimeIdentifier -ne $contractRid -or $provenance.files.Count -ne 2) { throw 'Runtime provenance did not bind both files to the RID.' }
         Remove-Item (Join-Path $temp 'source/THIRD-PARTY-NOTICES.TXT')
-        try { & (Join-Path $PSScriptRoot 'Stage-DotNetRuntimeLegal.ps1') -RuntimeIdentifier linux-x64 -StageDirectory (Join-Path $temp 'stage-2') -AssetsFile $assets -RuntimeLegalDirectory (Join-Path $temp 'source'); throw 'Missing runtime notices were accepted.' } catch { if ($_.Exception.Message -eq 'Missing runtime notices were accepted.') { throw } }
+        try { & (Join-Path $PSScriptRoot 'Stage-DotNetRuntimeLegal.ps1') -RuntimeIdentifier $contractRid -StageDirectory (Join-Path $temp 'stage-2') -AssetsFile $assets -RuntimeLegalDirectory (Join-Path $temp 'source'); throw 'Missing runtime notices were accepted.' } catch { if ($_.Exception.Message -eq 'Missing runtime notices were accepted.') { throw } }
     } finally { Remove-Item $temp -Recurse -Force }
 }
 Test-Contract 'ripgrep assets are official, licensed, hashed, and complete' {
@@ -236,7 +239,7 @@ Test-Contract 'reranker manifest is represented in generated legal evidence' {
     if ([IO.Path]::GetDirectoryName($temp) -ne $expectedParent) { throw 'Reranker legal fixture escaped its temporary parent.' }
     New-Item -ItemType Directory -Path $temp | Out-Null
     try {
-        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile (Join-Path $root 'src/Threadsmith.App/obj/project.assets.json') -OutputDirectory $temp -RuntimeIdentifier linux-x64
+        & (Join-Path $PSScriptRoot 'New-ReleaseLegalArtifacts.ps1') -AssetsFile (Join-Path $root 'src/Threadsmith.App/obj/project.assets.json') -OutputDirectory $temp -RuntimeIdentifier $contractRid
         $notice = Get-Content (Join-Path $temp 'THIRD-PARTY-NOTICES.txt') -Raw
         $sbom = Get-Content (Join-Path $temp 'sbom.spdx.json') -Raw | ConvertFrom-Json
         if (-not $notice.Contains($manifest.model) -or -not @($sbom.packages | Where-Object { $_.name -eq $manifest.model -and $_.versionInfo -eq $manifest.revision }).Count) { throw 'Reranker model is absent from generated legal evidence.' }

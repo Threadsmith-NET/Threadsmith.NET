@@ -203,6 +203,9 @@ public sealed record ToolSchedulingDescriptor
 /// <summary>Static metadata and policy requirements for one tool.</summary>
 public sealed record ToolDefinition
 {
+    /// <summary>Native concept metadata does not distinguish otherwise identical operational requests.</summary>
+    public bool ConceptsAreHints { get; init; }
+
     /// <summary>Stable snake-case identifier requested by models.</summary>
     public required string Id { get; init; }
 
@@ -454,6 +457,10 @@ public sealed record ToolResult<TOutput>
 /// <summary>Provider-neutral dynamic result returned to the model execution layer.</summary>
 public sealed record ToolInvocationResult
 {
+    /// <summary>Normalized hints from an admitted native execution, absent from durable/wire result serialization.</summary>
+    [JsonIgnore]
+    public IReadOnlyList<string> Concepts { get; init; } = [];
+
     /// <summary>Invocation identity.</summary>
     public required ToolInvocationId ToolInvocationId { get; init; }
 
@@ -630,6 +637,11 @@ public abstract class Tool<TInput, TOutput> : ITool
             var input = JsonSerializer.Deserialize<TInput>(normalizedArgumentsJson, _jsonOptions)
                 ?? throw new ToolArgumentValidationException("Tool arguments were empty.");
             ValidateInput(input);
+            if (input is IConceptToolInput conceptInput)
+            {
+                _ = MemoryConcepts.Normalize(conceptInput.Concepts);
+            }
+
             return input;
         }
         catch (ToolArgumentValidationException)

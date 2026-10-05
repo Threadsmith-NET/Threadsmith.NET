@@ -27,8 +27,47 @@ public sealed record RepositoryMemoryOptions
     /// <summary>Maximum qualified candidates sent to the local reranker.</summary>
     public int RerankerCandidateLimit { get; init; } = 8;
 
-    /// <summary>Optional strict raw reranker-logit admission floor; null retains the ranked top candidates.</summary>
-    public double? RerankerMinimumScore { get; init; }
+    /// <summary>Independent write-time collision checking; ranks potential overlaps for caller review.</summary>
+    public bool ReconciliationEnabled { get; init; }
+
+    /// <summary>Required reranking for enabled write-time reconciliation.</summary>
+    public bool ReconciliationRerankerEnabled { get; init; } = true;
+
+    /// <summary>Independent lexical policy for write-time reconciliation.</summary>
+    public RepositoryMemoryLexicalOptions ReconciliationLexical { get; init; } = new();
+
+    /// <summary>Semantic qualification for write-time candidate discovery.</summary>
+    public double ReconciliationSemanticMinimum { get; init; } = DefaultSemanticMinimum;
+
+    /// <summary>Maximum candidates compared during a write check.</summary>
+    public int ReconciliationCandidateLimit { get; init; } = 20;
+
+    /// <summary>Uses supplied concepts to discover additional reconciliation candidates.</summary>
+    public bool ReconciliationConceptsEnabled { get; init; } = true;
+
+    /// <summary>Additional concept-only comparison slots for reconciliation.</summary>
+    public int ReconciliationConceptCandidateLimit { get; init; } = 4;
+
+    /// <summary>Enables fuzzy concept resolution during reconciliation.</summary>
+    public bool ReconciliationConceptFuzzyEnabled { get; init; }
+
+    /// <summary>Maximum reconciliation concept edit cost when enabled.</summary>
+    public int ReconciliationConceptFuzzyMaximumDistance { get; init; } = 1;
+
+    /// <summary>Fuzzy lexical discovery policy for conversational recall.</summary>
+    public RepositoryMemoryLexicalOptions Lexical { get; init; } = new();
+
+    /// <summary>Enables concept discovery during ordinary continuations.</summary>
+    public bool ConceptRecallEnabled { get; init; }
+
+    /// <summary>Enables app-owned spellfix lookup for hints with no exact match.</summary>
+    public bool ConceptFuzzyEnabled { get; init; }
+
+    /// <summary>Maximum spellfix edit cost; mandatory when fuzzy lookup is enabled.</summary>
+    public int ConceptFuzzyMaximumDistance { get; init; } = 1;
+
+    /// <summary>Additional concept-only candidates reserved in the reranking window.</summary>
+    public int ConceptCandidateLimit { get; init; } = 4;
 
     /// <summary>Maximum complete sanitized memory characters.</summary>
     public int MaximumTextCharacters { get; init; } = 2000;
@@ -54,12 +93,44 @@ public sealed record RepositoryMemoryOptions
     /// <summary>Rejects invalid configuration before it affects storage or retrieval.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReconciliationCandidateLimit);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConceptCandidateLimit);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReconciliationConceptCandidateLimit);
+        ArgumentNullException.ThrowIfNull(Lexical);
+        Lexical.Validate();
+        ArgumentNullException.ThrowIfNull(ReconciliationLexical);
+        ReconciliationLexical.Validate();
+        if (ReconciliationEnabled && !ReconciliationRerankerEnabled)
+        {
+            throw new ArgumentException("Enabled memory reconciliation requires Reconciliation:RerankerEnabled=true.");
+        }
+
+        if (ReconciliationConceptFuzzyEnabled && ReconciliationConceptFuzzyMaximumDistance is not > 0)
+        {
+            throw new ArgumentException("Fuzzy reconciliation concepts require a positive maximum distance.");
+        }
+
+        if (ConceptFuzzyEnabled && ConceptFuzzyMaximumDistance is not > 0)
+        {
+            throw new ArgumentException("Fuzzy concepts require a positive maximum distance.");
+        }
+
+        if (!double.IsFinite(ReconciliationSemanticMinimum) || ReconciliationSemanticMinimum is < -1 or > 1)
+        {
+            throw new ArgumentException("Memory reconciliation requires finite semantic bounds between -1 and 1.");
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumTextCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumQueryCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumQueryTerms);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCacheEntries);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumDiagnostics);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumListBytes);
+        if (ReconciliationEnabled && MaximumListBytes < 24 * 1024)
+        {
+            throw new ArgumentException("Reconciliation requires at least 24 KiB for a usable collision response.");
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxNumberOfRepoMemories);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRepoMemoriesInContext);
         ArgumentOutOfRangeException.ThrowIfNegative(StandingPreferenceWarningThreshold);
@@ -71,10 +142,6 @@ public sealed record RepositoryMemoryOptions
         ArgumentOutOfRangeException.ThrowIfLessThan(SemanticMinimum, -1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(SemanticMinimum, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(RerankerCandidateLimit, 1);
-        if (RerankerMinimumScore is { } rerankerMinimumScore && !double.IsFinite(rerankerMinimumScore))
-        {
-            throw new ArgumentOutOfRangeException(nameof(RerankerMinimumScore), "The reranker minimum score must be finite when supplied.");
-        }
     }
 }
 
@@ -118,6 +185,12 @@ public sealed record RepositoryMemoryEntry
 
     /// <summary>Explicit origin of the most recent meaningful content write.</summary>
     public required RepositoryMemoryOrigin Origin { get; init; }
+
+    /// <summary>Content classification without authority or ranking weight.</summary>
+    public ManagedRepositoryMemoryKind Kind { get; init; }
+
+    /// <summary>Normalized applicability hints.</summary>
+    public IReadOnlyList<string> Concepts { get; init; } = [];
 
     /// <summary>Selection behavior for this memory.</summary>
     public RepositoryMemoryType MemoryType { get; init; } = RepositoryMemoryType.Situational;
@@ -172,6 +245,15 @@ public sealed record RepositoryMemoryWrite
     /// <summary>Host-authorized source of the write.</summary>
     public required RepositoryMemoryOrigin Origin { get; init; }
 
+    /// <summary>Content classification without authority or ranking weight.</summary>
+    public ManagedRepositoryMemoryKind Kind { get; init; }
+
+    /// <summary>Complete normalized concept replacement.</summary>
+    public IReadOnlyList<string> Concepts { get; init; } = [];
+
+    /// <summary>Repository revision checked by reconciliation, fenced before add/eviction.</summary>
+    public long? ExpectedRepositoryRevision { get; init; }
+
     /// <summary>Selection behavior for the committed memory.</summary>
     public RepositoryMemoryType MemoryType { get; init; } = RepositoryMemoryType.Situational;
 
@@ -221,7 +303,11 @@ public sealed record RepositoryMemoryWriteResult(
 }
 
 /// <summary>Qualified SQLite lexical candidate; lower BM25 values rank ahead of higher ones.</summary>
-public sealed record RepositoryMemoryLexicalMatch(RepositoryMemoryId Id, double Bm25);
+public sealed record RepositoryMemoryLexicalMatch(RepositoryMemoryId Id, double Bm25)
+{
+    /// <summary>Qualified only after bounded query expansion; exact matches rank first.</summary>
+    public bool IsFuzzy { get; init; }
+}
 
 /// <summary>One consistent database snapshot for both retrieval branches and ranking-cache identity.</summary>
 public sealed record RepositoryMemoryReadSnapshot(
@@ -229,7 +315,14 @@ public sealed record RepositoryMemoryReadSnapshot(
     long Revision,
     IReadOnlyList<RepositoryMemoryEntry> Entries,
     IReadOnlyList<RepositoryMemoryLexicalMatch> LexicalMatches,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    /// <summary>Native text expansion outcome, separate from successful exact FTS lookup.</summary>
+    public RepositoryMemorySearchBranchStatus FuzzyLexicalStatus { get; init; }
+
+    /// <summary>Bounded additional text terms searched.</summary>
+    public IReadOnlyList<MemoryTermMatch> LexicalExpansions { get; init; } = [];
+}
 
 /// <summary>Final-dispatch receipt fenced by the exact content revision transmitted.</summary>
 public sealed record RepositoryMemoryInclusion(RepositoryMemoryId Id, long Revision);
@@ -242,6 +335,21 @@ public interface IManagedRepositoryMemoryStore
         string repositoryIdentity,
         IReadOnlyList<string> lexicalTerms,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads exact and optionally expanded lexical candidates in the same database snapshot.</summary>
+    async Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
+        string repositoryIdentity,
+        IReadOnlyList<string> lexicalTerms,
+        RepositoryMemoryLexicalOptions lexicalOptions,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = await GetSnapshotAsync(repositoryIdentity, lexicalTerms, cancellationToken);
+        return lexicalOptions.FuzzyEnabled ? snapshot with
+        {
+            FuzzyLexicalStatus = RepositoryMemorySearchBranchStatus.Unavailable,
+            Warnings = [.. snapshot.Warnings, "Fuzzy memory text lookup is unavailable; using exact lexical matches only."],
+        } : snapshot;
+    }
 
     /// <summary>Commits a pre-embedded entry and any deterministic eviction in one short transaction.</summary>
     Task<RepositoryMemoryWriteResult> AddAsync(

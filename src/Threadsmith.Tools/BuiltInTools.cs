@@ -12,8 +12,11 @@ using System.Text.RegularExpressions;
 using Threadsmith.Core;
 
 /// <summary>Input for bounded repository file listing.</summary>
-public sealed record ListFilesInput
+public sealed record ListFilesInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     private string _path = ".";
 
     /// <summary>Repository-relative directory; omitted, null, or blank paths use the repository root.</summary>
@@ -156,8 +159,11 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 }
 
 /// <summary>Input for a bounded file-range read.</summary>
-public sealed record ReadFileInput
+public sealed record ReadFileInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Returns an exact bounded UTF-8 snapshot and digest instead of a line page.</summary>
     public bool Snapshot { get; init; }
 
@@ -441,8 +447,11 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 }
 
 /// <summary>Input for bounded repository text search.</summary>
-public sealed record SearchTextInput
+public sealed record SearchTextInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     private string? _path;
 
     /// <summary>Text or regex pattern.</summary>
@@ -1226,7 +1235,11 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
 }
 
 /// <summary>Input for read-only Git status.</summary>
-public sealed record GitStatusInput;
+public sealed record GitStatusInput : IConceptToolInput
+{
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+}
 
 /// <summary>Normalized Git status output.</summary>
 public sealed record GitStatusOutput(
@@ -1328,22 +1341,31 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
 }
 
 /// <summary>Input for semantic symbol lookup.</summary>
-public sealed record FindSymbolInput
+public sealed record FindSymbolInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Declaration name.</summary>
     public required string Query { get; init; }
 }
 
 /// <summary>Input for reference lookup.</summary>
-public sealed record FindReferencesInput
+public sealed record FindReferencesInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Stable symbol identity returned by find_symbol.</summary>
     public required string SymbolId { get; init; }
 }
 
 /// <summary>Input for implementation lookup.</summary>
-public sealed record FindImplementationsInput
+public sealed record FindImplementationsInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Stable symbol identity returned by find_symbol.</summary>
     public required string SymbolId { get; init; }
 }
@@ -1681,8 +1703,11 @@ internal static class LegacySemanticToolOutput
 }
 
 /// <summary>Input for bounded shell-command execution.</summary>
-public sealed record RunProcessInput
+public sealed record RunProcessInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Shell command to execute in the repository root.</summary>
     public required string Command { get; init; }
 
@@ -1913,6 +1938,13 @@ internal static class ToolDefinitionFactory
             inputObject["properties"] = new JsonObject();
         }
 
+        if (typeof(IConceptToolInput).IsAssignableFrom(typeof(TInput))
+            && inputSchema is JsonObject conceptSchema
+            && conceptSchema["properties"]?["concepts"] is JsonObject concepts)
+        {
+            concepts["maxItems"] = MemoryConcepts.MaximumPerInput;
+        }
+
         SealObjectSchemas(inputSchema);
 
         var outputSchema = _schemaOptions.GetJsonSchemaAsNode(
@@ -1920,6 +1952,7 @@ internal static class ToolDefinitionFactory
         return new()
         {
             Id = id,
+            ConceptsAreHints = typeof(IConceptToolInput).IsAssignableFrom(typeof(TInput)) && typeof(TInput) != typeof(MemoriesInput),
             DisplayName = id.Replace('_', ' '),
             Source = "Built-in",
             Essential = _essentialToolIds.Contains(id),

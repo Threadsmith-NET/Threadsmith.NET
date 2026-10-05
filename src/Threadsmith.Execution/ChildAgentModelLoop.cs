@@ -733,9 +733,9 @@ internal sealed class ChildAgentModelLoop
             semanticToolAttempted |= SemanticFirstSearchPolicy.IsSemanticInspectionTool(request.ToolName);
         }
 
-        foreach (var request in requests)
+        for (var ordinal = 0; ordinal < requests.Count; ordinal++)
         {
-            toolCalls.TryAdd(request.ToolName, request.ArgumentsJson);
+            toolCalls.TryAdd(resolvedRegistrations[ordinal].Tool.Definition, requests[ordinal].ArgumentsJson);
         }
 
         var results = new List<ToolBatchResult>();

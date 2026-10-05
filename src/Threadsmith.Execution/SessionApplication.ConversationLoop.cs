@@ -182,7 +182,7 @@ public sealed partial class SessionApplication
         foreach (var message in messages)
         {
             registration.MemoryCurrentInstruction = message.Text;
-            if (!loopState.TransientState.HasResponses)
+            if (!loopState.TransientState.HasResponses || registration.MemoryOptions?.ConceptRecallEnabled == true)
             {
                 loopState.InvalidateFrozenContext();
             }
@@ -254,10 +254,27 @@ public sealed partial class SessionApplication
         ConversationLoopState loopState,
         CancellationToken cancellationToken)
     {
+        if (loopState.FrozenContext?.MemoryConceptResolutionPending == true && registration.ConceptResolutionRetries < 1)
+        {
+            registration.ConceptResolutionRetries++;
+            loopState.InvalidateFrozenContext();
+        }
+
         long? revision = null;
         if (_repositoryMemories is not null && invocation is not null)
         {
             var identity = RepositoryIdentity.Create(invocation.RepositoryPath);
+            if (registration.MemoryRepositoryIdentity != identity)
+            {
+                registration.MemoryConcepts.Clear();
+                registration.RetainedMemories = [];
+                registration.MemoryRepositoryIdentity = identity;
+                registration.ConceptResolutionRetries = 0;
+                registration.ConceptOverflowReported = false;
+                registration.MemoryOptions = null;
+                loopState.InvalidateFrozenContext();
+            }
+
             registration.MemoryOptions ??= _repositoryMemoryOptions?.Capture(identity) ?? new RepositoryMemoryOptions();
             if (enabled)
             {
@@ -276,11 +293,12 @@ public sealed partial class SessionApplication
             }
         }
 
-        if (loopState.MemorySetRevision != revision || loopState.MemoriesEnabled != enabled)
+        if (registration.MemorySetRevision != revision || registration.MemoriesEnabled != enabled)
         {
             loopState.InvalidateFrozenContext();
-            loopState.MemorySetRevision = revision;
-            loopState.MemoriesEnabled = enabled;
+            registration.ConceptResolutionRetries = 0;
+            registration.MemorySetRevision = revision;
+            registration.MemoriesEnabled = enabled;
         }
     }
 
@@ -337,6 +355,8 @@ public sealed partial class SessionApplication
                 RepositoryMemoriesEnabled = memoriesEnabled,
                 RepositoryMemoryOptions = registration.MemoryOptions,
                 RepositoryMemoryCurrentInstruction = registration.MemoryCurrentInstruction,
+                RepositoryMemoryConcepts = registration.MemoryConcepts.ToArray(),
+                RetainedRepositoryMemories = registration.RetainedMemories,
             };
             context = await _contextAssembler.AssembleAsync(
                 assemblyRequest,
@@ -348,7 +368,9 @@ public sealed partial class SessionApplication
                 modelPreference,
                 context,
                 cancellationToken);
+            context = loopState.RefreshContext(context, modelRound);
             loopState.FrozenContext = context;
+            registration.RetainedMemories = context.RepositoryMemoryInclusions ?? [];
         }
 
         invocationContext = AttachModelBudgetToInvocationContext(
@@ -1263,7 +1285,8 @@ public sealed partial class SessionApplication
 
         foreach (var call in streamState.PendingToolCalls)
         {
-            loopState.InvokedToolCalls.TryAdd(call.ToolName, call.ArgumentsJson);
+            var definition = round.ToolRegistrations.Single(item => item.Tool.Definition.Id.Equals(call.ToolName, StringComparison.OrdinalIgnoreCase)).Tool.Definition;
+            loopState.InvokedToolCalls.TryAdd(definition, call.ArgumentsJson);
             if (SemanticFirstSearchPolicy.IsSemanticInspectionTool(call.ToolName))
             {
                 loopState.SemanticToolAttempted = true;
@@ -1274,6 +1297,29 @@ public sealed partial class SessionApplication
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
             var result = batchResult.Result;
+            if (round.Registration.MemoryOptions?.ConceptRecallEnabled == true)
+            {
+                foreach (var concept in result.Concepts)
+                {
+                    if (round.Registration.MemoryConcepts.Contains(concept))
+                    {
+                        continue;
+                    }
+
+                    if (round.Registration.MemoryConcepts.Count < Threadsmith.Core.MemoryConcepts.MaximumPerTurn)
+                    {
+                        round.Registration.MemoryConcepts.Add(concept);
+                        round.Registration.ConceptResolutionRetries = 0;
+                        loopState.InvalidateFrozenContext();
+                    }
+                    else if (!round.Registration.ConceptOverflowReported)
+                    {
+                        round.Registration.ConceptOverflowReported = true;
+                        _logger.LogWarning("Additional memory concepts omitted at the per-turn limit of {MaximumConcepts}.", Threadsmith.Core.MemoryConcepts.MaximumPerTurn);
+                    }
+                }
+            }
+
             var structuredContent = result.ResultJson;
             var content = result.ModelResultContent
                 ?? structuredContent
@@ -3332,6 +3378,9 @@ public sealed partial class SessionApplication
         private int _retainedToolCalls;
         private long _nextGroupSequence = 1;
 
+        private ContextAssemblyResult? _contextBeforeRefresh;
+        private string _memoryContextText = string.Empty;
+
         public ConversationLoopState(
             int maximumOutputCharacters,
             int maximumSourcesPerGroup,
@@ -3357,10 +3406,6 @@ public sealed partial class SessionApplication
 
         public ContextAssemblyResult? FrozenContext { get; set; }
 
-        public long? MemorySetRevision { get; set; }
-
-        public bool MemoriesEnabled { get; set; }
-
         public bool RequiresChronologicalCorrections { get; set; }
 
         public ModelMessage PrepareCorrectionMessage(ModelMessage message)
@@ -3372,11 +3417,75 @@ public sealed partial class SessionApplication
 
         public void InvalidateFrozenContext()
         {
-            if (FrozenContext is not null)
+            if (TransientState.HasResponses)
             {
-                FrozenContext = null;
+                _contextBeforeRefresh ??= FrozenContext;
+            }
+            else if (FrozenContext is not null)
+            {
                 HistoryRewriteGeneration++;
             }
+
+            FrozenContext = null;
+        }
+
+        public ContextAssemblyResult RefreshContext(ContextAssemblyResult refreshed, int modelRound)
+        {
+            var previous = _contextBeforeRefresh;
+            _contextBeforeRefresh = null;
+            var memoryMessages = refreshed.Messages?.Where(message => message.SectionId == "repository-memory").ToArray() ?? [];
+            var memoryText = string.Join("\n", memoryMessages.Select(message => message.GetModelVisibleContent()));
+            if (previous is null || !TransientState.HasResponses)
+            {
+                _memoryContextText = memoryText;
+                return refreshed;
+            }
+
+            // Retained responses bind the complete delivered prefix. Only append fresh context after
+            // completed tool groups; actual history rewrites retain their separate generation fences.
+            var oldInstructions = previous.Messages?.Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
+                .Select(message => (message.Role, message.SectionId, message.GetModelVisibleContent())) ?? [];
+            var newInstructions = refreshed.Messages?.Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
+                .Select(message => (message.Role, message.SectionId, message.GetModelVisibleContent())) ?? [];
+            if (!oldInstructions.SequenceEqual(newInstructions)
+                || previous.InstructionBundleDigest != refreshed.InstructionBundleDigest
+                || previous.ProviderInstructions != refreshed.ProviderInstructions
+                || previous.ModelResolution?.ProfileId != refreshed.ModelResolution?.ProfileId)
+            {
+                throw new ModelProviderException("Context refresh changed active continuation authority; start a fresh turn.");
+            }
+
+            if (!string.Equals(_memoryContextText, memoryText, StringComparison.Ordinal))
+            {
+                var message = new ModelMessage
+                {
+                    Role = ModelMessageRole.HostContext,
+                    SectionId = "repository-memory",
+                    Content =
+                    [
+                        new ModelContentPart
+                        {
+                            Content = _prompts.Render(
+                                PromptFileNames.ContextRepositoryMemoryRefresh,
+                                new Dictionary<string, string>(StringComparer.Ordinal) { ["Text"] = memoryText }),
+                        },
+                    ],
+                    Sources = [.. memoryMessages.SelectMany(item => item.Sources)],
+                };
+                CommitStandaloneMessage(modelRound, message, purgeAfterCorrection: false);
+                _memoryContextText = memoryText;
+            }
+
+            return previous with
+            {
+                RepositoryMemoryInclusions = refreshed.RepositoryMemoryInclusions,
+                MemoryConceptResolutionPending = refreshed.MemoryConceptResolutionPending,
+                Inspection = refreshed.Inspection,
+                ModelConstraints = previous.ModelConstraints with
+                {
+                    ContainsSensitiveData = previous.ModelConstraints.ContainsSensitiveData || refreshed.ModelConstraints.ContainsSensitiveData,
+                },
+            };
         }
 
         public IReadOnlyList<ActiveTurnContinuationGroup> Groups => _groups;

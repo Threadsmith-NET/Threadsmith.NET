@@ -5,8 +5,11 @@ using System.Text.Json;
 using Threadsmith.Core;
 
 /// <summary>Model-facing Git diff request with one path-filter representation.</summary>
-public sealed record GitDiffInput
+public sealed record GitDiffInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Optional batch of up to 64 literal path filters.</summary>
     public IReadOnlyList<string> Paths { get; init; } = [];
 
@@ -253,8 +256,11 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
 }
 
 /// <summary>Model-facing Git object request with one path-filter representation.</summary>
-public sealed record GitShowInput
+public sealed record GitShowInput : IConceptToolInput
 {
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+
     /// <summary>Zero-based offset into a normalized inventory page.</summary>
     public int InventoryOffset { get; init; }
 
@@ -535,7 +541,11 @@ public sealed class GitBranchComparisonTool : Tool<GitBranchComparisonRequest, G
 }
 
 /// <summary>Empty model input for host-context-bound .NET inventory.</summary>
-public sealed record DotNetInventoryInput;
+public sealed record DotNetInventoryInput : IConceptToolInput
+{
+    /// <inheritdoc />
+    public IReadOnlyList<string>? Concepts { get; init; }
+}
 
 /// <summary>Gets normalized solution, project, target-framework, reference, package, and test inventory.</summary>
 public sealed class DotNetInventoryTool : Tool<DotNetInventoryInput, DotNetInventoryResult>

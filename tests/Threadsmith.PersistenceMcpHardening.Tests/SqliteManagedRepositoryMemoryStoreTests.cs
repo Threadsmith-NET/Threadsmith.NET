@@ -13,6 +13,146 @@ using Xunit;
 /// <summary>Real SQLite contracts for explicit memories, snapshots, revisions, eviction and migration.</summary>
 public sealed class SqliteManagedRepositoryMemoryStoreTests
 {
+    /// <summary>Metadata rows round-trip and cascade away through ordinary managed writes.</summary>
+    [Fact]
+    public async Task Concepts_cascade_on_removal_and_add_fence_precedes_eviction()
+    {
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var entry = Assert.IsType<RepositoryMemoryEntry>((await fixture.Store.AddAsync("repo", Write("original") with { Concepts = ["cancellation"], Kind = ManagedRepositoryMemoryKind.Constraint }, Model, Embedding, new())).Entry);
+        var snapshot = await fixture.Store.GetSnapshotAsync("repo", []);
+        var conflict = await fixture.Store.AddAsync("repo", Write("replacement") with { ExpectedRepositoryRevision = snapshot.Revision - 1 }, Model, Embedding, new() { MaxNumberOfRepoMemories = 1 });
+        Assert.Equal(RepositoryMemoryWriteStatus.Conflict, conflict.Status);
+        Assert.Empty(conflict.EvictedIds);
+        Assert.Equal(entry.Id, Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries).Id);
+        Assert.Equal(1, await fixture.ScalarAsync("SELECT count(*) FROM managed_memory_concepts;"));
+        await fixture.Store.RemoveAsync("repo", entry.Id);
+        Assert.Equal(0, await fixture.ScalarAsync("SELECT count(*) FROM managed_memory_concepts;"));
+    }
+
+    /// <summary>The application store exposes the same optional resolver as its bound SQLite store.</summary>
+    [Fact]
+    public async Task Repository_router_forwards_concept_resolution_and_cancellation()
+    {
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        using var router = new RepositoryBoundMemoryStore(fixture.ConnectionString, fixture.DirectoryPath);
+        var resolver = Assert.IsAssignableFrom<IRepositoryMemoryTermResolver>(router);
+        Assert.Empty((await resolver.ResolveTermsAsync(new RepositoryMemoryVocabularySnapshot(RepositoryIdentity.Create(fixture.DirectoryPath), 1, []), [], 10)).Matches);
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => resolver.ResolveTermsAsync(new RepositoryMemoryVocabularySnapshot(RepositoryIdentity.Create(fixture.DirectoryPath), 1, ["cancellation"]), ["cancelation"], 20, cancelled.Token));
+        var result = await resolver.ResolveTermsAsync(new RepositoryMemoryVocabularySnapshot(RepositoryIdentity.Create(fixture.DirectoryPath), 1, ["cancellation"]), ["cancelation"], 20);
+        if (result.DegradedReason is null)
+        {
+            Assert.Contains(result.Matches, match => match.Query == "cancelation" && match.Term == "cancellation");
+        }
+        else
+        {
+            Assert.Contains("exact matches only", result.DegradedReason, StringComparison.Ordinal);
+            Assert.Empty(result.Matches);
+        }
+    }
+
+    /// <summary>The native vocabulary is reused only for the same detached repository snapshot.</summary>
+    [Fact]
+    public async Task Concept_vocabulary_reuses_snapshot_and_invalidates_revision_repository_and_content()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var snapshot = new RepositoryMemoryVocabularySnapshot("repo", 1, ["cancellation"]);
+        var first = await fixture.Store.ResolveTermsAsync(snapshot, ["cancelation"], 20, ct);
+        if (first.DegradedReason is not null)
+        {
+            Assert.Skip(first.DegradedReason);
+        }
+
+        Assert.False(first.VocabularyCacheHit);
+        Assert.Single(first.Matches);
+        Assert.True((await fixture.Store.ResolveTermsAsync(snapshot, ["cancelation"], 20, ct)).VocabularyCacheHit);
+        var textSnapshot = snapshot with { Kind = MemoryVocabularyKind.Text, Vocabulary = ["serialization"] };
+        Assert.False((await fixture.Store.ResolveTermsAsync(textSnapshot, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        Assert.True((await fixture.Store.ResolveTermsAsync(snapshot, ["cancelation"], 20, ct)).VocabularyCacheHit);
+        Assert.True((await fixture.Store.ResolveTermsAsync(textSnapshot, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        var nextRevision = snapshot with { Revision = 2 };
+        Assert.False((await fixture.Store.ResolveTermsAsync(nextRevision, ["cancelation"], 20, ct)).VocabularyCacheHit);
+        var nextRepository = nextRevision with { RepositoryIdentity = "other-repo" };
+        Assert.False((await fixture.Store.ResolveTermsAsync(nextRepository, ["cancelation"], 20, ct)).VocabularyCacheHit);
+        var nextVocabulary = nextRepository with { Vocabulary = ["serialization"] };
+        var replaced = await fixture.Store.ResolveTermsAsync(nextVocabulary, ["cancelation"], 20, ct);
+        Assert.False(replaced.VocabularyCacheHit);
+        Assert.Empty(replaced.Matches);
+        await fixture.Store.ResolveTermsAsync(nextVocabulary with { Revision = 3, Vocabulary = [] }, [], 20, ct);
+        Assert.False((await fixture.Store.ResolveTermsAsync(nextVocabulary, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        fixture.Store.Dispose();
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => fixture.Store.ResolveTermsAsync(snapshot, ["cancelation"], 20, ct));
+    }
+
+    /// <summary>Native correction tracks the live FTS vocabulary across memory changes.</summary>
+    [Fact]
+    public async Task Native_text_expansion_uses_real_fts_vocabulary_and_refreshes_after_removal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var saved = await fixture.Store.AddAsync("repo", Write("cancellation"), Model, Embedding, new(), ct);
+        var options = new RepositoryMemoryLexicalOptions { FuzzyEnabled = true, FuzzyMaximumDistance = 20 };
+        var result = await fixture.Store.GetSnapshotAsync("repo", ["cancelation"], options, ct);
+        if (result.FuzzyLexicalStatus == RepositoryMemorySearchBranchStatus.Unavailable)
+        {
+            Assert.Skip(string.Join("; ", result.Warnings));
+        }
+
+        Assert.Equal(saved.Entry!.Id, Assert.Single(result.LexicalMatches).Id);
+        Assert.True(result.LexicalMatches[0].IsFuzzy);
+        Assert.Equal("cancellation", Assert.Single(result.LexicalExpansions).Term);
+        await fixture.Store.RemoveAsync("repo", saved.Entry.Id, ct);
+        await fixture.Store.AddAsync("repo", Write("serialization"), Model, Embedding, new(), ct);
+        var removed = await fixture.Store.GetSnapshotAsync("repo", ["cancelation"], options, ct);
+        Assert.Empty(removed.LexicalMatches);
+        Assert.Empty(removed.LexicalExpansions);
+    }
+
+    /// <summary>Upgrading populated type-aware storage preserves durable data and expands only lexical membership.</summary>
+    [Fact]
+    public async Task Version_twelve_preserves_populated_version_eleven_memories()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync(migrate: false);
+        await new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All.Where(migration => migration.Version <= 11)).RunAsync(ct);
+        await InsertVersionTenManagedEntriesAsync(fixture.ConnectionString, "repo", 2);
+        await fixture.ExecuteAsync("""
+            UPDATE managed_memories SET memory_type = 1 WHERE text = 'Version ten memory 0';
+            UPDATE managed_memories SET inclusion_count = 7, last_included_at = updated_at,
+                embedding = X'0000803F0000000000000000', embedding_space_id = 'test-space', embedding_dimensions = 3,
+                embedding_content_hash = content_hash, embedding_revision = content_revision;
+            INSERT INTO managed_memory_repositories(repository_identity, revision) VALUES('repo', 9);
+            CREATE TABLE migration_expected AS SELECT * FROM managed_memories;
+            """);
+        Assert.Equal(1, await fixture.ScalarAsync("SELECT count(*) FROM managed_memories_fts WHERE managed_memories_fts MATCH 'memory';"));
+
+        await new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All).RunAsync(ct);
+
+        // Compare every pre-existing column, including IDs, provenance, usage and vector bytes.
+        await using var connection = new SqliteConnection(fixture.ConnectionString);
+        await connection.OpenAsync(ct);
+        await using var columns = connection.CreateCommand();
+        columns.CommandText = "SELECT group_concat(name, ',') FROM pragma_table_info('migration_expected');";
+        var names = (string)(await columns.ExecuteScalarAsync(ct))!;
+        Assert.Equal(0, await fixture.ScalarAsync($"SELECT count(*) FROM (SELECT {names} FROM migration_expected EXCEPT SELECT {names} FROM managed_memories);"));
+        var snapshot = await fixture.Store.GetSnapshotAsync("repo", ["memory"], ct);
+        Assert.Equal(10, snapshot.Revision);
+        Assert.Equal(2, snapshot.Entries.Count);
+        Assert.Equal(2, snapshot.LexicalMatches.Count);
+        Assert.Single(snapshot.Entries, entry => entry.MemoryType == RepositoryMemoryType.StandingPreference);
+        Assert.All(snapshot.Entries, entry =>
+        {
+            Assert.Equal(ManagedRepositoryMemoryKind.Unspecified, entry.Kind);
+            Assert.Empty(entry.Concepts);
+            Assert.Equal(7, entry.InclusionCount);
+            Assert.Equal(new float[] { 1, 0, 0 }, entry.Embedding.ToArray());
+        });
+        await new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All).RunAsync(ct);
+        Assert.Equal(10, (await fixture.Store.GetSnapshotAsync("repo", [], ct)).Revision);
+    }
+
     private static readonly TextEmbeddingModelDescriptor Model = new("test-space", 3, 256);
     private static readonly TextEmbeddingResult Embedding = new(new float[] { 1, 0, 0 }, 5, false);
 
@@ -61,7 +201,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
 
     /// <summary>A same-text type change advances the content fence while retaining the compatible vector.</summary>
     [Fact]
-    public async Task Type_only_update_preserves_vector_and_rebuilds_lexical_membership()
+    public async Task Type_only_update_preserves_vector_and_shared_lexical_membership()
     {
         await using var fixture = await MemoryDatabase.CreateAsync();
         var added = Assert.IsType<RepositoryMemoryEntry>((await fixture.Store.AddAsync("repo", Write("Always use alpha cancellation"), Model, Embedding, new())).Entry);
@@ -82,7 +222,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Equal(updated.ContentHash, updated.EmbeddingContentHash);
         Assert.Equal(updated.Revision, updated.EmbeddingRevision);
         Assert.Equal(1, update.StandingPreferenceCount);
-        Assert.Empty((await fixture.Store.GetSnapshotAsync("repo", ["alpha"])).LexicalMatches);
+        Assert.Single((await fixture.Store.GetSnapshotAsync("repo", ["alpha"])).LexicalMatches);
 
         await Assert.ThrowsAsync<ArgumentNullException>(() => fixture.Store.UpdateAsync(
             "repo",
@@ -120,9 +260,9 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Single(entries, entry => entry.MemoryType == RepositoryMemoryType.Situational);
     }
 
-    /// <summary>Standing entries are absent from the FTS corpus, leaving situational BM25 scores unchanged.</summary>
+    /// <summary>Both types participate in text discovery; corpus statistics may change.</summary>
     [Fact]
-    public async Task Standing_preferences_do_not_change_situational_lexical_ranks()
+    public async Task Standing_preferences_join_the_shared_lexical_index()
     {
         await using var baseline = await MemoryDatabase.CreateAsync();
         await using var mixed = await MemoryDatabase.CreateAsync();
@@ -135,7 +275,9 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await mixed.Store.AddAsync("repo", Write("alpha beta alpha beta guidance", RepositoryMemoryType.StandingPreference), Model, Embedding, new());
         var baselineRanks = await ReadLexicalRanksAsync(baseline.Store);
         var mixedRanks = await ReadLexicalRanksAsync(mixed.Store);
-        Assert.Equal(baselineRanks, mixedRanks);
+        Assert.Single(baselineRanks);
+        Assert.Equal(2, mixedRanks.Count);
+        Assert.Contains(mixedRanks, item => item.Text == "alpha beta alpha beta guidance");
     }
 
     /// <summary>Complete-input bounds reject truncation, oversized text and invalid vectors before any eviction.</summary>
@@ -301,7 +443,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Forgotten, userCommand: true, "Forgotten manual");
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Active, userCommand: false, "No command provenance");
         var runner = new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All);
-        Assert.Equal(11, await runner.RunAsync());
+        Assert.Equal(12, await runner.RunAsync());
         var imported = Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries);
         Assert.Equal(manual, imported.Id);
         Assert.Equal(2_001, imported.Text.Length);
@@ -315,7 +457,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await using var query = restored.CreateCommand();
         query.CommandText = "SELECT count(*) FROM repository_memory;";
         Assert.Equal(4L, await query.ExecuteScalarAsync());
-        Assert.Equal(11, await runner.RunAsync());
+        Assert.Equal(12, await runner.RunAsync());
         Assert.Equal(1, await fixture.ScalarAsync("SELECT imported_count FROM managed_memory_migration;"));
         Assert.Equal(3, await fixture.ScalarAsync("SELECT dropped_count FROM managed_memory_migration;"));
     }
@@ -382,7 +524,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await using var count = verify.CreateCommand();
         count.CommandText = "SELECT count(*) FROM managed_memories;";
         Assert.Equal(22L, await count.ExecuteScalarAsync());
-        Assert.Equal(11, await new MigrationRunner(connectionString, DefaultMigrations.All).ReadCurrentVersionAsync());
+        Assert.Equal(12, await new MigrationRunner(connectionString, DefaultMigrations.All).ReadCurrentVersionAsync());
     }
 
     /// <summary>Repository switches select distinct local databases and reject stale identity calls.</summary>
@@ -788,6 +930,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
 
         public ValueTask DisposeAsync()
         {
+            Store.Dispose();
             SqliteConnection.ClearAllPools();
             var expectedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
             var actualParent = Directory.GetParent(_directory)?.FullName;

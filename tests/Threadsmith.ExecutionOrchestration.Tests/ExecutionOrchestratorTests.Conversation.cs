@@ -458,6 +458,8 @@ public sealed partial class ExecutionOrchestratorTests
 
         public ConversationModel Model { get; }
 
+        public ConceptMemory? Memory { get; init; }
+
         public SessionId SessionId { get; }
 
         public SqliteConversationStore Store { get; }
@@ -509,7 +511,8 @@ public sealed partial class ExecutionOrchestratorTests
         public static Task<ConversationScenario> CreateIncrementalAsync(
             int planProposalCount = 1,
             Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
-                userUrlIntake = null)
+                userUrlIntake = null,
+            bool memoryRecall = false)
         {
             var events = new DomainEventStream();
             return CreateCoreAsync(
@@ -530,7 +533,22 @@ public sealed partial class ExecutionOrchestratorTests
                 failAssistantArchive: false,
                 planProposalCount,
                 ExecutionLimits.Default,
-                userUrlIntake: userUrlIntake);
+                userUrlIntake: userUrlIntake,
+                memoryRecall: memoryRecall);
+        }
+
+        public static Task<ConversationScenario> CreateMemoryReplayAsync(IModelProvider provider, bool matches)
+        {
+            return CreateCoreAsync(
+                new DomainEventStream(),
+                CreatePlan(),
+                null,
+                null,
+                proposePlan: false,
+                failAssistantArchive: false,
+                memoryRecall: true,
+                provider: provider,
+                memoryMatches: matches);
         }
 
         public async Task<bool> CompletePlannedExecutionAsync()
@@ -563,9 +581,9 @@ public sealed partial class ExecutionOrchestratorTests
             var runId = await Dispatcher.DispatchAsync(new SubmitRequestCommand(
                 SessionId,
                 request ?? "Add a private const string field to the ShellRunner class named _test with the value tested!."));
-            var proposed = await planProposed.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var proposed = await planProposed.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.Equal(runId, proposed.RunId);
-            var transitioned = await awaitingPlanApproval.Task.WaitAsync(TimeSpan.FromSeconds(3));
+            var transitioned = await awaitingPlanApproval.Task.WaitAsync(TestContext.Current.CancellationToken);
             Assert.Equal(runId, transitioned.RunId);
             Assert.True(await Dispatcher.DispatchAsync(new ApprovePlanCommand(SessionId, runId)));
             return runId;
@@ -681,7 +699,10 @@ public sealed partial class ExecutionOrchestratorTests
             SessionId? restoredSession = null,
             SessionProjection? sessionProjection = null,
             Func<SessionId, RunId, ConversationMessageId, string, CancellationToken, Task<IReadOnlyList<UserUrlReference>>>?
-                userUrlIntake = null)
+                userUrlIntake = null,
+            bool memoryRecall = false,
+            IModelProvider? provider = null,
+            bool memoryMatches = true)
         {
             var directory = Path.Combine(Path.GetTempPath(), $"threadsmith-conversation-{Guid.NewGuid():N}");
             Directory.CreateDirectory(directory);
@@ -697,6 +718,7 @@ public sealed partial class ExecutionOrchestratorTests
                     ? new FailingAssistantConversationStore(store)
                     : store;
                 var evidence = new EvidenceStore(events, sanitizer);
+                var memory = memoryRecall ? new ConceptMemory { Matches = memoryMatches } : null;
                 var assembler = new ContextAssembler(
                     evidence,
                     new TokenEstimator(),
@@ -705,9 +727,10 @@ public sealed partial class ExecutionOrchestratorTests
                     sanitizer,
                     events,
                     TestPromptLoader.Instance,
-                    conversationStore: conversationStore);
-                var model = new ConversationModel(plan, planProposalCount ?? (proposePlan ? 1 : 0));
-                var registry = new ToolRegistry([]);
+                    conversationStore: conversationStore,
+                    repositoryMemoryRetriever: memory);
+                var model = new ConversationModel(plan, planProposalCount ?? (proposePlan ? 1 : 0)) { EmitMemoryConcept = memoryRecall };
+                var registry = new ToolRegistry(memory is null ? [] : [new MemoriesTool(memory, memory, TestPromptLoader.Instance), new ListFilesTool(TestPromptLoader.Instance)]);
                 var pipeline = new ToolInvocationPipeline(
                     registry,
                     new DefaultPolicyEngine(),
@@ -717,13 +740,16 @@ public sealed partial class ExecutionOrchestratorTests
                     NullLogger<ToolInvocationPipeline>.Instance);
                 var application = new SessionApplication(
                     events,
-                    model,
+                    provider ?? model,
                     new ExecutionBudget(new BudgetDimensions(100_000, 100, TimeSpan.FromMinutes(1))),
                     sanitizer,
                     NullLogger<SessionApplication>.Instance,
                     pipeline,
                     (_, cancellationToken) => CreateToolInvocationContextAsync(directory, cancellationToken),
                     contextAssembler: assembler,
+                    toolRegistry: registry,
+                    repositoryMemories: memory,
+                    repositoryMemoryOptions: memory,
                     evidenceStore: evidence,
                     limits: limits,
                     conversationStore: conversationStore,
@@ -746,7 +772,7 @@ public sealed partial class ExecutionOrchestratorTests
                     application.RegisterRestoredSession(sessionId);
                 }
 
-                return new ConversationScenario(directory, events, store, dispatcher, sessionId, model);
+                return new ConversationScenario(directory, events, store, dispatcher, sessionId, model) { Memory = memory };
             }
             catch
             {
@@ -846,6 +872,8 @@ public sealed partial class ExecutionOrchestratorTests
             _planProposalCount = planProposalCount;
         }
 
+        public bool EmitMemoryConcept { get; init; }
+
         public ModelStreamRequest? SecondRequest { get; private set; }
 
         public ModelStreamRequest? ThirdRequest { get; private set; }
@@ -891,7 +919,13 @@ public sealed partial class ExecutionOrchestratorTests
                 throw new InvalidOperationException("Simulated planning provider failure after usage.");
             }
 
-            if (_requests <= _planProposalCount
+            if (EmitMemoryConcept && _requests == 1)
+            {
+                yield return new ModelChunk { Output = new ToolRequestModelOutput("list_files", "{\"concepts\":[\"cancellation\"]}") };
+                yield break;
+            }
+
+            if (_requests - (EmitMemoryConcept ? 1 : 0) <= _planProposalCount
                 && request.Tools.Any(tool => string.Equals(tool.Name, "propose_plan", StringComparison.Ordinal)))
             {
                 yield return new ModelChunk

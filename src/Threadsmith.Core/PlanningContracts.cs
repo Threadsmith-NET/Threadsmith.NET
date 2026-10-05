@@ -459,6 +459,9 @@ public sealed record ContextInspectionProjection
     /// <summary>Repository-scoped memory inclusion, omission, staleness, and pressure decisions.</summary>
     public IReadOnlyList<RepositoryMemoryContextItemProjection> RepositoryMemoryItems { get; init; } = [];
 
+    /// <summary>Branch availability and search-window omissions before context admission.</summary>
+    public RepositoryMemorySearchDetails? RepositoryMemorySearch { get; init; }
+
     /// <summary>Estimated percentage of the selected model context window used.</summary>
     public double ContextPressurePercent { get; init; }
 

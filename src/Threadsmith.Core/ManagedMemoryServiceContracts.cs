@@ -18,6 +18,18 @@ public sealed record RepositoryMemoryOperationRequest
     /// <summary>Optional selection behavior for add or update; an omitted update preserves the current type.</summary>
     public RepositoryMemoryType? MemoryType { get; init; }
 
+    /// <summary>Optional content classification; omission preserves an update target.</summary>
+    public ManagedRepositoryMemoryKind? Kind { get; init; }
+
+    /// <summary>Optional concept replacement; empty clears and null preserves.</summary>
+    public IReadOnlyList<string>? Concepts { get; init; }
+
+    /// <summary>Exact revisions explicitly acknowledged as distinct on add.</summary>
+    public IReadOnlyList<RepositoryMemoryInclusion> ConfirmDistinctFrom { get; init; } = [];
+
+    /// <summary>Optional revision the caller observed before correcting an entry.</summary>
+    public long? ExpectedRevision { get; init; }
+
     /// <summary>Host-owned source of the explicit operation.</summary>
     public RepositoryMemoryOrigin Origin { get; init; }
 
@@ -45,6 +57,12 @@ public sealed record RepositoryMemoryOperationResult(
     IReadOnlyList<RepositoryMemoryEntry> Entries,
     IReadOnlyList<RepositoryMemoryId> EvictedIds)
 {
+    /// <summary>Bounded diagnostics describing the write check.</summary>
+    public IReadOnlyList<string> Diagnostics { get; init; } = [];
+
+    /// <summary>Structured evidence from the write-time collision check, when performed.</summary>
+    public RepositoryMemorySearchDetails? SearchDetails { get; init; }
+
     /// <summary>Standing-preference count after a committed write, when supplied by the store.</summary>
     public int? StandingPreferenceCount { get; init; }
 }
@@ -79,6 +97,12 @@ public interface IManagedRepositoryMemoryService
 /// <summary>Bounded retrieval query made exclusively from current instructions and active task intent.</summary>
 public sealed record RepositoryMemoryRetrievalRequest
 {
+    /// <summary>Bounded normalized hints accumulated in this user turn.</summary>
+    public IReadOnlyList<string> Concepts { get; init; } = [];
+
+    /// <summary>Previously admitted revisions eligible for conditional retention.</summary>
+    public IReadOnlyList<RepositoryMemoryInclusion> RetainedMemories { get; init; } = [];
+
     /// <summary>Canonical repository identity supplied by the host.</summary>
     public required string RepositoryIdentity { get; init; }
 
@@ -102,7 +126,11 @@ public sealed record RepositoryMemoryRetrievalCandidate(
     int? LexicalRank,
     int? SemanticRank,
     double? CosineSimilarity,
-    double? CrossEncoderScore = null);
+    double? CrossEncoderScore = null)
+{
+    /// <summary>Exact concept matches that qualified this candidate.</summary>
+    public IReadOnlyList<string> ConceptMatches { get; init; } = [];
+}
 
 /// <summary>Detached ranking and truthful retrieval/rebuild diagnostics.</summary>
 public sealed record RepositoryMemoryRetrievalResult(
@@ -113,6 +141,15 @@ public sealed record RepositoryMemoryRetrievalResult(
     bool QueryEmbeddingCacheHit = false,
     bool RankingCacheHit = false)
 {
+    /// <summary>Whether every enabled search branch and complete-pair check succeeded.</summary>
+    public bool IsComplete { get; init; } = true;
+
+    /// <summary>Branch execution and bounded selection evidence supplied by shared search.</summary>
+    public RepositoryMemorySearchDetails? SearchDetails { get; init; }
+
+    /// <summary>Concept lookup failed and may be retried at a bounded ordinary continuation.</summary>
+    public bool ConceptResolutionPending { get; init; }
+
     /// <summary>Current standing preferences from the same snapshot; they are not hybrid retrieval candidates.</summary>
     public IReadOnlyList<RepositoryMemoryEntry> StandingPreferences { get; init; } = [];
 }

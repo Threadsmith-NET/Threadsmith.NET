@@ -3343,26 +3343,44 @@ public sealed partial class InteractionCoordinator
                     var rememberText = remainder.StartsWith("repo ", StringComparison.OrdinalIgnoreCase)
                         ? remainder[5..].Trim()
                         : remainder;
-                    if (!TryParseRepositoryMemoryTypeOption(rememberText, out var rememberType, out rememberText))
+                    var rememberOptions = ParseMemoryWriteOptions(rememberText);
+                    if (rememberOptions.ExpectedRevision is not null)
                     {
+                        throw new ArgumentException("expected-revision is valid only for update.");
+                    }
+
+                    var remembered = await _presenter.RememberRepositoryMemoryAsync(
+                        new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, rememberOptions.Text, rememberOptions.MemoryType)
+                        {
+                            Kind = rememberOptions.Kind,
+                            Concepts = rememberOptions.Concepts,
+                            ConfirmDistinctFrom = rememberOptions.Confirmations,
+                        },
+                        cancellationToken);
+                    if (remembered.Outcome == "reconciliationRequired")
+                    {
+                        var candidates = string.Concat(remembered.Entries.Take(20).Select(item =>
+                            $"  {item.Id.Value:D}@{item.Revision}: {(item.Text.Length > 2000 ? item.Text[..2000] + " [excerpt; inspect full memory]" : item.Text)}\n"));
                         await _surface.WriteAsync(
-                            "Usage: /memory remember [--type standingPreference|situational] <text>\n",
+                            $"Memory was not added. Related memories (showing {Math.Min(20, remembered.Entries.Count)} of {remembered.Entries.Count}):\n" + candidates
+                            + $"The comparison window omitted {remembered.SearchDetails?.CandidateWindowOmissions ?? 0} discovered candidates; this is not exhaustive duplicate detection.\n"
+                            + "Update an existing ID using --expected-revision <revision>, or retry remember with --confirm-distinct-from <id>@<revision> for each distinct candidate.\n",
                             PresentationTextRole.Warning,
                             cancellationToken);
                         return;
                     }
 
-                    var remembered = await _presenter.RememberRepositoryMemoryAsync(
-                        sessionId,
-                        repositoryIdentity,
-                        rememberText,
-                        rememberType,
-                        cancellationToken);
                     await _surface.WriteAsync(
-                        $"Remembered repository memory {remembered.Id.Value:D}.\n",
-                        PresentationTextRole.Status,
+                        remembered.Outcome == "added"
+                            ? $"Remembered repository memory {remembered.Id?.Value:D}.\n"
+                            : $"Repository memory {remembered.Outcome}: {remembered.Id}.\n",
+                        remembered.Entry is null ? PresentationTextRole.Warning : PresentationTextRole.Status,
                         cancellationToken);
-                    await WriteStandingPreferenceWarningAsync(sessionId, repositoryIdentity, cancellationToken);
+                    if (remembered.Outcome == "added")
+                    {
+                        await WriteStandingPreferenceWarningAsync(sessionId, repositoryIdentity, cancellationToken);
+                    }
+
                     return;
 
                 case "list":
@@ -3405,29 +3423,30 @@ public sealed partial class InteractionCoordinator
                 case "update":
                 case "supersede":
                     var supersedeSeparator = remainder.IndexOf(' ');
-                    if (supersedeSeparator < 0
-                        || !TryParseRepositoryMemoryId(remainder[..supersedeSeparator], out var supersedeId)
-                        || !TryParseRepositoryMemoryTypeOption(remainder[(supersedeSeparator + 1)..].Trim(), out var replacementType, out var replacementText))
+                    if (supersedeSeparator < 0 || !TryParseRepositoryMemoryId(remainder[..supersedeSeparator], out var supersedeId))
                     {
-                        await _surface.WriteAsync(
-                            "Usage: /memory update <memory-id> [--type standingPreference|situational] <replacement-text>\n",
-                            PresentationTextRole.Warning,
-                            cancellationToken);
-                        return;
+                        throw new ArgumentException("Use /memory update <id> [--expected-revision <revision>] [--type standingPreference|situational] <text>.");
+                    }
+
+                    var replacementOptions = ParseMemoryWriteOptions(remainder[(supersedeSeparator + 1)..].Trim());
+                    if (replacementOptions.Confirmations.Count > 0)
+                    {
+                        throw new ArgumentException("Distinctness confirmation is valid only for remember.");
                     }
 
                     var replacement = await _presenter.UpdateRepositoryMemoryAsync(
-                        sessionId,
-                        repositoryIdentity,
-                        supersedeId,
-                        replacementText,
-                        replacementType,
+                        new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, supersedeId, replacementOptions.Text, replacementOptions.MemoryType)
+                        {
+                            ExpectedRevision = replacementOptions.ExpectedRevision,
+                            Kind = replacementOptions.Kind,
+                            Concepts = replacementOptions.Concepts,
+                        },
                         cancellationToken);
                     await _surface.WriteAsync(
                         $"Updated repository memory {replacement.Id.Value:D}.\n",
                         PresentationTextRole.Status,
                         cancellationToken);
-                    if (replacementType == RepositoryMemoryType.StandingPreference)
+                    if (replacementOptions.MemoryType == RepositoryMemoryType.StandingPreference)
                     {
                         await WriteStandingPreferenceWarningAsync(sessionId, repositoryIdentity, cancellationToken);
                     }
@@ -4097,6 +4116,7 @@ public sealed partial class InteractionCoordinator
     {
         return FormatRepositoryMemorySummary(item)
             + $"  created: {item.CreatedAt:O}\n  updated: {item.UpdatedAt:O}\n"
+            + $"  revision: {item.Revision}; kind: {item.Kind}; concepts: {string.Join(", ", item.Concepts)}\n"
             + $"  inclusions: {item.InclusionCount}; last included: {item.LastIncludedAt:O}\n"
             + $"  embedding: {(item.Embedding.IsEmpty ? "unavailable" : item.EmbeddingSpaceId)}\n";
     }
@@ -4162,35 +4182,84 @@ public sealed partial class InteractionCoordinator
         return false;
     }
 
-    private static bool TryParseRepositoryMemoryTypeOption(
-        string value,
-        out RepositoryMemoryType? memoryType,
-        out string text)
+    private static MemoryWriteOptions ParseMemoryWriteOptions(string value)
     {
-        memoryType = null;
-        text = value;
-        if (!value.Equals("--type", StringComparison.Ordinal) && !value.StartsWith("--type ", StringComparison.Ordinal))
+        RepositoryMemoryType? memoryType = null;
+        ManagedRepositoryMemoryKind? kind = null;
+        IReadOnlyList<string>? concepts = null;
+        long? revision = null;
+        var confirmations = new List<RepositoryMemoryInclusion>();
+        while (value.StartsWith("--", StringComparison.Ordinal))
         {
-            return !string.IsNullOrWhiteSpace(text);
+            if (value.StartsWith("-- ", StringComparison.Ordinal))
+            {
+                value = value[3..];
+                break;
+            }
+
+            var split = value.Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+            if (split.Length != 3)
+            {
+                throw new ArgumentException("Memory options require a value followed by complete memory text. Use -- before literal option-like text.");
+            }
+
+            switch (split[0])
+            {
+                case "--type":
+                    memoryType = split[1] switch
+                    {
+                        "standingPreference" => RepositoryMemoryType.StandingPreference,
+                        "situational" => RepositoryMemoryType.Situational,
+                        _ => throw new ArgumentException("Memory type is standingPreference or situational."),
+                    };
+                    break;
+                case "--kind":
+                    if (!Enum.TryParse<ManagedRepositoryMemoryKind>(split[1], true, out var parsedKind) || !Enum.IsDefined(parsedKind))
+                    {
+                        throw new ArgumentException("Memory kind is unspecified, constraint, decision, convention, requirement or finding.");
+                    }
+
+                    kind = parsedKind;
+                    break;
+                case "--concepts":
+                    concepts = MemoryConcepts.Normalize(split[1] == "[]" ? [] : split[1].Split(','));
+                    break;
+                case "--expected-revision":
+                    if (!long.TryParse(split[1], NumberStyles.None, CultureInfo.InvariantCulture, out var parsedRevision) || parsedRevision <= 0)
+                    {
+                        throw new ArgumentException("Expected revision must be a positive integer.");
+                    }
+
+                    revision = parsedRevision;
+                    break;
+                case "--confirm-distinct-from":
+                    var parts = split[1].Split('@');
+                    if (parts.Length != 2 || !Guid.TryParse(parts[0], out var id) || id == Guid.Empty
+                        || !long.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var confirmedRevision) || confirmedRevision <= 0)
+                    {
+                        throw new ArgumentException("Confirm distinctness using <id>@<revision>.");
+                    }
+
+                    confirmations.Add(new RepositoryMemoryInclusion(new RepositoryMemoryId(id), confirmedRevision));
+                    break;
+                default:
+                    throw new ArgumentException("Unknown memory option. Use -- before literal option-like text.");
+            }
+
+            value = split[2].Trim();
         }
 
-        var optionValue = value[6..].TrimStart();
-        var separator = optionValue.IndexOf(' ');
-        if (separator < 0)
-        {
-            return false;
-        }
-
-        var type = optionValue[..separator];
-        text = optionValue[(separator + 1)..].Trim();
-        memoryType = type switch
-        {
-            "standingPreference" => RepositoryMemoryType.StandingPreference,
-            "situational" => RepositoryMemoryType.Situational,
-            _ => null,
-        };
-        return memoryType is not null && !string.IsNullOrWhiteSpace(text);
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return new MemoryWriteOptions(value, memoryType, kind, concepts, revision, confirmations);
     }
+
+    private sealed record MemoryWriteOptions(
+        string Text,
+        RepositoryMemoryType? MemoryType,
+        ManagedRepositoryMemoryKind? Kind,
+        IReadOnlyList<string>? Concepts,
+        long? ExpectedRevision,
+        IReadOnlyList<RepositoryMemoryInclusion> Confirmations);
 
     private static string FormatConversationMode(ConversationContextMode mode)
     {

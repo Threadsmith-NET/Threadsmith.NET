@@ -413,21 +413,32 @@ Trusted machine/user/environment configuration. Implementation: `src/Threadsmith
 
 ### `tools:config:memories`
 
-Ordinary configuration; repository rebinding supported. Implementation: `src/Threadsmith.Core/ManagedMemoryContracts.cs`.
+Ordinary configuration; repository rebinding supported. Binding: `src/Threadsmith.Tools/RepositoryMemoryConfiguration.cs`. Recall and reconciliation have independent blocks with the same search settings; see [memory operations](conversation-context.md#reconciliation-and-concept-recall) for the full schema and migration guidance.
 
 | Field | Default | Purpose |
 |---|---:|---|
-| `maxNumberOfRepoMemories` | `20` | Maximum number of stored entries, shared by manual and model origins. |
-| `maxRepoMemoriesInContext` | `3` | Maximum number of relevant entries injected into automatic context. |
-| `standingPreferenceWarningThreshold` | `3` | Committed standing-preference count at which callers may warn about accumulating durable guidance. |
-| `semanticMinimum` | `0.47` | Strict minimum cosine similarity for semantic matches; lexical matches qualify independently. |
-| `rerankerCandidateLimit` | `8` | Maximum qualified candidates sent to the local reranker. |
-| `maximumTextCharacters` | `2000` | Maximum complete sanitized memory characters. |
-| `maximumQueryCharacters` | `8000` | Maximum retrieval query characters. |
-| `maximumQueryTerms` | `32` | Maximum distinct lexical query terms. |
-| `maximumCacheEntries` | `64` | Maximum entries in each retrieval cache. |
-| `maximumDiagnostics` | `64` | Maximum retrieval diagnostics retained. |
-| `maximumListBytes` | `49152` | Maximum serialized entry bytes in a memories tool list. |
+| `MaxNumberOfRepoMemories` | `20` | Shared storage capacity. |
+| `standingPreferenceWarningThreshold` | `3` | Warning threshold for committed standing preferences. |
+| `MaximumTextCharacters` | `2000` | Complete sanitized memory text limit. |
+| `MaximumQueryTerms` | `32` | Shared lexical query-term bound. |
+| `MaximumCacheEntries` | `64` | Bound for each retrieval cache. |
+| `MaximumDiagnostics` | `64` | Retained search diagnostics. |
+| `MaximumListBytes` | `49152` | Serialized entry limit for memory responses. |
+| `Recall:MaximumResults` | `3` | Situational context admissions; zero disables situational recall. |
+| `Recall:MaximumQueryCharacters` | `8000` | Conversational retrieval query bound. |
+| `Recall:SemanticMinimum` / `Reconciliation:SemanticMinimum` | `0.47` | Independent strict cosine discovery thresholds. |
+| `Recall:RerankerEnabled` | `false` | Optional recall reranking. |
+| `Reconciliation:Enabled` | `false` | Checks manual/model adds against both memory types. |
+| `Reconciliation:RerankerEnabled` | `true` | Required while reconciliation is enabled. |
+| `Recall:RerankerCandidateLimit` / `Reconciliation:RerankerCandidateLimit` | `8` / `20` | Independent positive hybrid comparison windows. |
+| `Recall:Concepts:Enabled` / `Reconciliation:Concepts:Enabled` | `false` / `true` | Independent concept discovery switches. |
+| `Recall:Concepts:CandidateLimit` / `Reconciliation:Concepts:CandidateLimit` | `4` | Reserved concept-only comparison slots per scenario. |
+| `Recall:Fuzzy:Enabled` / `Reconciliation:Fuzzy:Enabled` | `false` | One policy for both text and concept spelling alternatives per scenario. |
+| `Recall:Fuzzy:MaximumDistance` / `Reconciliation:Fuzzy:MaximumDistance` | `1` | Native weighted edit-cost bound. |
+| `Recall:Lexical:MaximumExpansionsPerTerm` / `Reconciliation:Lexical:MaximumExpansionsPerTerm` | `3` | One to three text alternatives per unmatched term. |
+| `Recall:Lexical:MaximumExpansions` / `Reconciliation:Lexical:MaximumExpansions` | `16` | Total additional text terms per query. |
+
+Reconciliation requires `MaximumListBytes` of at least 24 KiB; tool output caps serialized entries at 48 KiB. Concepts accept at most eight inputs per note/tool call, each at most 48 Unicode scalar values after normalization. Active runs retain at most 64 distinct hints. These are code-owned bounds. Cross-encoder scores only order discovered candidates; no absolute score cutoff exists. Production ranking-quality evaluation remains separate from feature configuration.
 
 ### `tools:runtime:presentation`
 
@@ -644,7 +655,7 @@ Put `resourceLimits` on the Anthropic provider entry in `~/.threadsmith/provider
 ## Existing settings with removed artificial ceilings
 
 - `tools.readFile.defaultLines`, `maxLines`, and `maxContentBytes` can exceed the old 2,000-line / 50 KiB maxima. `tools.readFile.maxBytes` still controls the input file size.
-- `tools.config.memories.rerankerCandidateLimit` accepts any positive count. The provider processes candidates in its supported batches; actual model token/shape limits remain in force.
+- `tools.config.memories.Recall.RerankerCandidateLimit` and `tools.config.memories.Reconciliation.RerankerCandidateLimit` accept any positive count. The provider processes candidates in its supported batches; actual model token/shape limits remain in force.
 - `repository.configurationBytes` (default 1 MiB, trusted machine/user/environment setting) is used by bootstrap and subsequent model, theme, allowed-host, and repository preference readers/writers.
 - `mcp.maximumConcurrentConnections` defaults to 4 with no artificial maximum of 16. MCP profile startup/request/shutdown timeouts require positive values without the previous 30-minute / 5-minute caps.
 - Model HTTP pool connections and lifetime/idle settings, hook handler budgets, script budgets, skill package/workflow budgets, and web fetch/search resource settings retain their existing configuration locations. Former arbitrary upper validation ceilings have been removed; positive values and meaningful cross-field relationships still apply.

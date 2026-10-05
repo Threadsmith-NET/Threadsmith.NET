@@ -67,20 +67,43 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
 
     private static RepositoryMemoryOptions Read(IConfiguration configuration, RepositoryMemoryOptions fallback)
     {
+        foreach (var key in new[] { "MaxRepoMemoriesInContext", "SemanticMinimum", "RerankerEnabled", "RerankerCandidateLimit", "MaximumQueryCharacters", "ConceptRecall", "Lexical", "Reconciliation:CandidateLimit", "Reconciliation:Concepts:FuzzyEnabled", "Reconciliation:Concepts:FuzzyMaximumDistance" })
+        {
+            if (configuration.GetSection($"{SectionName}:{key}").Exists())
+            {
+                throw new ArgumentException($"Memory setting '{key}' has moved. Use the Recall and Reconciliation blocks; each owns SemanticMinimum, RerankerEnabled, RerankerCandidateLimit, Concepts, Fuzzy and Lexical settings. Recall:MaximumResults replaces MaxRepoMemoriesInContext.");
+            }
+        }
+
+        var recallLexical = ReadLexical(configuration, "Recall", fallback.Lexical);
+        var reconciliationLexical = ReadLexical(configuration, "Reconciliation", fallback.ReconciliationLexical);
         var options = new RepositoryMemoryOptions
         {
+            Lexical = recallLexical,
+            ReconciliationLexical = reconciliationLexical,
+            ReconciliationRerankerEnabled = configuration.GetValue($"{SectionName}:Reconciliation:RerankerEnabled", fallback.ReconciliationRerankerEnabled),
+            ReconciliationConceptsEnabled = configuration.GetValue($"{SectionName}:Reconciliation:Concepts:Enabled", fallback.ReconciliationConceptsEnabled),
+            ReconciliationConceptCandidateLimit = configuration.GetValue($"{SectionName}:Reconciliation:Concepts:CandidateLimit", fallback.ReconciliationConceptCandidateLimit),
+            ReconciliationConceptFuzzyEnabled = reconciliationLexical.FuzzyEnabled,
+            ReconciliationConceptFuzzyMaximumDistance = reconciliationLexical.FuzzyMaximumDistance,
+            ReconciliationEnabled = configuration.GetValue($"{SectionName}:Reconciliation:Enabled", fallback.ReconciliationEnabled),
+            ReconciliationSemanticMinimum = configuration.GetValue($"{SectionName}:Reconciliation:SemanticMinimum", fallback.ReconciliationSemanticMinimum),
+            ReconciliationCandidateLimit = configuration.GetValue($"{SectionName}:Reconciliation:RerankerCandidateLimit", fallback.ReconciliationCandidateLimit),
+            ConceptFuzzyEnabled = recallLexical.FuzzyEnabled,
+            ConceptFuzzyMaximumDistance = recallLexical.FuzzyMaximumDistance,
+            ConceptCandidateLimit = configuration.GetValue($"{SectionName}:Recall:Concepts:CandidateLimit", fallback.ConceptCandidateLimit),
+            ConceptRecallEnabled = configuration.GetValue($"{SectionName}:Recall:Concepts:Enabled", fallback.ConceptRecallEnabled),
             MaximumTextCharacters = configuration.GetValue($"{SectionName}:MaximumTextCharacters", fallback.MaximumTextCharacters),
-            MaximumQueryCharacters = configuration.GetValue($"{SectionName}:MaximumQueryCharacters", fallback.MaximumQueryCharacters),
+            MaximumQueryCharacters = configuration.GetValue($"{SectionName}:Recall:MaximumQueryCharacters", fallback.MaximumQueryCharacters),
             MaximumQueryTerms = configuration.GetValue($"{SectionName}:MaximumQueryTerms", fallback.MaximumQueryTerms),
             MaximumCacheEntries = configuration.GetValue($"{SectionName}:MaximumCacheEntries", fallback.MaximumCacheEntries),
             MaximumDiagnostics = configuration.GetValue($"{SectionName}:MaximumDiagnostics", fallback.MaximumDiagnostics),
             MaximumListBytes = configuration.GetValue($"{SectionName}:MaximumListBytes", fallback.MaximumListBytes),
             MaxNumberOfRepoMemories = configuration.GetValue($"{SectionName}:MaxNumberOfRepoMemories", fallback.MaxNumberOfRepoMemories),
-            MaxRepoMemoriesInContext = configuration.GetValue($"{SectionName}:MaxRepoMemoriesInContext", fallback.MaxRepoMemoriesInContext),
-            SemanticMinimum = configuration.GetValue($"{SectionName}:SemanticMinimum", fallback.SemanticMinimum),
-            RerankerEnabled = configuration.GetValue($"{SectionName}:RerankerEnabled", fallback.RerankerEnabled),
-            RerankerCandidateLimit = configuration.GetValue($"{SectionName}:RerankerCandidateLimit", fallback.RerankerCandidateLimit),
-            RerankerMinimumScore = ReadNullableDouble(configuration, $"{SectionName}:RerankerMinimumScore", fallback.RerankerMinimumScore),
+            MaxRepoMemoriesInContext = configuration.GetValue($"{SectionName}:Recall:MaximumResults", fallback.MaxRepoMemoriesInContext),
+            SemanticMinimum = configuration.GetValue($"{SectionName}:Recall:SemanticMinimum", fallback.SemanticMinimum),
+            RerankerEnabled = configuration.GetValue($"{SectionName}:Recall:RerankerEnabled", fallback.RerankerEnabled),
+            RerankerCandidateLimit = configuration.GetValue($"{SectionName}:Recall:RerankerCandidateLimit", fallback.RerankerCandidateLimit),
             StandingPreferenceWarningThreshold = configuration.GetValue(
                 $"{SectionName}:standingPreferenceWarningThreshold",
                 fallback.StandingPreferenceWarningThreshold),
@@ -89,11 +112,15 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
         return options;
     }
 
-    private static double? ReadNullableDouble(IConfiguration configuration, string key, double? fallback)
+    private static RepositoryMemoryLexicalOptions ReadLexical(IConfiguration configuration, string scenario, RepositoryMemoryLexicalOptions fallback)
     {
-        var supplied = configuration.AsEnumerable()
-            .Any(pair => string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase));
-        return supplied ? configuration.GetValue<double?>(key) : fallback;
+        return new()
+        {
+            FuzzyEnabled = configuration.GetValue($"{SectionName}:{scenario}:Fuzzy:Enabled", fallback.FuzzyEnabled),
+            FuzzyMaximumDistance = configuration.GetValue($"{SectionName}:{scenario}:Fuzzy:MaximumDistance", fallback.FuzzyMaximumDistance),
+            MaximumExpansionsPerTerm = configuration.GetValue($"{SectionName}:{scenario}:Lexical:MaximumExpansionsPerTerm", fallback.MaximumExpansionsPerTerm),
+            MaximumExpansions = configuration.GetValue($"{SectionName}:{scenario}:Lexical:MaximumExpansions", fallback.MaximumExpansions),
+        };
     }
 
     private sealed record Snapshot(string Identity, RepositoryMemoryOptions Options);

@@ -14,6 +14,27 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static partial class AppBootstrapTests
 {
+    /// <summary>Invalid scenario settings are rejected before startup can create or migrate persistence.</summary>
+    [Theory]
+    [InlineData("Recall:MaximumResults", "-1")]
+    [InlineData("Reconciliation:RerankerEnabled", "false")]
+    [InlineData("SemanticMinimum", "0.7")]
+    public static async Task Invalid_memory_scenario_configuration_precedes_persistence(string key, string value)
+    {
+        using var temporary = new TemporaryDirectory("invalid-memory-policy");
+        var database = temporary.GetPath("must-not-create.db");
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["persistence:path"] = database,
+            ["tools:config:memories:Reconciliation:Enabled"] = "true",
+            [$"tools:config:memories:{key}"] = value,
+        }).Build();
+        using var loggerFactory = LoggerFactory.Create(_ => { });
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => HostFoundation.CreateAsync(
+            configuration, configuration, CreatePaths(temporary.Root), loggerFactory, TestPromptLoader.Instance));
+        Assert.False(File.Exists(database));
+    }
+
     /// <summary>Cumulative execution tokens are unlimited unless the user configures a ceiling.</summary>
     [Fact]
     public static void ConfigurationBootstrap_DefaultExecutionTokenBudget_IsNotConfigured()
@@ -482,7 +503,7 @@ public static partial class AppBootstrapTests
         Assert.Equal(50, initial.GetValue<int>("tools:config:memories:MaxNumberOfRepoMemories"));
         Assert.Equal(initial["tools:config:memories:MaxNumberOfRepoMemories"], rebound["tools:config:memories:MaxNumberOfRepoMemories"]);
         Assert.Equal(7, ConfigurationBootstrap.Build([], paths).GetValue<int>("tools:config:memories:MaxNumberOfRepoMemories"));
-        Assert.Equal(3, rebound.GetValue<int>("tools:config:memories:MaxRepoMemoriesInContext"));
+        Assert.Equal(3, rebound.GetValue<int>("tools:config:memories:Recall:MaximumResults"));
     }
 
     /// <summary>Repository configuration cannot enter trusted credential or command-execution settings.</summary>

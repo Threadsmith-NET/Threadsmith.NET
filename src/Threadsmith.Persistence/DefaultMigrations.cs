@@ -583,6 +583,7 @@ public sealed class DefaultMigrations
         new RepositoryMemorySchemaMigration(),
         new ManagedRepositoryMemorySchemaMigration(),
         new RepositoryMemoryTypeSchemaMigration(),
+        new RepositoryMemoryConceptSchemaMigration(),
     ];
 
     /// <summary>Uses the effective repository capacity during first import so valid manual memories are not prematurely evicted.</summary>

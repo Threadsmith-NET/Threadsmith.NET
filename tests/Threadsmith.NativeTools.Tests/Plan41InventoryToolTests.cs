@@ -528,7 +528,8 @@ public sealed class Plan41InventoryToolTests
         using (var schema = JsonDocument.Parse(inventoryTool.Definition.InputSchema.JsonSchema))
         {
             Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
-            Assert.Empty(schema.RootElement.GetProperty("properties").EnumerateObject());
+            Assert.Equal("concepts", Assert.Single(schema.RootElement.GetProperty("properties").EnumerateObject()).Name);
+            Assert.Equal(8, schema.RootElement.GetProperty("properties").GetProperty("concepts").GetProperty("maxItems").GetInt32());
         }
 
         var policy = new DefaultPolicyEngine();

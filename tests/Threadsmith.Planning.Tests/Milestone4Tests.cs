@@ -2337,7 +2337,7 @@ public static class Milestone4Tests
         await evidence.AddAsync(stale);
         evidence.QueueInvalidation(sessionId, "semantic", "confidence demoted");
         Assert.False(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == stale.EvidenceId).IsStale);
-        var assembler = CreateAssembler(events, evidence, maximumTokens: 2_000);
+        var assembler = CreateAssembler(events, evidence, maximumTokens: 2_200);
         var result = await assembler.AssembleAsync(CreateAssemblyRequest(sessionId, runId));
 
         Assert.True(evidence.Snapshot(sessionId).Single(item => item.EvidenceId == stale.EvidenceId).IsStale);

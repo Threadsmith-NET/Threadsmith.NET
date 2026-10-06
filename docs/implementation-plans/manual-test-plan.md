@@ -142,8 +142,10 @@ Expected: exact symbol/path exploration is a read-only, repository-confined, gen
 1. Apply syntax-error and unresolved-symbol source edits; confirm applied writes plus advisory findings.
 2. Perform rapid edits across independent projects, including a conflicted second edit.
 3. Verify earlier findings persist or unavailable coverage is explicitly delivered.
-4. Repair and verify the matching generation; graph-affecting changes must show refresh/omissions.
-5. Run final authoritative validation without treating pending advisory results as passed checks.
+4. Repair and verify the matching generation; create/move/project edits must show graph refresh/omissions. Poll during obsolete/pending replacement analysis and confirm later verified diagnostics still reach the continuing model, with unknown origins across graph replacement.
+5. Inspect pending, obsolete and unavailable receipts: model-facing error totals must be absent rather than zero. Verify user-visible advisory summaries show coverage and measured errors in plain text, without serialized analysis.
+6. Arrange findings that become ready during a final response. Confirm another permitted round receives them, the earlier response remains in history, and outdated validation claims can be corrected. Repeat at the model-round limit: expect a visible advisory notification and no extra request. Leave analysis pending and verify completion does not wait for it.
+7. Explicitly invoke build/test checks for authoritative validation and report failed or omitted checks honestly. End a separate edit-only response and confirm no automatic validation starts.
 
 ## MTP-240 — Tool and diff presentation
 
@@ -1313,7 +1315,7 @@ Current limitation: live-provider smoke verification is operator-initiated and r
 1. Request a change requiring two supporting reads outside the target file.
 2. Confirm the model inspects source and invokes `edit_source` without required planning/approval of a plan.
 3. Review the exact diff, authorize it, and verify committed bytes and the applied receipt.
-4. Continue related repairs in the ordinary loop, then inspect cumulative diff and actual final validation.
+4. Continue related repairs in the ordinary loop, then inspect the cumulative disk diff. Confirm edit-only completion starts no build/tests; explicitly invoke validation when requested and inspect its actual results.
 
 ### MTP-161 — Source denial and policy invariants
 
@@ -1344,7 +1346,7 @@ Current limitation: live-provider smoke verification is operator-initiated and r
 ### MTP-165 — Frontend parity and authoritative completion
 
 1. Perform equivalent direct edits in interactive and headless modes.
-2. Compare actual disk outcomes, authorization policy, activity, cumulative diff and final validation.
+2. Compare actual disk outcomes, authorization policy, activity, cumulative diff, advisory coverage and explicitly invoked validation results. Completion alone must launch no validation.
 3. Verify unavailable headless review fails visibly and no synthetic applied subset is reported.
 
 ## First-class parallel agents and isolated workers

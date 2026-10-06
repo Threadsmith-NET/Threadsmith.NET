@@ -17,8 +17,11 @@ using Xunit;
 public sealed partial class SourceEditApplicationTests
 {
     /// <summary>Two supporting reads outside the write baseline precede edit, advisory compiler feedback, repair, and final text.</summary>
-    [Fact]
-    public async Task Conversation_ReadsEditsAndRepairsWithoutAProposalRequest()
+    [Theory]
+    [InlineData(false, 0)]
+    [InlineData(true, 0)]
+    [InlineData(true, 6)]
+    public async Task Conversation_ReadsEditsAndRepairsWithoutAProposalRequest(bool feedbackDuringFinalAnswer, int maximumModelRounds)
     {
         var ct = TestContext.Current.CancellationToken;
         SemanticEngineRegistry? createdEngines = null;
@@ -40,10 +43,14 @@ public sealed partial class SourceEditApplicationTests
         await engines.LoadAsync(load, ct);
         await refresh.BindAsync(load, ct);
         await refresh.EnsureCurrentAsync(fixture.SessionId, SemanticRefreshReason.HostMutation, ct);
-        var edits = fixture.CreateApplication(analyzer: new CompletingAnalyzer(engines, fixture.Events), refresh: refresh);
+        var analyzer = new CompletingAnalyzer(engines, fixture.Events);
+        var edits = fixture.CreateApplication(analyzer: analyzer, refresh: refresh);
         var registry = new ToolRegistry([new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new SourceEditTool(edits, TestPromptLoader.Instance)]);
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
-        var provider = new DirectEditProvider();
+        var provider = new DirectEditProvider
+        {
+            BeforeFinalAnswer = feedbackDuringFinalAnswer ? () => analyzer.PublishLateFeedback = true : null,
+        };
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, fixture.Events, TestPromptLoader.Instance);
@@ -73,13 +80,30 @@ public sealed partial class SourceEditApplicationTests
             defaultModelProfileId: ModelProfileId.New(),
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance,
+            limits: new ExecutionLimits { MaxModelRounds = maximumModelRounds },
             semanticRefreshCoordinator: refresh,
             sourceEdits: edits);
         publication.Target = sessions;
         sessions.RegisterRestoredSession(fixture.SessionId);
         var run = await sessions.HandleAsync(new SubmitRequestCommand(fixture.SessionId, "Read both supporting files, add a field, and repair any compiler error."), ct);
         Assert.True(await sessions.HandleAsync(new WaitForRunCommand(run), ct));
-        Assert.Equal(6, provider.Requests.Count);
+        var continuedForFeedback = feedbackDuringFinalAnswer && maximumModelRounds != 6;
+        Assert.Equal(continuedForFeedback ? 7 : 6, provider.Requests.Count);
+        if (feedbackDuringFinalAnswer)
+        {
+            var diagnostic = Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback");
+            Assert.Contains("1 current errors, 0 new errors", diagnostic.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("{", diagnostic.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("EffectId", diagnostic.Message, StringComparison.Ordinal);
+        }
+
+        if (continuedForFeedback)
+        {
+            var feedbackMessage = Assert.Single(provider.Requests[6].Messages, message => message.SectionId == "source-edit-feedback" && message.GetModelVisibleContent().Contains("CS5001", StringComparison.Ordinal));
+            Assert.Contains("initial", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+            Assert.Contains("correct any outdated validation claim", feedbackMessage.GetModelVisibleContent(), StringComparison.Ordinal);
+        }
+
         Assert.Equal(2, fixture.Commits.Count);
         Assert.Equal("class Example { int Value; }", await File.ReadAllTextAsync(fixture.SourcePath, ct));
         Assert.True(provider.RequestText[2].Contains("CS0246", StringComparison.Ordinal), provider.RequestText[2]);
@@ -174,7 +198,22 @@ public sealed partial class SourceEditApplicationTests
             return admitted;
         }
 
-        public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId) => _inner.GetLatestAnalysis(sessionId, runId, workspaceId, effectId);
+        public bool PublishLateFeedback { get; set; }
+
+        public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId)
+        {
+            var latest = _inner.GetLatestAnalysis(sessionId, runId, workspaceId, effectId);
+            return PublishLateFeedback && latest is not null
+                ? latest with
+                {
+                    Revision = latest.Revision + 100,
+                    Pending = false,
+                    CurrentErrors = 1,
+                    NewErrors = 0,
+                    Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial")],
+                }
+                : latest;
+        }
 
         public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId) => _inner.ConfirmApplied(workspaceId, effectId);
 
@@ -195,6 +234,8 @@ public sealed partial class SourceEditApplicationTests
     {
         private readonly ModelProfileId _profileId = ModelProfileId.New();
 
+        public Action? BeforeFinalAnswer { get; init; }
+
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public List<string> RequestText { get; } = [];
@@ -208,8 +249,15 @@ public sealed partial class SourceEditApplicationTests
             RequestText.Add(JsonSerializer.Serialize(request.Messages));
             await Task.Yield();
             var ordinal = Requests.Count;
+            if (ordinal == 7 && BeforeFinalAnswer is not null)
+            {
+                yield return new() { Text = "Correction: advisory analysis reports an initial CS5001 error, with no new errors. Build and tests were not run.", FinishReason = ModelFinishReason.Stop };
+                yield break;
+            }
+
             if (ordinal == 6)
             {
+                BeforeFinalAnswer?.Invoke();
                 yield return new() { Text = "The field is repaired. Build and tests were not run.", FinishReason = ModelFinishReason.Stop };
                 yield break;
             }

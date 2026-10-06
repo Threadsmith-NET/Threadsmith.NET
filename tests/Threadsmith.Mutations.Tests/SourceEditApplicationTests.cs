@@ -479,6 +479,7 @@ public sealed partial class SourceEditApplicationTests
             await workspaces.RegisterBaselineAsync(baseline, cancellationToken: ct);
             var connection = $"Data Source={Path.Combine(root, "state.db")};Pooling=False";
             await new MigrationRunner(connection, DefaultMigrations.All).RunAsync(ct);
+            await new SqliteEventStore(connection).InitializeAsync(ct);
             var store = new ExecutionCheckpointStore(connection);
             var artifacts = new ExecutionArtifactPublisher(new ArtifactStore(connection, Path.Combine(root, "artifacts"), new SecretOutputSanitizer()));
             return new(root, workspaceId, events, workspaces, store, artifacts, limits);

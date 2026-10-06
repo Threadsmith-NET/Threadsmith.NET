@@ -9,7 +9,7 @@ For a component-by-component explanation of the conversation tool, see [`delegat
 - Child agents are in-process asynchronous .NET runs. No process hosts an agent.
 - Tools can opt out of subagent visibility with `ToolDefinition.SubagentAvailable = false`. `delegate_agents`, `invoke_skill`, and the parent-owned `pr_fetch` acquisition tool opt out, so child agents cannot launch further agents or skill workflows or reacquire a delegated PR.
 - Ordinary conversation delegation supports all seven roles. `inherit` uses `SharedWorkspace` mode with the parent's enabled, permitted tools; explicit `readOnly` selects a narrower inspection surface.
-Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and configured validation. Ordinary delegated children do not receive `edit_source`.
+- Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and advisory compiler feedback. Build/test validation requires explicit invocation; completion does not start it. Ordinary delegated children do not receive `edit_source`.
 - Existing isolated-worker APIs require approved ownership and managed detached Git worktrees. Selecting `implementer` in conversation does not start a worktree worker or automatic parallel application.
 - Worktrees isolate file state but are not sandboxes. Trust, prohibited paths, reparse checks, tool policy, secrets, network, process, and approval gates still apply.
 - Ordinary final responses cross durable join boundaries with host-owned role, model, and status metadata. Their claims are not promoted to verified findings. Legacy structured outcomes and approved mutation packages remain separate supported contracts; hidden reasoning is not joined.
@@ -132,7 +132,7 @@ Role keys and field names are case-sensitive; provider IDs and reasoning names a
 
 ## Parent-run mutation preparation
 
-Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and configured validation. Ordinary delegated children do not receive `edit_source`.
+Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and advisory compiler feedback. Builds and tests require explicit invocation; completing a response does not launch validation. Ordinary delegated children do not receive `edit_source`.
 
 This path does not automatically partition, apply, or merge parallel worktree changes. The existing isolated-worker APIs and their integration checks remain separate. A role name, a proposed file change, or a clean review cannot authorize a repository write.
 

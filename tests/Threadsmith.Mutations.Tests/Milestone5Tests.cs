@@ -40,12 +40,14 @@ public static partial class Milestone5Tests
         Assert.Equal(stepId, fromObject);
     }
 
-    /// <summary>A configured LCS ceiling cannot require an unrepresentable matrix or reject a valid change.</summary>
-    [Fact]
-    public static async Task TransactionalWorkspace_OversizedDiffMatrix_UsesLinearPreview()
+    /// <summary>Complete replacements remain exact without allocating a quadratic comparison matrix.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task TransactionalWorkspace_LargeReplacement_UsesExactPreview(bool singleLineEdit)
     {
         var before = string.Concat(Enumerable.Repeat("old\n", 50000));
-        var after = string.Concat(Enumerable.Repeat("new\n", 50000));
+        var after = singleLineEdit ? "new\n" + before : string.Concat(Enumerable.Repeat("new\n", 50000));
         await using var repository = await TestRepository.CreateAsync(new Dictionary<string, string>
         {
             ["large.txt"] = before,
@@ -53,12 +55,12 @@ public static partial class Milestone5Tests
         await using var events = new DomainEventStream();
         await using var workspace = await TransactionalWorkspace.CreateAsync(
             repository.Baseline,
-            events,
-            resourceLimits: new WorkspaceResourceLimits { MaximumDiffLinesForLcs = int.MaxValue });
+            events);
         var mutation = CreateReplacement(repository, "large.txt", 0, before, after);
         var staged = await workspace.StageAsync(CreateMutationSet(repository, [mutation]));
         Assert.False(staged.Conflicts.HasConflicts);
-        Assert.Contains("-old", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
+        Assert.Equal(singleLineEdit ? 1 : 50000, staged.Preview.AddedLines);
+        Assert.Equal(singleLineEdit ? 0 : 50000, staged.Preview.RemovedLines);
         Assert.Contains("+new", staged.Preview.UnifiedDiff, StringComparison.Ordinal);
         Assert.Equal(after, await workspace.ReadStagedTextAsync(staged.MutationSet.MutationSetId, "large.txt"));
     }

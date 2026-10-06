@@ -7,9 +7,9 @@
 ## Product
 
 **Threadsmith.NET** — a .NET-native coding harness. The host owns control flow; the model
-is a pluggable reasoning engine, not an autonomous actor. The model proposes; the host
-validates, applies, builds, tests, and reports back. Nothing destructive happens without
-user approval.
+is a pluggable reasoning engine. The model reads source and requests edits through ordinary
+tools; the host authorizes exact diffs under mutation policy, applies transactions, and
+returns advisory compiler feedback. Builds and tests run only when explicitly invoked.
 
 Code/namespace prefix: `Threadsmith.*`.
 
@@ -21,8 +21,10 @@ Code/namespace prefix: `Threadsmith.*`.
   mutations; never applies them directly.
 - **Mutation** — a proposed change to the working tree, produced by the engine, validated
   and applied by the host.
-- **Validation gate** — the ordered stages a mutation must pass before acceptance
-  (compile → diagnostics → tests). See plan-12/13.
+- **Validation gate** — acceptance rules for an explicitly invoked validation workflow.
+  Ordinary edit and response completion do not invoke it.
+- **Semantic feedback** — versioned advisory compiler findings with coverage and omissions.
+  Pending or unavailable error totals are unknown; compiler feedback does not prove build/test success.
 - **Extension** — a loadable plugin via `AssemblyLoadContext` (§36). Isolation/unload
   mechanism, **not** a security boundary. Extension types never appear in durable host
   state or public projections.
@@ -36,7 +38,8 @@ Code/namespace prefix: `Threadsmith.*`.
 - `Threadsmith.Core` — domain contracts, host-owned DTOs. No UI, no Roslyn, no SDKs.
 - `Threadsmith.Extensions.Abstractions` — small, stable extension contract surface.
 - `Threadsmith.Extensions.Runtime` — extension load/unload runtime (references abstractions only).
-- `Threadsmith.Tui` — Terminal.Gui projection of engine state.
+- `Threadsmith.Interaction` — frontend-neutral interactive coordination.
+- `Threadsmith.Tui.TuiKit` — default full-screen terminal projection of engine state.
 - `Threadsmith.Cli` — headless entry point.
 - `Threadsmith.Mcp` — Model Context Protocol surface (plan-20).
 

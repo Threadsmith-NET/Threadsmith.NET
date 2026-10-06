@@ -50,13 +50,15 @@ All external packages centrally versioned, pinned, upgraded deliberately.
 Host Surfaces (TUI | CLI | future API | future IDE)
    ↓ commands/queries/projections
 Application Coordination (sessions | commands | approvals | config | lifecycle)
-   → Agent Execution Engine  +  Context Governor
+   → Ordinary Model/Tool Conversation  +  Context Governor
    → Tool Runtime (files | search | process | git | MCP | extensions | policy)
-   → .NET Semantic Engine  +  Transactional Workspace
-   → Validation Pipeline (syntax | compilation | analyzers | tests | policy | diff)
+   → .NET Semantic Engine (advisory feedback)  +  Transactional Workspace (exact authorization)
+   → Explicit Validation Pipeline (build | diagnostics | analyzers | tests)
    → Persistence/Events/Telemetry/Artifacts
 Extension Runtime (discovery | collectible ALCs | activation | draining | registry | unload | hot-replace)
 ```
+
+The model selects read/edit order through ordinary tools. Compiler feedback is advisory and versioned; it does not gate authorized writes or prove build/test success. Ordinary completion records cumulative disk effects without invoking validation. Written plans are optional conversation text. See [the current conversation flow and diagram](../operations/conversation-loop.md) for feedback boundaries and final-response handling.
 
 **Boundary rules (§7.1):**
 - Core execution works **without** any interactive terminal library.

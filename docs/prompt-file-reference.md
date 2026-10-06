@@ -107,7 +107,7 @@ System policy, stable conversation instructions, request envelopes, and required
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, skill routing, artifact guidance, and native-tool concept hints. | `None` |
-| `System-RepositoryInspection.md` | Shared parent/child inspection, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
+| `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
 | `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
 #### `ToolInventory` family
@@ -127,7 +127,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
-| `Context-ExecutionOutcome.md` | Authoritative direct-edit outcome archived as historical data after final validation; bounded changed paths, validation status, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
+| `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
 
@@ -164,7 +164,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-CurrentTurn-HostAuthorizedUserUrl.md` | Host-authorized current-turn URL guidance. | [`Ordinal`](#placeholder-ordinal), [`UserUrlId`](#placeholder-userurlid) |
 
-| `Context-SourceEdit-Feedback.md` | Bounded versioned compiler feedback with guidance to repair compiler errors before selecting build/test tools. | [`FeedbackJson`](#placeholder-feedbackjson) |
+| `Context-SourceEdit-Feedback.md` | Bounded versioned compiler feedback, repair of introduced errors within the requested scope, explicit incomplete coverage, correction of stale validation claims, and accurate distinction between builds and separate analyzer checks. | [`FeedbackJson`](#placeholder-feedbackjson) |
 | `Context-SourceEdit-MembershipRefresh.md` | Coverage omission for changed membership or non-source input. | `None` |
 | `Context-SourceEdit-NewSourceParseOptions.md` | Default parsing and pending evaluated membership for new source. | `None` |
 | `Context-SourceEdit-OmittedProjectCoverage.md` | Explicit bounded omission of prior edited projects. | [`ProjectCount`](#placeholder-projectcount) |
@@ -461,7 +461,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
-| `Tool-edit_source-Description.md` | Ordered source operations through exact authorization and the shared writer. Compiler findings are advisory; builds/tests require explicit tool calls. | `None` |
+| `Tool-edit_source-Description.md` | Ordered source operations through exact authorization and the shared writer; operation scope distinguishes partial edits from file deletion, and undo preserves unrelated changes. Compiler findings do not gate writes; the model must repair introduced errors within the requested scope before finishing or explain a conflict with the request. Missing counts are unknown and incomplete coverage cannot establish clean validation. Builds/tests require explicit tool calls. | `None` |
 | `Tool-delegate_agents-Description.md` | Delegation tool guidance for role selection including concrete Explorer tasks, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
@@ -485,7 +485,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-dotnet_build-Description.md` | Advertised description for `dotnet_build`. | `None` |
+| `Tool-dotnet_build-Description.md` | Build execution and accurate reporting of configured analyzers versus separately invoked analyzer checks. | `None` |
 
 #### `dotnet_format_check` family
 
@@ -594,7 +594,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-read_file-Description.md` | Bounded line reads and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
+| `Tool-read_file-Description.md` | Scoped reads for local edits and undo, whole-file reads when needed, and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
 | `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of historical sanitized evidence explicitly referenced by the current request. | `None` |
 | `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
@@ -602,13 +602,13 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-run_process-Description.md` | Process execution guidance and clamped timeout-hint semantics. | [`ShellLanguage`](#placeholder-shelllanguage) |
+| `Tool-run_process-Description.md` | Process execution guidance, clamped timeout-hint semantics, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
 
 #### `search` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-search-Description.md` | Search guidance, concise-query bounds, and clamped `maximumMatches` hint semantics. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
+| `Tool-search-Description.md` | Focused pattern and diagnostic precedent searches, concise-query bounds, and clamped `maximumMatches` hint semantics. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
 
 #### `symbol_impact` family
 
@@ -903,7 +903,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-version"></a>`Version` | Schema, wrapper, package, or protocol version identified by the surrounding prompt. |
 | <a id="placeholder-workspacefilename"></a>`WorkspaceFileName` | Display name of the current workspace or repository file. |
 
-| <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with generation, coverage, diagnostics and omissions. |
+| <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with status, generation, coverage, diagnostics and omissions; pending, obsolete, or unmeasured error counts are omitted. |
 
 ## Related references
 

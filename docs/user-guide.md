@@ -328,7 +328,7 @@ Reasoning is hidden by default. While a turn is active, Threadsmith shows transi
 
 ### Cross-turn conversation context
 
-Conversation continuity is bounded and host-owned. Threadsmith archives only sanitized accepted user requests and visible assistant responses. When the host records a validated plan boundary or a completed/failed execution outcome, it records a compact, sanitized host-authored assistant receipt with the original request, reported status, changed files, behavior summary, validation gate, rollback availability, and final diff reference. The latest cumulative receipt is supplied as current-run host context on the next planning turn, independently of history mode, while the archived receipts remain available to future conversation turns. The JSON is historical data rather than instructions or repository memory; a failed receipt can still list changed files, so its reported status remains authoritative. Recent exchanges retain the user request and all subsequent assistant messages from the same run, including final cumulative receipts, and are ordered by completion. New clones preserve these associations under fresh run IDs; older cloned archives retain their original adjacent pairs where run associations were not preserved. Hidden reasoning, provider wire payloads, and raw tool output never enter the conversation archive. Large bodies use the content-addressed artifact store while metadata, hashes, ordering, and provenance remain durable.
+Conversation continuity is bounded and host-owned. Threadsmith archives sanitized accepted user requests and visible assistant responses. When the host records a completed/failed execution outcome, it records a compact, sanitized host-authored assistant receipt with the original request, reported status, changed files, behavior summary, any recorded validation evidence, rollback availability, and final diff reference. Ordinary completion records disk effects without running validation; missing validation evidence does not mean checks passed. Archived receipts remain available to future conversation turns under the configured history policy. The JSON is historical data rather than instructions or repository memory; a failed receipt can still list changed files, so its reported status remains authoritative. Recent exchanges retain the user request and all subsequent assistant messages from the same run, including final cumulative receipts, and are ordered by completion. New clones preserve these associations under fresh run IDs; older cloned archives retain their original adjacent pairs where run associations were not preserved. Hidden reasoning, provider wire payloads, and raw tool output never enter the conversation archive. Large bodies use the content-addressed artifact store while metadata, hashes, ordering, and provenance remain durable.
 
 - **Conversation-aware** (default): current input, bounded recent complete turns, and relevant explicitly saved repository memories.
 - **Governed-memory-only**: current input plus relevant explicitly saved repository memories; no raw prior messages.
@@ -558,6 +558,10 @@ After authorization, bounded candidate compiler feedback is advisory. Temporary 
 
 The model uses receipts and later diagnostics to continue edits. The model decides when to invoke build and test tools, guided to resolve incremental compiler findings first. Completing a response does not automatically run validation. Pending advisory analysis does not establish build/test success. A user may request a written plan as an ordinary response; no executable plan or plan approval is required.
 
+Compiler feedback reports its generation, completed project coverage and omissions. Pending, obsolete or unavailable analysis omits model-facing error totals; an omitted total means unknown, not zero. The output window shows plain-text advisory coverage and error summaries, while structured analysis stays in model context. A graph refresh can temporarily obsolete earlier analysis while retaining delivery tracking for its verified replacement; error origins across graph replacement are reported as unknown.
+
+Newer findings enter the same conversation at a provider-compatible boundary without rewriting earlier tool results. If feedback arrives during a final response, Threadsmith permits a follow-up within the configured round and budget limits and retains the earlier response so outdated claims can be corrected. At the round limit the advisory notification remains visible without another model request. The host does not wait for pending analysis or start a mandatory compiler-repair cycle. Model instructions require repairing errors introduced by the requested changes before finishing, or explaining a conflict with the request and asking for direction; unrelated existing errors remain outside scope.
+
 See [conversation flow](operations/conversation-loop.md), [recovery](operations/execution-resumption.md), and [validation](architecture/validation-pipeline.md).
 
 ### Mutation approval policies
@@ -571,7 +575,7 @@ See [conversation flow](operations/conversation-loop.md), [recovery](operations/
 | `TrustSession` | Auto-apply valid in-repository mutations until the process session ends. Leaves the saved repository policy untouched. |
 | `AlwaysTrustRepo` | Auto-apply valid in-repository mutations and save `mutation.approvalPolicy` only in this repository. |
 
-Trust-based choices print a warning. Every policy still requires `TrustedMutation`, preserves the exact diff in events/projections, validates baseline hashes and approved roots, rejects prohibited/secret-bearing paths and `.git` metadata, runs configured validation, and never commits, pushes, resets, cleans, or otherwise performs destructive Git operations.
+Trust-based choices print a warning. Every policy still requires `TrustedMutation`, preserves the exact diff in events/projections, validates baseline hashes and approved roots, rejects prohibited/secret-bearing paths and `.git` metadata, and never commits, pushes, resets, cleans, or otherwise performs destructive Git operations. Build and test validation runs only when the model or user invokes the corresponding tools.
 
 Optional Git-worktree isolation may be used by configured workflows, but Threadsmith does not treat Git as a transaction mechanism and does not perform destructive Git operations.
 
@@ -1476,7 +1480,7 @@ Tool activity also includes concise context when a built-in explicitly defines a
    └ dotnet test src/Threadsmith.sln
 ```
 
-Direct edits appear as ordinary `edit_source` tool activity, exact mutation preview/review, applied mutation notices, advisory semantic checks and final validation. Adjacent visible lifecycle blocks use one presentation-owned blank line. Historical sessions may display their original plan or proposal notices during replay.
+Direct edits appear as ordinary `edit_source` tool activity, exact mutation preview/review, applied mutation notices and advisory semantic checks. Build/test activity appears only for explicitly invoked checks. Late advisory notifications use plain-text coverage/error summaries; serialized analysis is model context, not output-window text. Adjacent visible lifecycle blocks use one presentation-owned blank line. Historical sessions may display their original plan or proposal notices during replay.
 
 ```json
 {

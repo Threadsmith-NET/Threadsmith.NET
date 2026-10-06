@@ -23,7 +23,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 2. Confirm one ordinary conversation inspects the evidence and invokes `edit_source` with related ordered operations.
 3. Review the exact diff when mutation policy requires it; approve the intended operations.
 4. Confirm committed bytes, applied receipt and versioned advisory diagnostics reach the conversation.
-5. Complete related repairs and confirm the final cumulative diff and configured validation reflect actual results.
+5. Complete related repairs and confirm the final cumulative diff reflects actual disk effects. Verify edit-only completion launches no build/test work; explicitly invoke checks and report their actual results when validation is requested.
 
 **Verifies:** supporting reads are independent of write authority; one shared tool/writer path; exact authorization; model-selected order; honest completion without required executable planning.
 
@@ -32,7 +32,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 1. Apply an authorized signature or source change that temporarily introduces an unresolved symbol or syntax error.
 2. Confirm the write is reported as applied and compiler findings identify generation, coverage and pending/omitted analysis.
 3. Repair the relevant source through another ordinary edit call and confirm errors resolve on the matching generation.
-4. Run configured final validation and confirm failed or omitted checks cannot establish successful acceptance.
+4. Explicitly invoke build/test validation and confirm failed or omitted checks cannot establish successful acceptance; ordinary response completion does not start these checks.
 
 **Verifies:** advisory findings remain actionable across edits without rejecting valid writes or turning introduced errors into an ignored baseline.
 
@@ -588,8 +588,10 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 1. Apply syntax-error and unresolved-symbol edits to an existing loaded C# document.
 2. Confirm writes succeed with separate versioned compiler feedback and explicit incomplete coverage.
 3. Apply consecutive edits to independent projects, including a declined/conflicted second edit; confirm prior findings persist or their unavailability is delivered explicitly.
-4. Confirm matching candidate results are reused and graph-affecting inputs receive visible refresh/omissions.
-5. Repair source and run authoritative final validation.
+4. Confirm matching candidate results are reused and graph-affecting inputs receive visible refresh/omissions. Poll while the old analysis is obsolete and replacement is pending; confirm tracking survives and replacement diagnostics reach the continuing model.
+5. Confirm pending, obsolete and unavailable coverage omits error totals rather than reporting zero; user-visible advisory output contains plain-text coverage/error summaries, not serialized analysis.
+6. Arrange newer findings during a final response. Confirm a follow-up receives them within existing round/budget limits, the earlier response remains in history, and the round-limit case reports the advisory notification without another request. Pending work does not delay completion.
+7. Repair introduced errors within the requested scope or explain a conflict with the request. Explicitly invoke authoritative build/test tools when verification is requested; edit-only completion starts no validation.
 
 **Verifies:** generation correctness, bounded coverage/cache ownership, advisory diagnostics and honest final acceptance.
 
@@ -618,9 +620,9 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 ## Cross-cutting note
 
 Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise the **Execution Turn & Concurrency Contract (§10.7)** and the **Semantic Confidence Levels (§13.x)** under load. Scenario M separately verifies that hook execution preserves the same turn and authority boundaries. These scenarios explicitly assert:
-- Staging is not visible to read tools mid-turn (Scenario B step 6/8 ordering).
-- Introduced-vs-baseline classification is authoritative at `FullSemantic` and reports `ConfidenceDegraded` otherwise (Scenario C step 2).
-- The correction loop stops at the configured budget (Scenario C step 8).
+- Private staged candidates do not become current disk source before authorized application (Scenario B).
+- Advisory origin classification reports unknown when comparable evidence is missing; authoritative build classification requires comparable full-semantic captures (Scenario C).
+- Malformed-call corrective turns stop at the configured budget; advisory compiler findings do not consume that budget (Scenario C2).
 
 ---
 

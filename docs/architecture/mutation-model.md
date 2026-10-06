@@ -22,6 +22,10 @@ The latest retained committed edit remains rollback-capable through the same jou
 
 Compiler analysis is advisory and distinct from disk authorization. Syntax or semantic errors do not reject well-formed authorized edits. Candidate analysis is bounded and versioned; committed matching candidates reuse results. Broader analysis reports its coverage, pending state and omissions explicitly. Unknown document membership, project inputs and generator changes use the existing graph refresh owner.
 
-The model receives an applied/conflict/denied/non-applied/recovery-required receipt and separate semantic evidence. Final acceptance uses the configured validation pipeline over cumulative affected scope. Supporting reads never expand write authority.
+The model receives an applied/conflict/denied/non-applied/recovery-required receipt and separate semantic evidence. Newer feedback enters the same conversation at a provider-compatible boundary without rewriting earlier tool results. A graph replacement retains delivery tracking while replacement analysis for the applied effect is pending. Missing or terminal obsolete analysis reports unavailable coverage.
+
+User-visible feedback uses plain-text coverage and error summaries; structured analysis is model context. Error totals are omitted when coverage is pending, obsolete, or unavailable and must not be read as zero. Model instructions require repairing introduced errors within the requested scope or explaining a conflict with the request. The host neither waits for pending analysis nor enforces a compiler-clean completion gate.
+
+Ordinary completion records cumulative disk effects without invoking validation. New feedback arriving during a final response permits a follow-up within the existing round and budget limits. Builds and tests run through explicitly invoked tools or validation commands; only their actual results establish validation. Supporting reads never expand write authority.
 
 Historical plan DTOs, enum values and events exist solely to read supported stored history; they have no live execution producers. See [execution recovery](../operations/execution-resumption.md).

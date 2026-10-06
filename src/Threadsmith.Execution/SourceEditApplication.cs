@@ -246,6 +246,13 @@ public sealed class SourceEditApplication :
                 : null;
         }
 
+        if (latest is { Obsolete: true, Pending: true })
+        {
+            // A graph refresh temporarily retires the old snapshot before installing
+            // replacement analysis for the same applied effect.
+            return null;
+        }
+
         if (latest is null || latest.Obsolete)
         {
             return _feedback.TryRemove(new KeyValuePair<RunId, FeedbackDelivery>(runId, delivered))

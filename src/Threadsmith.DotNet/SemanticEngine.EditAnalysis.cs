@@ -173,7 +173,7 @@ public sealed partial class SemanticEngine
                 && candidate.Command.RunId == runId && candidate.Command.EffectId == effectId
                 ? candidate.Result with
                 {
-                    Pending = !candidate.Result.Obsolete && (candidate.Result.Pending || candidate.Result.CommittedGeneration is null),
+                    Pending = candidate.Result.Pending || candidate.Result.CommittedGeneration is null,
                     Obsolete = candidate.Result.Obsolete || (!ReferenceEquals(_solution, candidate.Base) && !ReferenceEquals(_solution, candidate.Solution)),
                 } : null;
         }
@@ -554,7 +554,7 @@ public sealed partial class SemanticEngine
 
         if (_editCandidate is { } candidate)
         {
-            candidate.Result = candidate.Result with { Obsolete = true, Pending = false, Revision = candidate.Result.Revision + 1 };
+            candidate.Result = candidate.Result with { Obsolete = true, Pending = candidate.Applied, Revision = candidate.Result.Revision + 1 };
             candidate.Cancel();
         }
     }

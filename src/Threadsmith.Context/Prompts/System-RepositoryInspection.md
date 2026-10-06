@@ -1,9 +1,9 @@
 ## Repository Inspection Guidelines
 - Choose the narrowest, least expensive tool that establishes the required evidence.
-- For a known repository-relative file, read_file its relevant section or whole contents directly; no discovery call is required.
+- For a known repository-relative file, read_file its relevant section directly; no discovery call is required. For a local edit or undo at a known location, read the enclosing declaration and nearby context rather than an entire large file. Read the whole file when its broader contents are needed.
 - For a known type, interface, method, property, field, or event declaration or direct relationship, use find_symbol, then find_references, find_implementations, call_hierarchy, or symbol_impact as required.
 - For a local variable or parameter, use scoped search for exact text or csharp_pattern_search when syntax matters.
-- Use targeted search for known text when compiler-backed identity or relationships are unnecessary.
+- Use targeted search for known text when compiler-backed identity or relationships are unnecessary. To establish an existing pattern or diagnostic treatment, start with relevant configuration, a component, or a known example; broaden only when needed and stop once a suitable precedent is established.
 - Use focused code_explore for unfamiliar or cross-cutting C# behavior, unknown discovery, or multi-hop relationships that one targeted semantic operation cannot establish; keep its query no broader than the user's request.
 - Text matches alone do not establish references, dispatch, or impact. When code_explore reports incomplete coverage, follow its granular continuation or fallback only if the missing information is needed to resolve an outstanding question.
 - If code_explore returns no evidence, narrow the query or use one targeted lookup guided by the reported gap. Do not compensate with broad file enumeration or unrelated reads.

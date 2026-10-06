@@ -56,7 +56,7 @@ Dependencies must form a bounded DAG. `maximumIterations` is a fixed positive ce
 
 Procedure instructions should state a narrow objective, evidence expectations, structured output, stopping condition, uncertainties, and meaningful validation. Do not claim host policy precedence, approval, trust, write authority, or successful validation. Such prose has no authority and adversarial claims are ignored by the host.
 
-Host-action steps return typed requests under the existing closed action contract. Source edits use the ordinary shared edit command, exact authorization and configured validation. Packages cannot revive removed planning or approved-execution actions.
+Host-action steps return typed requests under the existing closed action contract. Source edits use the ordinary shared edit command, exact authorization, transactional writer and advisory semantic feedback. Validation requires an explicit tool or host action; edit or response completion does not invoke it. Packages cannot revive removed planning or approved-execution actions.
 
 ## Signing and enablement
 

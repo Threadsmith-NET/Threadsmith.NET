@@ -88,7 +88,16 @@ internal sealed class MutationDiffEvidence
             }
 
             var remaining = _limits.MaximumFinalDiffCharacters - diff.Length;
-            if (remaining <= 0 || !UnifiedTextDiff.TryCreate(normalized, before, after, _limits.MaximumDiffLinesForLcs, remaining, out var fileDiff, out _, out _))
+            if (remaining <= 0 || !UnifiedTextDiff.TryCreate(
+                normalized,
+                before,
+                after,
+                _limits.MaximumDiffLinesForLcs,
+                remaining,
+                out var fileDiff,
+                out _,
+                out _,
+                cancellationToken))
             {
                 return new(null, false);
             }

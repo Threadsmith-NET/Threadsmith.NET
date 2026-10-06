@@ -9,7 +9,7 @@
       "maximumMutations": 100,
       "maximumMutationCharacters": 4194304,
       "maximumRationaleCharacters": 8192,
-      // Machine/user/environment ceiling; other layers can only narrow it. Larger matrices use the linear diff fallback.
+      // Machine/user/environment ceiling; other layers can only narrow it. Its square bounds linear-space diff work.
       "maximumDiffLinesForLcs": 512,
       "maximumConcurrentConflictHashes": 4,
       "maximumConcurrentBaselineHashes": 8,

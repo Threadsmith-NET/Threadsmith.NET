@@ -1,6 +1,6 @@
 # Validation Pipeline
 
-`Threadsmith.Validation` owns authoritative build, diagnostic, test and acceptance evidence for explicit checks and cumulative direct-edit completion. Incremental compiler feedback is advisory and does not grant write authority.
+`Threadsmith.Validation` owns authoritative build, diagnostic, test and acceptance evidence for explicitly invoked validation workflows. Cumulative direct-edit completion records disk effects without invoking this pipeline. Incremental compiler feedback is advisory and does not grant write authority.
 
 ## Build-half flow
 
@@ -46,6 +46,6 @@ Builds and tests run only when explicitly requested through the existing tools o
 
 The initial diagnostic basis is preserved where known. When no comparable pre-edit build exists, final compiler error origins are reported as unknown. A later edit cannot silently relabel an introduced error as an initial error. Authoritative matching build evidence supersedes older advisory coverage.
 
-`mutation:approvalPolicy` and `/policy` govern exact staged diff authorization. They do not bypass repository trust, path checks, source preconditions, secret paths, metadata protection or validation. Ordinary malformed tool calls use the existing bounded correction mechanism; compiler findings do not consume that budget.
+`mutation:approvalPolicy` and `/policy` govern exact staged diff authorization. They preserve repository trust, path checks, source preconditions, secret paths and metadata protection; they do not schedule build/test validation. Explicit checks retain their own trust and execution requirements. Ordinary malformed tool calls use the existing bounded correction mechanism; compiler findings do not consume that budget.
 
 The existing runners remain available for explicitly requested intermediate or final validation. Supporting reads and subsequent edits use the ordinary tool pipeline. Historical planning state is a reader compatibility boundary, not a validation execution mode.

@@ -224,7 +224,7 @@ Cancellation is cooperative, but non-cooperative work is still observed at host-
 
 `delegate_agents` is the sole subagent launch entry point. The plan factory requires host-owned model-origin invocation metadata and the exact model-visible tool snapshot before creating assignments. Direct headless start commands and automatic approved-plan preflight/implementation wrappers are removed; inspection and cancellation remain available.
 
-Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and configured validation. Ordinary delegated children do not receive `edit_source`.
+Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and advisory compiler feedback. Builds and tests require explicit invocation; completing a response does not launch validation. Ordinary delegated children do not receive `edit_source`.
 
 `Checkpoint.Assignments` stores role, contract marker, runner version, and configured/effective provider/profile/reasoning with source and fallback. Outcomes retain their effective model provenance and optional `Response`. An empty ordinary response is distinct from a missing/null response in a legacy structured checkpoint. `/agents <id>` projects the role and effective provider/profile/reasoning/source/fallback alongside lifecycle state. Reading persisted state does not resume work: the coordinator has no automatic resume API for interrupted delegated model loops. Further delegation requires a new generation; it cannot continue an old provider stream. Historical execution records remain readable without resuming removed plan execution.
 

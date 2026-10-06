@@ -1107,7 +1107,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 ? BuildStagedFiles(mutationSet.Mutations)
                 : new Dictionary<string, StagedFile>(_pathComparer);
             var preview = conflicts.Count == 0
-                ? CreatePreview(mutationSet, files)
+                ? CreatePreview(mutationSet, files, cancellationToken)
                 : new MutationPreview(mutationSet.MutationSetId, string.Empty, [], 0, 0);
             var risk = MutationRiskCalculator.Calculate(
                 mutationSet,
@@ -1463,7 +1463,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
     private MutationPreview CreatePreview(
         MutationSet mutationSet,
-        IReadOnlyDictionary<string, StagedFile> files)
+        IReadOnlyDictionary<string, StagedFile> files,
+        CancellationToken cancellationToken)
     {
         var changes = new List<MutationDiff>();
         var rolling = new Dictionary<string, string?>(_pathComparer);
@@ -1483,11 +1484,11 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             var destination = mutation.DestinationRelativePath is null
                 ? null
                 : NormalizeRelativePath(mutation.DestinationRelativePath);
-            var operationDiff = CreateUnifiedDiff(relativePath, before, after, out _, out _);
+            var operationDiff = CreateUnifiedDiff(relativePath, before, after, out _, out _, cancellationToken);
             if (destination is not null)
             {
                 var movedText = mutation.Content?.Text ?? before;
-                operationDiff += CreateUnifiedDiff(destination, null, movedText, out _, out _);
+                operationDiff += CreateUnifiedDiff(destination, null, movedText, out _, out _, cancellationToken);
             }
 
             changes.Add(new MutationDiff(
@@ -1520,7 +1521,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 file.Original?.Text,
                 file.FinalText,
                 out var fileAdded,
-                out var fileRemoved));
+                out var fileRemoved,
+                cancellationToken));
             added += fileAdded;
             removed += fileRemoved;
         }
@@ -1657,7 +1659,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         string? before,
         string? after,
         out int addedLines,
-        out int removedLines)
+        out int removedLines,
+        CancellationToken cancellationToken)
     {
         return UnifiedTextDiff.Create(
             relativePath,
@@ -1665,7 +1668,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             after,
             _resourceLimits.MaximumDiffLinesForLcs,
             out addedLines,
-            out removedLines);
+            out removedLines,
+            cancellationToken);
     }
 
     private string NormalizeRelativePath(string relativePath)

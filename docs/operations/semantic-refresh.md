@@ -12,7 +12,9 @@ Incremental publication uses safe operation boundaries and immutable generations
 
 `edit_source` analyzes the authorized candidate within a bounded allowance and applies independently of compiler findings. Matching candidate analysis is reused after commit. Owning and dependent project coverage continues through the existing compilation coordinator. Results identify their generation, partial/pending/complete coverage and omissions. Unchanged cached project findings are reused; bounded carry-forward coverage preserves earlier edit errors or reports omissions explicitly.
 
-Unknown or deleted C# membership, project/reference/option changes and generator inputs use visible graph refresh rather than guessed inclusion. Final configured build/test validation remains authoritative over cumulative affected scope.
+Unknown or deleted C# membership, project/reference/option changes and generator inputs use visible graph refresh rather than guessed inclusion. During graph replacement, the old applied analysis is obsolete but replacement feedback remains pending; a conversation poll retains delivery tracking until the verified replacement arrives. Replacement coverage conservatively includes evaluated projects and reports error origins as unknown across the graph change.
+
+Feedback enters ordinary provider boundaries without rewriting delivered tool results. Pending, obsolete or unavailable coverage omits model-facing error totals; missing totals mean unknown. The output window shows plain-text advisory coverage/error summaries instead of serialized analysis. New feedback during a final response permits another model round within existing limits; the host does not wait for pending work. Explicit build/test results remain authoritative for the checks actually run, and response completion starts no validation.
 
 ## External edits: refresh or ignore
 

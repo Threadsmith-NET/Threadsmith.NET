@@ -2,6 +2,7 @@ namespace Threadsmith.Execution;
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Threadsmith.Core;
 using Threadsmith.Tools;
@@ -70,7 +71,14 @@ public sealed class SourceEditTool : Tool<SourceEditInput, SourceEditReceipt>, I
         try
         {
             var receipt = await _edits.HandleAsync(command, cancellationToken);
-            return new(receipt, receipt.ChangedFiles.Select(path => new ToolProvenanceSource("file", path)).ToArray());
+            var modelResult = JsonSerializer.SerializeToNode(receipt)?.AsObject()
+                ?? throw new InvalidOperationException("Source edit receipt could not be serialized.");
+            if (receipt.Analysis is { } analysis)
+            {
+                modelResult[nameof(receipt.Analysis)] = SourceEditAnalysisProjection.Create(analysis);
+            }
+
+            return new(receipt, receipt.ChangedFiles.Select(path => new ToolProvenanceSource("file", path)).ToArray(), ModelResultContent: modelResult.ToJsonString());
         }
         catch (MutationInstructionException exception)
         {

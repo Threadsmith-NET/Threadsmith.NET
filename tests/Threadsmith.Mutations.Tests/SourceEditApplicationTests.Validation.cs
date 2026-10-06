@@ -166,6 +166,42 @@ public sealed partial class SourceEditApplicationTests
         Assert.DoesNotContain(observed, item => item is BuildStarted or TestRunCompleted);
     }
 
+    /// <summary>A temporary obsolete snapshot does not retire delivery before its graph replacement arrives.</summary>
+    [Fact]
+    public async Task PendingGraphReplacementRetainsFeedbackDelivery()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await EditFixture.CreateAsync(ct);
+        var analyzer = new AdvisoryAnalyzer([]);
+        var edits = fixture.CreateApplication(analyzer: analyzer);
+        var command = fixture.Replace("Example", "Changed", false);
+        await edits.HandleAsync(command, ct);
+        analyzer.Publish(new()
+        {
+            EffectId = command.EffectId,
+            Revision = 1,
+            CommittedGeneration = 1,
+            Pending = true,
+            Obsolete = true,
+        });
+
+        Assert.Null(edits.TakeFeedback(fixture.SessionId, fixture.RunId));
+
+        analyzer.Publish(new()
+        {
+            EffectId = command.EffectId,
+            Revision = 2,
+            CommittedGeneration = 2,
+            Diagnostics = [new("CS0246", "Missing type", "Example.cs", 1, "Example", "net10.0", "unknown")],
+            CurrentErrors = 1,
+        });
+        var feedback = edits.TakeFeedback(fixture.SessionId, fixture.RunId);
+
+        Assert.NotNull(feedback);
+        Assert.Equal(2, feedback.Revision);
+        Assert.Contains(feedback.Diagnostics, diagnostic => diagnostic.Code == "CS0246");
+    }
+
     /// <summary>Replay and external source changes never trigger automatic verification or claim validation.</summary>
     [Theory]
     [InlineData(false)]
@@ -232,6 +268,8 @@ public sealed partial class SourceEditApplicationTests
         }
 
         public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId) => _analysis;
+
+        public void Publish(SourceEditAnalysis analysis) => _analysis = analysis;
 
         public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId) => _analysis = _analysis! with { CommittedGeneration = 1 };
 

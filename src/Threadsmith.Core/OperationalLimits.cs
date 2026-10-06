@@ -58,7 +58,7 @@ public sealed record WorkspaceResourceLimits
     /// <summary>Maximum characters in the batch rationale.</summary>
     public int MaximumRationaleCharacters { get; init; } = 8192;
 
-    /// <summary>Line-count scale whose square bounds the LCS diff matrix.</summary>
+    /// <summary>Line-count scale whose square bounds diff comparison work.</summary>
     public int MaximumDiffLinesForLcs { get; init; } = 512;
 
     /// <summary>Maximum characters retained for one cumulative execution diff.</summary>

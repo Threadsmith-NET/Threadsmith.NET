@@ -31,10 +31,12 @@ public sealed partial class SessionApplication
             RequirePrompts(),
             _limits.MaxRetainedToolCalls);
 
+        SourceEditAnalysis? deferredFeedback = null;
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
-            if (_sourceEdits?.TakeFeedback(registration.SessionId, runId) is { } feedback)
+            if ((deferredFeedback ?? _sourceEdits?.TakeFeedback(registration.SessionId, runId)) is { } feedback)
             {
+                deferredFeedback = null;
                 loopState.CommitStandaloneMessage(
                     modelRound,
                     new ModelMessage
@@ -47,7 +49,7 @@ public sealed partial class SessionApplication
                             {
                                 Content = _prompts.Render(PromptFileNames.ContextSourceEditFeedback, new Dictionary<string, string>(StringComparer.Ordinal)
                                 {
-                                    ["FeedbackJson"] = _sanitizer.Sanitize(JsonSerializer.Serialize(feedback)),
+                                    ["FeedbackJson"] = _sanitizer.Sanitize(SourceEditAnalysisProjection.Create(feedback).ToJsonString()),
                                 }),
                             },
                         ],
@@ -138,8 +140,28 @@ public sealed partial class SessionApplication
                 if (_sourceEdits?.TakeFeedback(registration.SessionId, runId) is { } finalFeedback)
                 {
                     await _events.PublishAsync(
-                        new DiagnosticObserved(registration.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", _sanitizer.Sanitize(JsonSerializer.Serialize(finalFeedback))),
+                        new DiagnosticObserved(registration.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", SourceEditAnalysisProjection.CreateDisplaySummary(finalFeedback)),
                         cancellationToken);
+                    if (maximumModelRounds <= 0 || modelRound < maximumModelRounds)
+                    {
+                        // Evidence completed during this response must reach the model before it finishes.
+                        deferredFeedback = finalFeedback;
+                        if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
+                        {
+                            loopState.CommitStandaloneMessage(
+                                modelRound,
+                                CreateVisibleAssistantMessage(outcome.TextOutput),
+                                purgeAfterCorrection: false);
+                            await ArchiveVisibleMessageAsync(
+                                registration.SessionId,
+                                runId,
+                                ConversationRole.Assistant,
+                                outcome.TextOutput,
+                                cancellationToken);
+                        }
+
+                        continue;
+                    }
                 }
 
                 if (!string.IsNullOrWhiteSpace(outcome.TextOutput))

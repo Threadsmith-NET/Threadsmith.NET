@@ -7,6 +7,9 @@ using Threadsmith.Core;
 /// <summary>Owns one independent semantic engine for each opened workspace.</summary>
 public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEditAnalyzer, IAsyncDisposable
 {
+    /// <summary>Gets optional, transient startup phase observations shared by the existing semantic owners.</summary>
+    public SemanticStartupProgress StartupProgress { get; } = new();
+
     private readonly TimeSpan? _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
@@ -193,7 +196,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
             _loggerFactory.CreateLogger<SemanticEngine>(),
             _prompts,
             _cancellationBackstop,
-            _resourceLimits));
+            _resourceLimits,
+            StartupProgress));
         if (_confidencePublisher is { } publisher)
         {
             engine.SetConfidencePublisher(publisher);

@@ -35,6 +35,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
     private readonly Lock _gate = new();
     private readonly ConcurrentQueue<string> _invalidations = new();
     private readonly ILogger<SemanticEngine> _logger;
+    private readonly SemanticStartupProgress? _startupProgress;
     private static VisualStudioInstance? _registeredMsBuildInstance;
     private static int _semanticLoadSequence;
     private static int _versionFactsLogged;
@@ -53,7 +54,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
         ILogger<SemanticEngine> logger,
         IPromptLoader prompts,
         TimeSpan? cancellationBackstop = null,
-        SemanticResourceLimits? resourceLimits = null)
+        SemanticResourceLimits? resourceLimits = null,
+        SemanticStartupProgress? startupProgress = null)
     {
         ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
@@ -68,6 +70,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
         _prompts = prompts;
         _events = events;
         _logger = logger;
+        _startupProgress = startupProgress;
         _cancellationBackstop = cancellationBackstop ?? TimeSpan.FromSeconds(2);
     }
 
@@ -291,6 +294,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         var diagnostics = new ConcurrentQueue<string>();
         var evaluationStarted = Stopwatch.GetTimestamp();
+        using var evaluationProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.OpenWorkspace, cancellationToken);
         (MSBuildWorkspace Workspace, Solution Solution) load;
         MSBuildWorkspace? provisionalWorkspace = null;
         try
@@ -348,9 +352,11 @@ public sealed partial class SemanticEngine : ISemanticEngine
                         DisposeCompilerWorkspace(failed);
                     }
                 });
+            evaluationProgress?.Complete();
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            evaluationProgress?.Dispose();
             measurement.EnsureWorkspaceFailure();
             _logger.LogWarning(
                 exception,
@@ -395,6 +401,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         using var workspaceLease = new WorkspaceLease(load.Workspace, RetireCompilerWorkspace);
         var confinementStarted = Stopwatch.GetTimestamp();
+        using var confinementProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.ConfineInputs, cancellationToken);
         var confinedSolution = load.Solution;
         foreach (var project in confinedSolution.Projects.ToArray())
         {
@@ -445,8 +452,10 @@ public sealed partial class SemanticEngine : ISemanticEngine
 
         load = (load.Workspace, confinedSolution);
         measurement.ConfinementDuration = Stopwatch.GetElapsedTime(confinementStarted);
+        confinementProgress?.Complete();
 
         var compilationStarted = Stopwatch.GetTimestamp();
+        using var compilationProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.PrepareCompilation, cancellationToken);
 
         // Refresh admission needs a current usable generation, just like startup. Remaining
         // projects use the same bounded demand preparation and background warming path.
@@ -538,6 +547,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 pending.Remove(completed);
                 if ((await completed).Succeeded)
                 {
+                    compilationProgress?.Complete();
                     break;
                 }
             }

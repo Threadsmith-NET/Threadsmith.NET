@@ -238,6 +238,10 @@ Ordinary prompts and repository-change requests use the same conversation. The m
 
 ### Commands
 
+While the startup modal is loading the solution and semantics, it displays a random tip every five seconds without repeating until all tips have appeared. Tips are loaded from the application's `tips.txt`, one tip per nonempty line. Use `/tips` to print the full list as bullets in the current output window; this output is local and is not added to model context.
+
+After required startup choices, the TUI paints the startup modal before loading the selected solution/project. Status rows time the actual file snapshot capture, workspace opening/evaluation, input boundary checks, initial compilation, file monitoring, document snapshot reads, and final reconciliation. Successful rows use the theme's success role and retain their completion duration; failures and cancellation do not turn green. The playful **Reticulating Splines** item remains, with no artificial startup delay. The composer opens after the existing readiness and reconciliation checks; remaining compilation warming continues in the background.
+
 | Command | Purpose |
 |---|---|
 | `/agents [<id> [cancel\|cancel-child <id>]]` | List, inspect, or cancel delegation trees; use tabs to view active agents. |
@@ -274,6 +278,7 @@ Ordinary prompts and repository-change requests use the same conversation. The m
 | `/theme <id>` | Apply a theme and save it as the user-level default. |
 | `/theme current` | Report the active theme. |
 | `/thinking [on\|off]` | Stream future sanitized reasoning, or toggle when no argument is supplied. |
+| `/tips` | Print all tips as local bullets without adding them to model context. |
 | `/tools` | Browse and toggle non-essential repository tools. |
 | `/trust [inspect\|read\|build\|mutation\|automation]` | Show or change repository trust. |
 

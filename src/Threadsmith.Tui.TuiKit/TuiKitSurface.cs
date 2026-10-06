@@ -229,6 +229,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _read = completion;
             _startupBlocked = false;
             _startupDetails = [];
+            _startupProgress = null;
             _startupPhases.Clear();
             ClosePalette();
             _prompt = request.Prompt;

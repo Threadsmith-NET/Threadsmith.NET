@@ -278,6 +278,7 @@ public static class Program
         return await ShellRunner.RunAsync(
             new ShellRunContext
             {
+                SemanticStartupProgress = foundation.SemanticEngines.StartupProgress,
                 CommandLine = commandLine,
                 Paths = paths,
                 Configuration = configuration,

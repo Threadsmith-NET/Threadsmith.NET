@@ -59,6 +59,7 @@ public sealed class SemanticRefreshCoordinator :
     private readonly Lock _gate = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly ILogger<SemanticRefreshCoordinator> _logger;
+    private readonly SemanticStartupProgress? _startupProgress;
     private readonly TimeSpan _maximumBurstWindow;
     private readonly ISemanticPathSafetyValidator? _pathSafetyValidator;
     private readonly ISemanticRefreshPublicationGate? _publicationGate;
@@ -95,6 +96,7 @@ public sealed class SemanticRefreshCoordinator :
             resourceLimits: resourceLimits)
     {
         semanticEngines.SetConfidencePublisher(PublishWorkspaceConfidenceAsync);
+        _startupProgress = semanticEngines.StartupProgress;
     }
 
     /// <inheritdoc />
@@ -175,7 +177,8 @@ public sealed class SemanticRefreshCoordinator :
         ISemanticPathSafetyValidator? pathSafetyValidator = null,
         TimeSpan? recentHostEchoLifetime = null,
         Func<string, FileSystemWatcher>? watcherFactory = null,
-        SemanticRefreshResourceLimits? resourceLimits = null)
+        SemanticRefreshResourceLimits? resourceLimits = null,
+        SemanticStartupProgress? startupProgress = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(events);
@@ -196,6 +199,7 @@ public sealed class SemanticRefreshCoordinator :
         }
 
         _backend = backend;
+        _startupProgress = startupProgress;
         _events = events;
         _fileSnapshotReader = fileSnapshotReader;
         _logger = logger;
@@ -321,12 +325,16 @@ public sealed class SemanticRefreshCoordinator :
 
         try
         {
+            using var monitoringProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.StartMonitoring, cancellationToken);
             binding.StartWatching(
                 change => QueueChange(binding, change),
                 () => QueueRecovery(binding, restartWatcher: true));
+            monitoringProgress?.Complete();
+            using var documentsProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.ReadDocuments, cancellationToken);
             var loadedDocuments = (await _backend.GetLoadedDocumentsAsync(
                 request.WorkspaceId,
                 cancellationToken)).Where(document => !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(request.RepositoryPath, document.Path)).ToArray();
+            documentsProgress?.Complete();
             lock (binding.Gate)
             {
                 foreach (var document in loadedDocuments)
@@ -337,11 +345,13 @@ public sealed class SemanticRefreshCoordinator :
 
             // Add exact non-recursive roots for loaded documents that intentionally live beneath
             // a normally ignored directory without interrupting the already-active monitor.
+            using var reconciliationProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.ReconcileSnapshots, cancellationToken);
             binding.StartWatching(
                 change => QueueChange(binding, change),
                 () => QueueRecovery(binding, restartWatcher: true));
             await SeedAuthoritativeInputIdentitiesAsync(binding, cancellationToken);
             await ReconcileBoundDocumentsAsync(binding, loadedDocuments, cancellationToken);
+            reconciliationProgress?.Complete();
             lock (binding.Gate)
             {
                 ThrowIfObsolete(binding);
@@ -978,6 +988,7 @@ public sealed class SemanticRefreshCoordinator :
             {
                 // Initial load reconciliation compares this snapshot with the loaded workspace. Starting
                 // native monitoring first would expose its bounded buffer to design-time build output.
+                using var snapshotProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.CaptureSnapshots, cancellationToken);
                 var initialSnapshot = await CaptureAuthoritativeInputSnapshotAsync(
                     binding,
                     _backend.GetRefreshInventory(binding.Request.WorkspaceId),
@@ -993,6 +1004,8 @@ public sealed class SemanticRefreshCoordinator :
                     ThrowIfObsolete(binding);
                     binding.InitialInputSnapshot = initialSnapshot;
                 }
+
+                snapshotProgress?.Complete();
             }
             catch (Exception exception)
             {

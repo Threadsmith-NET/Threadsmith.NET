@@ -12,6 +12,37 @@ using Xunit;
 /// <summary>Verifies external semantic refresh coordination, fencing, and recovery.</summary>
 public static class SemanticRefreshCoordinatorTests
 {
+    /// <summary>Actual binding boundaries produce timings without replacing freshness checks.</summary>
+    [Fact]
+    public static async Task StartupProgressTracksSnapshotAndMonitoringReconciliationBoundaries()
+    {
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var progress = new SemanticStartupProgress();
+        using var observation = progress.Observe(repository.SessionId);
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        await using var coordinator = CreateCoordinator(backend, events, startupProgress: progress);
+        var request = repository.CreateRequest();
+        var generation = await coordinator.BeginBindingAsync(request, TestContext.Current.CancellationToken);
+        var captured = Assert.Single(observation.Snapshot);
+        Assert.Equal(SemanticStartupPhase.CaptureSnapshots, captured.Phase);
+        Assert.Equal(SemanticStartupPhaseState.Completed, captured.State);
+        Assert.False(coordinator.IsCurrent(repository.SessionId));
+
+        await coordinator.CompleteBindingAsync(request, generation, TestContext.Current.CancellationToken);
+        Assert.Equal(
+            [
+            SemanticStartupPhase.CaptureSnapshots,
+            SemanticStartupPhase.StartMonitoring,
+            SemanticStartupPhase.ReadDocuments,
+            SemanticStartupPhase.ReconcileSnapshots,
+            ],
+            observation.Snapshot.Select(item => item.Phase));
+        Assert.All(observation.Snapshot, item => Assert.Equal(SemanticStartupPhaseState.Completed, item.State));
+        Assert.Equal(captured.Elapsed, observation.Snapshot[0].Elapsed);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+    }
+
     /// <summary>Derived build outputs stay irrelevant across binding, reload, watcher topology, and admission.</summary>
     [Fact]
     public static async Task GeneratedBuildOutputsNeverCreateRefreshWorkOrWatcherRoots()
@@ -2535,7 +2566,8 @@ public static class SemanticRefreshCoordinatorTests
         bool watchFileSystem = false,
         Func<string, FileSystemWatcher>? watcherFactory = null,
         SemanticRefreshResourceLimits? resourceLimits = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        SemanticStartupProgress? startupProgress = null)
     {
         return new SemanticRefreshCoordinator(
             backend,
@@ -2550,7 +2582,8 @@ public static class SemanticRefreshCoordinatorTests
             pathSafetyValidator: pathSafetyValidator,
             recentHostEchoLifetime: recentHostEchoLifetime,
             watcherFactory: watcherFactory,
-            resourceLimits: resourceLimits);
+            resourceLimits: resourceLimits,
+            startupProgress: startupProgress);
     }
 
     private static string Hash(string text)

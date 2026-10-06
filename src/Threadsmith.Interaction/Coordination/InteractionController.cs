@@ -7,7 +7,7 @@ public class InteractionController
 {
     private readonly Lock _gate = new();
     private readonly InteractionPresenter _presenter;
-    private readonly Func<string, Task, CancellationToken, Task>? _presentProgressAsync;
+    private readonly Func<string, Func<CancellationToken, Task>, CancellationToken, Task>? _presentProgressAsync;
     private readonly Func<string, CancellationToken, Task>? _presentRememberedSolutionAsync;
     private RunId? _activeRunId;
     private WorkspaceBaseline? _baseline;
@@ -24,7 +24,7 @@ public class InteractionController
     /// <summary>Initializes a new instance of the <see cref="InteractionController"/> class with repository progress presentation.</summary>
     public InteractionController(
         InteractionPresenter presenter,
-        Func<string, Task, CancellationToken, Task>? presentProgressAsync,
+        Func<string, Func<CancellationToken, Task>, CancellationToken, Task>? presentProgressAsync,
         Func<string, CancellationToken, Task>? presentRememberedSolutionAsync = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
@@ -145,10 +145,12 @@ public class InteractionController
         var submission = _presenter.SubmitAsync(sessionId, text, cancellationToken);
         if (_presentProgressAsync is not null && !submission.IsCompleted)
         {
+#pragma warning disable VSTHRD003 // This callback presents the admission task started and awaited by this method.
             await _presentProgressAsync(
                 "Preparing request — waiting for semantic freshness / admission...",
-                submission,
+                _ => submission,
                 cancellationToken);
+#pragma warning restore VSTHRD003
         }
 
         var runId = await submission;
@@ -476,16 +478,10 @@ public class InteractionController
             return new InteractionRepositoryOpenWorkflowResult(null, null);
         }
 
-        var openOperation = OpenRepositoryAsync(
-            repositoryPath,
-            effectiveRequest.Value,
+        var opened = await RunWithProgressAsync(
+            "Opening repository...",
+            token => OpenRepositoryAsync(repositoryPath, effectiveRequest.Value, token),
             cancellationToken);
-        if (_presentProgressAsync is not null)
-        {
-            await _presentProgressAsync("Opening repository...", openOperation, cancellationToken);
-        }
-
-        var opened = await openOperation;
         if (opened.Trust.Level < RepositoryTrustLevel.TrustedRead
             || opened.SolutionCandidates.Count == 0)
         {
@@ -509,18 +505,11 @@ public class InteractionController
             await _presentRememberedSolutionAsync(solutionPath, cancellationToken);
         }
 
-        var solutionOperation = SelectSolutionAsync(
-            opened.WorkspaceId,
-            solutionPath,
+        var isProject = Path.GetExtension(solutionPath).EndsWith("proj", StringComparison.OrdinalIgnoreCase);
+        var solution = await RunWithProgressAsync(
+            isProject ? "Loading project ..." : "Loading solution ...",
+            token => SelectSolutionAsync(opened.WorkspaceId, solutionPath, token),
             cancellationToken);
-        if (_presentProgressAsync is not null)
-        {
-            var isProject = Path.GetExtension(solutionPath).EndsWith("proj", StringComparison.OrdinalIgnoreCase);
-            var label = isProject ? "Loading project ..." : "Loading solution ...";
-            await _presentProgressAsync(label, solutionOperation, cancellationToken);
-        }
-
-        var solution = await solutionOperation;
         return new InteractionRepositoryOpenWorkflowResult(opened, solution, useRememberedSolution);
     }
 
@@ -797,6 +786,18 @@ public class InteractionController
         }
 
         return _presenter.RenderAsync(sessionId, cancellationToken);
+    }
+
+    private async Task<T> RunWithProgressAsync<T>(string label, Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    {
+        if (_presentProgressAsync is null)
+        {
+            return await operation(cancellationToken);
+        }
+
+        Task<T>? pending = null;
+        await _presentProgressAsync(label, token => pending = operation(token), cancellationToken);
+        return await (pending ?? throw new InvalidOperationException("The progress presenter did not start its operation."));
     }
 
     private (SessionId SessionId, RunId RunId) GetActiveRunIdentity()

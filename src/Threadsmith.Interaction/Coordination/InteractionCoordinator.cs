@@ -81,6 +81,7 @@ public sealed partial class InteractionCoordinator
     private readonly WebFetchAuthorizationAuthority? _webFetchAuthorization;
     private readonly DirectFetchApprovalPromptRouter? _directFetchApprovalPrompt;
     private readonly IFrontendCommandContribution? _frontendCommands;
+    private readonly SemanticStartupProgress? _semanticStartupProgress;
 
     /// <summary>Initializes a new instance of the <see cref="InteractionCoordinator" /> class.</summary>
     /// <param name="presenter">Command and projection adapter.</param>
@@ -109,6 +110,7 @@ public sealed partial class InteractionCoordinator
     /// <param name="standingPreferenceWarningThresholdProvider">Live repository-specific preference warning threshold.</param>
     /// <param name="agentDisplay">Bounded transient child display stream.</param>
     /// <param name="agentNames">Validated immutable child name catalog.</param>
+    /// <param name="semanticStartupProgress">Transient startup timings owned by semantic operations.</param>
     public InteractionCoordinator(
         InteractionPresenter presenter,
         IDomainEventStream events,
@@ -135,7 +137,8 @@ public sealed partial class InteractionCoordinator
         int standingPreferenceWarningThreshold = 3,
         Func<string, int>? standingPreferenceWarningThresholdProvider = null,
         AgentDisplayStream? agentDisplay = null,
-        AgentNameCatalog? agentNames = null)
+        AgentNameCatalog? agentNames = null,
+        SemanticStartupProgress? semanticStartupProgress = null)
     {
         ArgumentNullException.ThrowIfNull(presenter);
         ArgumentNullException.ThrowIfNull(events);
@@ -164,6 +167,7 @@ public sealed partial class InteractionCoordinator
         _webFetchAuthorization = webFetchAuthorization;
         _directFetchApprovalPrompt = directFetchApprovalPrompt;
         _frontendCommands = frontendCommands;
+        _semanticStartupProgress = semanticStartupProgress;
         _standingPreferenceWarningThreshold = standingPreferenceWarningThreshold;
         _standingPreferenceWarningThresholdProvider = standingPreferenceWarningThresholdProvider;
     }
@@ -193,7 +197,7 @@ public sealed partial class InteractionCoordinator
                 starting && (label.StartsWith("Loading solution", StringComparison.Ordinal)
                     || label.StartsWith("Loading project", StringComparison.Ordinal)) && _surface.Surface is IStartupProgressSurface startup
                     ? startup.ShowStartupAsync(StartupBanner, label, operation, token)
-                    : _surface.ShowStatusUntilAsync(label, operation, token),
+                    : _surface.ShowStatusUntilAsync(label, operation(token), token),
             (solutionPath, token) =>
                 starting && _surface.Surface is IStartupProgressSurface startup
                     ? startup.SetStartupDetailsAsync([$"Remembered: {Path.GetFileName(solutionPath)}"], token)
@@ -242,6 +246,14 @@ public sealed partial class InteractionCoordinator
         });
         var semanticCompletion = new TaskCompletionSource<SemanticLoadCompleted>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        using var startupProgress = _surface.Surface is IStartupProgressSurface
+            ? _semanticStartupProgress?.Observe(sessionId)
+            : null;
+        if (_surface.Surface is IStartupProgressSurface startupSurface && startupProgress is not null)
+        {
+            await startupSurface.SetStartupProgressAsync(() => startupProgress.Snapshot, lifetime.Token);
+        }
+
         await using var semanticCompletionSubscription = _events.Subscribe((domainEvent, _) =>
         {
             if (domainEvent is SemanticLoadCompleted completion
@@ -393,6 +405,12 @@ public sealed partial class InteractionCoordinator
         }
 
         starting = false;
+        startupProgress?.Dispose();
+        if (_surface.Surface is IStartupProgressSurface completedStartup)
+        {
+            await completedStartup.SetStartupProgressAsync(null, lifetime.Token);
+        }
+
         var startupCompletedAt = DateTimeOffset.UtcNow;
         TaskCompletionSource? activityCompletion = null;
         TaskCompletionSource<string?>? renderedRunCompletion = null;
@@ -981,6 +999,12 @@ public sealed partial class InteractionCoordinator
                             lifetime.Token);
                     }
 
+                    continue;
+                }
+
+                if (string.Equals(commandText, "/tips", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _surface.WriteAsync(TipsCatalog.FormatBullets(), PresentationTextRole.Default, lifetime.Token);
                     continue;
                 }
 

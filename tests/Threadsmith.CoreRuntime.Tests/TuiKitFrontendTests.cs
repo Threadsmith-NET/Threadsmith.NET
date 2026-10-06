@@ -182,18 +182,17 @@ public static class TuiKitFrontendTests
         Assert.StartsWith("X", lines[^1], StringComparison.Ordinal);
     }
 
-    /// <summary>Every modal keeps its heading flush to the top, a blank row below it, and side and bottom padding.</summary>
+    /// <summary>Non-startup modals keep their heading spacing and side and bottom padding.</summary>
     [Theory]
     [InlineData(40, 12)]
     [InlineData(80, 24)]
     [InlineData(120, 35)]
-    public static void AllModalsKeepHeadingSpacingAndInteriorPadding(int width, int height)
+    public static void NonStartupModalsKeepHeadingSpacingAndInteriorPadding(int width, int height)
     {
         var size = new Size(width, height);
         var discovery = new TuiKitCommandDiscovery(Threadsmith.Interaction.Commands.InteractiveCommandCatalog.All, _ => { });
         TUIKit.Modals.Modal[] modals =
         [
-            new StartupModal("Logo", "Loading", [], () => { }, _ => CellStyle.Default),
             new ChoiceModal("Models", [new("one", "Model one")]),
             new ToggleModal(new InteractionToggleRequest("Tools", [new("one", "Tool one", "Tools", true)]), _ => CellStyle.Default, () => { }, () => { }),
             new KeyHelpModal("Help", ["F7 focuses output"]),

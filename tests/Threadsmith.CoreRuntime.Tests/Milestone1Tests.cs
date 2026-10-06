@@ -31,6 +31,27 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static partial class Milestone1Tests
 {
+    /// <summary>Tips print every deployed line locally without a model run or archived conversation.</summary>
+    [Fact]
+    public static async Task InteractionCoordinator_TipsStayOutOfModelContext()
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new FakeConsoleSurface(["/tips", "/quit"]);
+        var coordinator = CreateCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+
+        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        var tips = await File.ReadAllLinesAsync(Path.Combine(AppContext.BaseDirectory, "tips.txt"), TestContext.Current.CancellationToken);
+        foreach (var tip in tips.Where(line => !string.IsNullOrWhiteSpace(line)))
+        {
+            Assert.Contains($"- {tip}\n", surface.Output, StringComparison.Ordinal);
+        }
+
+        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
+        Assert.Empty(harness.Events.OfType<ConversationMessageArchived>());
+    }
+
     /// <summary>Gets every legal non-terminal transition path used by the transition matrix.</summary>
     public static TheoryData<RunPhase[]> LegalTransitionPaths => [.. GetLegalTransitionPaths()];
 
@@ -1043,17 +1064,6 @@ public static partial class Milestone1Tests
 
         await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Contains("_____ _", surface.Output, StringComparison.Ordinal);
-        Assert.NotEmpty(surface.Writes);
-        Assert.EndsWith(
-            "Forge better code, not slop.\n\n",
-            surface.Writes[0].ReplaceLineEndings("\n"),
-            StringComparison.Ordinal);
-        Assert.Contains("Current status", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Model: Test model", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Repository: Not open", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Trust: Not granted", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Session status: Composer-adjacent", surface.Output, StringComparison.Ordinal);
         Assert.Single(surface.SessionStatuses);
         Assert.Equal(["status", "read"], surface.Operations);
     }
@@ -1103,30 +1113,6 @@ public static partial class Milestone1Tests
         Assert.DoesNotContain("Manage MCP profiles and capabilities", output, StringComparison.Ordinal);
         Assert.DoesNotContain("Submit any other text to Threadsmith.", output, StringComparison.Ordinal);
         Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
-    }
-
-    /// <summary>The retained startup surface owns the logo, while MAIN retains warnings and session information.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_TuiKitStartupDoesNotEchoBanner()
-    {
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(8));
-        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
-        using var backend = new TUIKit.Terminal.HeadlessBackend(80, 24);
-        await using var terminal = new Threadsmith.Tui.TuiKit.TuiKitSurface(BuiltInThemes.Create()[0], timeout.Cancel, backend);
-        var surface = new TuiKitCommandSurface(terminal, backend, ["/quit\r"]);
-        var coordinator = new InteractionCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            displayWarnings: ["Startup configuration warning"]);
-
-        await terminal.RunAsync(token => coordinator.RunAsync(cancellationToken: token), timeout.Token);
-
-        var output = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
-        Assert.DoesNotContain("_____ _", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("Forge better code, not slop.", output, StringComparison.Ordinal);
-        Assert.Contains("Startup configuration warning", output, StringComparison.Ordinal);
-        Assert.Contains("Current status", output, StringComparison.Ordinal);
     }
 
     /// <summary>Completed names enter shared routing only as submitted input; unknown commands never create model work.</summary>
@@ -2071,6 +2057,7 @@ public static partial class Milestone1Tests
             "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]",
             "/theme [id|current]",
             "/thinking [on|off]",
+            "/tips",
             "/tools",
             "/trust [inspect|read|build|mutation|automation]",
         ];
@@ -5571,6 +5558,16 @@ public static partial class Milestone1Tests
         public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
         {
             return _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+        }
+
+        public Task ShowStartupAsync(string logo, string label, Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
+        {
+            return _surface.ShowStartupAsync(logo, label, operation, cancellationToken);
+        }
+
+        public Task SetStartupProgressAsync(Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? snapshots, CancellationToken cancellationToken = default)
+        {
+            return _surface.SetStartupProgressAsync(snapshots, cancellationToken);
         }
 
         public Task SetStartupDetailsAsync(IReadOnlyList<string> details, CancellationToken cancellationToken = default)

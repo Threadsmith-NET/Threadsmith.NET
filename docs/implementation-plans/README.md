@@ -173,6 +173,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-semantic-refresh-generated-build-input-churn.md` | Ignore derived MSBuild editor-config churn without weakening semantic freshness |
 | Maintenance | `maintenance-model-output-coalescing.md` | Bound main-chat text batching through the shared durable event stream |
 | Maintenance | `maintenance-semantic-validation-reconciliation.md` | Reuse proven semantic snapshots and bound validation reconciliation work |
+| Maintenance | [maintenance-semantic-startup-progress.md](maintenance-semantic-startup-progress.md) | Early startup presentation and timed semantic initialization status |
 
 ## Update discipline
 

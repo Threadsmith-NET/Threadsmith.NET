@@ -359,6 +359,9 @@ internal static class ShellRunner
 /// <summary>Collects immutable shell dependencies produced by earlier startup phases.</summary>
 internal sealed record ShellRunContext
 {
+    /// <summary>Gets transient timings for the interactive startup projection.</summary>
+    internal SemanticStartupProgress? SemanticStartupProgress { get; init; }
+
     /// <summary>Gets parsed host command-line intent.</summary>
     internal required CommandLineOptions CommandLine { get; init; }
 

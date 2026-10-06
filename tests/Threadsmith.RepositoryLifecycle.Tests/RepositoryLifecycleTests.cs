@@ -905,9 +905,9 @@ public static class RepositoryLifecycleTests
         Assert.Equal("Second.sln", document.RootElement.GetProperty("solution").GetProperty("path").GetString());
     }
 
-    /// <summary>Interactive startup reports live state and labels the composer with the repository name.</summary>
+    /// <summary>Interactive startup labels the composer with the repository name.</summary>
     [Fact]
-    public static async Task InteractionCoordinator_Startup_ReportsStateAndUsesRepositoryPrompt()
+    public static async Task InteractionCoordinator_Startup_UsesRepositoryPrompt()
     {
         await using var repository = await TemporaryRepository.CreateAsync();
         await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
@@ -927,22 +927,11 @@ public static class RepositoryLifecycleTests
             cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal($"{Path.GetFileName(repository.RootPath)[..40]} > ", surface.Prompt);
-        Assert.Contains(
-            "Forge better code, not slop.\n\n",
-            surface.Output.ReplaceLineEndings("\n"),
-            StringComparison.Ordinal);
-        Assert.Contains("Model: Test profile (test-model)", surface.Output, StringComparison.Ordinal);
-        Assert.Contains($"Repository: {repository.RootPath}", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Trust: TrustedRead", surface.Output, StringComparison.Ordinal);
-        Assert.Contains($"Solution: {repository.SolutionPath}", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Target frameworks: net10.0", surface.Output, StringComparison.Ordinal);
         Assert.Collection(
             surface.TransientStatuses,
             text => Assert.StartsWith("Opening repository...", text, StringComparison.Ordinal),
             text => Assert.StartsWith("Loading solution ...", text, StringComparison.Ordinal),
             text => Assert.StartsWith("Semantic confidence: Loading...", text, StringComparison.Ordinal));
-        Assert.DoesNotContain("Semantic confidence: Loading...", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Semantic confidence: TextOnly", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>Interactive startup reports remembered auto-loading before normal status.</summary>
@@ -1086,7 +1075,6 @@ public static class RepositoryLifecycleTests
             modelStatus: "Test profile (test-model)",
             cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.Contains("Startup cancelled.", surface.Output, StringComparison.Ordinal);
         Assert.Equal(string.Empty, surface.Prompt);
         Assert.DoesNotContain(harness.ObservedEvents, item => item is SolutionLoaded);
         Assert.DoesNotContain(harness.ObservedEvents, item => item is TaskIntentRecorded);

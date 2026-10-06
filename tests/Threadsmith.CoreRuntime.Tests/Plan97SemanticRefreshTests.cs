@@ -21,7 +21,7 @@ public static class Plan97SemanticRefreshTests
         {
             Assert.Contains("Preparing request", label, StringComparison.Ordinal);
             presented.TrySetResult();
-            await operation.WaitAsync(token);
+            await operation(token).WaitAsync(token);
         });
         await controller.OpenAsync("refresh-test", TestContext.Current.CancellationToken);
         var submission = controller.SubmitAsync("review", TestContext.Current.CancellationToken);

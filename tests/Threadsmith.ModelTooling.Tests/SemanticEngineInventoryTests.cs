@@ -15,8 +15,19 @@ public static class SemanticEngineInventoryTests
     public static async Task InventoryIsImmutableAndTracksPublishedSolutionMembership()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
+        // MSBuild can canonicalize reference paths through macOS's /var -> /private/var
+        // link. Use one physical root for the fixture and its expected membership.
+        var temporaryPath = Path.GetFullPath(Path.GetTempPath());
+        var physicalTemporaryPath = Path.GetPathRoot(temporaryPath)!;
+        foreach (var segment in temporaryPath[physicalTemporaryPath.Length..]
+            .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var directory = new DirectoryInfo(Path.Combine(physicalTemporaryPath, segment));
+            physicalTemporaryPath = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+        }
+
         var root = Directory.CreateDirectory(Path.Combine(
-            Path.GetTempPath(), "threadsmith-inventory", Guid.NewGuid().ToString("N"))).FullName;
+            physicalTemporaryPath, "threadsmith-inventory", Guid.NewGuid().ToString("N"))).FullName;
         try
         {
             var projectPath = Path.Combine(root, "App.csproj");
@@ -50,7 +61,7 @@ public static class SemanticEngineInventoryTests
             var empty = engine.GetRefreshInventory();
             var request = new SemanticLoadRequest(
                 SessionId.New(), WorkspaceId.New(), root, projectPath, RepositoryTrustLevel.TrustedBuild);
-            await engine.LoadAsync(request, cancellationToken);
+            var load = await engine.LoadAsync(request, cancellationToken);
             var inventory = engine.GetRefreshInventory();
 
             Assert.NotSame(empty, inventory);
@@ -58,7 +69,10 @@ public static class SemanticEngineInventoryTests
             Assert.Contains(explicitSourcePath, inventory.SourceDocuments);
             Assert.Contains(additionalPath, inventory.AdditionalDocuments);
             Assert.Contains(configPath, inventory.AnalyzerConfigDocuments);
-            Assert.Contains(referencePath, inventory.FullReloadInputs);
+            Assert.True(
+                inventory.FullReloadInputs.Contains(referencePath),
+                $"Expected reference '{referencePath}' in [{string.Join(", ", inventory.FullReloadInputs)}]. "
+                + $"Load diagnostics: {string.Join("; ", load.Diagnostics)}");
             Assert.IsType<FrozenSet<string>>(inventory.SourceDocuments, exactMatch: false);
             Assert.IsType<FrozenSet<string>>(inventory.AdditionalDocuments, exactMatch: false);
             Assert.IsType<FrozenSet<string>>(inventory.AnalyzerConfigDocuments, exactMatch: false);

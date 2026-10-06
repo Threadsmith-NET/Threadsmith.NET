@@ -170,6 +170,111 @@ public sealed partial class SourceEditApplicationTests
         Assert.Contains(analysis.Diagnostics, item => item.Code == "CS0246" && item.File == "Added.cs" && item.Origin == "unknown");
     }
 
+    /// <summary>Real report lifecycle edits bypass both advisory diagnostics and semantic refresh.</summary>
+    [Theory]
+    [InlineData("migration.cypher")]
+    [InlineData("notes.md")]
+    [InlineData("settings.json")]
+    public async Task UnregisteredFileLifecycleDoesNotRunSemanticWork(string name)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        SemanticEngineRegistry? createdEngines = null;
+        SemanticRefreshCoordinator? createdRefresh = null;
+        await using var fixture = await EditFixture.CreateAsync(ct, events =>
+        {
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance);
+            return createdRefresh;
+        });
+        await using var engines = createdEngines ?? throw new InvalidOperationException("Missing semantic registry.");
+        await using var refresh = createdRefresh ?? throw new InvalidOperationException("Missing refresh owner.");
+        var project = Path.Combine(fixture.Repository, "Example.csproj");
+        await File.WriteAllTextAsync(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup></Project>", ct);
+        var load = new SemanticLoadRequest(fixture.SessionId, fixture.WorkspaceId, fixture.Repository, project, RepositoryTrustLevel.TrustedMutation);
+        await engines.LoadAsync(load, ct);
+        await refresh.BindAsync(load, ct);
+        await refresh.EnsureCurrentAsync(fixture.SessionId, SemanticRefreshReason.HostMutation, ct);
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = fixture.Events.Subscribe((item, _) =>
+        {
+            observed.Enqueue(item);
+            return Task.CompletedTask;
+        });
+        var edits = fixture.CreateApplication(analyzer: engines, refresh: refresh);
+        var moved = "moved-" + name;
+        foreach (var proposal in new MutationProposalChange[]
+        {
+            new CreateFileMutationProposal { RelativePath = name, Content = new() { Text = "before" } },
+            new ReplaceTextMutationProposal { RelativePath = name, ExpectedText = "before", ReplacementText = "after" },
+            new MoveFileMutationProposal { RelativePath = name, DestinationRelativePath = moved },
+            new DeleteFileMutationProposal { RelativePath = moved },
+        })
+        {
+            var command = fixture.Replace("Example", "Unused", false);
+            command = command with { Instructions = command.Instructions with { Mutations = [proposal] } };
+            var receipt = await edits.HandleAsync(command, ct);
+            Assert.Equal(SourceEditStatus.Applied, receipt.Status);
+            Assert.Null(receipt.Analysis);
+            Assert.False((await refresh.EnsureCurrentAsync(fixture.SessionId, SemanticRefreshReason.HostMutation, ct)).WasRefreshed);
+        }
+
+        Assert.False(File.Exists(Path.Combine(fixture.Repository, name)));
+        Assert.False(File.Exists(Path.Combine(fixture.Repository, moved)));
+        Assert.DoesNotContain(observed, item => item is SemanticRefreshStarted or SemanticCheckStarted);
+    }
+
+    /// <summary>A JSON additional file remains authoritative through the real edit path.</summary>
+    [Fact]
+    public async Task RegisteredJsonInputRefreshesCompilation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        SemanticEngineRegistry? createdEngines = null;
+        SemanticRefreshCoordinator? createdRefresh = null;
+        await using var fixture = await EditFixture.CreateAsync(ct, events =>
+        {
+            createdEngines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
+            createdRefresh = new SemanticRefreshCoordinator(createdEngines, events, NullLogger<SemanticRefreshCoordinator>.Instance);
+            return createdRefresh;
+        });
+        await using var engines = createdEngines ?? throw new InvalidOperationException("Missing semantic registry.");
+        await using var refresh = createdRefresh ?? throw new InvalidOperationException("Missing refresh owner.");
+        var command = fixture.Replace("Example", "Unused", false);
+        command = command with
+        {
+            Instructions = command.Instructions with
+            {
+                Mutations = [new CreateFileMutationProposal { RelativePath = "settings.json", Content = new() { Text = "{}" } }],
+            },
+        };
+        Assert.Equal(SourceEditStatus.Applied, (await fixture.Application.HandleAsync(command, ct)).Status);
+        var project = Path.Combine(fixture.Repository, "Example.csproj");
+        await File.WriteAllTextAsync(project, "<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><AdditionalFiles Include=\"settings.json\" /></ItemGroup></Project>", ct);
+        var load = new SemanticLoadRequest(fixture.SessionId, fixture.WorkspaceId, fixture.Repository, project, RepositoryTrustLevel.TrustedMutation);
+        await engines.LoadAsync(load, ct);
+        await refresh.BindAsync(load, ct);
+        await refresh.EnsureCurrentAsync(fixture.SessionId, SemanticRefreshReason.HostMutation, ct);
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = fixture.Events.Subscribe((item, _) =>
+        {
+            observed.Enqueue(item);
+            return Task.CompletedTask;
+        });
+        var edits = fixture.CreateApplication(analyzer: engines, refresh: refresh);
+        command = command with
+        {
+            EffectId = Guid.NewGuid(),
+            Instructions = command.Instructions with
+            {
+                Mutations = [new ReplaceTextMutationProposal { RelativePath = "settings.json", ExpectedText = "{}", ReplacementText = "{ \"value\": 1 }" }],
+            },
+        };
+        var receipt = await edits.HandleAsync(command, ct);
+        Assert.Equal(SourceEditStatus.Applied, receipt.Status);
+        Assert.NotNull(receipt.Analysis);
+        await refresh.EnsureCurrentAsync(fixture.SessionId, SemanticRefreshReason.HostMutation, ct);
+        Assert.Contains(observed, item => item is SemanticRefreshStarted { Mode: SemanticRefreshMode.Full });
+    }
+
     private sealed class CompletingAnalyzer : ISourceEditAnalyzer
     {
         private readonly ISourceEditAnalyzer _inner;
@@ -181,7 +286,9 @@ public sealed partial class SourceEditApplicationTests
             _events = events;
         }
 
-        public async Task<SourceEditAnalysis> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
+        public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot) => _inner.HasSemanticInputs(workspaceId, repositoryPath, snapshot);
+
+        public async Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
         {
             var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             await using var subscription = _events.Subscribe((item, _) =>
@@ -194,7 +301,11 @@ public sealed partial class SourceEditApplicationTests
                 return Task.CompletedTask;
             });
             var admitted = await _inner.AnalyzeCandidateAsync(command, repositoryPath, snapshot, TimeSpan.Zero, cancellationToken);
-            await completed.Task.WaitAsync(cancellationToken);
+            if (admitted is not null)
+            {
+                await completed.Task.WaitAsync(cancellationToken);
+            }
+
             return admitted;
         }
 

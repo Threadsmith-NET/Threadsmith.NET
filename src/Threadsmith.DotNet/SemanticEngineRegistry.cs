@@ -59,7 +59,13 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
     }
 
     /// <inheritdoc />
-    public Task<SourceEditAnalysis> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
+    public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
+    {
+        return GetEngine(workspaceId).HasSemanticInputs(repositoryPath, snapshot);
+    }
+
+    /// <inheritdoc />
+    public Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
     {
         return GetEngine(command.WorkspaceId).AnalyzeCandidateAsync(command, repositoryPath, snapshot, immediateAllowance, cancellationToken);
     }

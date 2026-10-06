@@ -59,8 +59,11 @@ public sealed record SourceEditAnalysis
 /// <summary>Existing semantic owner supplies advisory analysis of exact authorized writer snapshots.</summary>
 public interface ISourceEditAnalyzer
 {
-    /// <summary>Admits one candidate and waits only the supplied immediate allowance.</summary>
-    Task<SourceEditAnalysis> AnalyzeCandidateAsync(
+    /// <summary>Returns whether any endpoint affects known compiler inputs.</summary>
+    bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot);
+
+    /// <summary>Admits one candidate and waits only the supplied immediate allowance; returns null for unrelated inputs.</summary>
+    Task<SourceEditAnalysis?> AnalyzeCandidateAsync(
         ApplySourceEditCommand command,
         string repositoryPath,
         MutationEffectSnapshot snapshot,

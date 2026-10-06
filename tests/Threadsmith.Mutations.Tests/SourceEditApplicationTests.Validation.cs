@@ -260,11 +260,13 @@ public sealed partial class SourceEditApplicationTests
             _omissions = omissions;
         }
 
-        public Task<SourceEditAnalysis> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
+        public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot) => true;
+
+        public Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             _analysis = new() { EffectId = command.EffectId, CurrentErrors = 1, Omissions = _omissions };
-            return Task.FromResult(_analysis);
+            return Task.FromResult<SourceEditAnalysis?>(_analysis);
         }
 
         public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId) => _analysis;

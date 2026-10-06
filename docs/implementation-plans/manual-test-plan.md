@@ -38,6 +38,9 @@ Expected: prompt assets are complete, exact, immutable for the process lifetime,
 3. Confirm admitted earlier queries retain their snapshot and stale results are discarded.
 4. Change project/generator inputs and verify visible graph refresh and degraded/unavailable coverage on failure.
 5. Confirm host-write attribution avoids duplicate reloads while independent external changes still invalidate.
+6. Externally and through `edit_source`, create, edit, rename, and delete ordinary `.cypher`, Markdown, JSON, and report files. Confirm no semantic refresh, compiler diagnostic activity, or admission wait. In a mixed source/report edit, confirm source feedback and candidate promotion still work.
+7. Explicitly include a JSON file as `AdditionalFiles`, a custom analyzer configuration, and a local reference. Change each and confirm full refresh, including registered inputs in normally ignored directories. Ordinary JSON remains unrelated.
+8. Create a folder containing only reports and confirm no compiler work. Add C# source inside that folder and confirm membership refresh. Repeat source moves/deletions and verify stale symbols disappear.
 
 ## MTP-254 — Model-callable roles, fork/join, and policy narrowing
 

@@ -270,6 +270,61 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(1, backend.RefreshCount);
     }
 
+    /// <summary>An empty directory created during failed-watcher handoff gains coverage without extra compiler work.</summary>
+    [Fact]
+    public static async Task ObserveFileSystemWatcherError_EmptyDirectoryDuringHandoffGainsCoverage()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var completion = new TaskCompletionSource<SemanticRefreshCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = events.Subscribe((domainEvent, _) =>
+        {
+            if (domainEvent is SemanticRefreshCompleted completed && completed.Reason == SemanticRefreshReason.ExternalChange)
+            {
+                completion.TrySetResult(completed);
+            }
+
+            return Task.CompletedTask;
+        });
+        var folder = Path.Combine(repository.Root, "handoff");
+        var watchers = new ConcurrentDictionary<string, FileSystemWatcher>(PathComparer);
+        var createDuringHandoff = false;
+        FileSystemWatcher CreateWatcher(string path)
+        {
+            if (createDuringHandoff)
+            {
+                createDuringHandoff = false;
+                Directory.CreateDirectory(folder);
+            }
+
+            var watcher = new FileSystemWatcher(path);
+            watchers[path] = watcher;
+            return watcher;
+        }
+
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), ct);
+        foreach (var watcher in watchers.Values)
+        {
+            watcher.EnableRaisingEvents = false;
+        }
+
+        // The old watcher cannot deliver the create, and the replacement roots have already been captured.
+        createDuringHandoff = true;
+        coordinator.ObserveFileSystemWatcherError(repository.SessionId);
+        await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct);
+        Assert.True(watchers.TryGetValue(folder, out var installed));
+        Assert.True(installed.EnableRaisingEvents);
+        Assert.Equal(1, backend.RefreshCount);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+
+        // Exercise native monitoring; injecting a notification would hide missing coverage.
+        await File.WriteAllTextAsync(Path.Combine(folder, "New.cs"), "class New { }", ct);
+        Assert.Equal(SemanticRefreshMode.Full, (await completion.Task.WaitAsync(ct)).Mode);
+    }
+
     /// <summary>Watcher recovery rebuilds monitoring before accepting later physical edits.</summary>
     [Fact]
     public static async Task ObserveFileSystemWatcherError_RestartsProductionWatcher()
@@ -1005,9 +1060,9 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(0, coordinator.GetActiveHostMutationCount(repository.SessionId));
     }
 
-    /// <summary>A host-created wildcard candidate forces membership reevaluation without a watcher event.</summary>
+    /// <summary>A host-created unrelated input does not request semantic work.</summary>
     [Fact]
-    public static async Task CompleteExpectedWritesAsync_HostCreatedCustomFileForcesFullRefresh()
+    public static async Task CompleteExpectedWritesAsync_HostCreatedUnregisteredFileDoesNotRefresh()
     {
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
@@ -1033,9 +1088,8 @@ public static class SemanticRefreshCoordinatorTests
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
 
-        Assert.True(result.WasRefreshed);
-        Assert.Equal(SemanticRefreshMode.Full, result.Mode);
-        Assert.Equal(SemanticRefreshReason.HostMutation, result.Reason);
+        Assert.False(result.WasRefreshed);
+        Assert.Equal(0, backend.RefreshCount);
     }
 
     /// <summary>A delayed create echo survives an intervening full refresh without hiding later content.</summary>
@@ -1054,20 +1108,20 @@ public static class SemanticRefreshCoordinatorTests
         await using var coordinator = CreateCoordinator(backend, events);
         await coordinator.BindAsync(repository.CreateRequest());
         const string hostContent = "host semantic input";
-        var createdPath = Path.Combine(repository.Root, "generated.input");
+        var createdPath = Path.Combine(repository.Root, "Generated.cs");
         var registration = Assert.IsType<SemanticHostMutationRegistration>(
             await coordinator.RegisterExpectedWritesAsync(
                 repository.SessionId,
                 repository.WorkspaceId,
                 MutationSetId.New(),
                 [new SemanticHostWriteExpectation(
-                    "generated.input",
+                    "Generated.cs",
                     Hash(hostContent),
                     AllowMissingTransition: false,
                     ExistedBefore: false)]));
 
         await File.WriteAllTextAsync(createdPath, hostContent);
-        await coordinator.CompleteExpectedWritesAsync(registration, ["generated.input"]);
+        await coordinator.CompleteExpectedWritesAsync(registration, ["Generated.cs"]);
         var hostResult = await coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
@@ -1117,7 +1171,7 @@ public static class SemanticRefreshCoordinatorTests
     public static async Task CompleteExpectedWritesAsync_DelayedDeletedEchoSuppressesOnlyMatchingTombstone()
     {
         using var repository = new TemporaryRepository();
-        var deletedPath = Path.Combine(repository.Root, "removed.input");
+        var deletedPath = Path.Combine(repository.Root, "Removed.cs");
         await File.WriteAllTextAsync(deletedPath, "original semantic input");
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<IDomainEvent>();
@@ -1135,13 +1189,13 @@ public static class SemanticRefreshCoordinatorTests
                 repository.WorkspaceId,
                 MutationSetId.New(),
                 [new SemanticHostWriteExpectation(
-                    "removed.input",
+                    "Removed.cs",
                     "missing",
                     AllowMissingTransition: true,
                     ExistedBefore: true)]));
 
         File.Delete(deletedPath);
-        await coordinator.CompleteExpectedWritesAsync(registration, ["removed.input"]);
+        await coordinator.CompleteExpectedWritesAsync(registration, ["Removed.cs"]);
         var hostResult = await coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
@@ -1201,20 +1255,20 @@ public static class SemanticRefreshCoordinatorTests
             timeProvider: timeProvider);
         await coordinator.BindAsync(repository.CreateRequest());
         const string hostContent = "expiring host semantic input";
-        var createdPath = Path.Combine(repository.Root, "expiring.input");
+        var createdPath = Path.Combine(repository.Root, "Expiring.cs");
         var registration = Assert.IsType<SemanticHostMutationRegistration>(
             await coordinator.RegisterExpectedWritesAsync(
                 repository.SessionId,
                 repository.WorkspaceId,
                 MutationSetId.New(),
                 [new SemanticHostWriteExpectation(
-                    "expiring.input",
+                    "Expiring.cs",
                     Hash(hostContent),
                     AllowMissingTransition: false,
                     ExistedBefore: false)]));
 
         await File.WriteAllTextAsync(createdPath, hostContent);
-        await coordinator.CompleteExpectedWritesAsync(registration, ["expiring.input"]);
+        await coordinator.CompleteExpectedWritesAsync(registration, ["Expiring.cs"]);
         await coordinator.EnsureCurrentAsync(
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
@@ -1511,6 +1565,7 @@ public static class SemanticRefreshCoordinatorTests
             if (change.Path == directoryPath)
             {
                 Directory.CreateDirectory(directoryPath);
+                await File.WriteAllTextAsync(Path.Combine(directoryPath, "New.cs"), "public class New { }");
             }
             else
             {
@@ -1535,29 +1590,188 @@ public static class SemanticRefreshCoordinatorTests
             backend.Modes);
     }
 
-    /// <summary>A custom-extension lifecycle change remains conservatively full-refresh eligible.</summary>
-    [Fact]
-    public static async Task ObserveChangeAsync_CustomExtensionLifecycleChangeForcesFullRefresh()
+    /// <summary>Unregistered non-code files never dirty semantic state for any lifecycle operation.</summary>
+    [Theory]
+    [InlineData("notes.md")]
+    [InlineData("migration.cypher")]
+    [InlineData("settings.json")]
+    [InlineData("report.txt")]
+    [InlineData("Directory.Build.md")]
+    public static async Task ObserveChangeAsync_UnregisteredFilesDoNotRefresh(string name)
     {
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
         var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
         await using var coordinator = CreateCoordinator(backend, events);
         await coordinator.BindAsync(repository.CreateRequest());
-        var notesPath = Path.Combine(repository.Root, "notes.md");
-        await File.WriteAllTextAsync(notesPath, "not semantic input");
+        var path = Path.Combine(repository.Root, name);
+        await File.WriteAllTextAsync(path, "not semantic input");
+        foreach (var kind in Enum.GetValues<SemanticFileChangeKind>())
+        {
+            await coordinator.ObserveChangeAsync(new SemanticFileChange(
+                repository.SessionId,
+                path,
+                kind,
+                PreviousPath: Path.Combine(repository.Root, "old-" + name)));
+            var result = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission);
+            Assert.False(result.WasRefreshed);
+        }
 
-        await coordinator.ObserveChangeAsync(new SemanticFileChange(
-            repository.SessionId,
-            notesPath,
-            SemanticFileChangeKind.Created));
-        var result = await coordinator.EnsureCurrentAsync(
-            repository.SessionId,
-            SemanticRefreshReason.UserAdmission);
+        Assert.Equal(0, backend.RefreshCount);
+    }
 
+    /// <summary>Unrelated lifecycle bursts reuse a compiler ancestor index, which follows inventory replacement.</summary>
+    [Fact]
+    public static async Task ObserveChangeAsync_UnrelatedLifecycleBurstDoesNotEnumerateInventoryRepeatedly()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var sources = new EnumerationProbeSet([repository.SourcePath]);
+        var additional = new EnumerationProbeSet([Path.Combine(repository.Root, "obj", "settings.json")]);
+        var configs = new EnumerationProbeSet([Path.Combine(repository.Root, "config", ".editorconfig")]);
+        var references = new EnumerationProbeSet([Path.Combine(repository.Root, "bin", "reference.dll")]);
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath)
+        {
+            InventoryOverride = new SemanticRefreshInventory(sources, additional, configs, references),
+        };
+        await using var coordinator = CreateCoordinator(backend, events);
+        await coordinator.BindAsync(repository.CreateRequest(), ct);
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, Path.Combine(repository.Root, "warmup.md"), SemanticFileChangeKind.Created), ct);
+        var enumerations = new[] { sources, additional, configs, references }.Select(set => set.EnumerationCount).ToArray();
+        Assert.All(enumerations, count => Assert.True(count > 0));
+
+        foreach (var kind in new[] { SemanticFileChangeKind.Created, SemanticFileChangeKind.Deleted, SemanticFileChangeKind.Renamed, SemanticFileChangeKind.Uncertain })
+        {
+            for (var i = 0; i < 100; i++)
+            {
+                await coordinator.ObserveChangeAsync(new(repository.SessionId, Path.Combine(repository.Root, $"report-{i}.json"), kind), ct);
+            }
+        }
+
+        Assert.Equal(enumerations, new[] { sources, additional, configs, references }.Select(set => set.EnumerationCount).ToArray());
+        Assert.False((await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct)).WasRefreshed);
+
+        // Missing directories still carry compiler membership, including beneath ignored roots.
+        foreach (var name in new[] { "obj", "config", "bin" })
+        {
+            await coordinator.ObserveChangeAsync(new(repository.SessionId, Path.Combine(repository.Root, name), SemanticFileChangeKind.Deleted), ct);
+            Assert.True((await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct)).WasRefreshed);
+        }
+
+        var replacement = Path.Combine(repository.Root, "replacement", "data.json");
+        backend.InventoryOverride = new SemanticRefreshInventory(
+            new HashSet<string>(PathComparer),
+            new HashSet<string>([replacement], PathComparer),
+            new HashSet<string>(PathComparer),
+            new HashSet<string>(PathComparer));
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, Path.GetDirectoryName(replacement)!, SemanticFileChangeKind.Deleted), ct);
+        Assert.True((await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct)).WasRefreshed);
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, Path.Combine(repository.Root, "obj"), SemanticFileChangeKind.Deleted), ct);
+        Assert.False((await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct)).WasRefreshed);
+    }
+
+    /// <summary>An unrelated new directory gains watcher coverage without semantic work.</summary>
+    [Fact]
+    public static async Task UnrelatedDirectoryMaintainsWatchersWithoutRefresh()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        var watched = new ConcurrentQueue<string>();
+        FileSystemWatcher CreateWatcher(string path)
+        {
+            watched.Enqueue(path);
+            return new FileSystemWatcher(path);
+        }
+
+        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), ct);
+        var folder = Directory.CreateDirectory(Path.Combine(repository.Root, "reports")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(folder, "notes.md"), "not compiler input", ct);
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, folder, SemanticFileChangeKind.Created), ct);
+        Assert.False((await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct)).WasRefreshed);
+        Assert.Contains(folder, watched);
+        Assert.Equal(0, backend.RefreshCount);
+
+        var source = Path.Combine(folder, "New.cs");
+        await File.WriteAllTextAsync(source, "class New { }", ct);
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, source, SemanticFileChangeKind.Created), ct);
+        var result = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct);
         Assert.True(result.WasRefreshed);
         Assert.Equal(SemanticRefreshMode.Full, result.Mode);
-        Assert.Equal(1, backend.RefreshCount);
+    }
+
+    /// <summary>A removed watcher root repairs monitoring without a compiler recovery cycle.</summary>
+    [Theory]
+    [InlineData("reports")]
+    [InlineData("reports.cs")]
+    public static async Task DeletedReportDirectoryWatcherErrorDoesNotRefresh(string name)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var folder = Directory.CreateDirectory(Path.Combine(repository.Root, name)).FullName;
+        var watchers = new ConcurrentDictionary<string, ErrorProbeWatcher>();
+        FileSystemWatcher CreateWatcher(string path)
+        {
+            var watcher = new ErrorProbeWatcher(path);
+            watchers[path] = watcher;
+            return watcher;
+        }
+
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), ct);
+        var deletedWatcher = watchers[folder];
+        Directory.Delete(folder);
+        deletedWatcher.RaiseError();
+        var result = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct);
+        Assert.False(result.WasRefreshed);
+        Assert.Equal(0, backend.RefreshCount);
+        Assert.True(coordinator.IsCurrent(repository.SessionId));
+
+        await File.WriteAllTextAsync(repository.SourcePath, "public class StillWatched { }", ct);
+        await coordinator.ObserveChangeAsync(new(repository.SessionId, repository.SourcePath, SemanticFileChangeKind.Changed), ct);
+        Assert.True((await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct)).WasRefreshed);
+
+        watchers[repository.Root].RaiseError();
+        result = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct);
+        Assert.True(result.WasRefreshed);
+        Assert.Equal(SemanticRefreshReason.Recovery, result.Reason);
+        Assert.Equal(SemanticRefreshMode.Full, result.Mode);
+    }
+
+    /// <summary>Losing an explicit compiler input beneath an ignored watcher root still refreshes.</summary>
+    [Fact]
+    public static async Task DeletedRegisteredInputDirectoryWatcherErrorRefreshes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var repository = new TemporaryRepository();
+        await using var events = new DomainEventStream();
+        var folder = Directory.CreateDirectory(Path.Combine(repository.Root, "obj")).FullName;
+        var additional = Path.Combine(folder, "settings.json");
+        await File.WriteAllTextAsync(additional, "{}", ct);
+        var backend = new TestSemanticRefreshBackend(repository.WorkspaceId, repository.SourcePath);
+        backend.AddAdditionalDocument(repository.WorkspaceId, additional);
+        var watchers = new ConcurrentDictionary<string, ErrorProbeWatcher>();
+        FileSystemWatcher CreateWatcher(string path)
+        {
+            var watcher = new ErrorProbeWatcher(path);
+            watchers[path] = watcher;
+            return watcher;
+        }
+
+        await using var coordinator = CreateCoordinator(backend, events, watchFileSystem: true, watcherFactory: CreateWatcher);
+        await coordinator.BindAsync(repository.CreateRequest(), ct);
+        var removedWatcher = watchers[folder];
+        File.Delete(additional);
+        Directory.Delete(folder);
+        removedWatcher.RaiseError();
+        var result = await coordinator.EnsureCurrentAsync(repository.SessionId, SemanticRefreshReason.UserAdmission, ct);
+        Assert.True(result.WasRefreshed);
+        Assert.Equal(SemanticRefreshMode.Full, result.Mode);
     }
 
     /// <summary>A binary full-reload input uses its raw-byte content identity.</summary>
@@ -1816,9 +2030,9 @@ public static class SemanticRefreshCoordinatorTests
         Assert.Equal(0, backend.RefreshCount);
     }
 
-    /// <summary>A build-output reference remains excluded from semantic refresh.</summary>
+    /// <summary>An explicitly registered reference overrides normal build-output exclusions.</summary>
     [Fact]
-    public static async Task ObserveChangeAsync_BuildOutputReferenceIsIgnored()
+    public static async Task ObserveChangeAsync_RegisteredBuildOutputReferenceRefreshes()
     {
         using var repository = new TemporaryRepository();
         await using var events = new DomainEventStream();
@@ -1839,8 +2053,9 @@ public static class SemanticRefreshCoordinatorTests
             repository.SessionId,
             SemanticRefreshReason.UserAdmission);
 
-        Assert.False(result.WasRefreshed);
-        Assert.Equal(0, backend.RefreshCount);
+        Assert.True(result.WasRefreshed);
+        Assert.Equal(SemanticRefreshMode.Full, result.Mode);
+        Assert.Equal(1, backend.RefreshCount);
     }
 
     /// <summary>Known generated and local-tool directories do not dirty semantic state.</summary>
@@ -2591,6 +2806,26 @@ public static class SemanticRefreshCoordinatorTests
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
     }
 
+    private static StringComparer PathComparer => OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+
+    private sealed class EnumerationProbeSet(IEnumerable<string> paths) : HashSet<string>(paths, PathComparer), IReadOnlySet<string>
+    {
+        public int EnumerationCount { get; private set; }
+
+        IEnumerator<string> IEnumerable<string>.GetEnumerator()
+        {
+            EnumerationCount++;
+            return GetEnumerator();
+        }
+    }
+
+    private sealed class ErrorProbeWatcher(string path) : FileSystemWatcher(path)
+    {
+        public void RaiseError() => OnError(new ErrorEventArgs(new IOException("Synthetic native watcher failure.")));
+    }
+
     private sealed class TemporaryRepository : IDisposable
     {
         public TemporaryRepository(bool useNestedSourcePath = false)
@@ -2662,6 +2897,8 @@ public static class SemanticRefreshCoordinatorTests
         public bool FailRefreshes { get; set; }
 
         public bool InventoryAvailable { get; set; } = true;
+
+        public SemanticRefreshInventory? InventoryOverride { get; set; }
 
         public int PreparationOwnerVersion { get; set; } = 1;
 
@@ -2783,6 +3020,11 @@ public static class SemanticRefreshCoordinatorTests
                 throw new ObjectDisposedException(nameof(SemanticEngineRegistry));
             }
 
+            if (InventoryOverride is not null)
+            {
+                return InventoryOverride;
+            }
+
             if (!InventoryAvailable)
             {
                 return new SemanticRefreshInventory(
@@ -2826,10 +3068,6 @@ public static class SemanticRefreshCoordinatorTests
         {
             return RefreshAsync(workspaceId, SemanticRefreshMode.Full, cancellationToken);
         }
-
-        private static StringComparer PathComparer => OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
 
         private static string Hash(string text)
         {

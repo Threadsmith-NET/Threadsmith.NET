@@ -24,8 +24,30 @@ public sealed partial class SemanticEngine
     /// <summary>Gets aggregate counters without retaining source or model payloads.</summary>
     internal (long DiagnosticPasses, long CandidatePromotions) EditAnalysisStatistics => (Interlocked.Read(ref _editDiagnosticPasses), Interlocked.Read(ref _editCandidatePromotions));
 
+    /// <summary>Checks exact writer endpoints against the shared compiler input policy.</summary>
+    internal bool HasSemanticInputs(string repositoryPath, MutationEffectSnapshot snapshot)
+    {
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            var relevant = false;
+            foreach (var endpoint in snapshot.Endpoints)
+            {
+                var path = Path.GetFullPath(endpoint.RelativePath, repositoryPath);
+                if (!IsPathWithinRoot(path, repositoryPath))
+                {
+                    throw new UnauthorizedAccessException("Candidate source must remain inside its repository.");
+                }
+
+                relevant |= SemanticRefreshPathPolicy.Classify(repositoryPath, path, _refreshInventory) != SemanticInputKind.None;
+            }
+
+            return relevant;
+        }
+    }
+
     /// <summary>Admits exact candidate analysis with bounded immediate observation.</summary>
-    internal async Task<SourceEditAnalysis> AnalyzeCandidateAsync(
+    internal async Task<SourceEditAnalysis?> AnalyzeCandidateAsync(
         ApplySourceEditCommand command,
         string repositoryPath,
         MutationEffectSnapshot snapshot,
@@ -39,6 +61,11 @@ public sealed partial class SemanticEngine
         lock (_gate)
         {
             ObjectDisposedException.ThrowIf(_disposed != 0, this);
+            if (!HasSemanticInputs(repositoryPath, snapshot))
+            {
+                return null;
+            }
+
             var source = _solution;
             if (source is null)
             {
@@ -60,6 +87,10 @@ public sealed partial class SemanticEngine
             // The writer owns exact filename spelling and absence checks. Compiler inputs use
             // filesystem identity, so a case-only move contributes its surviving byte identity once.
             var semanticEndpoints = snapshot.Endpoints
+                .Where(endpoint => SemanticRefreshPathPolicy.Classify(
+                    repositoryPath,
+                    Path.GetFullPath(endpoint.RelativePath, repositoryPath),
+                    _refreshInventory) != SemanticInputKind.None)
                 .GroupBy(endpoint => Path.GetFullPath(endpoint.RelativePath, repositoryPath), StringComparerForCurrentPlatform())
                 .Select(group => group.FirstOrDefault(endpoint => endpoint.AfterSha256 is not null) ?? group.First())
                 .ToArray();

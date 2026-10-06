@@ -49,36 +49,6 @@ public static class CommandTelemetryCompositionTests
             request.Stages);
     }
 
-    /// <summary>Plan sanity composition uses the active workspace policy after repository rebinding.</summary>
-    [Fact]
-    public static void ApplicationComposition_PlanSanityRequest_UsesActiveWorkspacePolicy()
-    {
-        var plan = new ImplementationPlan { Summary = "test" };
-        var startupContext = new ToolInvocationContext
-        {
-            RepositoryPath = "startup",
-            ProhibitedPaths = ["startup/**"],
-            TrustLevel = RepositoryTrustLevel.UntrustedInspection,
-            RequestedBy = "test",
-        };
-        var baseline = new WorkspaceBaseline(
-            WorkspaceId.New(),
-            "active",
-            DateTimeOffset.UtcNow,
-            [],
-            TrustLevel: RepositoryTrustLevel.TrustedMutation,
-            ProhibitedPaths: ["active/**"]);
-
-        var request = Threadsmith.App.ApplicationComposition.CreatePlanSanityCheckRequest(
-            plan,
-            startupContext,
-            baseline);
-
-        Assert.Equal("active", request.RepositoryRoot);
-        Assert.Equal(RepositoryTrustLevel.TrustedMutation, request.TrustLevel);
-        Assert.Equal(["active/**"], request.ProhibitedPaths);
-    }
-
     /// <summary>Missing mutation baselines degrade plan sanity composition to unavailable evidence.</summary>
     [Fact]
     public static void ApplicationComposition_MissingPlanSanityBaseline_ReturnsNull()

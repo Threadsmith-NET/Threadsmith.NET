@@ -35,7 +35,7 @@ public sealed partial class SkillSubsystemTests
         var steps = Enumerable.Range(0, count).Select(index => new SkillWorkflowStep
         {
             StepId = index.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            Kind = SkillWorkflowStepKind.AwaitPlanApproval,
+            Kind = SkillWorkflowStepKind.AwaitDelegation,
             DependsOn = index + 1 < count
                 ? [(index + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)]
                 : cyclic ? ["0"] : [],
@@ -120,20 +120,18 @@ public sealed partial class SkillSubsystemTests
         Assert.Contains(verified, item => item.Metadata.SkillId.Value == "threadsmith-docs-help");
     }
 
-    /// <summary>Maintained plan procedures produce the same content accepted by the host's plan parser.</summary>
+    /// <summary>Maintained analysis procedures return advisory results without a host planning action.</summary>
     [Theory]
     [InlineData("fix-analyzer-warnings")]
     [InlineData("upgrade-package")]
-    public static async Task MaintainedPlanSchemasMatchHostContentContract(string skill)
+    public static async Task MaintainedAnalysisSchemasMatchAdvisoryContract(string skill)
     {
-        var schemaJson = await File.ReadAllTextAsync(Path.Combine(MaintainedRoot(), skill, "schemas", "plan-output.json"), TestContext.Current.CancellationToken);
+        var schemaJson = await File.ReadAllTextAsync(Path.Combine(MaintainedRoot(), skill, "schemas", "analysis-output.json"), TestContext.Current.CancellationToken);
         var validator = new BoundedJsonSchemaValidator();
-        var content = validator.Validate(validator.Compile(schemaJson), ValidPlanJson());
-        var plan = ModelOutputValidator.ParsePlan(content).Plan;
-
-        Assert.Equal(2, plan.SchemaVersion);
-        Assert.Equal(1, plan.Revision);
-        Assert.NotEqual(default, Assert.Single(plan.Steps).StepId);
+        var content = validator.Validate(validator.Compile(schemaJson), ValidAnalysisJson());
+        using var analysis = JsonDocument.Parse(content);
+        Assert.NotEmpty(analysis.RootElement.GetProperty("summary").GetString() ?? string.Empty);
+        Assert.False(analysis.RootElement.TryGetProperty("steps", out _));
     }
 
     /// <summary>Verifies a body changed after metadata discovery fails integrity verification.</summary>
@@ -823,12 +821,15 @@ public sealed partial class SkillSubsystemTests
         }
     }
 
-    /// <summary>Verifies a maintained two-step plan workflow pauses for a host action and then completes.</summary>
-    [Fact]
-    public async Task Workflow_ProcedureThenHostAction_CheckpointsAndCompletes()
+    /// <summary>Advisory procedures complete directly; optional user-input workflows retain their checkpoint boundary.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Workflow_AdvisoryProcedureAndUserInput_CheckpointAndComplete(bool askUser)
     {
         // Arrange
-        var root = MaintainedRoot();
+        using var package = askUser ? CreateUserInputPackage() : TemporaryPackage.CopyMaintained("fix-analyzer-warnings");
+        var root = package.Root;
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
         await catalog.RefreshAsync();
@@ -840,7 +841,7 @@ public sealed partial class SkillSubsystemTests
             new CompatibleEvaluator(),
             new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner(ValidPlanJson()),
+            new FixedProcedureRunner(ValidAnalysisJson()),
             TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(new SkillInvocationHostContext
@@ -864,18 +865,21 @@ public sealed partial class SkillSubsystemTests
                 Phase = RunPhase.EvidenceCollection,
                 HostBudget = new SkillBudget(),
             });
-        var completed = await orchestrator.ContinueAsync(
-            invocationId,
-            "{\"accepted\":true,\"planId\":\"plan-1\"}");
+        var completed = waiting;
+        if (askUser)
+        {
+            Assert.Equal(SkillInvocationStatus.AwaitingHost, waiting.Status);
+            Assert.Equal(SkillHostActionKind.AskUserInput, Assert.Single(waiting.HostActions).Kind);
+            completed = await orchestrator.ContinueAsync(invocationId, "{\"answer\":\"yes\"}");
+        }
+        else
+        {
+            Assert.Empty(waiting.HostActions);
+        }
 
-        // Assert
-        Assert.Equal(SkillInvocationStatus.AwaitingHost, waiting.Status);
-        Assert.Equal(SkillHostActionKind.ProposePlan, Assert.Single(waiting.HostActions).Kind);
-        Assert.Equal(2, ModelOutputValidator.ParsePlan(waiting.HostActions[0].PayloadJson).Plan.SchemaVersion);
-        Assert.Equal("host must resolve ProposePlan", waiting.Checkpoint.NextAction);
         Assert.Equal(SkillInvocationStatus.Completed, completed.Status);
         Assert.Equal("inspect authoritative skill outcome", completed.Checkpoint.NextAction);
-        Assert.Equal(2, completed.Checkpoint.Steps.Count);
+        Assert.Equal(askUser ? 2 : 1, completed.Checkpoint.Steps.Count);
         Assert.Equal(completed.Checkpoint, await state.GetCheckpointAsync(invocationId));
         await orchestrator.DisposeAsync();
     }
@@ -885,7 +889,8 @@ public sealed partial class SkillSubsystemTests
     public async Task Workflow_ContinueAfterTrustDowngrade_IsRejected()
     {
         // Arrange
-        var root = MaintainedRoot();
+        using var package = CreateUserInputPackage();
+        var root = package.Root;
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
         await catalog.RefreshAsync();
@@ -905,7 +910,7 @@ public sealed partial class SkillSubsystemTests
             compatibility,
             new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner(ValidPlanJson()),
+            new FixedProcedureRunner(ValidAnalysisJson()),
             TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(current),
@@ -928,7 +933,7 @@ public sealed partial class SkillSubsystemTests
         // Act / Assert
         await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.ContinueAsync(
             invocationId,
-            "{\"accepted\":true,\"planId\":\"plan-1\"}"));
+            "{\"answer\":\"yes\"}"));
         Assert.Equal(RepositoryTrustLevel.UntrustedInspection, compatibility.LastRequest?.Trust);
     }
 
@@ -937,7 +942,8 @@ public sealed partial class SkillSubsystemTests
     public async Task Workflow_ContinueAfterWorkspaceChange_IsRejected()
     {
         // Arrange
-        var root = MaintainedRoot();
+        using var package = CreateUserInputPackage();
+        var root = package.Root;
         var catalog = new SkillCatalog(
             [new SkillCatalogSource(SkillScope.Maintained, root, "maintained", IsMaintained: true)]);
         await catalog.RefreshAsync();
@@ -956,7 +962,7 @@ public sealed partial class SkillSubsystemTests
             new CompatibleEvaluator(),
             new SkillContentLoader(new Threadsmith.Telemetry.SecretOutputSanitizer()),
             new BoundedJsonSchemaValidator(),
-            new FixedProcedureRunner(ValidPlanJson()),
+            new FixedProcedureRunner(ValidAnalysisJson()),
             TestPromptLoader.Instance,
             state,
             (_, _) => Task.FromResult(current),
@@ -980,7 +986,7 @@ public sealed partial class SkillSubsystemTests
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             orchestrator.ContinueAsync(
                 invocationId,
-                "{\"accepted\":true,\"planId\":\"plan-1\"}"));
+                "{\"answer\":\"yes\"}"));
         Assert.Contains("workspace", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -1092,7 +1098,7 @@ public sealed partial class SkillSubsystemTests
             await store.SaveCheckpointAsync(checkpoint, expectedVersion: null);
 
             // Assert
-            Assert.Equal(12, version);
+            Assert.Equal(13, version);
             Assert.Equal(identity, await store.GetPinAsync(identity.SkillId));
             var restored = await store.GetCheckpointAsync(invocationId);
             Assert.NotNull(restored);
@@ -1211,14 +1217,25 @@ public sealed partial class SkillSubsystemTests
         }));
     }
 
-    private static string ValidPlanJson()
+    private static string ValidAnalysisJson()
     {
         return """
-            {"summary":"Apply the existing static-member pattern.",
-             "steps":[{"title":"Fix analyzer diagnostic","description":"Inspect and fix A.cs",
-             "fileIntents":[{"kind":"Modify","path":"A.cs"}],"expectedOutcome":"CA1822 is resolved",
-             "validation":["dotnet test"]}],"risks":[],"outstandingQuestions":[]}
+            {"summary":"Apply the existing static-member pattern.","findings":["CA1822 at A.cs:10"],
+             "recommendations":["Make the member static after checking callers."],"validation":["dotnet test"]}
             """;
+    }
+
+    private static TemporaryPackage CreateUserInputPackage()
+    {
+        var package = TemporaryPackage.CopyMaintained("fix-analyzer-warnings");
+        var path = Path.Combine(package.PackageRoot, "skill.json");
+        var manifest = JsonNode.Parse(File.ReadAllText(path))?.AsObject()
+            ?? throw new InvalidOperationException("Missing fixture manifest.");
+        manifest["workflow"]!["steps"]!.AsArray().Add(JsonNode.Parse("""
+            {"stepId":"ask-user","kind":"askUserInput","hostAction":"askUserInput","maximumIterations":1,"dependsOn":["analyze"]}
+            """));
+        File.WriteAllText(path, manifest.ToJsonString());
+        return package;
     }
 
     private static SkillPackageIdentity PackageIdentity()

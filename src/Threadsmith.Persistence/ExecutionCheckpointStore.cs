@@ -6,7 +6,7 @@ using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
 /// <summary>SQLite-backed atomic execution checkpoint and terminal-outcome store.</summary>
-public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
+public sealed partial class ExecutionCheckpointStore : IExecutionCheckpointStore, IMutationEffectStore
 {
     private const int CurrentCheckpointSchemaVersion = 2;
     private const int MinimumCheckpointSchemaVersion = 1;
@@ -23,22 +23,6 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         _connectionString = connectionString;
-    }
-
-    /// <inheritdoc />
-    public Task SaveCheckpointAsync(
-        ExecutionContinuation checkpoint,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(checkpoint);
-        ValidateCheckpoint(checkpoint);
-        return UpsertAsync(
-            checkpoint.RunId,
-            checkpoint.SessionId,
-            checkpoint.SchemaVersion,
-            JsonSerializer.Serialize(checkpoint, JsonOptions),
-            outcomeJson: null,
-            cancellationToken);
     }
 
     /// <inheritdoc />
@@ -99,6 +83,71 @@ public sealed class ExecutionCheckpointStore : IExecutionCheckpointStore
         }
 
         return outcome;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> HasUnresolvedLegacyEffectsAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
+        await using var connection = new SqliteConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+
+        // The catalog is authoritative when present. For orphaned runs, use their own
+        // latest repository-opening event; absent attribution cannot fence every repository.
+        command.CommandText = """
+            SELECT sessions.repository_identity,
+                (SELECT CASE WHEN json_valid(events.payload) THEN
+                    CASE WHEN json_type(events.payload, '$.Path') = 'text'
+                        THEN json_extract(events.payload, '$.Path') END END
+                 FROM domain_events AS events
+                 WHERE sessions.session_id IS NULL AND events.session_id = runs.session_id
+                   AND events.event_name = 'repositoryOpened'
+                 ORDER BY events.sequence DESC LIMIT 1) AS repository_path
+            FROM execution_runs AS runs
+            LEFT JOIN session_catalog AS sessions ON sessions.session_id = runs.session_id
+            WHERE (sessions.repository_identity = $repository OR sessions.session_id IS NULL)
+              AND runs.checkpoint_json IS NOT NULL
+              AND CASE WHEN json_valid(runs.checkpoint_json) = 0 THEN 1
+                  WHEN COALESCE(json_extract(runs.checkpoint_json, '$.SchemaVersion'), 0) NOT IN (1, 2) THEN 1
+                  WHEN json_type(runs.checkpoint_json, '$.Operation') = 'object'
+                       AND COALESCE(json_extract(runs.checkpoint_json, '$.Operation.State'), -1) NOT IN ('Completed', 'RolledBack', 1, 2) THEN 1
+                  WHEN json_extract(runs.checkpoint_json, '$.Phase') IN ('MutationApplyPending', 7)
+                       AND json_extract(runs.checkpoint_json, '$.Operation.State') IS NULL THEN 1
+                  ELSE 0 END;
+            """;
+        command.Parameters.AddWithValue("$repository", repositoryIdentity);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (!await reader.IsDBNullAsync(0, cancellationToken))
+            {
+                return true;
+            }
+
+            if (!await reader.IsDBNullAsync(1, cancellationToken))
+            {
+                var repositoryPath = reader.GetString(1);
+                if (string.IsNullOrWhiteSpace(repositoryPath) || !Path.IsPathFullyQualified(repositoryPath))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (RepositoryIdentity.Create(repositoryPath) == repositoryIdentity)
+                    {
+                        return true;
+                    }
+                }
+                catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+                {
+                    // An invalid historical path remains unattributed and available for recovery.
+                }
+            }
+        }
+
+        return false;
     }
 
     private async Task UpsertAsync(

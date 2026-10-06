@@ -1,104 +1,48 @@
-# Conversation and execution loop
+# Conversation and source editing
 
-This diagram shows the ordinary Threadsmith conversation loop and the governed implementation path. The host owns phase selection, capability admission, approvals, persistence, mutation application, validation, correction limits, and completion. Model output is accepted only through the formatter and the tools advertised for the current phase.
+Threadsmith runs one ordinary model conversation. The model inspects relevant source, chooses an edit sequence, invokes advertised tools, and uses their results to continue the task. The host owns capability admission, trust, exact authorization, transactions, cancellation, durable effects and validation.
 
 ```mermaid
 flowchart TD
-    USER["User request or explicit resume"] --> CONTEXT["Assemble bounded model context"]
-    HISTORY[("Sanitized conversation archive<br/>and current-run receipt")] -. "recent context" .-> CONTEXT
-    MEMORY[("Repository memories")] -. "selected standing and relevant<br/>situational memories" .-> CONTEXT
-    INSTRUCTIONS["Host, user, and repository instructions"] -. "ordered context" .-> CONTEXT
-
-    CONTEXT --> BEFORE_MODEL["BeforeModelRequest hook boundary"]
-    BEFORE_MODEL --> MODEL["Model request<br/>phase tools plus output formatter"]
-    MODEL --> AFTER_MODEL["AfterModelRequest hook boundary"]
-    AFTER_MODEL --> RESPONSE{"Formatted model response"}
-
-    RESPONSE -- "ordinary answer, question, or blocker" --> VISIBLE["Visible response<br/>unfinished governed work remains resumable"]
-    VISIBLE --> USER
-
-    subgraph EVIDENCE["Evidence collection and governed capabilities"]
-        RESPONSE -- "evidence-phase tool call batch" --> TOOL_PREFLIGHT["Central tool batch preflight<br/>schema, phase, trust, policy, budget"]
-        TOOL_PREFLIGHT -- "repairable rejection" --> TOOL_FEEDBACK["Actionable corrective feedback"]
-        TOOL_FEEDBACK --> CONTEXT
-        TOOL_PREFLIGHT -- "accepted" --> BEFORE_TOOL["BeforeToolInvocation hook boundary"]
-        BEFORE_TOOL --> REGISTRY{"Host tool registry"}
-        REGISTRY --> BUILTIN["Built-in tools<br/>read, explore, search, process, delegation, etc."]
-        REGISTRY --> MEMORY_TOOL["memories tool"]
-        REGISTRY --> SKILL_TOOL["inspect_skill / invoke_skill"]
-        REGISTRY --> MCP_TOOL["Imported MCP tools"]
-        REGISTRY --> EXTENSION_TOOL["Extension tools"]
-        MEMORY_TOOL <--> MEMORY
-        SKILL_TOOL --> SKILL["Verified declarative skill workflow<br/>closed host actions using the same governed boundaries"]
-        BUILTIN --> AFTER_TOOL["AfterToolInvocation hook boundary"]
-        MEMORY_TOOL --> AFTER_TOOL
-        SKILL --> AFTER_TOOL
-        MCP_TOOL --> AFTER_TOOL
-        EXTENSION_TOOL --> AFTER_TOOL
-        AFTER_TOOL --> EVIDENCE_RESULT["Sanitized, bounded tool evidence"]
-        EVIDENCE_RESULT --> CONTEXT
-    end
-
-    subgraph PLANNING["One complete plan tranche"]
-        RESPONSE -- "propose_plan" --> PLAN_FORMAT["Plan formatter and schema"]
-        PLAN_FORMAT --> PLAN_SANITY["Host plan sanity checks<br/>PlanProposed hook boundary"]
-        PLAN_SANITY -- "repairable scope or structure issue" --> PLAN_FEEDBACK["Actionable complete-plan revision feedback"]
-        PLAN_FEEDBACK --> CONTEXT
-        PLAN_SANITY -- "non-repairable policy or trust failure" --> FAILED
-        PLAN_SANITY -- "passes" --> PLAN_APPROVAL["Manual or policy plan approval<br/>PlanApproved hook boundary"]
-        PLAN_APPROVAL -- "not approved" --> PAUSED["Paused and resumable"]
-        PLAN_APPROVAL -- "approved tranche" --> ACTIVE_STEP["Select earliest incomplete approved step"]
-    end
-
-    subgraph MUTATION["Incremental implementation of the active step"]
-        ACTIVE_STEP --> IMPLEMENTATION_CONTEXT["Assemble active-step context<br/>current bytes, progress, evidence, and soft batch targets"]
-        IMPLEMENTATION_CONTEXT --> BEFORE_MODEL
-        RESPONSE -- "propose_mutations" --> PROPOSAL_VALIDATION["Proposal validation<br/>schema, active scope, paths, trust, budgets, current baseline"]
-        PROPOSAL_VALIDATION -- "passes" --> ROSLYN["In-memory C# overlay<br/>syntax screening without compilation"]
-        PROPOSAL_VALIDATION -- "repairable rejection" --> MUTATION_FEEDBACK["CorrectionStarted hook<br/>actionable mutation feedback"]
-        ROSLYN -- "blocking diagnostics" --> MUTATION_FEEDBACK
-        MUTATION_FEEDBACK --> IMPLEMENTATION_CONTEXT
-        PROPOSAL_VALIDATION -- "non-repairable failure" --> FAILED
-        ROSLYN -- "passes or not applicable" --> STAGE["Private atomic staging and exact diff<br/>MutationStaged hook boundary"]
-        STAGE --> MUTATION_APPROVAL["Manual or policy approval<br/>for this exact mutation batch"]
-        MUTATION_APPROVAL -- "not authorized" --> PAUSED
-        MUTATION_APPROVAL -- "authorized" --> BASELINE["Capture authoritative pre-write<br/>diagnostic baseline"]
-        BASELINE --> APPLY["Write-ahead transactional apply<br/>promote current-byte baseline<br/>MutationApplied hook boundary"]
-        APPLY --> FULL_BATCH{"Full mutation batch<br/>authorized and applied?"}
-        VALIDATE["One cumulative semantic, compile,<br/>diagnostic, and affected-test validation<br/>BeforeValidation / AfterValidation hooks"]
-        VALIDATE -- "introduced failure: reopen affected step" --> MUTATION_FEEDBACK
-        FULL_BATCH -- "no" --> CONTINUATION_PENDING["ContinuationPending<br/>partial authorization; validation deferred"]
-        CONTINUATION_PENDING -- "explicit /validation retry" --> IMPLEMENTATION_CONTEXT
-        FULL_BATCH -- "yes" --> STEP_COMPLETE{"Active step complete<br/>with supporting evidence?"}
-        STEP_COMPLETE -- "no: another coherent batch" --> IMPLEMENTATION_CONTEXT
-        STEP_COMPLETE -- "yes" --> MORE_STEPS{"More approved steps<br/>in this tranche?"}
-        MORE_STEPS -- "yes" --> ACTIVE_STEP
-        MORE_STEPS -- "no" --> VALIDATE
-        VALIDATE -- "passes" --> PLAN_BOUNDARY["PlanContinuationPending<br/>persist cumulative progress and receipt"]
-        PLAN_BOUNDARY --> CONTEXT
-    end
-
-    RESPONSE -- "request_replan<br/>implementation or correction only" --> REPLAN["PlanReplanningPending<br/>no mutation is staged or applied"]
-    REPLAN --> PRESERVE["Preserve applied bytes, completed work,<br/>unresolved validation, budgets, scope,<br/>original-file evidence, and net diff"]
-    PRESERVE --> CONTEXT
-
-    RESPONSE -- "complete_objective {}<br/>only at a finished plan boundary" --> FINAL_VALIDATION["Verify durable cumulative validation,<br/>workspace identity, input membership,<br/>and live file hashes"]
-    FINAL_VALIDATION -- "passes" --> COMPLETED["Terminal success<br/>RunCompleted hook"]
-    FINAL_VALIDATION -- "fails" --> FAILED["Accurate terminal failure<br/>RunFailed hook"]
-    PAUSED --> USER
-    COMPLETED --> USER
-    FAILED --> USER
-
-    EXTENSIONS["Extension runtime"] -. "registers immutable tool capabilities" .-> EXTENSION_TOOL
-    EXTENSIONS -. "can provide hook handlers" .-> HOOKS
-    MCP["Connected MCP profiles"] -. "publish imported tools" .-> MCP_TOOL
-    HOOKS["Lifecycle hook coordinator<br/>executable, HTTP, MCP, or extension handlers<br/>advisory by default; never approves, mutates, or skips validation"]
-    HOOKS -. "serves the labeled model, tool, plan,<br/>mutation, validation, correction, and outcome boundaries" .-> BEFORE_MODEL
+    U[User request] --> C[Bounded conversation context]
+    C --> M[Model response]
+    M --> T[Central tool pipeline]
+    T --> R[Read or semantic query]
+    R --> C
+    T --> E[edit_source]
+    E --> A[Exact diff authorization]
+    A --> S[Bounded advisory candidate analysis]
+    S --> W[Existing transactional writer]
+    W --> F[Write receipt and current advisory feedback]
+    F --> C
+    W --> B[Background semantic analysis or graph refresh]
+    B --> P[Versioned feedback at provider boundary]
+    P --> C
+    M --> D[Response without tool calls]
+    T --> V[Model-requested build or test]
+    V --> C
+    D --> Q{New feedback ready?}
+    Q -->|Yes| N[Plain-text advisory notification]
+    N --> L{Another round allowed?}
+    L -->|Yes| H[Retain response and supply feedback]
+    H --> C
+    L -->|No| O[Cumulative disk outcome]
+    Q -->|No| O
+    O --> X[Completion without automatic validation]
 ```
 
-The two backward paths have different meanings:
+`edit_source` accepts a rationale and an ordered list of create, replace, delete, move or supported semantic-rename operations. Host identities are assigned by the application. Supporting reads are independent of the write set. The existing scheduler preserves dependent tool order and the workspace edit lease serializes writes.
 
-- **Mutation retry:** proposal feedback returns to the active approved step; final validation can reopen an earlier affected step. A corrected batch repeats proposal validation, syntax screening, exact-diff approval, and transaction; cumulative validation runs when the plan is applied. The configured corrective-turn budget remains authoritative.
-- **Plan rework:** `request_replan` is an exclusive implementation decision made only between settled transactions. It records `PlanReplanningPending` and returns the same run to ordinary evidence collection and planning. The replacement is a complete new tranche with fresh plan approval and fresh exact-diff authorization; there is no separate correction loop and no plan-count cap.
+Enabled tools are advertised according to current trust and tool allow/deny policy, without phase, side-effect, or conversation opt-in filtering. Required approval is enforced at invocation. The tool pipeline retains policy, hooks, activity events, resource bounds and cancellation. The edit application captures current touched endpoints, resolves exact anchors, stages the diff and applies the surviving mutation approval policy. A declined edit returns a denied receipt; a changed source precondition returns a conflict requiring a fresh read. Neither outcome silently applies changes.
 
-Skills, extensions, MCP tools, hooks, and memories do not gain authority from appearing in model context. Skills are verified declarative workflows, extension and MCP capabilities enter the central registry, hooks observe or advise at stable boundaries, and memories are bounded repository context managed through the ordinary tool policy. Every path rejoins the same host-owned planning, mutation, validation, persistence, cancellation, and completion machinery.
+After authorization, the semantic owner analyzes the candidate within a bounded allowance. Compiler errors are advisory: well-formed authorized edits can temporarily introduce syntax or semantic errors. The effect journal persists exact before/after endpoint identities before invoking the existing writer. The writer rechecks preconditions and verifies final bytes. Disk outcome and semantic outcome remain separate.
+
+Matching candidate results are reused after commit. Broader owner/dependent analysis continues through the existing compiler coordinator with generation fencing and bounded coverage. New diagnostics enter the ordinary conversation at a provider-compatible boundary; already delivered tool results are preserved. Graph replacement temporarily marks earlier applied analysis obsolete while retaining delivery tracking for its pending verified replacement. Missing or terminal obsolete analysis is reported explicitly. Model-facing receipts omit error totals while analysis is pending, obsolete, or has no completed project coverage; omitted totals are unknown, not zero.
+
+If newer advisory evidence arrives while the model writes its final response, the host supplies it through the same feedback boundary and permits a follow-up response within the configured round and budget limits. The previous response remains in history so outdated validation claims can be corrected. User-visible advisory notifications contain a plain-text coverage and error summary; serialized analysis is reserved for model context, not the output window. The host does not wait for pending analysis or start a mandatory repair cycle. Model instructions require repairing errors introduced by its changes before finishing, preserving the requested behavior and repository rules, and inspecting updated feedback. If repair conflicts with the request, the model must explain the conflict and ask for direction; unrelated existing errors remain outside scope. If no newer evidence is available, the ordinary final response ends model continuation and records cumulative disk effects; it does not launch validation. The model decides when to invoke build and test tools, with guidance to resolve incremental compiler errors and obtain current feedback first. Advisory compiler feedback never establishes build or test success. Cancellation or a later provider failure preserves already proven disk effects in the durable outcome.
+
+Cancellation finalization records durable edit receipts without reacquiring the repository edit lease, so another run's pending exact approval cannot delay the cancelled terminal state. This outcome omits cumulative diff evidence and rollback availability and explicitly records that current disk state was not verified.
+
+No executable plan, plan approval, step, tranche, proposal-generation turn or completion tool is required. A user-requested written plan is ordinary advisory conversation text.
+
+See [mutation model](../architecture/mutation-model.md), [execution recovery](execution-resumption.md), [semantic refresh](semantic-refresh.md), and [validation pipeline](../architecture/validation-pipeline.md).

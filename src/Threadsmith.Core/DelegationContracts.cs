@@ -677,22 +677,6 @@ public sealed record AgentConflict(
     IReadOnlyList<AgentAssignmentId> Assignments,
     IReadOnlyList<string> Paths);
 
-/// <summary>Host partition decision with explicit serial fallback.</summary>
-public sealed record AssignmentPartitionDecision
-{
-    /// <summary>Assignments safe to execute concurrently.</summary>
-    public IReadOnlyList<AgentAssignmentId> ParallelAssignments { get; init; } = [];
-
-    /// <summary>Assignments that must execute serially.</summary>
-    public IReadOnlyList<AgentAssignmentId> SerialAssignments { get; init; } = [];
-
-    /// <summary>Overlap or confidence reasons.</summary>
-    public IReadOnlyList<AgentConflict> Conflicts { get; init; } = [];
-
-    /// <summary>Whether all requested implementation assignments are provably parallel-safe.</summary>
-    public bool IsParallelSafe { get; init; }
-}
-
 /// <summary>One child terminal result projected without raw transcript content.</summary>
 public sealed record AgentRunOutcome
 {
@@ -838,70 +822,6 @@ public interface IDelegationCoordinator
     Task<bool> CancelAsync(
         DelegationId delegationId,
         CancellationToken cancellationToken = default);
-}
-
-/// <summary>Conservatively proves assignment non-overlap.</summary>
-public interface IAssignmentPartitioner
-{
-    /// <summary>Partitions implementation assignments or returns serial fallback.</summary>
-    AssignmentPartitionDecision Partition(DelegationPlan plan);
-}
-
-/// <summary>Host-owned managed worktree lease for one implementation assignment.</summary>
-public sealed record WorkerWorktreeLease
-{
-    /// <summary>Owning delegation.</summary>
-    public required DelegationId DelegationId { get; init; }
-
-    /// <summary>Owning assignment.</summary>
-    public required AgentAssignmentId AssignmentId { get; init; }
-
-    /// <summary>Owning child run.</summary>
-    public required RunId ChildRunId { get; init; }
-
-    /// <summary>Managed isolated repository root.</summary>
-    public required string RepositoryPath { get; init; }
-
-    /// <summary>Exact parent revision used to create the worktree.</summary>
-    public required string Revision { get; init; }
-
-    /// <summary>Exact parent baseline identity.</summary>
-    public required string BaselineIdentity { get; init; }
-
-    /// <summary>Whether the lease is frozen against further child work.</summary>
-    public bool IsFrozen { get; init; }
-}
-
-/// <summary>Creates, freezes, and cleans confined worker worktrees.</summary>
-public interface IWorkerWorktreeCoordinator
-{
-    /// <summary>Creates a managed detached worktree at the exact parent revision.</summary>
-    Task<WorkerWorktreeLease> CreateAsync(
-        DelegationPlan plan,
-        AgentAssignment assignment,
-        string repositoryPath,
-        string revision,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Freezes and verifies terminal worktree status.</summary>
-    Task<WorkerWorktreeLease> FreezeAsync(
-        WorkerWorktreeLease lease,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>Removes only a worktree owned by this coordinator.</summary>
-    Task RemoveAsync(
-        WorkerWorktreeLease lease,
-        CancellationToken cancellationToken = default);
-}
-
-/// <summary>Detects worker scope, worker-to-worker, and stale-parent conflicts before restaging.</summary>
-public interface IWorkerIntegrationCoordinator
-{
-    /// <summary>Validates selected frozen worker packages against current parent facts.</summary>
-    IReadOnlyList<AgentConflict> DetectConflicts(
-        DelegationPlan plan,
-        IReadOnlyList<WorkerChangeSet> changeSets,
-        string currentParentBaselineIdentity);
 }
 
 /// <summary>Persists delegation checkpoints without exposing storage implementation types.</summary>

@@ -212,7 +212,7 @@ public sealed class AnthropicRequestMapperTests
         var request = TestAnthropic.Request() with
         {
             Tools = [TestAnthropic.Tool() with { PreferStrictArguments = true }],
-            Messages = [TestAnthropic.Message(ModelMessageRole.System, "host-policy", "host stable"), TestAnthropic.Message(ModelMessageRole.Developer, "repository-instructions", "repository stable"), TestAnthropic.Message(ModelMessageRole.Developer, "phase-policy", "phase stable"), .. TestAnthropic.Request().Messages],
+            Messages = [TestAnthropic.Message(ModelMessageRole.System, "host-policy", "host stable"), TestAnthropic.Message(ModelMessageRole.Developer, "repository-instructions", "repository stable"), TestAnthropic.Message(ModelMessageRole.Developer, "conversation-policy", "phase stable"), .. TestAnthropic.Request().Messages],
         };
         var compatibility = TestAnthropic.Compatibility() with { PromptCachingEnabled = true, MinimumCacheableTokens = 1 };
         var prepared = AnthropicRequestPreparer.Prepare(request, TestAnthropic.Profile(), compatibility, "instance");
@@ -227,9 +227,9 @@ public sealed class AnthropicRequestMapperTests
         Assert.Contains(prepared.WireEstimate.Components, item => item.Label == request.Tools[0].Name && item.Category == "Tools");
         Assert.Equal(4, prepared.WireEstimate.StablePrefixComponentCount);
         Assert.Equal(
-            ["System: host-policy", "Developer: repository-instructions", request.Tools[0].Name, "Developer: phase-policy"],
+            ["System: host-policy", "Developer: repository-instructions", request.Tools[0].Name, "Developer: conversation-policy"],
             [.. prepared.WireEstimate.Components
-                .Where(item => item.Category is "System prompt" or "Repository instructions" or "Tools" or "Phase instructions")
+                .Where(item => item.Category is "System prompt" or "Repository instructions" or "Tools" or "Conversation instructions")
                 .Select(item => item.Label)]);
         var uncached = AnthropicRequestMapper.CreateBody(projected, TestAnthropic.Profile(), compatibility with { PromptCachingEnabled = false });
         RemoveCacheControls(body);

@@ -67,6 +67,12 @@ internal static class SemanticLoadMetrics
     /// <summary>Gets replacement source texts materialized by diagnostic reconciliation.</summary>
     internal static Counter<long> DiagnosticTextsCreated { get; } = _meter.CreateCounter<long>("threadsmith.semantic.diagnostics.texts_created");
 
+    /// <summary>Gets completed scoped compiler diagnostic passes for exact edit candidates.</summary>
+    internal static Counter<long> EditDiagnosticPasses { get; } = _meter.CreateCounter<long>("threadsmith.semantic.edit.diagnostic_passes");
+
+    /// <summary>Gets exact candidate solutions reused by authoritative source publication.</summary>
+    internal static Counter<long> EditCandidatePromotions { get; } = _meter.CreateCounter<long>("threadsmith.semantic.edit.candidate_promotions");
+
     /// <summary>Records one terminal semantic load without repository-specific tags.</summary>
     public static void Record(
         string mode,

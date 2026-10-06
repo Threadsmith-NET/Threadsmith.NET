@@ -1,5 +1,7 @@
 # ADR-57: Model-requested delegation only
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 Status: Accepted
 
 ## Context
@@ -21,3 +23,7 @@ An approved edit never causes a subagent launch on its own. Explicit model deleg
 ## Native skills
 
 Native model procedures use the same request-scoped tool snapshot and `delegate_agents` entry as conversation models. The actual model call owns the snapshot and frozen parent model/reasoning selection. Role configuration still takes precedence over inherited selection. A skill name, prompt or manifest cannot grant delegation authority. There is no special review entry.
+
+## Direct-editing amendment (2026-10-05)
+
+Model-requested delegation remains the established child-run scheduler. Children perform research/review through ordinary allowed tools; they do not obtain the parent write tool. Parent edits use `edit_source` and the same exact authorization path. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

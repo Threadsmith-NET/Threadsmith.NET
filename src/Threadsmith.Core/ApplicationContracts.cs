@@ -261,8 +261,6 @@ public interface IStreamingOutputSanitizer : IOutputSanitizer
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
 [JsonDerivedType(typeof(TextModelOutput), "text")]
 [JsonDerivedType(typeof(ToolRequestModelOutput), "toolRequest")]
-[JsonDerivedType(typeof(PlanModelOutput), "plan")]
-[JsonDerivedType(typeof(MutationSetModelOutput), "mutationSet")]
 public abstract record ModelOutput
 {
     /// <summary>Schema version.</summary>
@@ -274,9 +272,3 @@ public sealed record TextModelOutput(string Text) : ModelOutput;
 
 /// <summary>Tool request model output.</summary>
 public sealed record ToolRequestModelOutput(string ToolName, string ArgumentsJson) : ModelOutput;
-
-/// <summary>Structured implementation-plan model output.</summary>
-public sealed record PlanModelOutput(ImplementationPlan Plan) : ModelOutput;
-
-/// <summary>Structured bounded mutation set proposed by a model.</summary>
-public sealed record MutationSetModelOutput(MutationSet MutationSet) : ModelOutput;

@@ -5,11 +5,12 @@ using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
 
 /// <summary>Owns one independent semantic engine for each opened workspace.</summary>
-public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutationAnalyzer, IAsyncDisposable
+public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEditAnalyzer, IAsyncDisposable
 {
     private readonly TimeSpan? _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
+    private readonly IPromptLoader _prompts;
     private readonly IDomainEventStream _events;
     private readonly ILoggerFactory _loggerFactory;
     private Func<SemanticLoadRequest, SemanticConfidenceLevel, CancellationToken, Task>? _confidencePublisher;
@@ -19,9 +20,11 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
     public SemanticEngineRegistry(
         IDomainEventStream events,
         ILoggerFactory loggerFactory,
+        IPromptLoader prompts,
         TimeSpan? cancellationBackstop = null,
         SemanticResourceLimits? resourceLimits = null)
     {
+        ArgumentNullException.ThrowIfNull(prompts);
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(loggerFactory);
         if (cancellationBackstop <= TimeSpan.Zero)
@@ -31,6 +34,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
 
         _resourceLimits = resourceLimits ?? new SemanticResourceLimits();
         _resourceLimits.Validate();
+        _prompts = prompts;
         _events = events;
         _loggerFactory = loggerFactory;
         _cancellationBackstop = cancellationBackstop;
@@ -49,6 +53,30 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
     public SemanticConfidenceLevel GetConfidence(WorkspaceId workspaceId)
     {
         return GetEngine(workspaceId).Confidence;
+    }
+
+    /// <inheritdoc />
+    public Task<SourceEditAnalysis> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
+    {
+        return GetEngine(command.WorkspaceId).AnalyzeCandidateAsync(command, repositoryPath, snapshot, immediateAllowance, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId)
+    {
+        return GetEngine(workspaceId).GetLatestEditAnalysis(sessionId, runId, effectId);
+    }
+
+    /// <inheritdoc />
+    public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId)
+    {
+        GetEngine(workspaceId).ConfirmEditApplied(effectId);
+    }
+
+    /// <inheritdoc />
+    public void DiscardCandidate(WorkspaceId workspaceId, Guid effectId)
+    {
+        GetEngine(workspaceId).DiscardEditCandidate(effectId);
     }
 
     /// <summary>Gets a stable snapshot of the loaded host-owned project inventory.</summary>
@@ -102,15 +130,6 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
         CancellationToken cancellationToken = default)
     {
         return GetEngine(workspaceId).GetDiagnosticsAsync(projectPaths, changedFiles, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<PreMutationAnalysisResult> AnalyzeAsync(
-        PreMutationAnalysisRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        return GetEngine(request.WorkspaceId).AnalyzePreMutationAsync(request, cancellationToken);
     }
 
     /// <inheritdoc />
@@ -172,6 +191,7 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, IPreMutati
         var engine = _engines.GetOrAdd(workspaceId, _ => new SemanticEngine(
             _events,
             _loggerFactory.CreateLogger<SemanticEngine>(),
+            _prompts,
             _cancellationBackstop,
             _resourceLimits));
         if (_confidencePublisher is { } publisher)

@@ -18,39 +18,7 @@ public sealed class RunStateMachine : IStateMachine
         {
             [RunPhase.Intake] = Set(RunPhase.RepositoryDiscovery, RunPhase.EvidenceCollection),
             [RunPhase.RepositoryDiscovery] = Set(RunPhase.EvidenceCollection),
-            [RunPhase.EvidenceCollection] = Set(RunPhase.ChangePlanning, RunPhase.Completion),
-            [RunPhase.ChangePlanning] = Set(RunPhase.AwaitingPlanApproval, RunPhase.Completion),
-            [RunPhase.AwaitingPlanApproval] = Set(
-                RunPhase.MutationPreparation,
-                RunPhase.ImplementationPreparing,
-                RunPhase.Completion),
-            [RunPhase.ImplementationPreparing] = Set(
-                RunPhase.ImplementationModelTurn,
-                RunPhase.EvidenceCollection,
-                RunPhase.Completion),
-            [RunPhase.ImplementationModelTurn] = Set(RunPhase.MutationProposed),
-            [RunPhase.MutationProposed] = Set(RunPhase.MutationStaged),
-            [RunPhase.MutationStaged] = Set(RunPhase.AwaitingMutationApproval),
-            [RunPhase.MutationPreparation] = Set(RunPhase.AwaitingMutationApproval),
-            [RunPhase.AwaitingMutationApproval] = Set(
-                RunPhase.BaselineValidation,
-                RunPhase.Mutation),
-            [RunPhase.BaselineValidation] = Set(RunPhase.MutationApplyPending),
-            [RunPhase.MutationApplyPending] = Set(RunPhase.Mutation),
-            [RunPhase.Mutation] = Set(RunPhase.Compilation, RunPhase.RolledBack),
-            [RunPhase.Compilation] = Set(
-                RunPhase.Testing,
-                RunPhase.CorrectionPending,
-                RunPhase.RolledBack),
-            [RunPhase.Testing] = Set(
-                RunPhase.Verification,
-                RunPhase.CorrectionPending,
-                RunPhase.RolledBack),
-            [RunPhase.CorrectionPending] = Set(RunPhase.CorrectionModelTurn, RunPhase.CompletionPending),
-            [RunPhase.CorrectionModelTurn] = Set(RunPhase.MutationProposed, RunPhase.CompletionPending),
-            [RunPhase.Verification] = Set(RunPhase.AwaitingAcceptance, RunPhase.CompletionPending),
-            [RunPhase.AwaitingAcceptance] = Set(RunPhase.Completion, RunPhase.RolledBack),
-            [RunPhase.CompletionPending] = Set(RunPhase.Completion),
+            [RunPhase.EvidenceCollection] = Set(RunPhase.Completion),
         };
 
     private readonly IDomainEventStream _events;

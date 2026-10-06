@@ -1,5 +1,7 @@
 # ADR-4: Roslyn + MSBuild as semantic sources of truth
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 - **Status:** Accepted
 - **Date:** 2026-07-31
 - **Strategy source:** §6 (Technology Choices), §29 (ADR 7)
@@ -20,3 +22,7 @@ Use **Roslyn** (`Microsoft.CodeAnalysis.*` 5.9.0) + **MSBuild** (`Microsoft.Code
 `Spike.MsBuildWorkspace` loads `src/Threadsmith.sln` and resolves `Threadsmith.App.Program` (type kind, namespace, assembly) → `PASS` (exit 0). See `spikes/Spike.MsBuildWorkspace/README.md` and `docs/architecture/spike-notes.md`.
 
 Plan 117 revalidated this boundary with Roslyn 5.9.0 and the SDK 10.0.401-owned MSBuild 18.9.11 runtime. The validation covers solution and direct-project loading, C# 14 symbols, analyzers, source generators, generated-source queries, scripting isolation, cancellation, dependency closure, and runtime-assembly exclusion.
+
+## Direct-editing amendment (2026-10-05)
+
+The persistent Roslyn engine supplies versioned advisory candidate and committed diagnostics during ordinary editing. Operations retain the shared queue, cancellation and workspace lifetime owners; semantic coverage never grants write authority. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

@@ -1,5 +1,7 @@
 # ADR-11: Central Tool Policy and Invocation Pipeline
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 - **Status:** Accepted
 - **Date:** 2026-08-01
 - **Strategy source:** §12, §22.4, §24.4, §29 (decision 20)
@@ -24,3 +26,7 @@ Child processes use tokenized arguments without shell interpolation, a filtered 
 - Read-only and future mutating or extension tools reuse the same policy boundary.
 - `AssemblyLoadContext`, Roslyn, provider, process, and UI implementation types remain outside durable tool results.
 - A denied or cancelled request remains observable without retaining raw model arguments or secrets.
+
+## Direct-editing amendment (2026-10-05)
+
+`edit_source` uses the existing tool invocation pipeline. Its exact mutation review supplies write authorization, avoiding a second generic approval prompt for the same edit. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

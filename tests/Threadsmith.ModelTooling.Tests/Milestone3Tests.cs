@@ -43,7 +43,7 @@ public static class Milestone3Tests
     {
         var root = SmallSemanticSolutionFixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
 
         var loaded = await engine.LoadAsync(SmallSemanticSolutionFixture.CreateLoadRequest());
         var generated = await engine.FindSymbolsAsync("GeneratedMarker");
@@ -64,7 +64,7 @@ public static class Milestone3Tests
     {
         var root = SmallSemanticSolutionFixture.Root;
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         var request = SmallSemanticSolutionFixture.CreateLoadRequest();
         await engine.LoadAsync(request);
 
@@ -126,6 +126,7 @@ public static class Milestone3Tests
         await using var engine = new SemanticEngine(
             events,
             NullLogger<SemanticEngine>.Instance,
+            TestPromptLoader.Instance,
             TimeSpan.FromMilliseconds(100));
         var request = SmallSemanticSolutionFixture.CreateLoadRequest();
         await engine.LoadAsync(request);
@@ -157,7 +158,7 @@ public static class Milestone3Tests
     public static async Task SemanticEngine_DegradedLoadsReportProjectAndSolutionFailures()
     {
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         var request = SmallSemanticSolutionFixture.CreateLoadRequest();
         var brokenRoot = SmallSemanticSolutionFixture.CopyToTemporaryRoot("threadsmith-broken");
         try
@@ -218,7 +219,7 @@ public static class Milestone3Tests
                 Path.Combine(root, "Caller.cs"),
                 "namespace Demo;\npublic sealed class Caller\n{\n    public Service Create() => new();\n}\n");
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -262,7 +263,7 @@ public static class Milestone3Tests
                 callerPath,
                 "namespace Demo;\npublic sealed class Caller\n{\n    public string Name => Missing.Value;\n}\n");
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -292,388 +293,6 @@ public static class Milestone3Tests
         }
     }
 
-    /// <summary>Pre-mutation analysis parses proposed source in memory before files change.</summary>
-    [Fact]
-    public static async Task SemanticEngine_PreMutationAnalysis_ReturnsSyntaxDiagnosticsFromOverlay()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            var sourcePath = Path.Combine(root, "Example.cs");
-            const string original = "namespace Demo;\npublic sealed class Example\n{\n}\n";
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(sourcePath, original);
-            var sessionId = SessionId.New();
-            var workspaceId = WorkspaceId.New();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
-            await engine.LoadAsync(new SemanticLoadRequest(
-                sessionId,
-                workspaceId,
-                root,
-                projectPath,
-                RepositoryTrustLevel.TrustedBuild));
-            var mutationSet = new MutationSet
-            {
-                MutationSetId = MutationSetId.New(),
-                SessionId = sessionId,
-                RunId = RunId.New(),
-                WorkspaceId = workspaceId,
-                BaselineCapturedAt = DateTimeOffset.UtcNow,
-                Mutations =
-                [
-                    new Mutation
-                    {
-                        MutationId = MutationId.New(),
-                        Type = MutationType.ReplaceText,
-                        RelativePath = "Example.cs",
-                        StartOffset = original.IndexOf("}\n", StringComparison.Ordinal),
-                        Length = 0,
-                        ExpectedText = string.Empty,
-                        ReplacementText = "public void Broken( { }\n",
-                    },
-                ],
-                Rationale = "Introduce malformed source for pre-mutation analysis.",
-            };
-            var baseline = new WorkspaceBaseline(
-                workspaceId,
-                root,
-                mutationSet.BaselineCapturedAt,
-                [],
-                SelectedSolutionPath: projectPath,
-                TrustLevel: RepositoryTrustLevel.TrustedBuild);
-
-            var result = await engine.AnalyzePreMutationAsync(new PreMutationAnalysisRequest
-            {
-                SessionId = sessionId,
-                RunId = mutationSet.RunId,
-                WorkspaceId = workspaceId,
-                Baseline = baseline,
-                MutationSet = mutationSet,
-                OverlayFiles =
-                [
-                    new PreMutationOverlayFile
-                    {
-                        RelativePath = "Example.cs",
-                        Text = original.Replace("}\n", "public void Broken( { }\n}\n", StringComparison.Ordinal),
-                        RelatedMutationId = mutationSet.Mutations[0].MutationId,
-                    },
-                ],
-            });
-
-            Assert.Equal(PreMutationGateDecision.RepairableDiagnostics, result.Decision);
-            var diagnostic = Assert.Single(
-                result.Diagnostics,
-                item => item.Source == PreMutationDiagnosticSource.Syntax
-                    && item.Severity == DiagnosticSeverity.Error);
-            Assert.Equal("Example.cs", diagnostic.File);
-            Assert.Equal(mutationSet.Mutations[0].MutationId, diagnostic.RelatedMutationId);
-            Assert.Contains("Broken", diagnostic.ChangedHunk, StringComparison.Ordinal);
-            Assert.Equal(original, await File.ReadAllTextAsync(sourcePath));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Pre-mutation analysis removes deleted documents from the overlay compilation.</summary>
-    [Fact]
-    public static async Task SemanticEngine_PreMutationAnalysis_DeleteReportsUnchangedAffectedDiagnostics()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-delete-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            const string caller = "namespace Demo;\npublic sealed class Caller\n{\n    public Service Create() => new();\n}\n";
-            const string service = "namespace Demo;\npublic sealed class Service { }\n";
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(Path.Combine(root, "Caller.cs"), caller);
-            await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), service);
-            var sessionId = SessionId.New();
-            var workspaceId = WorkspaceId.New();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
-            await engine.LoadAsync(new SemanticLoadRequest(
-                sessionId,
-                workspaceId,
-                root,
-                projectPath,
-                RepositoryTrustLevel.TrustedBuild));
-            var mutation = CreateMutation(MutationType.DeleteFile, "Service.cs");
-            var mutationSet = CreateMutationSet(sessionId, workspaceId, mutation);
-            var baseline = CreatePreMutationBaseline(workspaceId, root, projectPath, mutationSet.BaselineCapturedAt);
-
-            var result = await engine.AnalyzePreMutationAsync(new PreMutationAnalysisRequest
-            {
-                SessionId = sessionId,
-                RunId = mutationSet.RunId,
-                WorkspaceId = workspaceId,
-                Baseline = baseline,
-                MutationSet = mutationSet,
-                OverlayFiles =
-                [
-                    new PreMutationOverlayFile
-                    {
-                        RelativePath = "Service.cs",
-                        Text = null,
-                        RelatedMutationId = mutation.MutationId,
-                    },
-                ],
-            });
-
-            Assert.Equal(PreMutationGateDecision.RepairableDiagnostics, result.Decision);
-            Assert.Contains(result.Diagnostics, diagnostic =>
-                diagnostic.Source == PreMutationDiagnosticSource.Compilation
-                && diagnostic.Severity == DiagnosticSeverity.Error
-                && string.Equals(diagnostic.File, "Caller.cs", StringComparison.Ordinal));
-            Assert.Equal(service, await File.ReadAllTextAsync(Path.Combine(root, "Service.cs")));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Pre-mutation move analysis removes the old document before adding the destination.</summary>
-    [Fact]
-    public static async Task SemanticEngine_PreMutationAnalysis_MoveDoesNotCompileDuplicateSource()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-move-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            const string service = "namespace Demo;\npublic sealed class Service { }\n";
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), service);
-            var sessionId = SessionId.New();
-            var workspaceId = WorkspaceId.New();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
-            await engine.LoadAsync(new SemanticLoadRequest(
-                sessionId,
-                workspaceId,
-                root,
-                projectPath,
-                RepositoryTrustLevel.TrustedBuild));
-            var mutation = CreateMutation(MutationType.MoveFile, "Service.cs") with
-            {
-                DestinationRelativePath = "Moved/Service.cs",
-                Content = new FileContentDescriptor { Text = service },
-            };
-            var mutationSet = CreateMutationSet(sessionId, workspaceId, mutation);
-            var baseline = CreatePreMutationBaseline(workspaceId, root, projectPath, mutationSet.BaselineCapturedAt);
-
-            var result = await engine.AnalyzePreMutationAsync(new PreMutationAnalysisRequest
-            {
-                SessionId = sessionId,
-                RunId = mutationSet.RunId,
-                WorkspaceId = workspaceId,
-                Baseline = baseline,
-                MutationSet = mutationSet,
-                OverlayFiles =
-                [
-                    new PreMutationOverlayFile
-                    {
-                        RelativePath = "Service.cs",
-                        Text = null,
-                        RelatedMutationId = mutation.MutationId,
-                    },
-                    new PreMutationOverlayFile
-                    {
-                        RelativePath = "Moved/Service.cs",
-                        Text = service,
-                        RelatedMutationId = mutation.MutationId,
-                    },
-                ],
-            });
-
-            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Code == "CS0101");
-            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-            Assert.Equal(service, await File.ReadAllTextAsync(Path.Combine(root, "Service.cs")));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Pre-mutation analysis preserves baseline diagnostics when edits shift their line numbers.</summary>
-    [Fact]
-    public static async Task SemanticEngine_PreMutationAnalysis_FiltersBaselineDiagnosticsAfterLineShift()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-lineshift-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            const string original = "namespace Demo;\npublic sealed class Example\n{\n    public Missing Existing() => new();\n}\n";
-            var changed = original.Replace("public sealed", "// inserted\npublic sealed", StringComparison.Ordinal);
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(Path.Combine(root, "Example.cs"), original);
-            var sessionId = SessionId.New();
-            var workspaceId = WorkspaceId.New();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
-            await engine.LoadAsync(new SemanticLoadRequest(
-                sessionId,
-                workspaceId,
-                root,
-                projectPath,
-                RepositoryTrustLevel.TrustedBuild));
-            var mutation = CreateMutation(MutationType.ReplaceText, "Example.cs");
-            var mutationSet = CreateMutationSet(sessionId, workspaceId, mutation);
-            var baseline = CreatePreMutationBaseline(workspaceId, root, projectPath, mutationSet.BaselineCapturedAt);
-
-            var result = await engine.AnalyzePreMutationAsync(new PreMutationAnalysisRequest
-            {
-                SessionId = sessionId,
-                RunId = mutationSet.RunId,
-                WorkspaceId = workspaceId,
-                Baseline = baseline,
-                MutationSet = mutationSet,
-                OverlayFiles =
-                [
-                    new PreMutationOverlayFile
-                    {
-                        RelativePath = "Example.cs",
-                        Text = changed,
-                        RelatedMutationId = mutation.MutationId,
-                    },
-                ],
-            });
-
-            Assert.NotEqual(PreMutationGateDecision.RepairableDiagnostics, result.Decision);
-            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-            Assert.Equal(original, await File.ReadAllTextAsync(Path.Combine(root, "Example.cs")));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Pre-mutation analysis does not block on baseline compilation diagnostics.</summary>
-    [Fact]
-    public static async Task SemanticEngine_PreMutationAnalysis_FiltersBaselineCompilationDiagnostics()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-baseline-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            const string caller = "namespace Demo;\npublic sealed class Caller\n{\n    public Missing Existing() => new();\n}\n";
-            const string service = "namespace Demo;\npublic sealed class Service\n{\n    public int Value => 1;\n}\n";
-            var changedService = service.Replace("1", "2", StringComparison.Ordinal);
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(Path.Combine(root, "Caller.cs"), caller);
-            await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), service);
-            var sessionId = SessionId.New();
-            var workspaceId = WorkspaceId.New();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
-            await engine.LoadAsync(new SemanticLoadRequest(
-                sessionId,
-                workspaceId,
-                root,
-                projectPath,
-                RepositoryTrustLevel.TrustedBuild));
-            var mutation = CreateMutation(MutationType.ReplaceText, "Service.cs");
-            var mutationSet = CreateMutationSet(sessionId, workspaceId, mutation);
-            var baseline = CreatePreMutationBaseline(workspaceId, root, projectPath, mutationSet.BaselineCapturedAt);
-
-            var result = await engine.AnalyzePreMutationAsync(new PreMutationAnalysisRequest
-            {
-                SessionId = sessionId,
-                RunId = mutationSet.RunId,
-                WorkspaceId = workspaceId,
-                Baseline = baseline,
-                MutationSet = mutationSet,
-                OverlayFiles =
-                [
-                    new PreMutationOverlayFile
-                    {
-                        RelativePath = "Service.cs",
-                        Text = changedService,
-                        RelatedMutationId = mutation.MutationId,
-                    },
-                ],
-            });
-
-            Assert.NotEqual(PreMutationGateDecision.RepairableDiagnostics, result.Decision);
-            Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
-            Assert.Equal(service, await File.ReadAllTextAsync(Path.Combine(root, "Service.cs")));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
-    /// <summary>Pre-mutation analysis reports compilation diagnostics in unchanged affected files.</summary>
-    [Fact]
-    public static async Task SemanticEngine_PreMutationAnalysis_ReportsDiagnosticsOutsideChangedFiles()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-premutation-affected-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(root);
-        try
-        {
-            var projectPath = Path.Combine(root, "App.csproj");
-            const string caller = "namespace Demo;\npublic sealed class Caller\n{\n    public int Read(Service service) => service.Value;\n}\n";
-            const string service = "namespace Demo;\npublic sealed class Service\n{\n    public int Value => 1;\n}\n";
-            var changedService = service.Replace("Value", "Renamed", StringComparison.Ordinal);
-            await File.WriteAllTextAsync(projectPath, CreateMinimalProjectText());
-            await File.WriteAllTextAsync(Path.Combine(root, "Caller.cs"), caller);
-            await File.WriteAllTextAsync(Path.Combine(root, "Service.cs"), service);
-            var sessionId = SessionId.New();
-            var workspaceId = WorkspaceId.New();
-            await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
-            await engine.LoadAsync(new SemanticLoadRequest(
-                sessionId,
-                workspaceId,
-                root,
-                projectPath,
-                RepositoryTrustLevel.TrustedBuild));
-            var mutation = CreateMutation(MutationType.ReplaceText, "Service.cs");
-            var mutationSet = CreateMutationSet(sessionId, workspaceId, mutation);
-            var baseline = CreatePreMutationBaseline(workspaceId, root, projectPath, mutationSet.BaselineCapturedAt);
-
-            var result = await engine.AnalyzePreMutationAsync(new PreMutationAnalysisRequest
-            {
-                SessionId = sessionId,
-                RunId = mutationSet.RunId,
-                WorkspaceId = workspaceId,
-                Baseline = baseline,
-                MutationSet = mutationSet,
-                OverlayFiles =
-                [
-                    new PreMutationOverlayFile
-                    {
-                        RelativePath = "Service.cs",
-                        Text = changedService,
-                        RelatedMutationId = mutation.MutationId,
-                    },
-                ],
-            });
-
-            Assert.Equal(PreMutationGateDecision.RepairableDiagnostics, result.Decision);
-            Assert.Contains(result.Diagnostics, diagnostic =>
-                diagnostic.Source == PreMutationDiagnosticSource.Compilation
-                && diagnostic.Severity == DiagnosticSeverity.Error
-                && string.Equals(diagnostic.File, "Caller.cs", StringComparison.Ordinal));
-            Assert.Equal(service, await File.ReadAllTextAsync(Path.Combine(root, "Service.cs")));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     /// <summary>Fast semantic diagnostics stop compiling source files deleted after the workspace was loaded.</summary>
     [Fact]
     public static async Task SemanticEngine_DiagnosticsRefreshDeletedSourceDocuments()
@@ -692,7 +311,7 @@ public static class Milestone3Tests
                 servicePath,
                 "namespace Demo;\npublic sealed class Service\n{\n}\n");
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
             var request = new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -735,6 +354,7 @@ public static class Milestone3Tests
         await using var engines = new SemanticEngineRegistry(
             events,
             NullLoggerFactory.Instance,
+            TestPromptLoader.Instance,
             TimeSpan.FromMilliseconds(100));
         await using var observer = new SemanticLifecycleObserver(
             engines,
@@ -797,7 +417,7 @@ public static class Milestone3Tests
             var sessionId = SessionId.New();
             var workspaceId = WorkspaceId.New();
             await using var events = new DomainEventStream();
-            await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            await using var engines = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
             await using var observer = new SemanticLifecycleObserver(
                 engines,
                 events,
@@ -855,6 +475,7 @@ public static class Milestone3Tests
         await using var engines = new SemanticEngineRegistry(
             events,
             NullLoggerFactory.Instance,
+            TestPromptLoader.Instance,
             TimeSpan.FromMilliseconds(100));
 
         await engines.LoadAsync(new SemanticLoadRequest(
@@ -888,7 +509,7 @@ public static class Milestone3Tests
             "semantic",
             "SmallDotNetSolution");
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         var request = new SemanticLoadRequest(
             SessionId.New(),
             WorkspaceId.New(),
@@ -955,7 +576,7 @@ public static class Milestone3Tests
                 Path.Combine(root, "Oversized.cs"),
                 "TargetSymbol();" + new string('x', (1024 * 1024) + 1));
             await using var events = new DomainEventStream();
-            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance);
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
             await engine.LoadAsync(new SemanticLoadRequest(
                 SessionId.New(),
                 WorkspaceId.New(),
@@ -1289,9 +910,9 @@ public static class Milestone3Tests
             [
                 new ModelToolDefinition
                 {
-                    Name = "propose_plan",
+                    Name = "inspect_file",
                     Description = "Propose governed work.",
-                    ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"plan\":{\"type\":\"object\",\"description\":\"The complete proposed plan.\"}}}",
+                    ArgumentsJsonSchema = "{\"type\":\"object\",\"properties\":{\"file\":{\"type\":\"object\",\"description\":\"The file to inspect.\"}}}",
                     PreferStrictArguments = true,
                 },
             ],
@@ -1302,17 +923,17 @@ public static class Milestone3Tests
         var tool = Assert.Single(document.RootElement.GetProperty("tools").EnumerateArray());
         Assert.Equal("function", tool.GetProperty("type").GetString());
         var function = tool.GetProperty("function");
-        Assert.Equal("propose_plan", function.GetProperty("name").GetString());
+        Assert.Equal("inspect_file", function.GetProperty("name").GetString());
         Assert.Equal("Propose governed work.", function.GetProperty("description").GetString());
         Assert.True(function.GetProperty("strict").GetBoolean());
         var parameters = function.GetProperty("parameters");
         Assert.Equal("object", parameters.GetProperty("type").GetString());
         Assert.False(parameters.GetProperty("additionalProperties").GetBoolean());
-        Assert.Equal(["plan"], parameters.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
-        var planSchema = parameters.GetProperty("properties").GetProperty("plan");
-        Assert.Equal("The complete proposed plan.", planSchema.GetProperty("description").GetString());
+        Assert.Equal(["file"], parameters.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
+        var fileSchema = parameters.GetProperty("properties").GetProperty("file");
+        Assert.Equal("The file to inspect.", fileSchema.GetProperty("description").GetString());
         Assert.Contains(
-            planSchema.GetProperty("type").EnumerateArray(),
+            fileSchema.GetProperty("type").EnumerateArray(),
             item => item.GetString() == "null");
         Assert.False(document.RootElement.GetProperty("parallel_tool_calls").GetBoolean());
         Assert.False(document.RootElement.TryGetProperty("response_format", out _));
@@ -1396,7 +1017,7 @@ public static class Milestone3Tests
             Messages =
             [
                 CreateStructuredMessage(ModelMessageRole.System, "host-policy", "Host policy."),
-                CreateStructuredMessage(ModelMessageRole.System, "phase-policy", "Phase policy."),
+                CreateStructuredMessage(ModelMessageRole.System, "conversation-policy", "Phase policy."),
                 CreateStructuredMessage(ModelMessageRole.Developer, "context", "Use available tools."),
                 CreateStructuredMessage(ModelMessageRole.User, "request", "Inspect the repository."),
             ],
@@ -3059,55 +2680,6 @@ public static class Milestone3Tests
         "    <Nullable>enable</Nullable>\n" +
         "  </PropertyGroup>\n" +
         "</Project>\n";
-    }
-
-    private static Mutation CreateMutation(
-        MutationType type,
-        string relativePath)
-    {
-        return new Mutation
-        {
-            MutationId = MutationId.New(),
-            Type = type,
-            RelativePath = relativePath,
-            StartOffset = 0,
-            Length = 0,
-            ExpectedText = string.Empty,
-            ReplacementText = string.Empty,
-            BaselineSha256 = string.Empty,
-        };
-    }
-
-    private static MutationSet CreateMutationSet(
-        SessionId sessionId,
-        WorkspaceId workspaceId,
-        Mutation mutation)
-    {
-        return new MutationSet
-        {
-            MutationSetId = MutationSetId.New(),
-            SessionId = sessionId,
-            RunId = RunId.New(),
-            WorkspaceId = workspaceId,
-            BaselineCapturedAt = DateTimeOffset.UtcNow,
-            Mutations = [mutation],
-            Rationale = "Pre-mutation regression test.",
-        };
-    }
-
-    private static WorkspaceBaseline CreatePreMutationBaseline(
-        WorkspaceId workspaceId,
-        string root,
-        string projectPath,
-        DateTimeOffset capturedAt)
-    {
-        return new WorkspaceBaseline(
-            workspaceId,
-            root,
-            capturedAt,
-            [],
-            SelectedSolutionPath: projectPath,
-            TrustLevel: RepositoryTrustLevel.TrustedBuild);
     }
 
     private sealed class CapturingModelProvider : IModelProvider

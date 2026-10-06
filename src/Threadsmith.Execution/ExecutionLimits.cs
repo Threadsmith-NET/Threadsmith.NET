@@ -12,22 +12,12 @@ public sealed record ExecutionLimits
     /// <summary>Default model continuation-round limit. Zero means disabled.</summary>
     public const int DefaultMaxModelRounds = 0;
 
-    /// <summary>Default separate evidence-collection inspection-tool cutoff. Zero means disabled.</summary>
-    public const int DefaultMaxPlanningToolRounds = 0;
-
     /// <summary>
-    /// Optional maximum number of model continuation rounds within one plan-generation cycle.
+    /// Optional maximum number of model continuation rounds within one conversation.
     /// A value of zero or less disables the separate continuation-round cutoff so cancellation,
     /// tool policy, output accounting, and user-controlled budgets govern the run. Default: 0.
     /// </summary>
     public int MaxModelRounds { get; init; } = DefaultMaxModelRounds;
-
-    /// <summary>
-    /// Optional maximum initial evidence-collection rounds that advertise repository inspection tools.
-    /// A value of zero or less disables the separate cutoff so read-only exploration can use the
-    /// full continuation budget. Default: 0.
-    /// </summary>
-    public int MaxPlanningToolRounds { get; init; } = DefaultMaxPlanningToolRounds;
 
     /// <summary>
     /// Maximum active-turn corrective messages for recoverable malformed or invalid model requests.
@@ -57,20 +47,8 @@ public sealed record ExecutionLimits
     /// <summary>Maximum timer interval before buffered model output is published. Default: 50 ms.</summary>
     public int ModelOutputFlushIntervalMilliseconds { get; init; } = 50;
 
-    /// <summary>Soft targets used to encourage incremental approved-plan mutation proposals.</summary>
-    public MutationBatchingOptions MutationBatching { get; init; } = new();
-
-    /// <summary>Controls incremental planning across one user objective.</summary>
-    public IncrementalPlanningOptions IncrementalPlanning { get; init; } = new();
-
-    /// <summary>Structured plan admission limits.</summary>
-    public PlanResourceLimits Plan { get; init; } = new();
-
     /// <summary>Maximum source references retained for model context provenance.</summary>
     public int MaxSourceFrontierEntries { get; init; } = 256;
-
-    /// <summary>Maximum retained structured plan sanity issues.</summary>
-    public int MaxPlanSanityIssues { get; init; } = 32;
 
     /// <summary>Maximum characters accepted in a steering submission.</summary>
     public int MaxSteeringCharacters { get; init; } = 100000;
@@ -84,66 +62,19 @@ public sealed record ExecutionLimits
     /// <summary>Maximum child display line retained before complete-line sanitization.</summary>
     public int MaxAgentDisplayLineCharacters { get; init; } = 16384;
 
-    /// <summary>Validates positive buffer limits and structured-plan limits.</summary>
+    /// <summary>Validates operational buffer limits.</summary>
     public void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxModelOutputBatchCharacters, 2);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ModelOutputFlushIntervalMilliseconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxSourceFrontierEntries);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxPlanSanityIssues);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxSteeringCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxAgentDisplayFragments);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaxAgentDisplayFragmentCharacters, 2);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaxAgentDisplayLineCharacters);
         ArgumentOutOfRangeException.ThrowIfNegative(MaxRetainedToolCalls);
-        ArgumentNullException.ThrowIfNull(MutationBatching);
-        MutationBatching.Validate();
-        ArgumentNullException.ThrowIfNull(IncrementalPlanning);
-        IncrementalPlanning.Validate();
-        Plan.Validate();
     }
 
     /// <summary>The compiled-in defaults used when no configuration is supplied.</summary>
     public static ExecutionLimits Default { get; } = new();
-}
-
-/// <summary>Configurable soft sizing guidance for incremental plan tranches.</summary>
-public sealed record IncrementalPlanningOptions
-{
-    /// <summary>Whether a completed plan returns to planning until the objective is complete.</summary>
-    public bool Enabled { get; init; } = true;
-
-    /// <summary>Preferred maximum number of steps in one independently valid plan tranche.</summary>
-    public int TargetSteps { get; init; } = 4;
-
-    /// <summary>Preferred maximum number of distinct affected paths in one plan tranche.</summary>
-    public int TargetFiles { get; init; } = 8;
-
-    /// <summary>Rejects nonpositive targets.</summary>
-    public void Validate()
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetSteps);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetFiles);
-    }
-}
-
-/// <summary>Configurable soft sizing targets for one mutation proposal.</summary>
-public sealed record MutationBatchingOptions
-{
-    /// <summary>Preferred maximum number of model-authored operations in one coherent batch.</summary>
-    public int TargetMutations { get; init; } = 8;
-
-    /// <summary>Preferred maximum number of distinct source and destination paths in one batch.</summary>
-    public int TargetFiles { get; init; } = 3;
-
-    /// <summary>Preferred aggregate mutation-content characters in one batch.</summary>
-    public long TargetMutationCharacters { get; init; } = 24_000;
-
-    /// <summary>Rejects nonpositive target values.</summary>
-    public void Validate()
-    {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetMutations);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetFiles);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TargetMutationCharacters);
-    }
 }

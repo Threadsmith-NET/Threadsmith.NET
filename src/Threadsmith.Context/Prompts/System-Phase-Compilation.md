@@ -1,1 +1,0 @@
-Analyze introduced diagnostics using changed code and accepted decisions only.

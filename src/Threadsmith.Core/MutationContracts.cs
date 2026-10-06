@@ -200,6 +200,9 @@ public sealed record Mutation
 /// <summary>A bounded, ordered mutation proposal tied to one immutable baseline.</summary>
 public sealed record MutationSet
 {
+    /// <summary>Host policy requires explicit exact-diff review even when mutation policy would auto-approve.</summary>
+    public bool RequireExplicitReview { get; init; }
+
     /// <summary>Stable mutation-set identity.</summary>
     public required MutationSetId MutationSetId { get; init; }
 
@@ -235,9 +238,6 @@ public sealed record MutationSet
 
     /// <summary>Risk classification supplied by the proposal source.</summary>
     public MutationRisk Risk { get; init; } = MutationRisk.Medium;
-
-    /// <summary>Whether every target is contained by the accepted plan's declared file scope.</summary>
-    public bool IsWithinApprovedPlan { get; init; }
 
     /// <summary>Required approval mode.</summary>
     public MutationApprovalLevel RequiredApproval { get; init; } = MutationApprovalLevel.EntireSet;
@@ -345,37 +345,6 @@ public sealed record StagedMutationSet(
     public bool? StepComplete { get; init; }
 }
 
-/// <summary>Validated result of one incremental mutation-proposal turn.</summary>
-public sealed record MutationProposalResult
-{
-    /// <summary>Staged exact diff when the proposal contains changes.</summary>
-    public StagedMutationSet? StagedMutationSet { get; init; }
-
-    /// <summary>Optional model claim that the selected approved step is complete.</summary>
-    public bool? StepComplete { get; init; }
-
-    /// <summary>Sanitized explanation of the proposed progress, completion claim, or replanning request.</summary>
-    public required string Rationale { get; init; }
-
-    /// <summary>Cumulative execution-budget usage after this proposal turn.</summary>
-    public BudgetDimensions? BudgetUsed { get; init; }
-
-    /// <summary>Whether the reason requests renewed planning instead of a mutation or completion.</summary>
-    public bool ReplanRequested { get; init; }
-
-    /// <summary>Whether this is a no-change completion candidate.</summary>
-    public bool IsCompletionOnly => !ReplanRequested && StagedMutationSet is null && StepComplete == true;
-}
-
-/// <summary>Produces one validated incremental proposal through the established mutation path.</summary>
-public interface IIncrementalMutationProposalProvider
-{
-    /// <summary>Produces staged changes, a no-change completion candidate, or a replanning request.</summary>
-    Task<MutationProposalResult> ProposeAsync(
-        ProposeMutationSetCommand command,
-        CancellationToken cancellationToken = default);
-}
-
 /// <summary>Explicit authorization selecting which staged mutations may commit.</summary>
 public sealed record MutationApproval
 {
@@ -419,6 +388,29 @@ public sealed record WorkspaceIsolation(
 /// <summary>Transactional file workspace with immutable baseline reads and private staging.</summary>
 public interface ITransactionalWorkspace : IAsyncDisposable
 {
+    /// <summary>Checks endpoint policy before reading requested source.</summary>
+    void ValidateEditPaths(IEnumerable<string> relativePaths)
+    {
+        throw new NotSupportedException("This workspace cannot admit direct editing.");
+    }
+
+    /// <summary>Captures the writer's exact bytes for the approved subset before recording durable intent.</summary>
+    Task<MutationEffectSnapshot> CaptureEffectAsync(
+        MutationSetId mutationSetId,
+        MutationApproval approval,
+        CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("This workspace cannot capture durable edit effects.");
+    }
+
+    /// <summary>Compares durable endpoint identities without writing or replaying an effect.</summary>
+    Task<MutationEffectReconciliation> ReconcileEffectAsync(
+        MutationEffectSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("This workspace cannot reconcile durable edit effects.");
+    }
+
     /// <summary>Immutable repository baseline captured for this workspace.</summary>
     WorkspaceBaseline Baseline { get; }
 
@@ -475,6 +467,18 @@ public interface ITransactionalWorkspace : IAsyncDisposable
 /// <summary>Resolves transactional workspaces and registers staged sets for command-boundary ownership checks.</summary>
 public interface ITransactionalWorkspaceResolver
 {
+    /// <summary>Discards abandoned staging only if the writer has never attempted its effects.</summary>
+    Task DiscardUnattemptedEditAsync(WorkspaceId workspaceId, MutationSetId mutationSetId, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("This workspace owner cannot discard direct edit staging.");
+    }
+
+    /// <summary>Serializes the complete edit/review/commit lifetime across sessions bound to the same repository.</summary>
+    Task<IAsyncDisposable> AcquireEditLeaseAsync(WorkspaceId workspaceId, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("This workspace owner cannot admit direct edits.");
+    }
+
     /// <summary>Gets a registered transactional workspace.</summary>
     ITransactionalWorkspace GetWorkspace(WorkspaceId workspaceId);
 
@@ -516,40 +520,6 @@ public sealed record CommitMutationSetCommand(
 public sealed record RollbackMutationSetCommand(
     SessionId SessionId,
     MutationSetId MutationSetId) : ICommand<MutationRollbackResult>;
-
-/// <summary>Bounded host-owned corrective context for one governed mutation proposal turn.</summary>
-/// <param name="Category">Correction category that produced the retry.</param>
-/// <param name="AttemptNumber">One-based correction attempt number.</param>
-/// <param name="MaximumAttempts">Configured maximum correction attempts.</param>
-/// <param name="SafeReason">Sanitized bounded reason that excludes raw model payloads, source bodies, and logs.</param>
-public sealed record MutationCorrectionContext(
-    ModelCorrectionCategory Category,
-    int AttemptNumber,
-    int MaximumAttempts,
-    string SafeReason);
-
-/// <summary>Requests one governed model mutation proposal against an approved plan.</summary>
-public sealed record ProposeMutationSetCommand(
-    SessionId SessionId,
-    RunId RunId,
-    WorkspaceId WorkspaceId,
-    TaskSpecification Task,
-    ImplementationPlan ApprovedPlan,
-    RunPhase Phase = RunPhase.MutationPreparation,
-    MutationCorrectionContext? Correction = null) : ICommand<StagedMutationSet>
-{
-    /// <summary>Optional host-selected step and batch scope for approved-plan execution.</summary>
-    public MutationExecutionScope? ExecutionScope { get; init; }
-
-    /// <summary>Whether the owning execution can return a request_replan decision to planning.</summary>
-    public bool AllowReplanning { get; init; }
-
-    /// <summary>Cumulative budget usage to restore before this proposal turn.</summary>
-    public BudgetDimensions? BudgetUsed { get; init; }
-
-    /// <summary>Whether failures should carry newly consumed budget usage back to the caller.</summary>
-    public bool ReportBudgetUsageOnFailure { get; init; }
-}
 
 /// <summary>Parameters for compiler-aware symbol rename.</summary>
 public sealed record RenameSymbolMutationRequest

@@ -1,5 +1,7 @@
 # ADR-34 — Governed declarative skills and reusable workflows
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 **Status:** Accepted
 
 ## Context
@@ -28,3 +30,7 @@ SQLite migration 5 stores verification provenance, immutable pins, and versioned
 - Maintained analyzer, package-upgrade, and review packages exercise the same untrusted-data pipeline as third-party packages.
 - Extension assemblies remain the mechanism for new executable capabilities; skills remain declarative orchestration over existing host capabilities.
 - Marketplace hosting, Git/PR publication, automatic dependency restore, arbitrary scripting, nested skills, and package-owned concurrency remain outside M12.
+
+## Direct-editing amendment (2026-10-05)
+
+Skills cannot propose, approve or execute plans through host actions. Retired plan workflow nodes are rejected. Maintained remediation skills produce advisory procedure output; edits use the ordinary tool and exact authorization path. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

@@ -1,5 +1,7 @@
 # ADR-58: Current mutation baselines and text anchors
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 Status: Accepted
 
 ## Context
@@ -17,3 +19,7 @@ Render known file-read evidence as decoded lines with all metadata, provenance, 
 ## Consequences
 
 Manual rollbacks before a fresh execution no longer leave that execution targeting old approved-file bytes. Source snapshots outside the approved endpoints are reused. Changes after the boundary still conflict; refresh is never an approval bypass. The prompt removes unnecessary character-counting work and escaping, but provider latency remains variable and needs live measurement.
+
+## Direct-editing amendment (2026-10-05)
+
+Source anchors target current authoritative bytes and ordered earlier operations in the same edit. The shared materializer retains line-ending normalization and exact unique anchors; it neither inherits plan authority nor computes unused fuzzy repair suggestions. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

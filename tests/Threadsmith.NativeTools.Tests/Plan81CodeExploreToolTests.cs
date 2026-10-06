@@ -921,7 +921,7 @@ public sealed class Plan81CodeExploreToolTests
         var repositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-plan81-unavailable-{Guid.NewGuid():N}");
         Directory.CreateDirectory(repositoryPath);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         try
         {
             var workspaceId = WorkspaceId.New();
@@ -1398,7 +1398,7 @@ public sealed class Plan81CodeExploreToolTests
             WriteLinkedProject(repositoryPath, "LinkedTwo");
             WriteLinkedProject(repositoryPath, "LinkedThree");
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
             var workspaceId = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(

@@ -10,7 +10,6 @@ public class InteractionController
     private readonly Func<string, Task, CancellationToken, Task>? _presentProgressAsync;
     private readonly Func<string, CancellationToken, Task>? _presentRememberedSolutionAsync;
     private RunId? _activeRunId;
-    private RunId? _backgroundValidationRunId;
     private WorkspaceBaseline? _baseline;
     private RunId? _latestRunId;
     private SessionId? _sessionId;
@@ -54,18 +53,6 @@ public class InteractionController
             lock (_gate)
             {
                 return _activeRunId;
-            }
-        }
-    }
-
-    /// <summary>Gets the run currently validating after an applied mutation.</summary>
-    public RunId? BackgroundValidationRunId
-    {
-        get
-        {
-            lock (_gate)
-            {
-                return _backgroundValidationRunId;
             }
         }
     }
@@ -148,12 +135,6 @@ public class InteractionController
                 throw new InvalidOperationException("A run is already active.");
             }
 
-            if (_backgroundValidationRunId is not null)
-            {
-                throw new InvalidOperationException(
-                    "Post-apply validation is still running; wait for the validation result or correction prompt.");
-            }
-
             if (_stagedMutationSet is not null)
             {
                 throw new InvalidOperationException(
@@ -192,27 +173,6 @@ public class InteractionController
         }
 
         return _presenter.ForceSemanticRefreshAsync(sessionId, cancellationToken);
-    }
-
-    /// <summary>Gets the current plan approval policy through the shared host boundary.</summary>
-    public Task<PlanApprovalPolicy> GetPlanApprovalPolicyAsync(CancellationToken cancellationToken = default)
-    {
-        return _presenter.GetPlanApprovalPolicyAsync(cancellationToken);
-    }
-
-    /// <summary>Sets the current plan approval policy through the shared host boundary.</summary>
-    public Task<PlanApprovalPolicy> SetPlanApprovalPolicyAsync(
-        PlanApprovalPolicy policy,
-        CancellationToken cancellationToken = default)
-    {
-        SessionId sessionId;
-        lock (_gate)
-        {
-            sessionId = _sessionId
-                ?? throw new InvalidOperationException("The TUI session is not open.");
-        }
-
-        return _presenter.SetPlanApprovalPolicyAsync(policy, sessionId, cancellationToken);
     }
 
     /// <summary>Executes one MCP lifecycle operation through the shared host manager.</summary>
@@ -605,17 +565,30 @@ public class InteractionController
                 ?? throw new InvalidOperationException("No run is active.");
         }
 
+        var terminal = false;
         try
         {
-            return await _presenter.WaitAsync(runId, cancellationToken);
+            var result = await _presenter.WaitAsync(runId, cancellationToken);
+            terminal = true;
+            return result;
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            terminal = true;
+            throw;
         }
         finally
         {
             lock (_gate)
             {
-                if (_activeRunId == runId)
+                if (terminal && _activeRunId == runId)
                 {
                     _activeRunId = null;
+                }
+
+                if (terminal && _stagedMutationSet?.MutationSet.RunId == runId)
+                {
+                    _stagedMutationSet = null;
                 }
             }
         }
@@ -657,6 +630,11 @@ public class InteractionController
             if (_activeRunId == runId)
             {
                 _activeRunId = null;
+            }
+
+            if (_stagedMutationSet?.MutationSet.RunId == runId)
+            {
+                _stagedMutationSet = null;
             }
         }
 
@@ -702,97 +680,6 @@ public class InteractionController
             cancellationToken);
     }
 
-    /// <summary>Approves the active run's pending plan.</summary>
-    public Task<bool> ApproveActivePlanAsync(CancellationToken cancellationToken = default)
-    {
-        return DispatchActivePlanDecisionAsync(
-                (sessionId, runId) => _presenter.ApprovePlanAsync(
-                    sessionId,
-                    runId,
-                    cancellationToken));
-    }
-
-    /// <summary>Approves the active plan and starts its governed mutation-preparation pass.</summary>
-    public async Task<StagedMutationSet?> ApproveActivePlanAndProposeMutationSetAsync(
-        CancellationToken cancellationToken = default)
-    {
-        SessionId sessionId;
-        RunId runId;
-        lock (_gate)
-        {
-            sessionId = _sessionId
-                ?? throw new InvalidOperationException("The TUI session is not open.");
-            runId = _activeRunId
-                ?? throw new InvalidOperationException("No run is active.");
-        }
-
-        var state = await _presenter.GetSessionProjectionAsync(sessionId, cancellationToken)
-            ?? throw new InvalidOperationException("The TUI session projection is not available.");
-        var plan = state.Plan;
-        if (plan is null
-            || plan.RunId != runId
-            || plan.Status != PlanReviewStatus.Pending
-            || string.IsNullOrWhiteSpace(state.Intent))
-        {
-            throw new InvalidOperationException(
-                "An active approved-plan review and submitted request are required before mutation preparation.");
-        }
-
-        var approved = await _presenter.ApprovePlanAsync(sessionId, runId, cancellationToken);
-        if (!approved)
-        {
-            return null;
-        }
-
-        var staged = await _presenter.GetExecutionMutationAsync(
-            sessionId,
-            runId,
-            cancellationToken);
-        if (staged is null)
-        {
-            return null;
-        }
-
-        lock (_gate)
-        {
-            _stagedMutationSet = staged;
-        }
-
-        _ = ObserveNonFatalAsync(_presenter.PrepareExecutionValidationAsync(
-            sessionId,
-            runId,
-            CancellationToken.None));
-        return staged;
-    }
-
-    /// <summary>Rejects the active run's pending plan.</summary>
-    public Task<bool> RejectActivePlanAsync(
-        string reason,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        return DispatchActivePlanDecisionAsync(
-            (sessionId, runId) => _presenter.RejectPlanAsync(
-                sessionId,
-                runId,
-                reason,
-                cancellationToken));
-    }
-
-    /// <summary>Requests a revision of the active run's pending plan.</summary>
-    public Task<bool> ReviseActivePlanAsync(
-        string instructions,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(instructions);
-        return DispatchActivePlanDecisionAsync(
-            (sessionId, runId) => _presenter.RevisePlanAsync(
-                sessionId,
-                runId,
-                instructions,
-                cancellationToken));
-    }
-
     /// <summary>Loads the exact staged mutation referenced by a review-ready event.</summary>
     public async Task<StagedMutationSet> LoadMutationReviewAsync(
         MutationSetId mutationSetId,
@@ -829,107 +716,47 @@ public class InteractionController
         CancellationToken cancellationToken = default)
     {
         SessionId sessionId;
-        WorkspaceBaseline baseline;
-        StagedMutationSet staged;
         lock (_gate)
         {
             sessionId = _sessionId
                 ?? throw new InvalidOperationException("The TUI session is not open.");
-            baseline = _baseline
-                ?? throw new InvalidOperationException("No immutable workspace baseline is available.");
-            staged = _stagedMutationSet is { } candidate
-                && candidate.MutationSet.MutationSetId == mutationSetId
-                    ? candidate
-                    : throw new InvalidOperationException("The reviewed mutation set is not staged.");
+            if (_stagedMutationSet?.MutationSet.MutationSetId != mutationSetId)
+            {
+                throw new InvalidOperationException("The reviewed mutation set is not staged.");
+            }
         }
 
-        _ = baseline;
-        var applied = await _presenter.ApplyExecutionMutationAsync(
-            new ContinueExecutionRequest
-            {
-                SessionId = sessionId,
-                RunId = staged.MutationSet.RunId,
-                Approval = approval,
-                ApprovalProvenance = approval.Level == MutationApprovalLevel.PolicyAutoApproved
-                    ? "host mutation policy"
-                    : "interactive user approval",
-            },
-            cancellationToken);
+        var result = await _presenter.CommitMutationSetAsync(sessionId, mutationSetId, approval, cancellationToken);
         lock (_gate)
         {
             if (_stagedMutationSet?.MutationSet.MutationSetId == mutationSetId)
             {
                 _stagedMutationSet = null;
             }
-
-            if (_activeRunId == staged.MutationSet.RunId)
-            {
-                _activeRunId = null;
-            }
-
-            _backgroundValidationRunId = staged.MutationSet.RunId;
         }
 
-        return new MutationCommitResult(
-            mutationSetId,
-            staged.MutationSet.Mutations.Select(mutation => mutation.MutationId).ToArray(),
-            applied.ChangedFiles,
-            staged.MutationSet.BaselineRevision ?? string.Empty,
-            RequiresAcceptance: false)
-        {
-            LifecycleReconciliations = applied.LifecycleReconciliations.ToArray(),
-        };
+        return result;
     }
 
-    /// <summary>Resumes post-apply validation for a backgrounded execution run.</summary>
-    public async Task<ExecutionContinuation> ResumeAppliedMutationValidationAsync(
-        RunId runId,
-        CancellationToken cancellationToken = default)
+    /// <summary>Declines the exact pending edit without ending its ordinary conversation.</summary>
+    public async Task<bool> RejectSourceEditAsync(MutationSetId mutationSetId, CancellationToken cancellationToken = default)
     {
         SessionId sessionId;
         lock (_gate)
         {
-            sessionId = _sessionId
-                ?? throw new InvalidOperationException("The TUI session is not open.");
+            sessionId = _sessionId ?? throw new InvalidOperationException("The TUI session is not open.");
         }
 
-        var continuation = await _presenter.ResumeExecutionAsync(
-            sessionId,
-            runId,
-            cancellationToken);
-        if (continuation.Phase == ExecutionCheckpointPhase.MutationApprovalPending)
+        var rejected = await _presenter.RejectSourceEditAsync(sessionId, mutationSetId, cancellationToken);
+        lock (_gate)
         {
-            var correction = await _presenter.GetExecutionMutationAsync(
-                sessionId,
-                runId,
-                cancellationToken) ?? throw new InvalidOperationException(
-                    "Correction execution did not expose its staged exact diff.");
-            lock (_gate)
+            if (rejected && _stagedMutationSet?.MutationSet.MutationSetId == mutationSetId)
             {
-                _stagedMutationSet = correction;
-                _activeRunId = runId;
-            }
-        }
-        else if (continuation.Phase is ExecutionCheckpointPhase.PlanContinuationPending or ExecutionCheckpointPhase.PlanReplanningPending)
-        {
-            lock (_gate)
-            {
-                _activeRunId = runId;
+                _stagedMutationSet = null;
             }
         }
 
-        if (CanReleasePostApplyValidationGuard(continuation.Phase))
-        {
-            lock (_gate)
-            {
-                if (_backgroundValidationRunId == runId)
-                {
-                    _backgroundValidationRunId = null;
-                }
-            }
-        }
-
-        return continuation;
+        return rejected;
     }
 
     /// <summary>Discards or restores a mutation set through the active session command boundary.</summary>
@@ -988,47 +815,20 @@ public class InteractionController
         {
             _sessionId = sessionId;
             _activeRunId = null;
-            _backgroundValidationRunId = null;
             _latestRunId = null;
             _stagedMutationSet = null;
         }
-    }
-
-    private static bool CanReleasePostApplyValidationGuard(ExecutionCheckpointPhase phase)
-    {
-        return phase is ExecutionCheckpointPhase.Completed
-            or ExecutionCheckpointPhase.Failed
-            or ExecutionCheckpointPhase.Cancelled
-            or ExecutionCheckpointPhase.RolledBack
-            or ExecutionCheckpointPhase.PlanContinuationPending
-            or ExecutionCheckpointPhase.PlanReplanningPending
-            or ExecutionCheckpointPhase.MutationApprovalPending;
     }
 
     private void EnsureSafeTransitionBoundary()
     {
         lock (_gate)
         {
-            if (_activeRunId is not null || _backgroundValidationRunId is not null)
+            if (_activeRunId is not null)
             {
                 throw new InvalidOperationException(
                     "Session transition requires the active run and post-apply validation to complete or be cancelled.");
             }
-        }
-    }
-
-    private static async Task ObserveNonFatalAsync(Task task)
-    {
-        ArgumentNullException.ThrowIfNull(task);
-        try
-        {
-#pragma warning disable VSTHRD003 // The controller intentionally observes best-effort background preparation.
-            await task;
-#pragma warning restore VSTHRD003
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            // Best-effort pre-capture only; the apply path repeats the baseline capture when needed.
         }
     }
 
@@ -1039,21 +839,5 @@ public class InteractionController
             return _sessionId
                 ?? throw new InvalidOperationException("The TUI session is not open.");
         }
-    }
-
-    private Task<bool> DispatchActivePlanDecisionAsync(
-        Func<SessionId, RunId, Task<bool>> decision)
-    {
-        SessionId? sessionId;
-        RunId? runId;
-        lock (_gate)
-        {
-            sessionId = _sessionId;
-            runId = _activeRunId;
-        }
-
-        return sessionId is not null && runId is not null
-            ? decision(sessionId.Value, runId.Value)
-            : Task.FromResult(false);
     }
 }

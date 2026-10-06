@@ -1440,7 +1440,6 @@ public static partial class ToolRuntimeTests
                 new ToolRegistry([new RunProcessTool(
                     manager,
                     TestPromptLoader.Instance,
-                    allowedExecutables: [shell],
                     shellExecutable: shell)]),
                 new DefaultPolicyEngine(),
                 new AllowApprovalPolicy(),
@@ -2413,7 +2412,6 @@ public static partial class ToolRuntimeTests
                 new ToolRegistry([new RunProcessTool(
                     manager,
                     TestPromptLoader.Instance,
-                    allowedExecutables: [shell],
                     shellExecutable: shell)]),
                 new DefaultPolicyEngine(),
                 new AllowApprovalPolicy(),
@@ -2454,14 +2452,13 @@ public static partial class ToolRuntimeTests
         }
     }
 
-    /// <summary>Run-process exposes its schema but is withheld when the host cannot obtain required approval.</summary>
+    /// <summary>Run-process exposes its schema and retains required approval for the invocation pipeline.</summary>
     [Fact]
-    public static void RunProcess_ApprovalRequired_IsNotConversationAvailable()
+    public static void RunProcess_ApprovalRequired_RetainsPolicyMetadata()
     {
         var tool = new RunProcessTool(
             new DirectProcessStartManager(),
             TestPromptLoader.Instance,
-            allowedExecutables: ["pwsh"],
             shellExecutable: "pwsh");
 
         using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
@@ -2472,7 +2469,6 @@ public static partial class ToolRuntimeTests
         Assert.Equal(0, timeoutSchema.GetProperty("minimum").GetInt32());
         Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
         Assert.Equal(3, properties.EnumerateObject().Count());
-        Assert.False(tool.Definition.ConversationAvailable);
         Assert.Equal(ApprovalLevel.User, tool.Definition.RequiredApproval);
     }
 
@@ -2483,31 +2479,10 @@ public static partial class ToolRuntimeTests
         var tool = new RunProcessTool(
             new DirectProcessStartManager(),
             TestPromptLoader.Instance,
-            allowedExecutables: ["powershell"],
             requireApproval: false,
             shellExecutable: "powershell.exe");
 
-        Assert.True(tool.Definition.ConversationAvailable);
         Assert.Contains("PowerShell", tool.Definition.Description, StringComparison.Ordinal);
-    }
-
-    /// <summary>Unsupported or non-bare shells are never advertised to the model.</summary>
-    [Theory]
-    [InlineData("fish", "fish")]
-    [InlineData("C:\\Tools\\powershell.exe", "powershell")]
-    [InlineData("/usr/bin/bash", "bash")]
-    public static void RunProcess_InvalidShellConfiguration_IsNotConversationAvailable(
-        string shellExecutable,
-        string allowedExecutable)
-    {
-        var tool = new RunProcessTool(
-            new DirectProcessStartManager(),
-            TestPromptLoader.Instance,
-            allowedExecutables: [allowedExecutable],
-            requireApproval: false,
-            shellExecutable: shellExecutable);
-
-        Assert.False(tool.Definition.ConversationAvailable);
     }
 
     /// <summary>Trusted composition can remove per-call approval without weakening executable restrictions.</summary>
@@ -2517,11 +2492,9 @@ public static partial class ToolRuntimeTests
         var tool = new RunProcessTool(
             new DirectProcessStartManager(),
             TestPromptLoader.Instance,
-            allowedExecutables: ["pwsh"],
             requireApproval: false,
             shellExecutable: "pwsh");
 
-        Assert.True(tool.Definition.ConversationAvailable);
         Assert.Equal(ApprovalLevel.None, tool.Definition.RequiredApproval);
         Assert.Contains("command", tool.Definition.InputSchema.JsonSchema, StringComparison.Ordinal);
     }
@@ -2550,7 +2523,6 @@ public static partial class ToolRuntimeTests
                     RunProcessDefaultTimeoutSeconds = 3,
                     RunProcessMaxTimeoutSeconds = 7,
                 },
-                allowedExecutables: ["bash"],
                 requireApproval: false,
                 shellExecutable: "bash");
             var context = new ToolExecutionContext(
@@ -3151,7 +3123,6 @@ public static partial class ToolRuntimeTests
             await state.EnableAsync("csharp_script");
             var registeredScript = registry.Get("csharp_script");
             Assert.Equal("csharp_script", registeredScript.Definition.Id);
-            Assert.True(registeredScript.Definition.ConversationAvailable);
             Assert.Equal(ToolSideEffect.ExecutesCode, registeredScript.Definition.SideEffect);
             using (var schema = JsonDocument.Parse(registeredScript.Definition.InputSchema.JsonSchema))
             {

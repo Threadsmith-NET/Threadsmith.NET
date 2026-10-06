@@ -24,6 +24,9 @@ public enum DiagnosticClassification
 
     /// <summary>The baseline comparison is not authoritative at the available semantic confidence.</summary>
     ConfidenceDegraded,
+
+    /// <summary>The current compiler finding is known, but no comparable pre-edit baseline was captured.</summary>
+    OriginUnknown,
 }
 
 /// <summary>Stable host-owned compiler diagnostic independent of MSBuild or Roslyn implementation types.</summary>
@@ -363,8 +366,8 @@ public sealed record ValidateMutationCommand : ICommand<MutationValidationResult
     /// <summary>Affected-project build request.</summary>
     public required BuildValidationRequest Request { get; init; }
 
-    /// <summary>Pre-mutation baseline build capture.</summary>
-    public required BaselineCapture BaselineCapture { get; init; }
+    /// <summary>Pre-mutation baseline build capture, or null when final validation cannot establish error origins.</summary>
+    public BaselineCapture? BaselineCapture { get; init; }
 
     /// <summary>Mutation set whose effects are being validated.</summary>
     public required MutationSet MutationSet { get; init; }

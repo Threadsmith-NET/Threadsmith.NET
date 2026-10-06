@@ -470,7 +470,7 @@ public sealed class Plan41InventoryToolTests
         // Arrange
         await using var repository = await TestRepository.CreateDotNetAsync();
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var workspaceId = WorkspaceId.New();
         var load = await registry.LoadAsync(new SemanticLoadRequest(
             SessionId.New(),

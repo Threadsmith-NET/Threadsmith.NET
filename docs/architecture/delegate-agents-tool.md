@@ -1,6 +1,6 @@
 # `delegate_agents` under the hood
 
-This document explains the model-visible `delegate_agents` tool. Children can investigate, implement, or review using tools inherited from the parent's actual request, under the parent's existing permissions. An explicit `readOnly` selection narrows that tool surface to inspection. Approved implementer preparation continues to use the existing mutation proposal application.
+This document explains the model-visible `delegate_agents` tool. Children can investigate, implement, or review using tools inherited from the parent's actual request, under the parent's existing permissions. An explicit `readOnly` selection narrows that tool surface to inspection. Parent source writes use the shared direct-edit application.
 
 ## Mental model
 
@@ -224,9 +224,9 @@ Cancellation is cooperative, but non-cooperative work is still observed at host-
 
 `delegate_agents` is the sole subagent launch entry point. The plan factory requires host-owned model-origin invocation metadata and the exact model-visible tool snapshot before creating assignments. Direct headless start commands and automatic approved-plan preflight/implementation wrappers are removed; inspection and cancellation remain available.
 
-Application composition passes `MutationProposalApplication` directly to the execution orchestrator. Approved implementation and correction use the parent run identity, ordinary session model/reasoning selection, normal context capacity checks, and the selected profile's output reserve. Native proposal calls do not also require JSON-mode capability. Proposal parsing, bounded repair, scope/baseline checks, staging for exact-diff approval, transactional writes, and validation stay host-owned. There is no preparation child or deferred child-capacity validation. Existing worker change-set integration remains separately authorized and does not launch an agent. See [ADR-57](adr-57-model-requested-delegation-only.md).
+Parent source edits use the ordinary conversation and shared `SourceEditApplication`, retaining exact-diff authorization, transactions, durable effects and advisory compiler feedback. Builds and tests require explicit invocation; completing a response does not launch validation. Ordinary delegated children do not receive `edit_source`.
 
-`Checkpoint.Assignments` stores role, contract marker, runner version, and configured/effective provider/profile/reasoning with source and fallback. Outcomes retain their effective model provenance and optional `Response`. An empty ordinary response is distinct from a missing/null response in a legacy structured checkpoint. `/agents <id>` projects the role and effective provider/profile/reasoning/source/fallback alongside lifecycle state. Reading persisted state does not resume work: the coordinator has no automatic resume API for interrupted delegated model loops. Further delegation requires a new generation; it cannot continue an old provider stream. Approved-plan execution retains its existing resume lifecycle.
+`Checkpoint.Assignments` stores role, contract marker, runner version, and configured/effective provider/profile/reasoning with source and fallback. Outcomes retain their effective model provenance and optional `Response`. An empty ordinary response is distinct from a missing/null response in a legacy structured checkpoint. `/agents <id>` projects the role and effective provider/profile/reasoning/source/fallback alongside lifecycle state. Reading persisted state does not resume work: the coordinator has no automatic resume API for interrupted delegated model loops. Further delegation requires a new generation; it cannot continue an old provider stream. Historical execution records remain readable without resuming removed plan execution.
 
 ## Component review map
 
@@ -243,7 +243,7 @@ For a focused code review, read these files in order:
 9. `EvidenceStore.cs`: atomic evidence batch commit.
 10. `DelegateAgentsResultProjector.cs` and `DelegateAgentsResultRenderer.cs`: final bounded output.
 11. `AgentRoleModelConfiguration.cs`, `AgentRoleModelPolicy.cs`, and `AgentModelSelection.cs`: trusted routing, precedence, and request checks.
-12. `MutationProposalApplication.cs`: parent-run proposal generation, validation, repair, and staging.
+12. `SourceEditApplication.cs`: shared source-edit materialization, exact authorization, durable effects and feedback.
 13. `ContextContracts.cs` and `ContextAssembler.cs`: ordinary request assembly and complete capacity checks.
 
 Application composition connects these services to provider dispatch, persistence, terminal inspection, and the central tool policy.

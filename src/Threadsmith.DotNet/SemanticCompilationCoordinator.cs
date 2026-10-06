@@ -113,10 +113,25 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
     }
 
     /// <summary>Admits transient compiler work through the same bounded foreground queue.</summary>
-    internal async Task<T> RunAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    internal Task<T> RunAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)
+    {
+        return RunQueryAsync(operation, default, cancellationToken);
+    }
+
+    /// <summary>Bounds queue waiting by the query deadline while preserving partial results from started queries.</summary>
+    internal async Task<T> RunQueryAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken queryDeadline, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        queryDeadline.ThrowIfCancellationRequested();
         var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var admissionState = 0;
+        using var deadlineRegistration = queryDeadline.Register(() =>
+        {
+            if (Interlocked.CompareExchange(ref admissionState, -1, 0) == 0)
+            {
+                completion.TrySetCanceled(queryDeadline);
+            }
+        });
         lock (_gate)
         {
             if (_stopped != 0)
@@ -132,6 +147,11 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
             _operations.Enqueue(new(
                 async token =>
                 {
+                    if (Interlocked.CompareExchange(ref admissionState, 1, 0) != 0)
+                    {
+                        return;
+                    }
+
                     using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, cancellationToken);
                     try
                     {
@@ -139,6 +159,10 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                         var value = await operation(lifetime.Token);
                         lifetime.Token.ThrowIfCancellationRequested();
                         completion.TrySetResult(value);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && token.IsCancellationRequested)
+                    {
+                        completion.TrySetException(new InvalidOperationException("The semantic compilation generation was superseded."));
                     }
                     catch (OperationCanceledException)
                     {
@@ -149,8 +173,30 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                         completion.TrySetException(exception);
                     }
                 },
-                token => completion.TrySetCanceled(token)));
+                token =>
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        completion.TrySetCanceled(cancellationToken);
+                    }
+                    else
+                    {
+                        completion.TrySetException(new InvalidOperationException("The semantic compilation generation was superseded."));
+                    }
+                }));
             _available.Release();
+            foreach (var running in _entries.Values.Where(entry => entry.State == PreparationState.Running && !entry.Demanded))
+            {
+                if (running.Interruption is { IsCancellationRequested: false } interruption)
+                {
+                    running.InterruptionCompletion = interruption.CancelAsync();
+                    _ = running.InterruptionCompletion.ContinueWith(
+                        completed => _ = completed.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
+            }
         }
 
 #pragma warning disable VSTHRD003 // The bounded worker owns this operation's completion.
@@ -170,6 +216,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
             }
 
             completion = entry.Completion.Task;
+            entry.Demanded |= demand;
             if (entry.State == PreparationState.Pending && _stopped == 0)
             {
                 entry.State = demand ? PreparationState.Demand : PreparationState.Warm;
@@ -245,9 +292,10 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                 {
                     _operations.TryDequeue(out operation);
                     entry = operation is null ? Take(_demand, PreparationState.Demand) ?? Take(_warm, PreparationState.Warm) : null;
-                    entry?.State = PreparationState.Running;
                     if (entry is not null)
                     {
+                        entry.State = PreparationState.Running;
+                        entry.Interruption = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
                         _attempts++;
                     }
 
@@ -280,9 +328,12 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                     continue;
                 }
 
+                Task? deferredCompletion = null;
+                var retry = false;
+                var interruption = entry.Interruption ?? throw new InvalidOperationException("Running preparation has no lifetime.");
                 try
                 {
-                    var outcome = await _prepare(entry.Id, _lifetime.Token);
+                    var outcome = await _prepare(entry.Id, interruption.Token);
                     if (_lifetime.IsCancellationRequested)
                     {
                         Interlocked.Increment(ref _discarded);
@@ -297,6 +348,11 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                 {
                     entry.Completion.TrySetResult(new(entry.Id, false, Obsolete: true));
                 }
+                catch (OperationCanceledException exception) when (interruption.IsCancellationRequested)
+                {
+                    retry = true;
+                    deferredCompletion = (exception as SemanticOperationAbandonedException)?.Completion;
+                }
                 catch (Exception exception)
                 {
                     // Publication/operation failure is terminal; no automatic retry in this generation.
@@ -304,16 +360,65 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
                 }
                 finally
                 {
+                    Task? callbacks;
                     lock (_gate)
                     {
-                        entry.State = PreparationState.Terminal;
+                        callbacks = entry.InterruptionCompletion;
+                        entry.InterruptionCompletion = null;
+                        entry.Interruption = null;
+                        entry.State = retry ? PreparationState.Deferred : PreparationState.Terminal;
                         _running--;
+                    }
+
+                    if (callbacks is null || callbacks.IsCompleted)
+                    {
+                        interruption.Dispose();
+                    }
+                    else
+                    {
+                        _ = callbacks.ContinueWith(
+                            _ => interruption.Dispose(),
+                            CancellationToken.None,
+                            TaskContinuationOptions.ExecuteSynchronously,
+                            TaskScheduler.Default);
+                        deferredCompletion = deferredCompletion is null ? callbacks : Task.WhenAll(deferredCompletion, callbacks);
+                    }
+                }
+
+                if (retry)
+                {
+                    if (deferredCompletion is null)
+                    {
+                        RequeueInterrupted(entry);
+                    }
+                    else
+                    {
+                        _ = deferredCompletion.ContinueWith(
+                            _ => RequeueInterrupted(entry),
+                            CancellationToken.None,
+                            TaskContinuationOptions.ExecuteSynchronously,
+                            TaskScheduler.Default);
                     }
                 }
             }
         }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
         {
+        }
+    }
+
+    private void RequeueInterrupted(Entry entry)
+    {
+        lock (_gate)
+        {
+            if (_stopped != 0 || entry.State != PreparationState.Deferred)
+            {
+                return;
+            }
+
+            entry.State = entry.Demanded ? PreparationState.Demand : PreparationState.Warm;
+            (entry.Demanded ? _demand : _warm).Enqueue(entry.Id);
+            _available.Release();
         }
     }
 
@@ -337,6 +442,7 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
         Warm,
         Demand,
         Running,
+        Deferred,
         Terminal,
     }
 
@@ -357,6 +463,12 @@ internal sealed class SemanticCompilationCoordinator : IAsyncDisposable
         internal ProjectId Id { get; }
 
         internal PreparationState State { get; set; }
+
+        internal bool Demanded { get; set; }
+
+        internal CancellationTokenSource? Interruption { get; set; }
+
+        internal Task? InterruptionCompletion { get; set; }
 
         internal TaskCompletionSource<SemanticPreparationOutcome> Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }

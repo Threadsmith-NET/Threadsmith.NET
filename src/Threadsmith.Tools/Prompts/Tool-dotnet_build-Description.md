@@ -1,1 +1,1 @@
-Runs a bounded exploratory build without restore.
+Runs a bounded exploratory build without restore. Configured analyzers may execute as part of the build; do not infer that analyzers were skipped merely because dotnet_analyzers was not called. Report the build result and distinguish any separately invoked analyzer checks or tests.

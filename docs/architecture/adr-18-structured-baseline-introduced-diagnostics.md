@@ -1,5 +1,7 @@
 # ADR-18: Structured Baseline Versus Introduced Diagnostics
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 - **Status:** Accepted
 - **Date:** 2026-08-02
 - **Strategy source:** §10.7, §13.x, §16.1–§16.4, §16.7, §29
@@ -30,3 +32,7 @@ Correction attempts receive only the relevant changed code, one introduced diagn
 - Diagnostic identity remains stable across UI, persistence, telemetry, and future test validation.
 - Build trust is an explicit security boundary because repository-controlled MSBuild logic may execute.
 - Plan 13 can add normalized test evidence to the same acceptance pipeline without changing diagnostic classification.
+
+## Direct-editing amendment (2026-10-05)
+
+Direct editing does not require a pre-edit build. Comparable diagnostic versions permit advisory origin classification; missing or incomparable evidence is explicitly unknown. Explicitly requested final validation remains authoritative; ordinary response completion does not invoke it. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

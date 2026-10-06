@@ -443,7 +443,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Forgotten, userCommand: true, "Forgotten manual");
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Active, userCommand: false, "No command provenance");
         var runner = new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All);
-        Assert.Equal(12, await runner.RunAsync());
+        Assert.Equal(13, await runner.RunAsync());
         var imported = Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries);
         Assert.Equal(manual, imported.Id);
         Assert.Equal(2_001, imported.Text.Length);
@@ -457,7 +457,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await using var query = restored.CreateCommand();
         query.CommandText = "SELECT count(*) FROM repository_memory;";
         Assert.Equal(4L, await query.ExecuteScalarAsync());
-        Assert.Equal(12, await runner.RunAsync());
+        Assert.Equal(13, await runner.RunAsync());
         Assert.Equal(1, await fixture.ScalarAsync("SELECT imported_count FROM managed_memory_migration;"));
         Assert.Equal(3, await fixture.ScalarAsync("SELECT dropped_count FROM managed_memory_migration;"));
     }
@@ -524,7 +524,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await using var count = verify.CreateCommand();
         count.CommandText = "SELECT count(*) FROM managed_memories;";
         Assert.Equal(22L, await count.ExecuteScalarAsync());
-        Assert.Equal(12, await new MigrationRunner(connectionString, DefaultMigrations.All).ReadCurrentVersionAsync());
+        Assert.Equal(13, await new MigrationRunner(connectionString, DefaultMigrations.All).ReadCurrentVersionAsync());
     }
 
     /// <summary>Repository switches select distinct local databases and reject stale identity calls.</summary>

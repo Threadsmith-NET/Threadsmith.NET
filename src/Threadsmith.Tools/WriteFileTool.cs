@@ -53,7 +53,6 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             8192) with
         {
             DisplayName = "Write File",
-            ConversationAvailable = true,
             Idempotency = ToolIdempotency.NonIdempotent,
         };
     }

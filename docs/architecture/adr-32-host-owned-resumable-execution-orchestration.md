@@ -1,5 +1,7 @@
 # ADR-32 — Host-owned resumable execution orchestration
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 **Status:** Accepted
 
 ## Context
@@ -28,3 +30,7 @@ Legacy planning-only sessions remain readable and are not retroactively executed
 - A process interruption never authorizes replay merely because a post-effect checkpoint is absent.
 - Parallel implementation remains excluded until Plan 38 and must compose over this serial contract.
 - Incremental approved-plan execution remains inside this serial state machine: the host selects the earliest incomplete step, persists step/batch progress, and repeats the existing proposal, exact-diff authorization, transaction, and validation path until every approved step has supported completion.
+
+## Direct-editing amendment (2026-10-05)
+
+The plan orchestrator, router, checkpoint writer and separate model proposal loop are removed. `SessionApplication` runs ordinary tool/model continuations; `SourceEditApplication` and `MutationEffectJournal` own durable effects and final outcomes. Legacy checkpoint readers and unresolved-write fencing remain. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

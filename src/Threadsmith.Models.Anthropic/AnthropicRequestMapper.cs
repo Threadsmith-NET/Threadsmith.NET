@@ -453,7 +453,7 @@ internal static class AnthropicRequestMapper
             {
                 ModelCacheBreakpointClass.HostPolicy => "host-policy",
                 ModelCacheBreakpointClass.RepositoryInstructions => "repository-instructions",
-                ModelCacheBreakpointClass.PhasePolicy => "phase-policy",
+                ModelCacheBreakpointClass.PhasePolicy => "conversation-policy",
                 _ => string.Empty,
             };
             var target = breakpoint.Class switch

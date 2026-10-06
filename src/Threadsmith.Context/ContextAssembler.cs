@@ -21,73 +21,23 @@ public sealed class TokenEstimator
     }
 }
 
-/// <summary>Phase-specific evidence and instruction policy.</summary>
+/// <summary>Conversation evidence admission policy.</summary>
 public sealed class ContextPolicy
 {
-    /// <summary>Gets evidence categories permitted for a phase.</summary>
-    public static IReadOnlySet<EvidenceKind> GetAllowedKinds(RunPhase phase)
+    /// <summary>Gets evidence categories permitted for conversation context.</summary>
+    public static IReadOnlySet<EvidenceKind> GetAllowedKinds()
     {
-        HashSet<EvidenceKind> allowedKinds = phase switch
-        {
-            RunPhase.EvidenceCollection =>
-            [
-                EvidenceKind.RepositoryMap,
-                EvidenceKind.SourceExcerpt,
-                EvidenceKind.SemanticFact,
-                EvidenceKind.ToolResult,
-                EvidenceKind.UserConstraint,
-                EvidenceKind.Decision,
-                EvidenceKind.Failure,
-            ],
-            RunPhase.ChangePlanning or RunPhase.AwaitingPlanApproval =>
-            [
-                EvidenceKind.RepositoryMap,
-                EvidenceKind.SourceExcerpt,
-                EvidenceKind.SemanticFact,
-                EvidenceKind.ToolResult,
-                EvidenceKind.UserConstraint,
-                EvidenceKind.Decision,
-                EvidenceKind.Diagnostic,
-                EvidenceKind.Failure,
-            ],
-            RunPhase.MutationPreparation
-                or RunPhase.ImplementationPreparing
-                or RunPhase.ImplementationModelTurn
-                or RunPhase.MutationProposed
-                or RunPhase.MutationStaged
-                or RunPhase.AwaitingMutationApproval
-                or RunPhase.CorrectionPending
-                or RunPhase.CorrectionModelTurn =>
-            [
-                EvidenceKind.RepositoryMap,
-                EvidenceKind.SourceExcerpt,
-                EvidenceKind.SemanticFact,
-                EvidenceKind.ToolResult,
-                EvidenceKind.UserConstraint,
-                EvidenceKind.Decision,
-                EvidenceKind.Diagnostic,
-                EvidenceKind.Failure,
-            ],
-            RunPhase.Compilation =>
-            [
-                EvidenceKind.SourceExcerpt,
-                EvidenceKind.Decision,
-                EvidenceKind.Diagnostic,
-                EvidenceKind.Failure,
-            ],
-            RunPhase.Testing or RunPhase.Verification =>
-            [
-                EvidenceKind.SourceExcerpt,
-                EvidenceKind.Decision,
-                EvidenceKind.Diagnostic,
-                EvidenceKind.Failure,
-            ],
-            _ =>
-            [
-                EvidenceKind.UserConstraint,
-                EvidenceKind.Decision,
-            ],
-        };
+        HashSet<EvidenceKind> allowedKinds =
+        [
+            EvidenceKind.RepositoryMap,
+            EvidenceKind.SourceExcerpt,
+            EvidenceKind.SemanticFact,
+            EvidenceKind.ToolResult,
+            EvidenceKind.UserConstraint,
+            EvidenceKind.Decision,
+            EvidenceKind.Diagnostic,
+            EvidenceKind.Failure,
+        ];
         return allowedKinds;
     }
 }
@@ -273,8 +223,8 @@ public sealed class ContextAssembler : IContextAssembler
                 request.ProhibitedPaths,
                 request.TrustGeneration,
                 cancellationToken);
-        var phasePromptFileName = GetPhasePromptFileName(request.Phase);
-        var phaseInstructions = _prompts.Get(phasePromptFileName);
+        var conversationPromptFileName = PromptFileNames.SystemConversationGuidance;
+        var conversationInstructions = _prompts.Get(conversationPromptFileName);
         var sanitizedTask = request.Task with
         {
             Intent = _sanitizer.Sanitize(request.Task.Intent),
@@ -309,55 +259,12 @@ public sealed class ContextAssembler : IContextAssembler
             sanitizedTask,
             conversation,
             cancellationToken);
-        var affectedPaths = (request.MutationExecutionScope is null
-                ? request.ApprovedPlan?.Steps.SelectMany(step => step.GetAffectedPaths())
-                : request.MutationExecutionScope.ActiveStep.GetAffectedPaths()
-                    .Concat(request.MutationExecutionScope.ActivatedPaths))
-            ?? [];
-        var normalizedAffectedPaths = affectedPaths
-            .Select(path => path.Replace('\\', '/'))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var mutationBaseline = request.MutationBaseline is null
-            ? null
-            : new
-            {
-                request.MutationBaseline.WorkspaceId,
-                request.MutationBaseline.CapturedAt,
-                request.MutationBaseline.GitRevision,
-                Files = request.MutationBaseline.Files
-                    .Where(file => normalizedAffectedPaths.Contains(file.RelativePath))
-                    .ToArray(),
-                PlannedFiles = normalizedAffectedPaths.OrderBy(path => path, StringComparer.Ordinal).ToArray(),
-            };
         var governedStateValues = new Dictionary<string, object?>
         {
-            ["Phase"] = request.Phase.ToString(),
             ["ConversationHistoryIncluded"] = conversation.Mode == ConversationContextMode.ConversationAware,
             ["ConversationMode"] = conversation.Mode.ToString(),
             ["CurrentTurnHostContext"] = currentTurnHostContext,
         };
-        if (request.PlanUnderRevision is not null)
-        {
-            governedStateValues["PlanUnderRevision"] = request.PlanUnderRevision;
-        }
-
-        if (request.MutationExecutionScope is null)
-        {
-            if (request.ApprovedPlan is not null)
-            {
-                governedStateValues["ApprovedPlan"] = request.ApprovedPlan;
-            }
-        }
-        else
-        {
-            governedStateValues["MutationExecutionScope"] = request.MutationExecutionScope;
-        }
-
-        if (mutationBaseline is not null)
-        {
-            governedStateValues["MutationBaseline"] = mutationBaseline;
-        }
-
         var governedState = JsonSerializer.Serialize(governedStateValues);
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(
             request.ToolSchemas.Select(schema => new ModelToolDefinition
@@ -372,7 +279,7 @@ public sealed class ContextAssembler : IContextAssembler
         var toolSchemas = request.ToolTransportMode == ToolTransportMode.Text
             ? ModelToolCanonicalizer.RenderText(canonicalTools, _prompts, out textToolSources)
             : string.Empty;
-        var outputSchema = GetRequiredOutput(request.Phase);
+        var outputSchema = _prompts.Get(PromptFileNames.SystemConversationOutput);
         var appendParts = instructionBundle.Sources.Select(source => source.Kind == RepositoryInstructionSourceKind.PromptAppend
                 ? $"<project_context id=\"{Escape(source.Id)}\" version=\"{Escape(source.Version)}\">\n"
                     + Escape(source.Content)
@@ -387,7 +294,7 @@ public sealed class ContextAssembler : IContextAssembler
         {
             ["systemPolicy"] = TokenEstimator.Estimate(systemPolicy),
             ["promptAppend"] = TokenEstimator.Estimate(appendContent),
-            ["phaseInstructions"] = TokenEstimator.Estimate(phaseInstructions),
+            ["conversationInstructions"] = TokenEstimator.Estimate(conversationInstructions),
             ["task"] = TokenEstimator.Estimate(taskJson),
             ["currentTurn"] = TokenEstimator.Estimate(conversation.CurrentTurnContent),
             ["recentTurns"] = TokenEstimator.Estimate(conversation.RecentTurnsContent),
@@ -409,14 +316,14 @@ public sealed class ContextAssembler : IContextAssembler
             + tokensByCategory["conversationSummary"]
             + tokensByCategory["retrievedMemory"]
             + tokensByCategory["repositoryMemory"] - repositoryMemory.RequiredTokens;
-        var allowedKinds = ContextPolicy.GetAllowedKinds(request.Phase);
+        var allowedKinds = ContextPolicy.GetAllowedKinds();
         Evidence[] candidates = [.. _evidence.Snapshot(request.SessionId)
             .Where(item => item.RunId is null || item.RunId == request.RunId)
             .OrderByDescending(item => item.Kind == EvidenceKind.Decision)
             .ThenByDescending(item => item.Relevance)
             .ThenBy(item => item.CollectedAt)
             .ThenBy(item => item.EvidenceId.Value)];
-        var workloadClass = ResolveWorkloadClass(request.Phase);
+        var workloadClass = WorkloadClass.General;
         var tokenBudget = _modelResolver?.MaximumInputTokenBudget ?? _options.MaximumTokens;
         var requiredFixedTokens = fixedTokens - optionalConversationTokens;
         if (requiredFixedTokens > tokenBudget)
@@ -446,7 +353,7 @@ public sealed class ContextAssembler : IContextAssembler
             }
             else if (!allowedKinds.Contains(item.Kind))
             {
-                omissionReason = $"{item.Kind} is excluded by {request.Phase} context policy.";
+                omissionReason = $"{item.Kind} is excluded by context policy.";
             }
             else if (instructionEvidence.IsAlreadyIncluded(item))
             {
@@ -486,7 +393,7 @@ public sealed class ContextAssembler : IContextAssembler
                 item.EvidenceId,
                 item.Kind.ToString(),
                 Included: true,
-                $"Included by {request.Phase} policy with relevance {item.Relevance:F2}.",
+                $"Included by context policy with relevance {item.Relevance:F2}.",
                 tokens,
                 IsStale: false));
         }
@@ -516,7 +423,7 @@ public sealed class ContextAssembler : IContextAssembler
         var modelInput = BuildModelInput(
             systemPolicy,
             appendContent,
-            phaseInstructions,
+            conversationInstructions,
             taskJson,
             conversation,
             repositoryMemory,
@@ -534,7 +441,7 @@ public sealed class ContextAssembler : IContextAssembler
                 modelInput = BuildModelInput(
                     systemPolicy,
                     appendContent,
-                    phaseInstructions,
+                    conversationInstructions,
                     taskJson,
                     conversation,
                     repositoryMemory,
@@ -566,7 +473,7 @@ public sealed class ContextAssembler : IContextAssembler
             modelInput = BuildModelInput(
                 systemPolicy,
                 appendContent,
-                phaseInstructions,
+                conversationInstructions,
                 taskJson,
                 conversation,
                 repositoryMemory,
@@ -580,14 +487,10 @@ public sealed class ContextAssembler : IContextAssembler
 
         int EstimateCompleteInputTokens(string currentModelInput, string currentEvidenceContent)
         {
-            var legacyTokens = EstimateWireInputTokens(
-                currentModelInput,
-                tokensByCategory["nativeToolSchemas"],
-                tokensByCategory["wireFraming"]);
             var currentMessages = BuildStructuredMessages(
                 systemPolicy,
                 appendContent,
-                phaseInstructions,
+                conversationInstructions,
                 structuredTaskStateJson,
                 conversation,
                 repositoryMemory,
@@ -606,7 +509,7 @@ public sealed class ContextAssembler : IContextAssembler
                 providerInstructions,
                 _prompts);
             var prepared = PrepareWire(currentModelInput, currentMessages, currentEstimate, null);
-            return Math.Max(legacyTokens, prepared.WireInputTokens);
+            return prepared.WireInputTokens;
         }
 
         ModelWireEstimate PrepareWire(
@@ -686,14 +589,14 @@ public sealed class ContextAssembler : IContextAssembler
             source.Position + instructionAssetOffset,
             source.Content.Length)));
         promptAssets.Add(CreateAssetReference(
-            $"host:phase:{request.Phase}",
-            phasePromptFileName,
+            "host:conversation-guidance",
+            conversationPromptFileName,
             promptAssets.Count,
-            phaseInstructions));
+            conversationInstructions));
         var messages = BuildStructuredMessages(
             systemPolicy,
             appendContent,
-            phaseInstructions,
+            conversationInstructions,
             structuredTaskStateJson,
             conversation,
             repositoryMemory,
@@ -744,7 +647,7 @@ public sealed class ContextAssembler : IContextAssembler
         var stablePrefixDigest = ComputeMessageDigest(
             messages.Take(stablePrefixMessageCount),
             providerInstructions);
-        var cacheFamily = $"layout-v{ModelRequestLayout.CurrentVersion}:{request.Phase}:"
+        var cacheFamily = $"layout-v{ModelRequestLayout.CurrentVersion}:"
             + $"{stablePrefixDigest}:{instructionBundle.Digest}:{toolInventoryDigest}";
         var layout = new ModelRequestLayout
         {
@@ -1119,23 +1022,6 @@ public sealed class ContextAssembler : IContextAssembler
         return assembly;
     }
 
-    private static WorkloadClass ResolveWorkloadClass(RunPhase phase)
-    {
-        return phase switch
-        {
-            RunPhase.ChangePlanning or RunPhase.AwaitingPlanApproval => WorkloadClass.Planning,
-            RunPhase.MutationPreparation
-                or RunPhase.ImplementationPreparing
-                or RunPhase.ImplementationModelTurn
-                or RunPhase.MutationProposed
-                or RunPhase.MutationStaged
-                or RunPhase.AwaitingMutationApproval
-                or RunPhase.CorrectionPending
-                or RunPhase.CorrectionModelTurn => WorkloadClass.CodeEdit,
-            _ => WorkloadClass.General,
-        };
-    }
-
     private static int ResolveInputTokenBudget(ModelResolution? resolution, int fallbackBudget)
     {
         if (resolution is null)
@@ -1367,7 +1253,7 @@ public sealed class ContextAssembler : IContextAssembler
             {
                 "host-policy" => ContextVolatilityClass.Process,
                 "repository-instructions" => ContextVolatilityClass.Repository,
-                "phase-policy" => ContextVolatilityClass.Phase,
+                "conversation-policy" => ContextVolatilityClass.Process,
                 "conversation-summary" => ContextVolatilityClass.Session,
                 "recent-user" or "recent-assistant" => ContextVolatilityClass.Turn,
                 "current-user" => ContextVolatilityClass.Request,
@@ -1382,39 +1268,10 @@ public sealed class ContextAssembler : IContextAssembler
         return segments;
     }
 
-    private static string GetPhasePromptFileName(RunPhase phase)
-    {
-        return phase switch
-        {
-            RunPhase.EvidenceCollection => PromptFileNames.SystemPhaseEvidenceCollection,
-            RunPhase.ChangePlanning or RunPhase.AwaitingPlanApproval => PromptFileNames.SystemPhaseChangePlanning,
-            RunPhase.MutationPreparation or RunPhase.ImplementationPreparing or RunPhase.ImplementationModelTurn
-                or RunPhase.CorrectionPending or RunPhase.CorrectionModelTurn =>
-                PromptFileNames.SystemPhaseMutationProposal,
-            RunPhase.AwaitingMutationApproval => PromptFileNames.SystemPhaseAwaitingMutationApproval,
-            RunPhase.Compilation => PromptFileNames.SystemPhaseCompilation,
-            RunPhase.Testing or RunPhase.Verification => PromptFileNames.SystemPhaseValidation,
-            _ => PromptFileNames.SystemPhaseDefault,
-        };
-    }
-
-    private string GetRequiredOutput(RunPhase phase)
-    {
-        var name = phase switch
-        {
-            RunPhase.EvidenceCollection => PromptFileNames.SystemRequiredOutputEvidenceCollection,
-            RunPhase.MutationPreparation or RunPhase.ImplementationPreparing or RunPhase.ImplementationModelTurn
-                or RunPhase.CorrectionPending or RunPhase.CorrectionModelTurn =>
-                PromptFileNames.SystemRequiredOutputMutationProposal,
-            _ => PromptFileNames.SystemRequiredOutputPlan,
-        };
-        return _prompts.Get(name);
-    }
-
     private IReadOnlyList<ModelMessage> BuildStructuredMessages(
         string systemPolicy,
         string appendContent,
-        string phaseInstructions,
+        string conversationInstructions,
         string taskStateJson,
         ConversationAssemblyState conversation,
         RepositoryMemoryAssemblyState repositoryMemory,
@@ -1434,7 +1291,7 @@ public sealed class ContextAssembler : IContextAssembler
                 ModelMessageRole.Developer,
                 "repository-instructions",
                 repositoryInstructions),
-            CreateTextMessage(ModelMessageRole.System, "phase-policy", phaseInstructions),
+            CreateTextMessage(ModelMessageRole.System, "conversation-policy", conversationInstructions),
         };
         var additionalPrefix = additionalMessages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).ToArray();
         messages.AddRange(additionalPrefix);
@@ -1512,7 +1369,7 @@ public sealed class ContextAssembler : IContextAssembler
     private string BuildModelInput(
         string systemPolicy,
         string appendContent,
-        string phaseInstructions,
+        string conversationInstructions,
         string taskJson,
         ConversationAssemblyState conversation,
         RepositoryMemoryAssemblyState repositoryMemory,
@@ -1528,8 +1385,8 @@ public sealed class ContextAssembler : IContextAssembler
             {
                 ["SystemPolicy"] = $"<system_policy>{Escape(systemPolicy)}</system_policy>",
                 ["RepositoryInstructions"] = PrefixLegacySection(appendContent),
-                ["PhaseInstructions"] = PrefixLegacySection(
-                    $"<phase_instructions>{Escape(phaseInstructions)}</phase_instructions>"),
+                ["ConversationInstructions"] = PrefixLegacySection(
+                    $"<conversation_instructions>{Escape(conversationInstructions)}</conversation_instructions>"),
                 ["Task"] = PrefixLegacySection($"<task>{taskJson}</task>"),
                 ["CurrentTurn"] = PrefixLegacySection(
                     $"<current_turn untrusted=\"true\">{Escape(conversation.CurrentTurnContent)}</current_turn>"),

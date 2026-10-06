@@ -13,15 +13,13 @@ using Threadsmith.Tools;
 public sealed partial class SessionApplication
 {
 #pragma warning restore SA1601
-    private async Task<PlanPublication?> GeneratePlanAsync(
+    private async Task RunConversationAsync(
         RunId runId,
         RunRegistration registration,
         RunPhase phase,
         CancellationToken cancellationToken)
     {
-        registration.ObjectiveCompletionRequested = false;
         var maximumModelRounds = _limits.MaxModelRounds;
-        var maximumPlanningToolRounds = _limits.MaxPlanningToolRounds;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var invocationContext = await CreateToolInvocationContextAsync(registration, cancellationToken);
         await using var operationScope = new ToolOperationScope(cancellationToken);
@@ -33,8 +31,32 @@ public sealed partial class SessionApplication
             RequirePrompts(),
             _limits.MaxRetainedToolCalls);
 
+        SourceEditAnalysis? deferredFeedback = null;
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
         {
+            if ((deferredFeedback ?? _sourceEdits?.TakeFeedback(registration.SessionId, runId)) is { } feedback)
+            {
+                deferredFeedback = null;
+                loopState.CommitStandaloneMessage(
+                    modelRound,
+                    new ModelMessage
+                    {
+                        Role = ModelMessageRole.HostContext,
+                        SectionId = "source-edit-feedback",
+                        Content =
+                        [
+                            new ModelContentPart
+                            {
+                                Content = _prompts.Render(PromptFileNames.ContextSourceEditFeedback, new Dictionary<string, string>(StringComparer.Ordinal)
+                                {
+                                    ["FeedbackJson"] = _sanitizer.Sanitize(SourceEditAnalysisProjection.Create(feedback).ToJsonString()),
+                                }),
+                            },
+                        ],
+                    },
+                    purgeAfterCorrection: false);
+            }
+
             var boundarySteering = await _steering.PauseParentAtBoundaryAsync(
                 registration.SessionId,
                 runId,
@@ -53,7 +75,6 @@ public sealed partial class SessionApplication
                 invocationContext,
                 workspaceAvailable,
                 modelRound,
-                maximumPlanningToolRounds,
                 loopState,
                 cancellationToken);
             invocationContext = round.InvocationContext;
@@ -84,7 +105,6 @@ public sealed partial class SessionApplication
             if (submittedSteering.Count > 0)
             {
                 if (!outcome.ToolInvoked
-                    && outcome.Plan is null
                     && !string.IsNullOrWhiteSpace(outcome.TextOutput))
                 {
                     loopState.CommitStandaloneMessage(
@@ -115,39 +135,35 @@ public sealed partial class SessionApplication
                 continue;
             }
 
-            var plan = CompleteRoundPlan(
-                outcome.Plan,
-                outcome.TextOutput,
-                round.Context,
-                phase,
-                registration.PendingPlan ?? registration.LastPublishedPlan,
-                _sanitizer);
-            if (plan is not null)
+            if (!outcome.ToolInvoked)
             {
-                var evaluation = await EvaluatePlanCandidateAsync(
-                    runId,
-                    registration,
-                    plan,
-                    phase,
-                    loopState,
-                    correctiveTurns,
-                    maximumModelRounds,
-                    modelRound,
-                    cancellationToken);
-                if (evaluation.Publication is not null)
+                if (_sourceEdits?.TakeFeedback(registration.SessionId, runId) is { } finalFeedback)
                 {
-                    return evaluation.Publication;
+                    await _events.PublishAsync(
+                        new DiagnosticObserved(registration.SessionId, DateTimeOffset.UtcNow, "AdvisorySemanticFeedback", SourceEditAnalysisProjection.CreateDisplaySummary(finalFeedback)),
+                        cancellationToken);
+                    if (maximumModelRounds <= 0 || modelRound < maximumModelRounds)
+                    {
+                        // Evidence completed during this response must reach the model before it finishes.
+                        deferredFeedback = finalFeedback;
+                        if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
+                        {
+                            loopState.CommitStandaloneMessage(
+                                modelRound,
+                                CreateVisibleAssistantMessage(outcome.TextOutput),
+                                purgeAfterCorrection: false);
+                            await ArchiveVisibleMessageAsync(
+                                registration.SessionId,
+                                runId,
+                                ConversationRole.Assistant,
+                                outcome.TextOutput,
+                                cancellationToken);
+                        }
+
+                        continue;
+                    }
                 }
 
-                if (evaluation.CorrectionRequested)
-                {
-                    continue;
-                }
-            }
-
-            if (!outcome.ToolInvoked || outcome.ObjectiveComplete)
-            {
-                registration.ObjectiveCompletionRequested = outcome.ObjectiveComplete;
                 if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
                 {
                     await ArchiveVisibleMessageAsync(
@@ -158,7 +174,7 @@ public sealed partial class SessionApplication
                         cancellationToken);
                 }
 
-                return null;
+                return;
             }
 
             if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
@@ -309,32 +325,23 @@ public sealed partial class SessionApplication
         ToolInvocationContext? invocationContext,
         bool workspaceAvailable,
         int modelRound,
-        int maximumPlanningToolRounds,
         ConversationLoopState loopState,
         CancellationToken cancellationToken)
     {
-        var planningToolsWithheld = phase == RunPhase.EvidenceCollection
-            && maximumPlanningToolRounds > 0
-            && modelRound > maximumPlanningToolRounds;
         var conversationTools = ConversationToolAvailability.CreateSnapshot(
             _toolPipeline,
             _toolRegistry,
             registration.SessionId,
             runId,
             invocationContext,
-            planningToolsWithheld);
+            toolsWithheld: false);
         var conversationDefinitions = conversationTools.Definitions;
         var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
         await RefreshMemoryContextAsync(registration, invocationContext, memoriesEnabled, loopState, cancellationToken);
 
-        var allowObjectiveCompletion = registration.IncrementalPlanExecution
-            && registration.LastPlanBoundaryOrdinal > 0
-            && registration.ReplanningPlan is null;
         var modelTools = CreateModelTools(
             conversationDefinitions,
             workspaceAvailable,
-            phase,
-            allowObjectiveCompletion,
             loopState.ActiveTurnEvidenceReferences.Count > 0);
         var modelPreference = _sessionPreferences?.Capture();
         var context = loopState.FrozenContext;
@@ -396,8 +403,6 @@ public sealed partial class SessionApplication
         modelTools = CreateModelTools(
             conversationDefinitions,
             workspaceAvailable,
-            phase,
-            allowObjectiveCompletion,
             activeTurnRecoveryAvailable: loopState.ActiveTurnEvidenceReferences.Count > 0);
 
         var modelVisibleContinuation = loopState.CreateModelVisibleContinuation();
@@ -519,7 +524,6 @@ public sealed partial class SessionApplication
             registration,
             phase,
             invocationContext,
-            planningToolsWithheld,
             modelRound,
             modelTools,
             context,
@@ -609,7 +613,7 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         loopState.BeginCurrentGroup();
-        var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters, _prompts);
+        var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters);
         var modelHookBoundary = new ModelRequestHookBoundary(
             round.Registration.SessionId,
             round.RunId,
@@ -754,12 +758,7 @@ public sealed partial class SessionApplication
                     cancellationToken);
             }
 
-            if (streamState.Plan is not null)
-            {
-                loopState.TransientState.Clear();
-                loopState.AbortCurrentGroup();
-            }
-            else if (streamState.HasResponseEnvelope)
+            if (streamState.HasResponseEnvelope)
             {
                 loopState.SealCurrentReplayRound(round.ModelRequest.ToolContinuationRound);
             }
@@ -795,11 +794,9 @@ public sealed partial class SessionApplication
         }
 
         return new ConversationRoundOutcome(
-            streamState.Plan,
             streamState.TextOutput.ToString(),
             streamState.ToolInvoked,
-            preToolSteering,
-            streamState.ObjectiveComplete);
+            preToolSteering);
     }
 
     private async Task ProcessModelChunkAsync(
@@ -853,14 +850,6 @@ public sealed partial class SessionApplication
             await output.FlushAsync(cancellationToken);
         }
 
-        if (chunk.Output is PlanModelOutput planOutput)
-        {
-            streamState.ObserveToolProducingOutput(isPlanProposal: true);
-            ModelOutputValidator.Validate(planOutput, planLimits: _limits.Plan);
-            loopState.AddRetainedPlanOutputCharacters(planOutput.Plan);
-            streamState.Plan = planOutput.Plan;
-        }
-
         if (chunk.Output is ToolRequestModelOutput tool)
         {
             await ProcessToolRequestAsync(
@@ -907,54 +896,12 @@ public sealed partial class SessionApplication
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var isPlanningDecision = IsPlanningDecisionTool(tool.ToolName);
         loopState.AddRetainedOutputCharacters(tool.ToolName.Length + tool.ArgumentsJson.Length);
         loopState.IncrementRetainedToolCalls();
         if (streamState.HasResponseEnvelope)
         {
             // Correlate the complete native batch before validating or executing any call.
             EnqueueToolRequest(tool, round, loopState, streamState);
-            return;
-        }
-
-        streamState.ObserveToolProducingOutput(isPlanningDecision);
-
-        if (isPlanningDecision)
-        {
-            try
-            {
-                await ProcessPlanningDecisionToolRequestAsync(
-                    tool,
-                    round,
-                    loopState,
-                    streamState,
-                    maximumModelRounds,
-                    correctiveTurns,
-                    cancellationToken);
-            }
-            catch (MalformedInvocationException exception)
-            {
-                if (!TryAppendDeveloperCorrection(
-                    round,
-                    loopState,
-                    streamState,
-                    correctiveTurns,
-                    maximumModelRounds,
-                    exception.Diagnostic,
-                    out var attemptNumber))
-                {
-                    throw;
-                }
-
-                await PublishModelCorrectionAttemptedAsync(
-                    round,
-                    ModelCorrectionCategory.PlanSchema,
-                    attemptNumber,
-                    correctiveTurns.MaximumTurns,
-                    exception.Diagnostic.SafeMessage,
-                    cancellationToken);
-            }
-
             return;
         }
 
@@ -997,51 +944,22 @@ public sealed partial class SessionApplication
         CorrectiveTurnState correctiveTurns,
         CancellationToken cancellationToken)
     {
-        var planCall = streamState.PendingToolCalls.FirstOrDefault(call => IsPlanningDecisionTool(call.ToolName));
         MalformedInvocationDiagnostic? diagnostic = null;
-        if (planCall is not null && streamState.PendingToolCalls.Count != 1)
+        foreach (var call in streamState.PendingToolCalls)
         {
-            diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
-                MalformedInvocationFailureKind.MultipleToolProducingOutputs,
-                planCall.Ordinal,
-                planCall.ToolName,
-                _prompts.Get(PromptFileNames.CorrectionPlanProposalExclusiveToolOutput),
-                streamState.PendingToolCalls.Count);
-        }
-        else if (planCall is not null && !IsPlanningDecisionAvailable(round, planCall.ToolName))
-        {
-            diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
-                MalformedInvocationFailureKind.PhaseInvalidTool,
-                planCall.Ordinal,
-                planCall.ToolName,
-                RequireCorrectiveMessages().GetPlanWrongPhaseReason(),
-                streamState.PendingToolCalls.Count);
-        }
-        else
-        {
-            foreach (var call in streamState.PendingToolCalls)
+            try
             {
-                try
-                {
-                    ModelOutputValidator.ValidateInvocation(new ToolRequestModelOutput(call.ToolName, call.ArgumentsJson));
-                    if (planCall is not null)
-                    {
-                        AcceptPlanningDecision(call.ToolName, call.ArgumentsJson, streamState);
-                    }
-                }
-                catch (MalformedInvocationException exception)
-                {
-                    var reason = planCall is null
-                        ? exception.Diagnostic.SafeMessage
-                        : RequireCorrectiveMessages().CreatePlanSchemaFailureSummary(exception.Diagnostic);
-                    diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
-                        exception.Diagnostic.Kind,
-                        call.Ordinal,
-                        call.ToolName,
-                        reason,
-                        streamState.PendingToolCalls.Count);
-                    break;
-                }
+                ModelOutputValidator.ValidateInvocation(new ToolRequestModelOutput(call.ToolName, call.ArgumentsJson));
+            }
+            catch (MalformedInvocationException exception)
+            {
+                diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
+                    exception.Diagnostic.Kind,
+                    call.Ordinal,
+                    call.ToolName,
+                    exception.Diagnostic.SafeMessage,
+                    streamState.PendingToolCalls.Count);
+                break;
             }
         }
 
@@ -1054,91 +972,6 @@ public sealed partial class SessionApplication
                 correctiveTurns,
                 maximumModelRounds,
                 diagnostic,
-                cancellationToken);
-        }
-        else if (streamState.Plan is not null || streamState.ObjectiveComplete)
-        {
-            // An exclusive planning decision ends this host turn without a repository tool invocation.
-            streamState.PendingToolCalls.Clear();
-        }
-    }
-
-    private async Task ProcessPlanningDecisionToolRequestAsync(
-        ToolRequestModelOutput tool,
-        ConversationRound round,
-        ConversationLoopState loopState,
-        ModelRoundStreamState streamState,
-        int maximumModelRounds,
-        CorrectiveTurnState correctiveTurns,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (!IsPlanningDecisionAvailable(round, tool.ToolName))
-        {
-            var diagnostic = CorrectiveMessageFactory.CreateToolBatchDiagnostic(
-                MalformedInvocationFailureKind.PhaseInvalidTool,
-                failedOrdinal: 0,
-                failedToolId: tool.ToolName,
-                RequireCorrectiveMessages().GetPlanWrongPhaseReason(),
-                toolCallCount: 1);
-            throw new MalformedInvocationException(diagnostic);
-        }
-
-        try
-        {
-            ModelOutputValidator.ValidateInvocation(tool);
-        }
-        catch (MalformedInvocationException exception)
-        {
-            if (!TryAppendDeveloperCorrection(
-                round,
-                loopState,
-                streamState,
-                correctiveTurns,
-                maximumModelRounds,
-                exception.Diagnostic,
-                out var attemptNumber))
-            {
-                throw;
-            }
-
-            await PublishModelCorrectionAttemptedAsync(
-                round,
-                ModelCorrectionCategory.PlanSchema,
-                attemptNumber,
-                correctiveTurns.MaximumTurns,
-                exception.Diagnostic.SafeMessage,
-                cancellationToken);
-            return;
-        }
-
-        try
-        {
-            AcceptPlanningDecision(tool.ToolName, tool.ArgumentsJson, streamState);
-        }
-        catch (MalformedInvocationException exception)
-        {
-            var failureSummary = RequireCorrectiveMessages().CreatePlanSchemaFailureSummary(
-                exception.Diagnostic);
-            if (!TryAppendSingleToolCorrection(
-                tool,
-                round,
-                loopState,
-                streamState,
-                correctiveTurns,
-                maximumModelRounds,
-                failureSummary,
-                out var attemptNumber))
-            {
-                throw;
-            }
-
-            await PublishModelCorrectionAttemptedAsync(
-                round,
-                ModelCorrectionCategory.PlanSchema,
-                attemptNumber,
-                correctiveTurns.MaximumTurns,
-                failureSummary,
                 cancellationToken);
         }
     }
@@ -1241,6 +1074,9 @@ public sealed partial class SessionApplication
                     RunId = round.RunId,
                     Phase = round.Phase,
                     ToolId = call.ToolName,
+                    InvocationKey = streamState.HasResponseEnvelope
+                        ? $"native:{round.ModelRequest.ResolvedProfileId}:{round.ModelRequest.ToolContinuationRound}:{loopState.TransientState.GetWireToolCallId(round.ModelRequest.ToolContinuationRound, call.ToolCallId)}"
+                        : call.ToolCallId,
                     ArgumentsJson = call.ArgumentsJson,
                     Context = invocationContext,
                 }))
@@ -1456,14 +1292,10 @@ public sealed partial class SessionApplication
             { ModelRound = round.ModelRequest.ToolContinuationRound });
         }
 
-        var category = streamState.PendingToolCalls.Count == 1
-            && string.Equals(streamState.PendingToolCalls[0].ToolName, ProposePlanToolName, StringComparison.OrdinalIgnoreCase)
-                ? ModelCorrectionCategory.PlanSchema
-                : ModelCorrectionCategory.ToolBatch;
         streamState.MarkCorrectiveTurnRequested();
         await PublishModelCorrectionAttemptedAsync(
             round,
-            category,
+            ModelCorrectionCategory.ToolBatch,
             attemptNumber,
             correctiveTurns.MaximumTurns,
             failureSummary,
@@ -1479,7 +1311,7 @@ public sealed partial class SessionApplication
         int maximumModelRounds,
         CancellationToken cancellationToken)
     {
-        const string safeReason = "The model response did not include assistant text, a plan, or a tool request.";
+        const string safeReason = "The model response did not include assistant text or a tool request.";
         if (!TryBeginCorrectiveTurn(correctiveTurns, round.ModelRound, maximumModelRounds, out var attemptNumber))
         {
             throw new MalformedModelOutputException(
@@ -1516,7 +1348,7 @@ public sealed partial class SessionApplication
         var sanitized = _sanitizer.Sanitize(safeReason);
         var boundedReason = string.IsNullOrWhiteSpace(sanitized)
             ? "The model request was rejected before execution."
-            : BoundPlanCorrectionReason(sanitized);
+            : BoundCorrectionReason(sanitized);
         await _events.PublishAsync(
             new ModelCorrectionAttempted(
                 round.Registration.SessionId,
@@ -1668,37 +1500,9 @@ public sealed partial class SessionApplication
             cancellationToken: CancellationToken.None);
     }
 
-    private static bool IsPlanningDecisionTool(string name)
-    {
-        return string.Equals(name, ProposePlanToolName, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(name, CompleteObjectiveToolName, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsPlanningDecisionAvailable(ConversationRound round, string name)
-    {
-        return round.Phase == RunPhase.EvidenceCollection
-            && round.ModelTools.Any(tool => string.Equals(tool.Name, name, StringComparison.OrdinalIgnoreCase));
-    }
-
-    private void AcceptPlanningDecision(string name, string arguments, ModelRoundStreamState streamState)
-    {
-        if (string.Equals(name, CompleteObjectiveToolName, StringComparison.OrdinalIgnoreCase))
-        {
-            ModelOutputValidator.ValidateNoArgumentInvocation(
-                new ToolRequestModelOutput(name, arguments));
-            streamState.ObjectiveComplete = true;
-        }
-        else
-        {
-            streamState.Plan = ModelOutputValidator.ParsePlan(arguments, _limits.Plan).Plan;
-        }
-    }
-
-    private List<ModelToolDefinition> CreateModelTools(
+    private static List<ModelToolDefinition> CreateModelTools(
         IReadOnlyList<ToolDefinition> conversationDefinitions,
         bool workspaceAvailable,
-        RunPhase phase,
-        bool allowObjectiveCompletion,
         bool activeTurnRecoveryAvailable)
     {
         var availableDefinitions = workspaceAvailable
@@ -1717,28 +1521,6 @@ public sealed partial class SessionApplication
             ArgumentsJsonSchema = definition.InputSchema.JsonSchema,
             PreferStrictArguments = definition.PreferStrictArguments,
         })];
-        if (phase == RunPhase.EvidenceCollection)
-        {
-            modelTools.Add(new ModelToolDefinition
-            {
-                Name = ProposePlanToolName,
-                Description = RequirePrompts().Get(PromptFileNames.ToolProposePlanDescription),
-                ArgumentsJsonSchema = _proposePlanArgumentsSchema,
-                PreferStrictArguments = true,
-            });
-        }
-
-        if (phase == RunPhase.EvidenceCollection && allowObjectiveCompletion)
-        {
-            modelTools.Add(new ModelToolDefinition
-            {
-                Name = CompleteObjectiveToolName,
-                Description = RequirePrompts().Get(PromptFileNames.ToolCompleteObjectiveDescription),
-                ArgumentsJsonSchema = """{"type":"object","properties":{},"additionalProperties":false}""",
-                PreferStrictArguments = true,
-            });
-        }
-
         return [.. ModelToolCanonicalizer.Canonicalize(modelTools)];
     }
 
@@ -1773,7 +1555,7 @@ public sealed partial class SessionApplication
             RepositoryPath = repositoryPath,
             WorkingScope = RepositoryWorkingScope.Resolve(
                 repositoryPath,
-                (registration.PendingPlan ?? registration.ReplanningPlan)?.Steps.SelectMany(step => step.GetAffectedPaths()),
+                affectedPaths: null,
                 Directory.GetCurrentDirectory()),
             ProhibitedPaths = invocationContext?.ProhibitedPaths ?? [],
             ToolSchemas = toolSchemas,
@@ -1785,9 +1567,6 @@ public sealed partial class SessionApplication
             },
             DefaultModelProfileId = modelPreference?.ProfileId
                 ?? defaultModelProfileId,
-            PlanUnderRevision = phase == RunPhase.AwaitingPlanApproval
-                ? registration.PendingPlan
-                : registration.ReplanningPlan,
             CurrentTurnHostContext = registration.CurrentTurnHostContext,
             CurrentMessageId = registration.CurrentMessageId,
             ConversationModeOverride = registration.ConversationMode,
@@ -2730,7 +2509,7 @@ public sealed partial class SessionApplication
         };
     }
 
-    private ModelStreamRequest CreateModelStreamRequest(
+    private static ModelStreamRequest CreateModelStreamRequest(
         RunId runId,
         RunRegistration registration,
         RunPhase phase,
@@ -2750,7 +2529,6 @@ public sealed partial class SessionApplication
         };
         return new ModelStreamRequest
         {
-            PlanLimits = _limits.Plan,
             RunId = runId,
             CacheAffinityId = registration.SessionId.Value,
             MemorySubmission = context?.RepositoryMemoryInclusions is { Count: > 0 } inclusions && registration.RepositoryIdentity is { } repositoryPath
@@ -2795,188 +2573,10 @@ public sealed partial class SessionApplication
         };
     }
 
-    private ImplementationPlan? CompleteRoundPlan(
-        ImplementationPlan? plan,
-        string textOutput,
-        ContextAssemblyResult? context,
-        RunPhase phase,
-        ImplementationPlan? previousPlan,
-        IOutputSanitizer sanitizer)
+    private static string BoundCorrectionReason(string value)
     {
-        if (plan is null && context is not null && phase != RunPhase.EvidenceCollection)
-        {
-            var candidate = textOutput.Trim();
-            if (candidate.StartsWith('{'))
-            {
-                plan = ModelOutputValidator.ParsePlan(candidate, _limits.Plan).Plan;
-            }
-        }
-
-        if (plan is null)
-        {
-            return null;
-        }
-
-        plan = plan with
-        {
-            Revision = previousPlan is { } priorPlan ? priorPlan.Revision + 1 : 1,
-            Summary = sanitizer.Sanitize(plan.Summary),
-            Steps = plan.Steps.Select(step => step with
-            {
-                Title = sanitizer.Sanitize(step.Title),
-                Description = sanitizer.Sanitize(step.Description),
-                FileIntents = step.FileIntents.Select(intent => intent with
-                {
-                    Path = intent.Path,
-                    DestinationPath = intent.DestinationPath,
-                }).ToArray(),
-                ExpectedOutcome = sanitizer.Sanitize(step.ExpectedOutcome),
-                Validation = step.Validation
-                    .Select(sanitizer.Sanitize)
-                    .ToArray(),
-            }).ToArray(),
-            Risks = plan.Risks.Select(sanitizer.Sanitize).ToArray(),
-            OutstandingQuestions = plan.OutstandingQuestions
-                .Select(sanitizer.Sanitize)
-                .ToArray(),
-        };
-        ModelOutputValidator.Validate(new PlanModelOutput(plan), planLimits: _limits.Plan);
-
-        return plan;
-    }
-
-    private async Task<PlanCandidateEvaluation> EvaluatePlanCandidateAsync(
-        RunId runId,
-        RunRegistration registration,
-        ImplementationPlan plan,
-        RunPhase phase,
-        ConversationLoopState loopState,
-        CorrectiveTurnState correctiveTurns,
-        int maximumModelRounds,
-        int modelRound,
-        CancellationToken cancellationToken)
-    {
-        var evaluation = await CheckPlanSanityAsync(
-            registration,
-            plan,
-            cancellationToken);
-        var sanity = evaluation.Result;
-        await _events.PublishAsync(
-            new PlanSanityCheckCompleted(
-                registration.SessionId,
-                DateTimeOffset.UtcNow,
-                runId,
-                plan.Revision,
-                sanity.Risk,
-                sanity.Issues.Count,
-                sanity.Issues.Count(issue => issue.IsBlocking),
-                sanity.Issues.Count(issue => issue.IsBlocking && issue.IsRepairable),
-                sanity.NormalizedAffectedPaths.Count),
-            cancellationToken);
-
-        if (sanity.HasNonRepairableBlockingIssues)
-        {
-            throw new MalformedModelOutputException(
-                "The plan violates a non-repairable sanity-check guardrail.");
-        }
-
-        if (sanity.HasRepairableBlockingIssues)
-        {
-            var safeReason = FormatPlanSanityCorrectionReason(sanity);
-            if (!TryBeginCorrectiveTurn(
-                correctiveTurns,
-                modelRound,
-                maximumModelRounds,
-                out var attemptNumber))
-            {
-                throw new MalformedModelOutputException(
-                    "The plan still has repairable sanity-check failures after the corrective-turn budget was exhausted.");
-            }
-
-            await _events.PublishAsync(
-                new ModelCorrectionAttempted(
-                    registration.SessionId,
-                    DateTimeOffset.UtcNow,
-                    runId,
-                    ModelCorrectionCategory.PlanSanity,
-                    attemptNumber,
-                    correctiveTurns.MaximumTurns,
-                    safeReason),
-                cancellationToken);
-
-            loopState.CommitStandaloneMessage(
-                modelRound,
-                loopState.PrepareCorrectionMessage(RequireCorrectiveMessages().CreatePlanSanityDeveloperMessage(
-                    safeReason,
-                    attemptNumber,
-                    correctiveTurns.MaximumTurns,
-                    phase)),
-                purgeAfterCorrection: true);
-            return new PlanCandidateEvaluation(null, CorrectionRequested: true);
-        }
-
-        if (!sanity.Passed)
-        {
-            throw new MalformedModelOutputException(
-                "The plan violates a non-repairable sanity-check guardrail.");
-        }
-
-        var decision = evaluation.CanAutoApprove
-            ? _planApprovalPolicy?.Decide(sanity, ResolveTrust(registration))
-                ?? RequireManualPlanReview(
-                    sanity,
-                    PlanApprovalPolicy.ReviewAll,
-                    "Plan approval policy is not configured; manual review is required.")
-            : RequireManualPlanReview(
-                sanity,
-                _planApprovalPolicy?.CurrentPolicy ?? PlanApprovalPolicy.ReviewAll,
-                "Required plan sanity evidence is unavailable; policy auto-approval is forbidden.");
-        if (decision.Kind == PlanApprovalDecisionKind.Blocked)
-        {
-            throw new UnauthorizedAccessException(decision.Reason);
-        }
-
-        return new PlanCandidateEvaluation(new PlanPublication(plan, decision), CorrectionRequested: false);
-    }
-
-    private string FormatPlanSanityCorrectionReason(PlanSanityCheckResult sanity)
-    {
-        ArgumentNullException.ThrowIfNull(sanity);
-        string[] issueSummaries =
-        [
-            .. sanity.Issues
-                .Where(issue => issue.IsBlocking && issue.IsRepairable)
-                .Take(6)
-                .Select(issue => issue.RelativePath is null
-                    ? $"{issue.Kind}: {issue.Message}"
-                    : $"{issue.Kind} ({issue.RelativePath}): {issue.Message}"),
-        ];
-        const string fallbackReason = "Plan sanity found repairable blocking issues.";
-        var reason = issueSummaries.Length == 0
-            ? fallbackReason
-            : "Plan sanity found repairable blocking issues: " + string.Join("; ", issueSummaries);
-        var sanitized = _sanitizer.Sanitize(reason);
-        return string.IsNullOrWhiteSpace(sanitized)
-            ? fallbackReason
-            : BoundPlanCorrectionReason(sanitized);
-    }
-
-    private static string BoundPlanCorrectionReason(string value)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(value);
         var normalized = value.ReplaceLineEndings(" ");
-        var builder = new StringBuilder(Math.Min(normalized.Length, 512));
-        foreach (var character in normalized)
-        {
-            if (builder.Length == 512)
-            {
-                break;
-            }
-
-            builder.Append(char.IsControl(character) ? ' ' : character);
-        }
-
-        return builder.ToString().Trim();
+        return new string([.. normalized.Take(512).Select(character => char.IsControl(character) ? ' ' : character)]).Trim();
     }
 
     private static string CreateNextToolCallId(int modelRound, ModelRoundStreamState streamState)
@@ -2986,16 +2586,11 @@ public sealed partial class SessionApplication
             + streamState.ToolCallOrdinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private sealed record PlanCandidateEvaluation(
-        PlanPublication? Publication,
-        bool CorrectionRequested);
-
     private sealed record ConversationRound(
         RunId RunId,
         RunRegistration Registration,
         RunPhase Phase,
         ToolInvocationContext? InvocationContext,
-        bool PlanningToolsWithheld,
         int ModelRound,
         IReadOnlyList<ModelToolDefinition> ModelTools,
         ContextAssemblyResult? Context,
@@ -3007,11 +2602,9 @@ public sealed partial class SessionApplication
     }
 
     private sealed record ConversationRoundOutcome(
-        ImplementationPlan? Plan,
         string TextOutput,
         bool ToolInvoked,
-        IReadOnlyList<RunSteeringMessage> PreToolSteering,
-        bool ObjectiveComplete);
+        IReadOnlyList<RunSteeringMessage> PreToolSteering);
 
     private sealed record RequestEnvelope(
         IReadOnlyList<ModelMessage> Messages,
@@ -3506,14 +3099,6 @@ public sealed partial class SessionApplication
                 ref _retainedOutputCharacters);
         }
 
-        public void AddRetainedPlanOutputCharacters(ImplementationPlan plan)
-        {
-            SessionApplication.AddRetainedPlanOutputCharacters(
-                plan,
-                MaximumOutputCharacters,
-                ref _retainedOutputCharacters);
-        }
-
         public void AbortCurrentGroup()
         {
             _currentCalls.Clear();
@@ -3896,13 +3481,9 @@ public sealed partial class SessionApplication
 
     private sealed class ModelRoundStreamState
     {
-        private readonly IPromptLoader _prompts;
-
-        public ModelRoundStreamState(int maximumOutputCharacters, IPromptLoader prompts)
+        public ModelRoundStreamState(int maximumOutputCharacters)
         {
-            ArgumentNullException.ThrowIfNull(prompts);
             TextOutput = new StringBuilder(Math.Min(maximumOutputCharacters, 16 * 1024));
-            _prompts = prompts;
         }
 
         public bool CorrectiveTurnRequested { get; private set; }
@@ -3911,15 +3492,9 @@ public sealed partial class SessionApplication
 
         public bool ModelSucceeded { get; set; }
 
-        public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || Plan is not null || ObjectiveComplete || PendingToolCalls.Count > 0;
-
-        public bool ObjectiveComplete { get; set; }
+        public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || PendingToolCalls.Count > 0;
 
         public List<PendingModelToolCall> PendingToolCalls { get; } = [];
-
-        public ImplementationPlan? Plan { get; set; }
-
-        public bool PlanProposalObserved { get; private set; }
 
         public ModelUsage? ReportedUsage { get; set; }
 
@@ -3933,36 +3508,13 @@ public sealed partial class SessionApplication
 
         public bool HasResponseEnvelope { get; set; }
 
-        public bool ToolProducingOutputObserved { get; private set; }
-
         public void MarkCorrectiveTurnRequested()
         {
             PendingToolCalls.Clear();
             TextOutput.Clear();
-            Plan = null;
-            ObjectiveComplete = false;
             ToolInvoked = true;
             CorrectiveTurnRequested = true;
             CurrentGroupPurgeAfterCorrection = true;
-        }
-
-        public void ObserveToolProducingOutput(bool isPlanProposal)
-        {
-            if (isPlanProposal)
-            {
-                if (ToolProducingOutputObserved)
-                {
-                    throw CreateMultipleToolProducingOutputsException();
-                }
-
-                PlanProposalObserved = true;
-            }
-            else if (PlanProposalObserved)
-            {
-                throw CreateMultipleToolProducingOutputsException();
-            }
-
-            ToolProducingOutputObserved = true;
         }
 
         private static bool HasNonWhiteSpaceText(StringBuilder text)
@@ -3976,15 +3528,6 @@ public sealed partial class SessionApplication
             }
 
             return false;
-        }
-
-        private MalformedInvocationException CreateMultipleToolProducingOutputsException()
-        {
-            return new MalformedInvocationException(new MalformedInvocationDiagnostic
-            {
-                Kind = MalformedInvocationFailureKind.MultipleToolProducingOutputs,
-                SafeMessage = _prompts.Get(PromptFileNames.CorrectionPlanProposalExclusiveToolOutput),
-            });
         }
     }
 }

@@ -17,53 +17,33 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
-## Scenario B — Planned Code Change
+## Scenario B — Direct Source Change
 
-1. User requests a bounded feature.
-2. Harness gathers relevant semantic evidence.
-3. Model produces one complete ordered structured plan tranche in one proposal.
-4. User reviews and approves the whole tranche; this does not authorize repository writes or a later tranche.
-5. Host selects the earliest incomplete step and the model proposes only its next coherent mutation batch using configured soft targets.
-6. TUI displays that batch's exact diff and affected projects; user or mutation policy authorizes only that exact set.
-7. Harness applies the batch transactionally and promotes the mutation baseline without compiling between batches.
-8. If the active step remains incomplete, the host requests another focused batch without generating later-step mutations. A supported completion claim advances to the next approved step without another plan approval.
-9. Repeat exact diff, authorization, and application for every batch and step; run cumulative compilation/test validation once all approved steps are applied. A large step may span batches; tightly coupled edits may exceed soft targets while respecting hard limits.
-10. After all tranche steps validate, the host re-enters evidence/planning with the original objective, current repository, latest cumulative execution receipt regardless of conversation-history mode, plans-used count (including interrupted plans), and configured soft tranche targets. After interruption, explicit resume reattaches this same planning loop without replaying completed mutations.
-11. If work remains, the model proposes one next tranche through the same plan formatter and approval path. Otherwise an explicit `complete_objective` call with exactly `{}` requests completion. The host verifies workspace identity and uses the durable cumulative validation result from the completed plan without compiling it again; malformed arguments use corrective feedback and failed validation prevents completion. Ordinary text and questions must not claim success. Additional plans are not limited by count; existing execution budgets and policy remain in force.
-12. During implementation or correction, the model may instead call `request_replan` alone with a reason. The host records a resumable unfinished-plan boundary and re-enters the same evidence/planning cycle. Applied work and unresolved failures survive; completed steps are not replayed, diagnostic baselines are not recaptured from failed changes, and `complete_objective` is unavailable. A replacement plan requires normal approval and fresh exact-diff authorization. Restart resumes the same boundary.
-13. User sees the cumulative net final diff, completed steps, diagnostics, tests, approval provenance, rollback availability, and residual risks across every completed or interrupted tranche.
+1. Ask for a repository change that requires reading two supporting files outside the write set.
+2. Confirm one ordinary conversation inspects the evidence and invokes `edit_source` with related ordered operations.
+3. Review the exact diff when mutation policy requires it; approve the intended operations.
+4. Confirm committed bytes, applied receipt and versioned advisory diagnostics reach the conversation.
+5. Complete related repairs and confirm the final cumulative diff reflects actual disk effects. Verify edit-only completion launches no build/test work; explicitly invoke checks and report their actual results when validation is requested.
 
-**Verifies:** model abstraction, complete per-tranche planning and approval, objective-level planning continuation, host-selected serial step progression, incremental active-step mutation batches, configurable soft sizing, separate exact-diff authorization, transactional baseline promotion, build + diagnostics + baseline/introduced classification, test selection/execution, rollback, and authoritative cumulative completion.
+**Verifies:** supporting reads are independent of write authority; one shared tool/writer path; exact authorization; model-selected order; honest completion without required executable planning.
 
----
+## Scenario C — Compiler Feedback and Repair
 
-## Scenario C — Compilation Correction Loop
+1. Apply an authorized signature or source change that temporarily introduces an unresolved symbol or syntax error.
+2. Confirm the write is reported as applied and compiler findings identify generation, coverage and pending/omitted analysis.
+3. Repair the relevant source through another ordinary edit call and confirm errors resolve on the matching generation.
+4. Explicitly invoke build/test validation and confirm failed or omitted checks cannot establish successful acceptance; ordinary response completion does not start these checks.
 
-1. A mutation introduces `CS1503`.
-2. Harness identifies it as introduced.
-3. Diagnostic is correlated to the mutation and symbol.
-4. Model receives only the relevant changed code, diagnostic, and contract.
-5. Model proposes a corrective mutation.
-6. Harness applies and recompiles.
-7. Retry count and history are visible.
-8. The loop stops at the configured budget.
-
-**Verifies:** Roslyn semantic mutation, diagnostic normalization + baseline/introduced classification, selected-test correction, diagnostic→mutation correlation (`relatedMutationId` + `relatedSymbolId` at `≥ PartialCompilation` per §16.2), bounded-context-for-correction (§10.4 retry classification, §34-C budget stop), turn/visibility contract (§10.7) making the "introduced" classification authoritative at `FullSemantic` (§16.3), and reuse of the complete mutation/policy/transaction/validation path for each correction.
-
----
+**Verifies:** advisory findings remain actionable across edits without rejecting valid writes or turning introduced errors into an ignored baseline.
 
 ## Scenario C2 — Conversation-Native Corrective Turns
 
-1. A model emits malformed tool arguments, an unavailable tool, an invalid sibling in a multi-tool response, or an ambiguous/conflicting mutation payload.
-2. The host rejects the invalid request before execution and does not repair arguments.
-3. The next model request contains bounded corrective feedback controlled by `execution:maxCorrectiveTurns`.
-4. Safe documented mutation-shape differences are normalized only when lossless and unambiguous; invalid operations, conflicting aliases, malformed completion values, and duplicate authority-bearing fields receive actionable correction rather than host-authored edits.
-5. A corrected request can proceed; exhausted attempts fail closed with sanitized diagnostics.
-6. For MCP imported tools with provider-unsafe canonical ids, the provider wire name is safely aliased and mapped back before invocation.
+1. Submit malformed tool arguments and confirm bounded, sanitized, correlated corrective feedback reaches the same conversation.
+2. Confirm a batch rejected before admission executes no sibling operation and cannot repeat an effect on retry.
+3. Apply valid source instructions producing compiler errors and confirm these findings consume no malformed-call correction budget.
+4. Verify trust/path policy denial remains authoritative and exhausted correction limits are reported honestly.
 
-**Verifies:** active-turn corrective history, atomic pre-execution batch rejection, lossless mutation normalization, actionable incremental-proposal correction, purge after successful correction, safe diagnostics without raw malformed arguments/secrets/provider bodies, provider-neutral canonical tool identity, and OpenAI-family tool-name aliasing.
-
----
+**Verifies:** ordinary provider/tool correction preserves replay and authority while compiler feedback stays advisory.
 
 ## Scenario D — Drop-In Extension
 
@@ -154,65 +134,33 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
-## Scenario J — Interrupted Execution Resumes Safely
+## Scenario J — Interrupted Effects Recover Safely
 
-1. User approves a bounded plan and the host enters implementation.
-2. A valid mutation proposal is staged against the current mutation baseline, its exact diff is recorded, and the exact pre-mutation affected workspace is built into a durable `BaselineCapture`.
-3. The host process is deterministically interrupted after the durable `MutationStaged` checkpoint but before mutation approval.
-4. The session is restored and reports the interrupted run, checkpoint, repository state, and one legal next action without applying the staged mutation.
-5. User explicitly resumes; the host revalidates repository, solution, baseline, trust, policy, and artifact integrity, then presents the same exact diff for the required decision.
-6. User approves; the host durably records the mutation-apply intent, the transaction applies exactly once, its result is reconciled, the mutation baseline advances to the resulting workspace generation, and the durable `MutationApplied` checkpoint is recorded.
-7. The host is interrupted again after repository bytes change but before the apply result/checkpoint is recorded.
-8. On resume, the host reconciles the pending operation against the expected result identity, records the already-completed application instead of reapplying it, classifies the post-mutation build against the preserved `BaselineCapture`, runs explained selected tests, and records one final outcome.
-9. Repeat with repository bytes, selected solution, trust/policy, or a checkpoint artifact changed between interruption and resume.
-10. Repeat cancellation before staging, while approval is pending, during commit, build, test, and correction; make the correction edit a file changed and a file created by the first set to prove it stages against the promoted mutation baseline.
-11. Complete one batch with its step still in progress, then interrupt during the later implementation model turn. Resume and confirm the host restores the same approved plan, completed-step set, active step, batch ordinal, promoted source generation, and consumed budget without replaying prior mutations.
-12. Partially authorize a multi-mutation candidate. Confirm applied work is validated and the run stops at `ContinuationPending` with no stale review candidate. Invoke `/validation retry`; confirm a fresh candidate is generated from current bytes and requires fresh exact-diff authorization.
+1. Interrupt a direct edit before intent, after durable intent, and after disk publication.
+2. Reopen the session and compare exact endpoint identities with the retained effect snapshot.
+3. Confirm original/final states produce truthful non-applied/applied receipts without repeating a proven write.
+4. Confirm mixed, unknown or externally changed states require recovery and preserve newer bytes.
+5. Reopen supported historical plan history; confirm it is readable but cannot execute remaining steps or confer approval.
 
-**Verifies:** deterministic state and legal transitions, incremental step/batch progress, partial-consent continuation, transactional/idempotent mutation and exact diff, pre-mutation `BaselineCapture`, build/test cancellation and late-result abandonment, tolerant persistence/restoration, approval-policy revalidation, separate diagnostic/mutation baselines, write-ahead side-effect intents, idempotent reconciliation, atomic checkpoints, explicit resume, no duplicate effects, and authoritative completion. Changed or corrupt state fails closed and requires a fresh plan/rebase path; cancellation preserves an inspectable safe repository state.
-
----
+**Verifies:** durable intent, effect identity, fail-closed recovery, retention protection and readable history.
 
 ## Scenario K — Governed Reusable Skill Workflow
 
-1. Organization, machine, user, and repository catalogs each expose bounded metadata for one or more skills without opening their instruction bodies.
-2. User searches `/skills` for analyzer remediation and sees immutable version/digest, scope, publisher/source, verification state, tool/trust/model requirements, and compatibility or denial reasons.
-3. A same-ID candidate exists in multiple scopes and a repository candidate attempts to shadow an organization-revoked package.
-4. User explicitly selects the host-maintained `fix-analyzer-warnings` package by immutable scope/identity/version/digest; the host verifies its manifest and every declared asset and validates typed inputs and current requirements before loading bounded step content.
-5. The workflow gathers authorized analyzer evidence and proposes a host plan; after plan approval it proposes exact mutations through M11.
-6. User reviews the exact staged diff under the current mutation policy. The host applies authorized changes transactionally, builds affected projects, runs explained selected tests, and records authoritative results.
-7. Cancel and restart at a durable workflow boundary, then explicitly resume.
-8. Repeat with a tampered package, unsigned/unallowlisted digest, incompatible model, disabled required tool, insufficient trust, excessive schema/body, path traversal, prompt instructions claiming approval, and a revoked package between steps.
-9. Invoke maintained `upgrade-package` and `review` workflows against deterministic fixtures; let the `review` procedure call the ordinary `delegate_agents` tool for its five prompted specialists, and verify trusted `agents:delegation:maximumAgents` configuration remains authoritative.
+1. Verify and enable an exact skill package through existing external trust controls.
+2. Run its bounded model procedure with ordinary advertised tools and inspect its typed findings.
+3. Apply requested source changes through the shared direct-edit application and normal exact authorization.
+4. Confirm retired planning/approved-execution nodes are rejected, package prose grants no authority, and cancellation/resume revalidates package identity and host policy.
 
-**Verifies:** centralized tool and trust policy, governed context and structured plans, extension-versus-skill isolation, durable provenance/restoration, mutation policy/model compatibility, transactional execution/checkpointing, governed parallel-agent requests, and scoped metadata-first verified skills/workflows. No skill content grants capabilities, creates agents directly, or bypasses planning, scheduling/integration, exact-diff approval, transactions, validation, cancellation, or authoritative evidence.
+**Verifies:** declarative skills reuse normal execution, policy, scheduling, checkpoints and validation.
 
+## Scenario L — Bounded Parallel Research and Review
 
----
+1. Ask the model to delegate independent inspection/review questions in one `delegate_agents` call.
+2. Confirm validated children are visible, bounded and confined to the actual inherited advertised tools; ordinary children cannot call `edit_source`.
+3. Confirm cancellation, progress, joins, provider/model provenance and partial results remain observable.
+4. Apply resulting advice through the parent's ordinary source-edit path with exact authorization and configured validation.
 
-## Scenario L — Bounded Parallel Research, Isolated Workers, and Review
-
-1. In ordinary trusted chat with a selected semantic workspace, have the parent call `delegate_agents` with `task`, `context`, `toolAccess`, and optional `role`. Omission selects `explorer`; only the exact values `explorer`, `implementer`, `securityReviewer`, `testReviewer`, `performanceReviewer`, and `architectureReviewer` are accepted.
-2. Confirm the host freezes the parent's exact visible tool snapshot, rejects unknown knobs or excess children, removes mutation, process/code-execution, approval-required, workflow, and delegation tools, and narrows child trust, roots, prohibited paths, phase, sensitivity, network, and budget.
-3. Run mixed roles concurrently as in-process .NET tasks against one immutable baseline. Each role contributes a system-prompt amendment, selected model, and eligible tools, not a required response template. Accept arbitrary final bodies, including text, JSON, whitespace, and empty replies, without mandatory role fields, citation GUIDs, semantic grading, or response-format repair. No ordinary role writes files or runs processes. Return child bodies separately from host-owned delegation/assignment IDs, roles, model provenance, statuses, omissions, and usage, without child transcripts or hidden reasoning. Completion records transport/join success rather than answer quality; successful siblings remain visible when another fails.
-4. Inspect `/agents <delegation-id>` for role, effective provider/profile/reasoning, source, fallback, and lifecycle state, then cancel a child and a complete delegation in separate runs. Persisted assignments retain configured/effective routing, role, the common `agent-response/1` marker, and runner version. Outcomes preserve `AgentRunOutcome.Response`, distinguishing an empty reply from null in supported legacy structured checkpoints. Checkpoint revisions increase monotonically, joined state is durable before responses are exposed, and late progress cannot replace terminal state or emit stale events. Response claims are not promoted to verified findings or parent evidence. Inspection does not resume an interrupted delegated model loop; further delegation requires a new generation.
-5. Request a change and approve its plan through the existing plan approval boundary.
-6. Confirm implementation and correction use the parent run identity and ordinary session model/reasoning settings. Repeat with a configured Implementer role route and verify it does not create a child or override the parent model. No delegation lifecycle event or announcement occurs without a model `delegate_agents` call.
-7. Return a repairable proposal and verify bounded corrections stay in the parent run. Cancel or fail the model before staging in separate runs and confirm no candidate is staged or applied.
-8. Allow a valid proposal to complete. Confirm the host stages it, obtains exact-diff authorization, applies it transactionally, and runs validation and corrections. Repeat with a multi-step plan and resumed execution; neither operation starts a child automatically. Manually roll back the edit, use `/new`, and repeat: the approved endpoints refresh before generation and the proposal sees the new baseline. Verify unique anchors work without offsets, LF/CRLF differences recover without a model retry, and later external drift or ambiguous anchors still block writes.
-9. Separately exercise the existing isolated-worker APIs with two approved non-overlapping assignments and managed detached worktrees. Shared or ambiguous ownership falls back to serial execution. Freeze the structured worker change sets and have specialist reviewers inspect immutable diff/evidence artifacts with read-only tools.
-10. Resolve required review findings through the parent and explicitly select worker results for integration. A child review cannot approve integration or claim that a finding is resolved.
-11. Confirm the existing parent integration APIs detect worker overlap and stale primary bytes, restage selected changes transactionally, present a fresh aggregate diff, require authorization, and rerun aggregate affected builds/tests.
-12. Repeat with arbitrary ordinary response contents, malformed actual mutation proposals or worker packages, policy-denied child tools, overlapping/shared paths, stale primary bytes, an out-of-scope worker edit, cancelled parent/child, transport failure, slow provider, exhausted resource controls, reviewer disagreement, interrupted checkpoints, and worktree cleanup failure. Ordinary content alone does not fail completion or trigger repair; security, cancellation, real capacity, and mutation validation remain enforced.
-13. Monitor operating-system processes while agents run.
-14. During an ordinary model response and again during a two-child delegation tool batch, press Enter repeatedly. Confirm one immediate acknowledgement and one pause request; finish the in-flight operation, confirm the parent and every still-running child stop before their next provider/tool operation, and confirm no output occurs while `steer >` is visible. Submit ordered steering, verify eligible-child delivery and honest undelivered counts for completed children, then repeat with empty dismissal, buffered multiline input, `Esc Esc`, and `Ctrl+C` cancellation.
-15. Configure trusted user/machine `agents:roleModels` using exact role keys, required `providerId` and `profileId`, and optional supported `reasoningLevel`. Role/field names are case-sensitive; provider IDs and reasoning names are case-insensitive. Confirm omitted reasoning uses the profile default, omitted roles preserve inheritance/defaults, invalid entries and legacy trusted `agents:roleProfiles` fail startup without falling back, edits take effect only after restart, and the TUI has no role editor. Repository role entries and same-ID provider endpoint overrides cannot redirect configured roles or their fallbacks.
-16. Verify application assignment pin, role mapping, inherited preference, then compatible default precedence. Only `RoleConfiguration` uses trusted model routing; pins, inherited preferences, and defaults retain ordinary effective-catalog and eligible secret rules. Tool access mode does not change model trust. Make a preference incompatible with the actual request and confirm a compatible fallback is recorded or the request fails before I/O. Configured/effective provider/profile/reasoning, source, and fallback survive assignment, checkpoint, and outcome inspection without endpoints, credentials, or raw provider payloads.
-
-**Verifies:** deterministic state and immutable turns, direct model-callable fork/join, role-specific instructions with unrestricted ordinary responses, repository/baseline/worktree confinement, exact parent-tool inheritance and central tool/context/capability/model/budget policy, separate mutation validation and correction, legacy structured checkpoint compatibility, persistence/restoration, serialized idempotent active-run input, safe-boundary parent/child steering, hierarchical cancellation, in-process structured concurrency, non-overlap partitioning, isolated workers, conflict-safe parent integration, and parent/child provenance. No process hosts a child agent; only existing tracked Git/build/test/tool infrastructure processes may appear. Children never delegate or transition parent workflow, unsafe partitioning falls back to serial execution, and no worker result is automatically merged.
-
-
----
+**Verifies:** explicit model-requested delegation, preserved child restrictions and one parent source writer.
 
 ## Scenario M — Governed Lifecycle Hooks and Managed Policy
 
@@ -220,7 +168,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 2. The user inspects the repository declaration and explicitly approves its exact repository identity, configuration digest, executable target, hook points, limits, secret-reference names, and advisory authority outside repository control.
 3. A model proposes a read-only tool invocation. The host emits versioned envelopes in deterministic order, enforces bounded payload/data scope, and records advice from both handlers without allowing either to approve, rewrite, or block the tool.
 4. Repository configuration changes the executable path or requests fail-closed behavior. The prior approval becomes stale, the handler does not execute, and repository content gains no blocking authority.
-5. Trusted organization policy grants one immutable HTTP handler managed blocking authority for specified denial codes at `BeforeModelRequest`, `BeforeToolInvocation`, `PlanProposed`, `MutationStaged`, and `BeforeValidation`, with explicit fail behavior and secret/data scopes.
+5. Trusted organization policy grants one immutable HTTP handler managed blocking authority for specified denial codes at `BeforeModelRequest`, `BeforeToolInvocation`, `MutationStaged`, and `BeforeValidation`, with explicit fail behavior and secret/data scopes.
 6. The handler denies one pending mutation by an allowed code. The host records the raw result, effective managed-policy decision, authority source, and legal blocked transition; it does not apply the mutation or treat the hook as an approval.
 7. Repeat at an after/terminal point. The denial is advisory and cannot retroactively undo the completed host action.
 8. Exercise typed executable, HTTP, already-connected MCP, and leased extension handlers with acknowledgement, advice, timeout, malformed/oversized output, cancellation, unavailable target, and secret-bearing configuration.
@@ -232,23 +180,15 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
-## Scenario N — Typed Native Repository Investigation and Lifecycle Change
+## Scenario N — Typed Repository Investigation and Lifecycle Change
 
-1. User opens a multi-project, multi-targeted repository with central package management, generated code, branches with a common merge base, analyzer findings, and parameterized tests.
-2. The model uses typed `git_log`, branch comparison, `git_diff`, `git_show`, and `git_blame` tools to identify the relevant change history without invoking a pager, external driver, remote, or generic process tool.
-3. A typed repository inventory reports solutions, projects, TFMs, project/package references, version sources, and test projects with revision provenance, confidence, and omissions.
-4. NuGet health reports direct/transitive dependencies and bounded vulnerability/deprecation/outdated advisory evidence with source, freshness, and completeness; offline repetition performs no implicit restore or mutation and clearly reports incomplete advisory data.
-5. Structured analyzer/build/format-check tools return normalized exploratory evidence. The user queries diagnostics by project, file, and code, discovers tests by stable host identity, and runs one targeted subset with the exact generated scope/filter shown.
-6. The model requests incoming/outgoing calls and bounded impact for one symbol, runs a closed-schema C# pattern query, and inspects classified generated output. Results show dispatch/relationship reasons, workspace generation, confidence, dynamic unknowns, truncation, and provenance.
-7. The user approves a plan requiring one file create, one move with an explicit content edit, and one delete. The model proposes typed lifecycle mutations rather than shell commands.
-8. The host validates plan-step/path scope and source/destination baseline identities, stages an exact add/rename/edit/delete diff, classifies lifecycle risk, and obtains the configured mutation authorization.
-9. The transaction applies once, invalidates semantic state, runs authoritative affected builds/tests through M11, and reports the distinction from earlier exploratory runs.
-10. Repeat with invalid Git revisions, oversized histories/graphs, malicious option/filter/pattern input, stale package data, ambiguous tests, degraded semantic confidence, destination collision, reparse/secret/Git paths, cancellation, and interruption before/after each filesystem effect and checkpoint.
+1. Use typed repository tools to identify exact source and lifecycle endpoints without a whole-repository preload.
+2. Submit ordered create/delete/move/replacement instructions through `edit_source`.
+3. Review lifecycle risk and exact diff; verify encoding, newline handling and case-only moves on applicable filesystems.
+4. Exercise stale anchors, conflicting destinations, protected paths and partial selection; confirm unauthorized bytes remain unchanged.
+5. Roll back the latest retained edit and confirm newer external changes cannot be overwritten.
 
-**Verifies:** repository/semantic/tool foundations, transactional mutation and validation, availability/provider/network policy, typed Git and inventory, NuGet/validation/diagnostic/test tools, advanced semantic inspection, and interruption-safe file lifecycle mutations. Ordinary high-value operations use typed contracts; read tools do not mutate; exploratory evidence cannot impersonate authoritative acceptance evidence; all writes remain host-governed and transactional.
-
-
----
+**Verifies:** confined typed tools, ordered lifecycle state, transaction ownership, exact review and safe rollback.
 
 ## Scenario O — Download, Install, Upgrade, and Remove a Tagged Release
 
@@ -287,21 +227,12 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ## Scenario Q — Claude-Style Skill Compatibility
 
-1. Place an unchanged sanitized instruction-only skill at `.claude/skills/review-focused-change/SKILL.md`, and place a same-name skill plus a distinct skill in the documented user-level Claude skills root.
-2. Refresh `/skills`. Confirm metadata-only discovery reports both scope-qualified same-name candidates, source format/version, digest, enablement, and compatibility without reading their instruction bodies or supporting resources.
-3. Inspect the repository candidate. Confirm bounded frontmatter, mapped/unavailable tools, referenced resources, script/hook/agent assumptions, restrictions, and stable diagnostics are visible without treating metadata as permission.
-4. Explicitly enable the exact repository source/digest outside repository control, invoke it without repackaging, and confirm the host revalidates generation/digest/trust/model/tools/budgets before loading bounded instructions and confined text/templates as provenance-labeled untrusted context.
-5. Let the skill collect authorized evidence and propose a bounded change. Confirm planning, exact diff, approval policy, transactional lifecycle mutations, build/test validation, cancellation, and final evidence all remain owned by existing host boundaries.
-6. Repeat through headless commands and `invoke_skill`; confirm candidate resolution, restrictions, context selection, outcomes, and denials match the interactive path.
-7. Modify one eligible source byte between selection and invocation and again before resume. Confirm immutable identity changes and stale invocation/resume fails closed rather than running replacement content under the prior digest.
-8. Repeat with traversal, absolute/resource URI, escaping/cyclic symlink/junction/reparse point, alternate data stream, case collision, malformed UTF-8, YAML alias/tag/duplicate/merge/recursion/coercion attacks, oversized metadata/body/resource sets, and a source-replacement race. Each fails closed with bounded sanitized diagnostics; a confined canonical link target is deduplicated under stable identity.
-9. Add `allowed-tools`, an unmapped tool, shell scripts, hooks, MCP assumptions, and subagent/fork metadata. Confirm only semantically mapped tools remain subject to current policy; executable or unsupported requirements are reported restricted/unsupported and never execute or grant authority automatically.
-10. Revoke/disable the digest and test native-package/name collisions plus organization deny policy. Confirm native signed verification remains distinct, higher policy wins, private bodies do not leak, and no Claude credentials/settings/transcripts/model configuration are imported.
+1. Import the supported instruction-only Claude-style skill subset as inert data.
+2. Verify exact external enablement, confined assets, tool mapping and incompatibility diagnostics.
+3. Run the ordinary bounded procedure and confirm source edits retain normal tool policy and exact authorization.
+4. Confirm unsupported execution hooks, scripts, autonomous delegation and retired planning actions cannot grant authority.
 
-**Verifies:** centralized tools/trust and context governance, persistence and exact external enablement, model and mutation policy, authoritative execution/delegation/lifecycle mutation, and pinned standard parsing, confined discovery/resources, immutable compatibility identity, tool adaptation, restriction projection, and shared invocation surfaces.
-
-
----
+**Verifies:** portable package compatibility without alternate execution or permission paths.
 
 ## Scenario R — Repository Model and Reasoning Selection
 
@@ -483,7 +414,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 13. Inject timeout, stale head, partial publication, lost response, retry, and provider duplicate behavior. Confirm reconciliation never duplicates comments, overstates a completed check, or publishes against a changed head, and core grants no commit/push/approval/merge authority.
 14. Run noninteractive external-fork CI with no privileged secrets. Confirm explicit inputs, no prompt fallback, bounded detached/ephemeral workspace, no Git mutation/hooks/executable filters, process/network policy preservation, atomic artifacts, cancellation, cleanup, and no privileged publication.
 15. Cancel or crash after every durable boundary: source freeze, reviewer selection/terminal, finding join, dispositions, gate compile, exports, publication intent/result, and terminal outcome. Confirm resume revalidates source/provider/policy/tool/skill/model generations and produces no duplicate reviewer, finding, waiver, artifact, comment, or check effect.
-16. Select findings for remediation. Confirm Threadsmith starts ordinary governed planning/execution with exact diff/approval/validation and that only a fresh review rerun—not implementation claims—marks findings fixed or changes the gate.
+16. Select findings for remediation. Confirm Threadsmith starts ordinary ordinary conversation and shared direct editing with exact diff/approval/validation and that only a fresh review rerun—not implementation claims—marks findings fixed or changes the gate.
 17. Add managed hooks requiring a domain reviewer, stricter threshold, and publication block. Confirm trusted policy can narrow/block and contribute validated advisory findings but cannot rewrite commits/diff/citations, weaken hard gates, self-waive, or publish directly.
 18. Inspect events, logs, persistence, diagnostics, and bundles. Confirm bounded IDs/counts/digests/roles/models/coverage/gate/publication outcomes and durations without secrets, provider tokens, private PR bodies, raw diffs, hidden reasoning, reviewer transcripts, or unbounded payloads.
 19. Run maintained real local-Git review and explicit-opt-in provider retrieval/publication fixtures. Confirm local review has no provider dependency and all delegation/skill, Git/semantic/test, hook, canonical-context, session/scheduling, MCP, persistence, redaction, and architecture regressions remain green.
@@ -643,52 +574,35 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 ---
 
-## Scenario AJ - Codex-Style Tool and Mutation-Diff Presentation
+## Scenario AJ — Tool and Mutation-Diff Presentation
 
-1. In an interactive TUI session with operation durations enabled, invoke representative built-in tools including file read, symbol/search, repository/Git inspection, and a failing or cancelled tool. Confirm each completed tool displays as `• TOOLS: <name> - <completed|failed|cancelled> · <elapsed>` followed by `  └ <bounded sanitized detail>`.
-2. Disable operation durations through the effective TUI setting. Repeat representative tool invocations and confirm the same two-line block shape appears without the elapsed suffix.
-3. Invoke MCP-imported, extension-backed, and unknown/fallback tools through test fixtures. Confirm each uses the same block grammar, closed outcome vocabulary, original host-owned/canonical ordering under parallel execution, and a concise safe detail line without raw JSON arguments, secrets, terminal controls, stack traces, or provider/MCP payloads.
-4. Review a governed mutation preview with one or more unified-diff hunks. Confirm each `@@ ... @@` hunk header is followed by exactly one presentation-owned blank line before displayed code, while file headers, metadata, no-newline markers, and raw canonical diff content remain unchanged.
-5. Confirm added and removed diff line styling remains unchanged and neutral/context diff code text can be configured independently through the semantic TUI role system.
-6. Copy visible transcript text and inspect durable/headless outputs. Confirm native selection/copy remains usable and presentation-only hunk spacing/tool formatting does not mutate canonical tool continuations, raw diffs, mutation validation inputs, durable records, or machine-readable outputs.
-7. Run a multi-batch, multi-step approved plan. Confirm both interactive frontends distinguish an ordinary next batch from a validation correction, report a partial-authorization pause with the existing resume command, and do not display batch success as terminal run success. Confirm headless reports the same pending-review versus terminal state.
+1. Run inspection followed by `edit_source` in interactive and headless modes.
+2. Confirm tool starts, review, commit, semantic progress and completion have correctly correlated visible activity.
+3. Toggle preview and authorize a valid subset; confirm the actual applied IDs and paths match the writer receipt.
+4. Decline/cancel a review and confirm no success claim or hidden application occurs.
 
-**Verifies:** centralized completed-tool presentation, bounded sanitized details, duration-enabled/disabled grammar, parallel ordering preservation, presentation-only mutation-diff hunk spacing, incremental batch/correction/run-state presentation, neutral diff-code role configurability, and preservation of mutation authority, timing semantics, canonical ordering, and terminal-safe rendering boundaries.
+**Verifies:** frontend parity, exact preview, truthful subset receipts and ordinary activity integration.
 
+## Scenario AK — Advisory Incremental Semantic Feedback
 
----
+1. Apply syntax-error and unresolved-symbol edits to an existing loaded C# document.
+2. Confirm writes succeed with separate versioned compiler feedback and explicit incomplete coverage.
+3. Apply consecutive edits to independent projects, including a declined/conflicted second edit; confirm prior findings persist or their unavailability is delivered explicitly.
+4. Confirm matching candidate results are reused and graph-affecting inputs receive visible refresh/omissions. Poll while the old analysis is obsolete and replacement is pending; confirm tracking survives and replacement diagnostics reach the continuing model.
+5. Confirm pending, obsolete and unavailable coverage omits error totals rather than reporting zero; user-visible advisory output contains plain-text coverage/error summaries, not serialized analysis.
+6. Arrange newer findings during a final response. Confirm a follow-up receives them within existing round/budget limits, the earlier response remains in history, and the round-limit case reports the advisory notification without another request. Pending work does not delay completion.
+7. Repair introduced errors within the requested scope or explain a conflict with the request. Explicitly invoke authoritative build/test tools when verification is requested; edit-only completion starts no validation.
 
-## Scenario AK - Roslyn-Based Pre-Mutation Analysis
+**Verifies:** generation correctness, bounded coverage/cache ownership, advisory diagnostics and honest final acceptance.
 
-1. Start governed implementation for a C# change and have the model propose a `.cs` mutation with malformed member syntax. Confirm the host applies it only to an in-memory overlay, reports Roslyn parse diagnostics mapped to changed hunks and containing syntax where available, asks for proposal-phase repair, and shows no user approval prompt or disk mutation for the bad candidate.
-2. Revise the proposal to syntactically valid code referring to an API introduced by an earlier batch. Confirm proposal screening performs no compiler preparation, does not wait for queued refresh, and cannot reject the proposal against stale dependency compilations. Missing symbols and overload/interface mistakes are checked by final cumulative validation.
-3. Add an analyzer/code-style violation. Confirm batch screening explicitly reports deferred compiler/analyzer checks and the configured final validation reports relevant diagnostics; absence of batch diagnostics is not represented as semantic or analyzer validation success.
-4. Confirm the correction packet given to the model contains only bounded host-owned fields: mutation/plan identifiers, file/range, diagnostic ID/severity/message, changed hunk, nearby context, containing type/member/symbol, source (`Syntax`, `Semantic`, `Compilation`, `Analyzer`, or `HostValidation`), confidence, omissions, and valid schema/argument examples for host validation failures.
-5. Exhaust the configured repair-round or time budget, cancel during Roslyn analysis, and restore from every durable safe boundary. Confirm no candidate is applied, late Roslyn results from stale generations are discarded, repository state remains unchanged, and the user sees an inspectable bounded failure.
-6. Produce a candidate that passes cheap gates. Confirm the normal exact diff is then presented under existing mutation approval policy, approval remains required, transactional apply writes exactly once, and authoritative build/test validation still runs and can still fail independently.
-7. Exercise orphan `.cs` files, unloaded projects, generated/linked files, multi-TFM projects, source-generator-dependent diagnostics, baseline pre-existing diagnostics, and dependent-project omissions. Confirm the gate degrades explicitly rather than overstating certainty or blocking solely because optional Roslyn checks are unavailable.
-8. Inspect activity, TUI/headless output, context/model continuations, events, telemetry, durable records, diagnostics, and support bundles. Confirm metrics distinguish diagnostics caught pre-build from build/test failures and record repair rounds/invalid proposals/schema mistakes without raw source contents, secrets, Roslyn objects, raw build logs, or provider payloads.
+## Scenario AL — Exact Authorization and Retired Configuration
 
-**Verifies:** in-memory pre-mutation overlay, syntax-only batch gates, deferred cumulative compiler/analyzer validation, bounded proposal-phase repair loop, diagnostic-to-hunk/symbol correlation, adaptive repair-phase tool surface, tool-result-aware correction feedback, candidate scoring, and preservation of approval/transaction authority and authoritative build/test validation.
+1. Configure supported mutation approval policies and verify exact-diff review/auto-authorization follows the documented policy.
+2. Load legacy planning approval, tranche and plan-only limit settings beside unrelated valid configuration.
+3. Confirm writable known obsolete properties are migrated idempotently, read-only values are ignored with a bounded warning, and unrelated bytes/settings are preserved.
+4. Confirm legacy planning trust grants no source-write authority and removed commands/tools cannot reactivate the old workflow.
 
-
----
-
-## Scenario AL - Plan Approval Policy and Sanity Checks
-
-1. Configure `ReviewRisky` through `/plan-policy` in a trusted disposable repository. Ask for a one-file source edit whose structured plan declares an exact existing repository-relative affected file. Confirm the host runs plan sanity checks, classifies the plan as low risk, records policy auto-approval, shows concise auto-approved status, and proceeds to mutation proposal without a manual plan prompt.
-2. Repeat with `ReviewAll`. Confirm the same sanity checks run before the plan is shown, but manual approval is still required after the checks pass.
-3. Have the model first propose a plan whose structured affected file does not exist. Confirm the host does not show the invalid plan to the user, returns bounded plan-revision evidence to the model, and accepts a revised plan with the correct path within budget.
-4. Repeat with a bare ambiguous file name, empty `fileIntents` under a policy that requires concrete files, create target that already exists, protected/secret/Git path, generated/binary file, lifecycle delete/move, dependency/project change, and managed lifecycle policy denial. Confirm repairable issues revise, risky issues prompt under policy, and hard issues fail closed.
-5. Exercise `ReviewAll`, `ReviewRisky`, `TrustSession`, `AlwaysTrustRepo`, and the strongest explicit auto-approval mode. Restart and switch repositories. Confirm every policy except `TrustSession` persists in repository settings, `TrustSession` does not rewrite repository settings, `AlwaysTrustRepo` is bound to exact repository identity, repository content cannot grant identity-fenced trust to itself, and reset/revoke restores `ReviewAll` without overwriting unrelated configuration.
-6. Under controlled filesystem failure, grant `AlwaysTrustRepo` and make the repository marker write fail after the user grant succeeds. Confirm the grant is compensated and no success event or stronger in-memory policy appears. Then leave persistent trust while making the repository downgrade marker fail; confirm revocation occurs first and remains revoked. Preserve unrelated repository and user JSON in both cases.
-7. Confirm every approved or auto-approved plan remains a durable structured contract: later mutation proposals must cite existing step ids, stay within approved scope, and still pass pre-mutation Roslyn screening, exact-diff mutation approval policy, transactional application, post-mutation build/test validation, correction, cancellation, and resume gates.
-8. Inspect interactive/headless output, context/model continuations, events, telemetry, persistence, diagnostics, and support bundles. Confirm plan-sanity and auto-approval records include policy/risk/scope/revision/provenance but no source contents, secret values, raw hook payloads, or provider data.
-
-**Verifies:** separate plan approval policy, `/plan-policy` command, all-plan repository sanity checks before review/auto-approval, bounded plan-revision repair, risk-to-policy mapping, repository identity fencing, preserved structured plan contracts, and preservation of mutation authority and validation gates; additionally verifies focused repository/user storage ownership and the unchanged fail-closed compensation protocol.
-
-
----
+**Verifies:** planning retirement, preserved mutation policy, narrow migration and unchanged trust boundaries.
 
 ## Scenario AN - Packaged Local Documentation Help Skill
 
@@ -706,9 +620,9 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 ## Cross-cutting note
 
 Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise the **Execution Turn & Concurrency Contract (§10.7)** and the **Semantic Confidence Levels (§13.x)** under load. Scenario M separately verifies that hook execution preserves the same turn and authority boundaries. These scenarios explicitly assert:
-- Staging is not visible to read tools mid-turn (Scenario B step 6/8 ordering).
-- Introduced-vs-baseline classification is authoritative at `FullSemantic` and reports `ConfidenceDegraded` otherwise (Scenario C step 2).
-- The correction loop stops at the configured budget (Scenario C step 8).
+- Private staged candidates do not become current disk source before authorized application (Scenario B).
+- Advisory origin classification reports unknown when comparable evidence is missing; authoritative build classification requires comparable full-semantic captures (Scenario C).
+- Malformed-call corrective turns stop at the configured budget; advisory compiler findings do not consume that budget (Scenario C2).
 
 ---
 
@@ -726,7 +640,7 @@ Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise t
 10. Make embeddings unavailable or change their space. Confirm qualified lexical fallback/revision-fenced rebuild with visible diagnostics; failed SQLite search omits memory, and cancellation propagates. Inspect ignored local database storage, repository isolation, secret-free bounded diagnostics, supported model/native assets, and best-effort recall semantics.
 
 11. Enable reconciliation with bounded candidate windows. For both memory types and both manual/model adds, return similar existing entries without insertion or eviction. Have the model consume the real tool response and issue an expected-revision update; verify the same ID contains the replacement. Confirm a distinct retry creates one separate note and leaves the existing note unchanged. Change/add candidates concurrently and verify fresh decisions or bounded conflict, never an unchecked commit.
-12. Verify kind/concept round trips, Unicode bounds, omitted/null preservation, empty-list clearing, metadata-only vector reuse, concept cascade deletion and migration 12. Enable concept recall and reranking with bounded candidate and result windows; admitted native hints can discover a qualifying note on the next normal continuation, including across plan tranches. Denied/invalid calls add no hints; hint-only changes cannot evade operational duplicate suppression. New runs/children/repositories cannot inherit parent hints. Updated/deleted notes cannot survive as current retained context. No extra generative call is made.
+12. Verify kind/concept round trips, Unicode bounds, omitted/null preservation, empty-list clearing, metadata-only vector reuse, concept cascade deletion and migration 12. Enable concept recall and reranking with bounded candidate and result windows; admitted native hints can discover a qualifying note on the next normal continuation, including across ordinary continuations. Denied/invalid calls add no hints; hint-only changes cannot evade operational duplicate suppression. New runs/children/repositories cannot inherit parent hints. Updated/deleted notes cannot survive as current retained context. No extra generative call is made.
 13. Supply concepts on an add whose text discovery misses the existing note; verify concept-assisted reconciliation uses full proposed-text ranking and reserved slots. Exercise shared fuzzy lexical discovery for both recall and reconciliation: preserve exact matches/scores, bound additional terms, and count spelling alternatives once per original query term. Exercise exact concepts, a controlled typo, unrelated/noisy hints, incomplete scores and unavailable native assets. Verify negative as well as positive finite scores remain eligible after complete reranking and bounded reserved concept candidates, exact-only degradation, revision-aware cache refresh, normal context policy and final-dispatch receipts. Separately record held-out calibration and actual published native load/query evidence on every release RID; deterministic test scores do not establish production ranking quality.
 
 
@@ -804,7 +718,7 @@ Scenarios B, C, J, K, L, Q, R, S, T, U, V, W, X, Y, Z, AA, AK, and AL exercise t
 
 **Source:** Plan 100; ADR-52; MTP-257.
 
-With the same scripted model and repository, exercise TUIKit and headless execution through ordinary chat; repository open/trust; session new/resume/clone; model/reasoning and theme changes; MCP/extensions/tools/skills/hooks management; policy choices; planning approval/rejection; exact-diff apply/discard; validation retry/correction; context/source/Markdown output; usage; steering and cancellation. Assert identical host authority decisions and persistence outcomes where the entry points overlap.
+With the same scripted model and repository, exercise TUIKit and headless execution through ordinary chat; repository open/trust; session new/resume/clone; model/reasoning and theme changes; MCP/extensions/tools/skills/hooks management; policy choices; exact-diff apply/discard; advisory correction and final validation; context/source/Markdown output; usage; steering and cancellation. Assert identical host authority decisions and persistence outcomes where the entry points overlap.
 
 TUIKit keeps a fixed bottom footer through runs, selectors, output, and resize; moves each committed ordinary entry into retained output exactly once while preserving its exact `current-user` context content; preserves exact drafts across prompt purposes; exposes complete option labels and safe links; bounds retained text/queues; and restores terminal state on all exits. Bare `--tui` and `--tui=tuikit` select TUIKit; `--tui=original` is rejected. MCP/authentication bypass the terminal backend. Package notices and SPDX include the exact TUIKit payload and supplemental font terms for every supported RID.
 

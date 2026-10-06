@@ -9,7 +9,7 @@
       "maximumMutations": 100,
       "maximumMutationCharacters": 4194304,
       "maximumRationaleCharacters": 8192,
-      // Machine/user/environment ceiling; other layers can only narrow it. Larger matrices use the linear diff fallback.
+      // Machine/user/environment ceiling; other layers can only narrow it. Its square bounds linear-space diff work.
       "maximumDiffLinesForLcs": 512,
       "maximumConcurrentConflictHashes": 4,
       "maximumConcurrentBaselineHashes": 8,
@@ -78,14 +78,6 @@
       "maximumModelPathCharacters": 1024,
       "maximumModelMessageCharacters": 2048,
       "maximumModelOutputCharacters": 16384
-    },
-    "plan": {
-      "maximumSteps": 100,
-      "maximumMetadataItems": 100,
-      "maximumSummaryCharacters": 4096,
-      "maximumTitleCharacters": 256,
-      "maximumDescriptionCharacters": 8192,
-      "maximumPathCharacters": 1024
     },
     "process": {
       "maximumEnvironmentVariables": 16,
@@ -368,7 +360,6 @@
   "execution": {
     "maxRetainedToolCalls": 256,
     "maxSourceFrontierEntries": 256,
-    "maxPlanSanityIssues": 32,
     "maxSteeringCharacters": 100000,
     "maxAgentDisplayFragments": 256,
     "maxAgentDisplayFragmentCharacters": 4096,

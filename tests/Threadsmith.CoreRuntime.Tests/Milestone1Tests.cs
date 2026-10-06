@@ -133,21 +133,7 @@ public static partial class Milestone1Tests
             events.Add(domainEvent);
             return Task.CompletedTask;
         });
-        var machine = new RunStateMachine(SessionId.New(), RunId.New(), stream);
-        if (terminalPhase is RunPhase.Completion or RunPhase.RolledBack)
-        {
-            await machine.TransitionAsync(RunPhase.EvidenceCollection, "test");
-            if (terminalPhase == RunPhase.RolledBack)
-            {
-                await machine.TransitionAsync(RunPhase.ChangePlanning, "test");
-                await machine.TransitionAsync(RunPhase.AwaitingPlanApproval, "test");
-                await machine.TransitionAsync(RunPhase.MutationPreparation, "test");
-                await machine.TransitionAsync(RunPhase.AwaitingMutationApproval, "test");
-                await machine.TransitionAsync(RunPhase.Mutation, "test");
-            }
-        }
-
-        await machine.TransitionAsync(terminalPhase, "terminal");
+        var machine = new RunStateMachine(SessionId.New(), RunId.New(), stream, initialPhase: terminalPhase);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             machine.TransitionAsync(RunPhase.Failed, "illegal"));
@@ -159,34 +145,6 @@ public static partial class Milestone1Tests
     [Fact]
     public static async Task StateMachine_AllPhasePairs_MatchTheTransitionMatrix()
     {
-        var paths = new Dictionary<RunPhase, RunPhase[]>
-        {
-            [RunPhase.Intake] = [],
-            [RunPhase.RepositoryDiscovery] = [RunPhase.RepositoryDiscovery],
-            [RunPhase.EvidenceCollection] = [RunPhase.EvidenceCollection],
-            [RunPhase.ChangePlanning] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning],
-            [RunPhase.AwaitingPlanApproval] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval],
-            [RunPhase.ImplementationPreparing] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing],
-            [RunPhase.ImplementationModelTurn] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn],
-            [RunPhase.MutationProposed] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed],
-            [RunPhase.MutationStaged] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged],
-            [RunPhase.BaselineValidation] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation],
-            [RunPhase.MutationApplyPending] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending],
-            [RunPhase.CorrectionPending] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending],
-            [RunPhase.CorrectionModelTurn] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CorrectionModelTurn],
-            [RunPhase.CompletionPending] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CompletionPending],
-            [RunPhase.MutationPreparation] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation],
-            [RunPhase.AwaitingMutationApproval] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval],
-            [RunPhase.Mutation] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation],
-            [RunPhase.Compilation] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation],
-            [RunPhase.Testing] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing],
-            [RunPhase.Verification] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification],
-            [RunPhase.AwaitingAcceptance] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.AwaitingAcceptance],
-            [RunPhase.Completion] = [RunPhase.EvidenceCollection, RunPhase.Completion],
-            [RunPhase.Failed] = [RunPhase.Failed],
-            [RunPhase.Cancelled] = [RunPhase.Cancelled],
-            [RunPhase.RolledBack] = [RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.RolledBack],
-        };
         var allowed = GetLegalTransitionPaths()
             .SelectMany(path => path.Select((destination, index) =>
                 (index == 0 ? RunPhase.Intake : path[index - 1], destination)))
@@ -210,11 +168,7 @@ public static partial class Milestone1Tests
                     observed.Add(domainEvent);
                     return Task.CompletedTask;
                 });
-                var machine = new RunStateMachine(SessionId.New(), RunId.New(), stream);
-                foreach (var phase in paths[source])
-                {
-                    await machine.TransitionAsync(phase, "arrange");
-                }
+                var machine = new RunStateMachine(SessionId.New(), RunId.New(), stream, initialPhase: source);
 
                 observed.Clear();
                 var isLegal = !terminal.Contains(source)
@@ -989,32 +943,6 @@ public static partial class Milestone1Tests
         Assert.Equal(nameof(RunPhase.Completion), snapshot.Status);
     }
 
-    /// <summary>The interactive shell queues plan review only from explicit approval requests.</summary>
-    [Fact]
-    public static void InteractionCoordinator_PlanReviewQueue_UsesApprovalRequestedOnly()
-    {
-        var sessionId = SessionId.New();
-        var now = DateTimeOffset.UtcNow;
-
-        Assert.True(InteractiveDecisionClassifier.IsPlanApprovalRequest(new ApprovalRequested(
-            sessionId,
-            now,
-            ApprovalId.New(),
-            "Display text deliberately does not identify a plan",
-            ApprovalRequestKind.Plan)));
-        Assert.False(InteractiveDecisionClassifier.IsPlanApprovalRequest(new ApprovalRequested(
-            sessionId,
-            now,
-            ApprovalId.New(),
-            "Approve plan revision 2: misleading mutation display text",
-            ApprovalRequestKind.MutationSet)));
-        Assert.False(InteractiveDecisionClassifier.IsPlanApprovalRequest(new ApprovalRequested(
-            sessionId,
-            now,
-            ApprovalId.New(),
-            "Approve plan revision 2: legacy event without typed metadata")));
-    }
-
     /// <summary>The TUI controller routes cancellation through the application command boundary.</summary>
     [Fact]
     public static async Task InteractionController_CancelActiveRun_ProducesCancelledState()
@@ -1034,232 +962,6 @@ public static partial class Milestone1Tests
 
         Assert.Null(controller.ActiveRunId);
         Assert.Equal(nameof(RunPhase.Cancelled), snapshot.Status);
-    }
-
-    /// <summary>Discarding a staged mutation clears the correction guard before the next submission.</summary>
-    [Fact]
-    public static async Task InteractionController_DiscardStagedMutation_AllowsNextSubmission()
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: false);
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await controller.OpenAsync("TUI");
-        await controller.SelectSolutionAsync(fixture.WorkspaceId, fixture.SolutionPath);
-        fixture.Projections.Session = fixture.CreatePlanProjection();
-        _ = await controller.SubmitAsync("request");
-        var staged = await controller.ApproveActivePlanAndProposeMutationSetAsync();
-        Assert.NotNull(staged);
-
-        _ = await controller.RollbackMutationSetAsync(fixture.MutationSetId);
-        Assert.True(await controller.CancelActiveRunAsync());
-        var nextRun = await controller.SubmitAsync("next request");
-
-        Assert.Equal(fixture.RunId, nextRun);
-    }
-
-    /// <summary>A review-ready mutation can be loaded without waiting for execution-checkpoint hydration.</summary>
-    [Fact]
-    public static async Task InteractionController_LoadMutationReview_AllowsAutoApprovedPlanMutationReview()
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: false);
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await controller.OpenAsync("TUI");
-        await controller.SelectSolutionAsync(fixture.WorkspaceId, fixture.SolutionPath);
-        var projection = fixture.CreatePlanProjection();
-        var plan = projection.Plan
-            ?? throw new InvalidOperationException("The test fixture did not create a plan projection.");
-        fixture.Projections.Session = projection with
-        {
-            Plan = plan with { Status = PlanReviewStatus.Approved },
-        };
-        var runId = await controller.SubmitAsync("request");
-
-        var staged = await controller.LoadMutationReviewAsync(fixture.MutationSetId);
-        var result = await controller.CommitMutationSetAsync(
-            fixture.MutationSetId,
-            new MutationApproval
-            {
-                Level = MutationApprovalLevel.EntireSet,
-                ApprovalId = fixture.ApprovalId,
-            });
-
-        Assert.Equal(fixture.RunId, runId);
-        Assert.Equal(fixture.MutationSetId, staged.MutationSet.MutationSetId);
-        Assert.Equal(fixture.MutationSetId, result.MutationSetId);
-        Assert.Equal(fixture.RunId, controller.BackgroundValidationRunId);
-    }
-
-    /// <summary>Interrupted post-apply validation keeps the controller guard so new work cannot start.</summary>
-    [Fact]
-    public static async Task InteractionController_PostApplyValidationFailure_RetainsRunGuard()
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: true);
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await StageAndApplyMutationAsync(controller, fixture);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            controller.ResumeAppliedMutationValidationAsync(fixture.RunId));
-
-        Assert.Equal(fixture.RunId, controller.BackgroundValidationRunId);
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            controller.SubmitAsync("new request"));
-        Assert.Contains("Post-apply validation is still running", exception.Message, StringComparison.Ordinal);
-    }
-
-    /// <summary>Interrupted post-apply validation can be retried through the retained run identity.</summary>
-    [Fact]
-    public static async Task InteractionController_PostApplyValidationFailure_CanRetryRetainedRun()
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: true);
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await StageAndApplyMutationAsync(controller, fixture);
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            controller.ResumeAppliedMutationValidationAsync(fixture.RunId));
-        fixture.Dispatcher.ThrowOnResume = false;
-
-        var continuation = await controller.ResumeAppliedMutationValidationAsync(
-            fixture.RunId);
-
-        Assert.Equal(ExecutionCheckpointPhase.Completed, continuation.Phase);
-        Assert.Null(controller.BackgroundValidationRunId);
-    }
-
-    /// <summary>Terminal post-apply validation releases the controller guard.</summary>
-    [Fact]
-    public static async Task InteractionController_PostApplyValidationCompleted_ReleasesRunGuard()
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: false);
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await StageAndApplyMutationAsync(controller, fixture);
-
-        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
-
-        Assert.Equal(ExecutionCheckpointPhase.Completed, continuation.Phase);
-        Assert.Null(controller.BackgroundValidationRunId);
-    }
-
-    /// <summary>A partial-approval pause retains the existing explicit retry route and run guard.</summary>
-    [Fact]
-    public static async Task InteractionController_PartialApprovalPause_RemainsResumable()
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: false)
-        {
-            ResumePhase = ExecutionCheckpointPhase.ContinuationPending,
-        };
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await StageAndApplyMutationAsync(controller, fixture);
-
-        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
-
-        Assert.Equal(ExecutionCheckpointPhase.ContinuationPending, continuation.Phase);
-        Assert.Equal(fixture.RunId, controller.BackgroundValidationRunId);
-        (var message, var role) = InteractionCoordinator.FormatPostApplyValidationResult(continuation.Phase, string.Empty);
-        Assert.Contains("/validation retry", message, StringComparison.Ordinal);
-        Assert.DoesNotContain("completed", message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(PresentationTextRole.Warning, role);
-    }
-
-    /// <summary>Completed and interrupted plan boundaries reuse active planning and release the validation guard.</summary>
-    [Theory]
-    [InlineData(ExecutionCheckpointPhase.PlanContinuationPending, "assessing the remaining objective", PresentationTextRole.Status)]
-    [InlineData(ExecutionCheckpointPhase.PlanReplanningPending, "applied changes are retained", PresentationTextRole.Warning)]
-    public static async Task InteractionController_PlanContinuation_RestoresActiveRunAndReleasesValidationGuard(
-        ExecutionCheckpointPhase phase,
-        string expectedMessage,
-        PresentationTextRole expectedRole)
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: false)
-        {
-            ResumePhase = phase,
-        };
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await StageAndApplyMutationAsync(controller, fixture);
-
-        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
-
-        Assert.Equal(phase, continuation.Phase);
-        Assert.Equal(fixture.RunId, controller.ActiveRunId);
-        Assert.Null(controller.BackgroundValidationRunId);
-        (var message, var role) = InteractionCoordinator.FormatPostApplyValidationResult(
-            continuation.Phase,
-            string.Empty);
-        Assert.Contains(expectedMessage, message, StringComparison.Ordinal);
-        Assert.Equal(expectedRole, role);
-    }
-
-    /// <summary>Post-apply validation failure is not presented as successful completion.</summary>
-    [Fact]
-    public static void InteractionCoordinator_PostApplyValidationFailure_IsReportedSeparately()
-    {
-        (var failedMessage, var failedRole) = InteractionCoordinator.FormatPostApplyValidationResult(
-            ExecutionCheckpointPhase.Failed,
-            " (1.7s)");
-        (var completedMessage, var completedRole) = InteractionCoordinator.FormatPostApplyValidationResult(
-            ExecutionCheckpointPhase.Completed,
-            " (1.7s)");
-
-        Assert.Equal("Validation failed (1.7s); mutation was not accepted.\n", failedMessage);
-        Assert.Equal(PresentationTextRole.Error, failedRole);
-        Assert.DoesNotContain("completed", failedMessage, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("Validation completed (1.7s).\n", completedMessage);
-        Assert.Equal(PresentationTextRole.Status, completedRole);
-    }
-
-    /// <summary>Post-apply validation start remains visible when no semantic-check activity will follow.</summary>
-    [Fact]
-    public static void InteractionCoordinator_PostApplyValidationStart_RendersWhenSemanticStageIsDisabled()
-    {
-        Assert.Null(InteractionCoordinator.FormatPostApplyValidationStartSegments(
-        [
-            MutationValidationStage.Semantic,
-            MutationValidationStage.Compile,
-        ]));
-
-        var segments = InteractionCoordinator.FormatPostApplyValidationStartSegments(
-        [
-            MutationValidationStage.Compile,
-            MutationValidationStage.Diagnostics,
-            MutationValidationStage.Tests,
-        ]) ?? throw new InvalidOperationException("Non-semantic validation should render start status.");
-        var start = string.Concat(segments.Select(segment => segment.Text));
-
-        Assert.Equal(
-            " MUTATION: Validating applied mutation"
-                + Environment.NewLine
-                + " \u2514 Stages: compile, diagnostics, tests"
-                + Environment.NewLine,
-            start);
-        Assert.Collection(
-            segments,
-            segment =>
-            {
-                Assert.Equal(" MUTATION: Validating applied mutation" + Environment.NewLine, segment.Text);
-                Assert.Equal(PresentationTextRole.Status, segment.Role);
-            },
-            segment =>
-            {
-                Assert.Equal(" \u2514 Stages: compile, diagnostics, tests" + Environment.NewLine, segment.Text);
-                Assert.Equal(PresentationTextRole.Muted, segment.Role);
-            });
-    }
-
-    /// <summary>Post-apply correction review restores the owning active run for discard cancellation.</summary>
-    [Fact]
-    public static async Task InteractionController_PostApplyCorrectionReview_RestoresActiveRunForDiscard()
-    {
-        var fixture = new PostApplyValidationFixture(throwOnResume: false)
-        {
-            ResumePhase = ExecutionCheckpointPhase.MutationApprovalPending,
-        };
-        var controller = new InteractionController(new InteractionPresenter(fixture.Dispatcher, fixture.Projections));
-        await StageAndApplyMutationAsync(controller, fixture);
-
-        var continuation = await controller.ResumeAppliedMutationValidationAsync(fixture.RunId);
-        _ = await controller.RollbackMutationSetAsync(fixture.MutationSetId);
-
-        Assert.Equal(ExecutionCheckpointPhase.MutationApprovalPending, continuation.Phase);
-        Assert.Equal(fixture.RunId, controller.ActiveRunId);
-        Assert.Null(controller.BackgroundValidationRunId);
-        Assert.True(await controller.CancelActiveRunAsync());
     }
 
     /// <summary>Repository and semantic responses append through one boundary without clearing prior turns.</summary>
@@ -2361,7 +2063,6 @@ public static partial class Milestone1Tests
             "/models",
             "/new",
             "/open [path]",
-            "/plan-policy [name|current|reset|revoke]",
             "/policy [name|current]",
             "/quit",
             "/reasoning [level]",
@@ -2372,7 +2073,6 @@ public static partial class Milestone1Tests
             "/thinking [on|off]",
             "/tools",
             "/trust [inspect|read|build|mutation|automation]",
-            "/validation retry",
         ];
         var commandLines = surface.Output
             .Split(Environment.NewLine, StringSplitOptions.None)
@@ -2411,34 +2111,11 @@ public static partial class Milestone1Tests
                 + "Browse, verify, and toggle skills",
             surface.Output,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "/plan-policy [name|current|reset|revoke]  Select or report plan approval policy",
+        Assert.DoesNotContain(
+            "/plan-policy",
             surface.Output,
             StringComparison.Ordinal);
         Assert.Contains("Ctrl+T", surface.Output, StringComparison.Ordinal);
-    }
-
-    /// <summary>The /plan-policy command uses the shared command boundary and reports the selected policy.</summary>
-    [Fact]
-    public static async Task InteractionCoordinator_PlanPolicyCommand_UsesCommandBoundary()
-    {
-        var planPolicy = new RecordingPlanApprovalPolicyHandler();
-        await using var harness = await SessionHarness.CreateAsync(
-            new ScriptedSession(),
-            additionalHandlers: [planPolicy]);
-        var surface = new FakeConsoleSurface(["/plan-policy ReviewRisky", "/plan-policy current", "/quit"]);
-        var shell = CreateCoordinator(
-            new InteractionPresenter(harness.Dispatcher, harness.Projections),
-            harness.EventStream,
-            surface,
-            planApprovalPolicy: planPolicy);
-
-        await shell.RunAsync(modelStatus: "Test model").WaitAsync(TimeSpan.FromSeconds(5));
-
-        Assert.Equal(PlanApprovalPolicy.ReviewRisky, planPolicy.CurrentPolicy);
-        Assert.Equal(["repository"], planPolicy.Scopes);
-        Assert.Contains("Plan policy changed to ReviewRisky.", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("Current plan policy: ReviewRisky.", surface.Output, StringComparison.Ordinal);
     }
 
     /// <summary>Session usage replaces duplicate request observations and accumulates distinct rounds.</summary>
@@ -3155,7 +2832,7 @@ public static partial class Milestone1Tests
         var policy = new FakeMutationApprovalPolicy();
         var surface = new FakeConsoleSurface(
             ["/policy", "/policy current", "/policy missing", "/quit"],
-            [4]);
+            [3]);
         var shell = CreateCoordinator(
             new InteractionPresenter(harness.Dispatcher, harness.Projections),
             harness.EventStream,
@@ -3168,7 +2845,7 @@ public static partial class Milestone1Tests
         Assert.Equal([MutationApprovalPolicy.AlwaysTrustRepo], policy.SelectedPolicies);
         Assert.Contains("ReviewAll — review every staged diff", surface.Output, StringComparison.Ordinal);
         Assert.Contains("ReviewRisky — auto-apply ordinary edits", surface.Output, StringComparison.Ordinal);
-        Assert.Contains("TrustPlan — auto-apply changes within the approved plan", surface.Output, StringComparison.Ordinal);
+        Assert.DoesNotContain("TrustPlan", surface.Output, StringComparison.Ordinal);
         Assert.Contains("TrustSession — auto-apply in-repository changes this session", surface.Output, StringComparison.Ordinal);
         Assert.Contains("AlwaysTrustRepo — persistently auto-apply", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Current mutation policy: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
@@ -5085,30 +4762,7 @@ public static partial class Milestone1Tests
         yield return new[] { RunPhase.RepositoryDiscovery };
         yield return new[] { RunPhase.EvidenceCollection };
         yield return new[] { RunPhase.RepositoryDiscovery, RunPhase.EvidenceCollection };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.Completion };
         yield return new[] { RunPhase.EvidenceCollection, RunPhase.Completion };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.Completion };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.Completion };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.EvidenceCollection };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.CompletionPending, RunPhase.Completion };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CorrectionModelTurn, RunPhase.CompletionPending, RunPhase.Completion };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.CorrectionPending, RunPhase.CorrectionModelTurn, RunPhase.MutationProposed };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.CorrectionPending, RunPhase.CompletionPending, RunPhase.Completion };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.ImplementationPreparing, RunPhase.ImplementationModelTurn, RunPhase.MutationProposed, RunPhase.MutationStaged, RunPhase.AwaitingMutationApproval, RunPhase.BaselineValidation, RunPhase.MutationApplyPending, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.AwaitingAcceptance };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.RolledBack };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.RolledBack };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.RolledBack };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.AwaitingAcceptance };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.AwaitingAcceptance, RunPhase.Completion };
-        yield return new[] { RunPhase.EvidenceCollection, RunPhase.ChangePlanning, RunPhase.AwaitingPlanApproval, RunPhase.MutationPreparation, RunPhase.AwaitingMutationApproval, RunPhase.Mutation, RunPhase.Compilation, RunPhase.Testing, RunPhase.Verification, RunPhase.AwaitingAcceptance, RunPhase.RolledBack };
         yield return new[] { RunPhase.Failed };
         yield return new[] { RunPhase.Cancelled };
     }
@@ -5385,7 +5039,6 @@ public static partial class Milestone1Tests
         bool showSessionStatus = true,
         IToolStateManager? toolStateManager = null,
         IMutationApprovalPolicy? mutationApprovalPolicy = null,
-        IPlanApprovalPolicy? planApprovalPolicy = null,
         bool activeModelSelectionAvailable = false,
         IClaudeSkillCompatibilityCatalog? claudeSkills = null,
         bool sessionLifecycleAvailable = false,
@@ -5395,7 +5048,6 @@ public static partial class Milestone1Tests
         WebFetchAuthorizationAuthority? webFetchAuthorization = null,
         DirectFetchApprovalPromptRouter? directFetchApprovalPrompt = null,
         IThemePreferenceStore? themePreferenceStore = null,
-        IReadOnlyList<MutationValidationStage>? validationStages = null,
         CodeExploreOutputOptions? codeExploreOutputOptions = null)
     {
         var themes = themePreferences ?? new SessionThemePreferences(
@@ -5413,7 +5065,6 @@ public static partial class Milestone1Tests
             showSessionStatus,
             toolStateManager,
             mutationApprovalPolicy,
-            planApprovalPolicy,
             activeModelSelectionAvailable,
             claudeSkills,
             sessionLifecycleAvailable,
@@ -5424,7 +5075,6 @@ public static partial class Milestone1Tests
             webFetchAuthorization: webFetchAuthorization,
             directFetchApprovalPrompt: directFetchApprovalPrompt,
             frontendCommands: new ThemeCommandContribution(themes, surface.SetThemeAsync, themePreferenceStore),
-            validationStages: validationStages,
             codeExploreOutputOptions: codeExploreOutputOptions);
     }
 
@@ -6529,166 +6179,6 @@ public static partial class Milestone1Tests
         };
     }
 
-    private static async Task StageAndApplyMutationAsync(
-        InteractionController controller,
-        PostApplyValidationFixture fixture)
-    {
-        await controller.OpenAsync("TUI");
-        await controller.SelectSolutionAsync(fixture.WorkspaceId, fixture.SolutionPath);
-        fixture.Projections.Session = fixture.CreatePlanProjection();
-        var runId = await controller.SubmitAsync("request");
-        Assert.Equal(fixture.RunId, runId);
-        var staged = await controller.ApproveActivePlanAndProposeMutationSetAsync();
-        Assert.NotNull(staged);
-        _ = await controller.CommitMutationSetAsync(
-            fixture.MutationSetId,
-            new MutationApproval
-            {
-                Level = MutationApprovalLevel.EntireSet,
-                ApprovalId = fixture.ApprovalId,
-            });
-        Assert.Equal(fixture.RunId, controller.BackgroundValidationRunId);
-    }
-
-    private sealed class PostApplyValidationFixture
-    {
-        public PostApplyValidationFixture(bool throwOnResume)
-        {
-            SessionId = SessionId.New();
-            RunId = RunId.New();
-            WorkspaceId = WorkspaceId.New();
-            MutationSetId = MutationSetId.New();
-            ApprovalId = ApprovalId.New();
-            RepositoryPath = Path.Combine(Path.GetTempPath(), $"threadsmith-tui-{Guid.NewGuid():N}");
-            SolutionPath = Path.Combine(RepositoryPath, "App.csproj");
-            ResumePhase = ExecutionCheckpointPhase.Completed;
-            Projections = new FixedProjectionStore();
-            Dispatcher = new PostApplyValidationDispatcher(this, throwOnResume);
-        }
-
-        public SessionId SessionId { get; }
-
-        public RunId RunId { get; }
-
-        public WorkspaceId WorkspaceId { get; }
-
-        public MutationSetId MutationSetId { get; }
-
-        public ApprovalId ApprovalId { get; }
-
-        public ExecutionCheckpointPhase ResumePhase { get; set; }
-
-        public string RepositoryPath { get; }
-
-        public string SolutionPath { get; }
-
-        public FixedProjectionStore Projections { get; }
-
-        public PostApplyValidationDispatcher Dispatcher { get; }
-
-        public SessionProjection CreatePlanProjection()
-        {
-            return new()
-            {
-                Key = new ProjectionKey("session", SessionId.Value.ToString("D")),
-                SessionId = SessionId,
-                Name = "TUI",
-                Intent = "request",
-                Plan = new PlanProjection(
-                RunId,
-                ApprovalId.New(),
-                new ImplementationPlan
-                {
-                    Summary = "Change one file.",
-                    Steps =
-                    [
-                        new ImplementationPlanStep
-                        {
-                            StepId = StepId.New(),
-                            Title = "Edit file",
-                            Description = "Edit one file.",
-                            FileIntents =
-                            [
-                                new PlanFileIntent
-                                {
-                                    Kind = PlanFileChangeKind.Modify,
-                                    Path = "src/Example.cs",
-                                },
-                            ],
-                            ExpectedOutcome = "File changed.",
-                        },
-                    ],
-                },
-                PlanReviewStatus.Pending),
-            };
-        }
-
-        public WorkspaceBaseline CreateBaseline()
-        {
-            return new(
-            WorkspaceId,
-            RepositoryPath,
-            DateTimeOffset.UtcNow,
-            [],
-            SelectedSolutionPath: SolutionPath,
-            TrustLevel: RepositoryTrustLevel.TrustedBuild);
-        }
-
-        public StagedMutationSet CreateStagedMutationSet()
-        {
-            var mutationId = MutationId.New();
-            var mutationSet = new MutationSet
-            {
-                MutationSetId = MutationSetId,
-                SessionId = SessionId,
-                RunId = RunId,
-                WorkspaceId = WorkspaceId,
-                BaselineCapturedAt = DateTimeOffset.UtcNow,
-                Mutations =
-                [
-                    new Mutation
-                    {
-                        MutationId = mutationId,
-                        Type = MutationType.ReplaceText,
-                        RelativePath = "src/Example.cs",
-                        ExpectedText = "old",
-                        ReplacementText = "new",
-                    },
-                ],
-                Rationale = "Test mutation.",
-            };
-            var preview = new MutationPreview(
-                MutationSetId,
-                "diff",
-                [new MutationDiff(mutationId, "src/Example.cs", "diff", true)],
-                AddedLines: 1,
-                RemovedLines: 1);
-            return new StagedMutationSet(
-                mutationSet,
-                preview,
-                new ConflictReport(MutationSetId, []),
-                ApprovalId);
-        }
-
-        public ExecutionContinuation CreateContinuation(ExecutionCheckpointPhase phase)
-        {
-            return new()
-            {
-                SessionId = SessionId,
-                RunId = RunId,
-                WorkspaceId = WorkspaceId,
-                PlanRevision = 1,
-                PlanHash = "plan",
-                Phase = phase,
-                DiagnosticBaselineIdentity = "baseline",
-                MutationBaselineIdentity = "mutation-baseline",
-                MutationSetId = MutationSetId,
-                NextAction = "continue",
-                RecordedAt = DateTimeOffset.UtcNow,
-            };
-        }
-    }
-
     private sealed class FixedProjectionStore : IProjectionStore
     {
         public SessionProjection? Session { get; set; }
@@ -6704,62 +6194,6 @@ public static partial class Milestone1Tests
             where TProjection : class, IProjection
         {
             return Task.FromResult(Session as TProjection);
-        }
-    }
-
-    private sealed class PostApplyValidationDispatcher : ICommandDispatcher
-    {
-        private readonly PostApplyValidationFixture _fixture;
-
-        public PostApplyValidationDispatcher(
-            PostApplyValidationFixture fixture,
-            bool throwOnResume)
-        {
-            _fixture = fixture;
-            ThrowOnResume = throwOnResume;
-        }
-
-        public bool ThrowOnResume { get; set; }
-
-        public Task<TResponse> DispatchAsync<TResponse>(
-            ICommand<TResponse> command,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            object response = command switch
-            {
-                CreateSessionCommand => _fixture.SessionId,
-                SelectSolutionCommand => new SolutionSelectionResult(
-                    _fixture.WorkspaceId,
-                    _fixture.SolutionPath,
-                    ["net10.0"]),
-                RecordBaselineCommand => _fixture.CreateBaseline(),
-                SubmitRequestCommand => _fixture.RunId,
-                ApprovePlanCommand => true,
-                GetExecutionMutationCommand => _fixture.CreateStagedMutationSet(),
-                GetMutationReviewCommand => _fixture.CreateStagedMutationSet(),
-                PrepareExecutionValidationCommand => _fixture.CreateContinuation(
-                    ExecutionCheckpointPhase.MutationApprovalPending),
-                ApplyExecutionMutationCommand => new ExecutionApplyResult
-                {
-                    SessionId = _fixture.SessionId,
-                    RunId = _fixture.RunId,
-                    MutationSetId = _fixture.MutationSetId,
-                    ChangedFiles = ["src/Example.cs"],
-                    Continuation = _fixture.CreateContinuation(ExecutionCheckpointPhase.MutationApplied),
-                },
-                RollbackMutationSetCommand => new MutationRollbackResult(
-                    _fixture.MutationSetId,
-                    [],
-                    new ConflictReport(_fixture.MutationSetId, [])),
-                CancelRunCommand => true,
-                WaitForRunCommand => true,
-                ResumeRunCommand when ThrowOnResume => throw new InvalidOperationException(
-                    "Simulated post-apply validation failure."),
-                ResumeRunCommand => _fixture.CreateContinuation(_fixture.ResumePhase),
-                _ => throw new InvalidOperationException($"Unexpected command {command.GetType().Name}."),
-            };
-            return Task.FromResult((TResponse)response);
         }
     }
 
@@ -6850,67 +6284,6 @@ public static partial class Milestone1Tests
                 _ => throw new InvalidOperationException($"Unexpected command {command.GetType().Name}."),
             };
             return Task.FromResult((TResponse)response);
-        }
-    }
-
-    private sealed class RecordingPlanApprovalPolicyHandler
-        : IPlanApprovalPolicy,
-            ICommandHandler<GetPlanApprovalPolicyCommand, PlanApprovalPolicy>,
-            ICommandHandler<SetPlanApprovalPolicyCommand, PlanApprovalPolicy>
-    {
-        public PlanApprovalPolicy CurrentPolicy { get; private set; } = PlanApprovalPolicy.ReviewAll;
-
-        public List<string> Scopes { get; } = [];
-
-        public Task BindRepositoryAsync(
-            string repositoryRoot,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.CompletedTask;
-        }
-
-        public PlanApprovalDecision Decide(
-            PlanSanityCheckResult result,
-            RepositoryTrustLevel trustLevel)
-        {
-            ArgumentNullException.ThrowIfNull(result);
-            return new PlanApprovalDecision
-            {
-                Kind = PlanApprovalDecisionKind.RequiresReview,
-                Policy = CurrentPolicy,
-                Risk = result.Risk,
-                Reason = "test",
-            };
-        }
-
-        public Task SetPolicyAsync(
-            PlanApprovalPolicy policy,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            CurrentPolicy = policy;
-            return Task.CompletedTask;
-        }
-
-        public Task<PlanApprovalPolicy> HandleAsync(
-            GetPlanApprovalPolicyCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentNullException.ThrowIfNull(command);
-            cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(CurrentPolicy);
-        }
-
-        public Task<PlanApprovalPolicy> HandleAsync(
-            SetPlanApprovalPolicyCommand command,
-            CancellationToken cancellationToken = default)
-        {
-            ArgumentNullException.ThrowIfNull(command);
-            cancellationToken.ThrowIfCancellationRequested();
-            CurrentPolicy = command.Policy;
-            Scopes.Add(command.Scope);
-            return Task.FromResult(CurrentPolicy);
         }
     }
 
@@ -7084,7 +6457,7 @@ public static partial class Milestone1Tests
             return Task.CompletedTask;
         }
 
-        public bool RequiresApproval(MutationRiskAssessment risk, bool isWithinPlan)
+        public bool RequiresApproval(MutationRiskAssessment risk)
         {
             return true;
         }
@@ -7100,6 +6473,10 @@ public static partial class Milestone1Tests
         }
 
         public void Validate(MutationSet mutations, string repositoryRoot)
+        {
+        }
+
+        public void ValidatePaths(IEnumerable<string> relativePaths, string repositoryRoot)
         {
         }
     }

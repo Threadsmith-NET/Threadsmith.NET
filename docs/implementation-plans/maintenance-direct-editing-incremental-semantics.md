@@ -1,6 +1,6 @@
 # Direct editing with incremental semantic feedback
 
-**Status:** Planned — implementation and performance validation not started
+**Status:** Active — ordinary conversation/direct-edit composition implemented, live planning artifacts retired, and regression/source reviews verified; representative performance and remaining runtime acceptance evidence are outstanding
 
 **Delivery track:** Maintenance
 
@@ -14,7 +14,7 @@ Preserve semantic checks before and after edits, exact source preconditions, wri
 
 Immediate Roslyn feedback is advisory information for the implementing model: catch likely syntax, name-resolution, missing-using, missing-reference and related compiler problems before an eventual full build/test run. Some findings may already be known to the model. The model may act on a finding immediately, complete related edits first, or continue with an explanation. These checks do not create another approval gate, require a repair loop after every edit, or establish that the final build/tests will pass. Full build and test results remain authoritative for the validation they actually perform.
 
-This document is the implementation contract for replacing the mandatory planning workflow. The vertical slice is an early verification step, not the final deliverable. Completion includes production cutover, removal of obsolete code/configuration/prompts, migration, and documentation. No measured edit latency or implemented direct-editing path is claimed yet.
+This document is the implementation contract for replacing the mandatory planning workflow. The vertical slice is an early verification step, not the final deliverable. Completion includes production cutover, removal of obsolete code/configuration/prompts, migration, and documentation. The direct-edit path passes the solution build and regression suite. Clean-context source/artifact reviews and an implementation-contract alignment review found no remaining actionable findings in their assessed paths. Representative edit-latency measurements and remaining runtime acceptance evidence are still outstanding.
 
 ## 2 Architectural Context
 
@@ -81,15 +81,22 @@ These are source-based findings, not measurements attributing the reported 60-se
 flowchart LR
     M[Ordinary model loop] --> T[Registered edit tool]
     T --> P[Policy and source preconditions]
-    P --> S[Candidate semantic snapshot and precheck]
-    S --> A[Exact diff authorization]
-    A --> W[Existing transactional writer]
+    P --> A[Exact diff authorization]
+    A --> S[Bounded advisory candidate analysis]
+    S --> W[Existing transactional writer]
     W --> R[Promote matching semantic snapshot]
     R --> F[Edit result and scoped semantic feedback]
     F --> M
-    R --> D[Dependent project analysis]
+    R --> D[Dependent analysis or verified graph refresh]
     D --> F
+    M --> Q[Response without tool calls]
+    Q --> B{New feedback ready and another round allowed?}
+    B -->|Yes| H[Retain response and supply feedback]
+    H --> M
+    B -->|No| O[Disk outcome without automatic validation]
 ```
+
+The [current conversation-flow diagram](../operations/conversation-loop.md) details the visible late-feedback notification, including the round-limit case. Graph replacement retains feedback delivery while verified replacement analysis is pending. Model-facing error totals are omitted for pending, obsolete or unavailable coverage; user-visible summaries use plain text rather than serialized analysis.
 
 Implement a host-owned edit tool in `Threadsmith.Execution`, where tool implementations such as `ActiveTurnEvidenceTool` already exist. Register it through composition and invoke it through the ordinary pipeline. This keeps `Threadsmith.Tools` from depending on execution or Roslyn implementations. Manual entry points should dispatch to the same edit application command; internal semantic edits must materialize into that same transaction path.
 
@@ -123,7 +130,7 @@ Use immutable snapshot/version receipts and the existing refresh owner's dirty/a
 
 The edit tool returns a compact receipt: applied/conflict/denied status, changed paths, workspace version, semantic coverage, new/resolved/current error counts, a bounded diagnostic list, and pending analysis status. Compiler errors do not turn a successful write into a failed tool operation.
 
-Later diagnostics enter the existing conversation as fresh bounded host evidence at a provider-compatible boundary, before the next request when ready. Do not rewrite sealed tool results. Prefer new actionable diagnostics and resolved findings over repeated complete error lists. Delivery must also work when the next action is a final answer, without inventing an extra mandatory semantic-completion gate. The existing policy for full build/test validation governs validated completion; matching authoritative build results supersede pending advisory analysis of older snapshots. Avoid a model polling loop. Keep a bounded latest-result mailbox owned by the existing run/workspace coordination, rather than another durable diagnostic service.
+Later diagnostics enter the existing conversation as fresh bounded host evidence at a provider-compatible boundary, before the next request when ready. Do not rewrite sealed tool results. Prefer new actionable diagnostics and resolved findings over repeated complete error lists. Delivery must also work when the next action is a final answer, without inventing an extra mandatory semantic-completion gate. The model decides when to invoke full build/test validation, with guidance to resolve incremental compiler findings first; response completion does not trigger it automatically. Matching authoritative build results supersede pending advisory analysis of older snapshots. Avoid a model polling loop. Keep a bounded latest-result mailbox owned by the existing run/workspace coordination, rather than another durable diagnostic service.
 
 ### Ordering and lifecycle changes
 
@@ -206,6 +213,8 @@ These are implementation work packages for agents, not runtime phases imposed on
 
 ### A. Establish ownership and removal ledger
 
+Working inventory: [direct-editing removal ledger](maintenance-direct-editing-removal-ledger.md). Entries remain open until their actual callers, migration fixtures and replacement tests are verified.
+
 Confirm the active checkout and preserve unrelated working changes. Trace the section 8 symbols through registration, policy, frontend, persistence and tests. Inventory all plan settings across defaults, binders, schemas, examples, environment/CLI configuration and persistence. Record consumers of reusable mutation materialization, journal and approval code. Inspect the withdrawn source-evidence work item so its read loop is not reintroduced. Amend the relevant architectural decisions with the target protocol and compatibility boundary before cutover.
 
 **Exit:** concrete symbol/file disposition list, durable record compatibility decision, and one named owner each for editing, approval, effect recovery, semantic publication and final validation. No unexamined duplicate execution path.
@@ -224,7 +233,7 @@ Replace the run-completion wait at the existing publication gate with versioned 
 
 ### D. Implement advisory candidate and committed feedback
 
-Add internal candidate receipts; map changed paths to all document/project/target-framework owners through maintained indexes. Reuse cached baseline diagnostics keyed by semantic inputs. Analyze syntax and available scoped semantics within a bounded allowance, commit independently of compiler findings, and promote/reuse the exact matching candidate. Continue owning/dependent project analysis with explicit coverage. Handle missing membership, generators and graph changes through the existing refresh owner. Keep baseline origin across edits and discard obsolete deliveries. Bound diagnostic count/text and retained candidate/latest-result memory; dispose candidates on conflict, denial or supersession.
+Add internal candidate receipts; map changed paths to all document/project/target-framework owners through maintained indexes. Reuse cached baseline diagnostics keyed by semantic inputs. Analyze syntax and available scoped semantics within a bounded allowance, commit independently of compiler findings, and promote/reuse the exact matching candidate. Continue owning/dependent project analysis with explicit coverage. Handle missing membership, generators and graph changes through the existing refresh owner. Keep baseline origin across comparable edits, discard obsolete findings, and retain delivery tracking during pending verified graph replacement. Bound diagnostic count/text and retained candidate/latest-result memory; dispose candidates on conflict, denial or supersession.
 
 **Depends on:** B–C. **Exit:** unresolved symbol and syntax error edits apply successfully; feedback and subsequent resolution reach the correct generation without builds. Partial/unavailable analysis is honest. Candidate and committed analysis are not duplicated when inputs match.
 
@@ -236,7 +245,7 @@ Register the execution-owned edit tool through the central pipeline. Fix availab
 
 ### F. Complete user surfaces, validation and durable migration
 
-Route manual/internal entry points to the same edit command. Preserve existing delegated-agent restrictions; remove accidental plan prerequisites in delegation without adding new child write authority. Keep final build/test validation and cumulative diff reporting independent of an approved plan. Remove plan approval UI/commands/configuration following section 13. Migrate or explicitly refuse legacy execution resumption after reconciling durable effects; keep history viewable. Verify interactive and headless results agree.
+Route manual/internal entry points to the same edit command. Preserve existing delegated-agent restrictions; remove accidental plan prerequisites in delegation without adding new child write authority. Keep explicitly invoked build/test validation and cumulative disk reporting independent of an approved plan; ordinary response completion starts no validation. Remove plan approval UI/commands/configuration following section 13. Migrate or explicitly refuse legacy execution resumption after reconciling durable effects; keep history viewable. Verify interactive and headless results agree.
 
 **Depends on:** E. **Exit:** no user needs a plan or plan approval to edit; mutation authorization still applies. Old settings cannot change new edit authority, and reopening a checkpoint cannot duplicate a write.
 
@@ -307,7 +316,7 @@ The target has no legacy plan execution mode. Reconcile committed/pending mutati
 
 - One model conversation performs read → edit → semantic feedback → repair, with no mandatory plan-generation phase or second mutation-generation loop.
 - Prechecks and postchecks are version-correct, incremental where supported, and explicit about missing coverage. Errors remain actionable across edits.
-- Semantic feedback is offered during implementation so it can reduce avoidable build/test failures. The model can use or defer it without an enforced per-edit repair cycle; unavailable/pending feedback does not independently block editing.
+- Semantic feedback is offered during implementation so it can reduce avoidable build/test failures. The model can sequence related edits without an enforced per-edit repair cycle; unavailable/pending feedback does not independently block editing. Model instructions require repairing introduced errors within the requested scope before finishing or explaining a conflict with the request. Ordinary completion does not wait for pending analysis or enforce a compiler-clean gate.
 - Source edits reuse the workspace; supporting reads are independent of write scope; edits follow model order.
 - Approval, conflicts, cancellation, durable recovery and shared frontend behavior remain verified through real entry points.
 - The representative solution has recorded latency distributions and reload/analysis counters. A small synthetic fixture alone cannot establish success.
@@ -344,6 +353,6 @@ Documentation cleanup is part of G, not optional follow-up. Check links, publish
 - Which observed latency allowance yields useful immediate semantics on the representative solution? Measure before selecting the permanent default.
 - Which lifecycle/project shapes can safely update evaluated document membership incrementally, and which require graph reevaluation?
 - Which minimal existing approval coordinator extension exposes exact-diff review without a redundant generic approval prompt? Resolve in B/E; retaining plan approval is not an option.
-- Which final validation stages are required for validated completion under current user policy? Preserve applicable existing policy while separating it from plan progression; pending or omitted checks must remain visible. Advisory Roslyn completion is not an additional prerequisite.
+- Explicit validation workflows retain their configured stages and acceptance rules; ordinary response completion does not invoke them. Missing, failed or omitted checks cannot establish build/test success, and advisory Roslyn feedback is not authoritative validation.
 
 The user has already selected the direction: eliminate mandatory plans/tranches and preserve incremental semantic pre/post feedback. These questions concern implementation details and evidence, not whether to retain the old model scheduling protocol.

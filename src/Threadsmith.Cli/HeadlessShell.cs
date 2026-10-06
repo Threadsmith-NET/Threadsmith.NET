@@ -112,26 +112,6 @@ public sealed class HeadlessShell
             cancellationToken);
     }
 
-    /// <summary>Gets the current plan approval policy through the shared host command boundary.</summary>
-    public Task<PlanApprovalPolicy> GetPlanApprovalPolicyAsync(CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new GetPlanApprovalPolicyCommand(), cancellationToken);
-    }
-
-    /// <summary>Sets the current plan approval policy through the shared host command boundary.</summary>
-    public async Task<PlanApprovalPolicy> SetPlanApprovalPolicyAsync(
-        PlanApprovalPolicy policy,
-        CancellationToken cancellationToken = default)
-    {
-        var activeSession = await GetActiveSessionAsync(cancellationToken);
-        var scope = policy == PlanApprovalPolicy.TrustSession
-            ? "session"
-            : "repository";
-        return await _dispatcher.DispatchAsync(
-            new SetPlanApprovalPolicyCommand(policy, activeSession.SessionId, scope),
-            cancellationToken);
-    }
-
     /// <summary>Inspects model discovery through the same command boundary as interactive selection.</summary>
     public Task<ModelCatalogProviderStatus> GetModelCatalogStatusAsync(
         string providerId,
@@ -733,85 +713,6 @@ public sealed class HeadlessShell
         }
     }
 
-    /// <summary>Approves a pending plan through the shared command boundary.</summary>
-    public Task<bool> ApprovePlanAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new ApprovePlanCommand(sessionId, runId),
-            cancellationToken);
-    }
-
-    /// <summary>Rejects a pending plan through the shared command boundary.</summary>
-    public Task<bool> RejectPlanAsync(
-        SessionId sessionId,
-        RunId runId,
-        string reason,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new RejectPlanCommand(sessionId, runId, reason),
-            cancellationToken);
-    }
-
-    /// <summary>Requests a governed revision through the shared command boundary.</summary>
-    public Task<bool> RevisePlanAsync(
-        SessionId sessionId,
-        RunId runId,
-        string instructions,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new RevisePlanCommand(sessionId, runId, instructions),
-            cancellationToken);
-    }
-
-    /// <summary>Gets the active execution mutation staged for exact-diff review.</summary>
-    public Task<StagedMutationSet?> GetExecutionMutationAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(
-            new GetExecutionMutationCommand(sessionId, runId),
-            cancellationToken);
-    }
-
-    /// <summary>Continues an execution with explicit or host-policy mutation authorization.</summary>
-    public Task<ExecutionOutcomeProjection> ContinueExecutionAsync(
-        ContinueExecutionRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new ContinueExecutionCommand(request), cancellationToken);
-    }
-
-    /// <summary>Explicitly resumes an eligible interrupted execution.</summary>
-    public Task<ExecutionContinuation> ResumeRunAsync(
-        SessionId sessionId,
-        RunId runId,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new ResumeRunCommand(sessionId, runId), cancellationToken);
-    }
-
-    /// <summary>Stages a bounded mutation proposal through the shared command boundary.</summary>
-    public Task<StagedMutationSet> StageMutationSetAsync(
-        MutationSet mutationSet,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(new StageMutationSetCommand(mutationSet), cancellationToken);
-    }
-
-    /// <summary>Requests and stages a governed model mutation proposal.</summary>
-    public Task<StagedMutationSet> ProposeMutationSetAsync(
-        ProposeMutationSetCommand command,
-        CancellationToken cancellationToken = default)
-    {
-        return _dispatcher.DispatchAsync(command, cancellationToken);
-    }
-
     /// <summary>Changes whether one mutation has an individual preview.</summary>
     public Task<MutationPreview> SetMutationPreviewAsync(
         SessionId sessionId,
@@ -829,6 +730,18 @@ public sealed class HeadlessShell
             cancellationToken);
     }
 
+    /// <summary>Applies source instructions through the shared execution owner.</summary>
+    public Task<SourceEditReceipt> ApplySourceEditAsync(ApplySourceEditCommand command, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(command, cancellationToken);
+    }
+
+    /// <summary>Declines a pending exact edit review and releases the ordinary conversation.</summary>
+    public Task<bool> RejectSourceEditAsync(SessionId sessionId, MutationSetId mutationSetId, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new RejectSourceEditCommand(sessionId, mutationSetId), cancellationToken);
+    }
+
     /// <summary>Commits an explicitly approved mutation selection.</summary>
     public Task<MutationCommitResult> CommitMutationSetAsync(
         SessionId sessionId,
@@ -837,7 +750,7 @@ public sealed class HeadlessShell
         CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new CommitMutationSetCommand(sessionId, mutationSetId, approval),
+            new AuthorizeSourceEditCommand(sessionId, mutationSetId, approval),
             cancellationToken);
     }
 
@@ -910,11 +823,11 @@ public sealed class HeadlessShell
     {
         var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
         SessionProjection? state;
+        var approvalRequired = false;
         while (true)
         {
             state = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
-            if (state?.Phase is RunPhase.AwaitingPlanApproval
-                or RunPhase.Completion
+            if (state?.Phase is RunPhase.Completion
                 or RunPhase.Failed
                 or RunPhase.Cancelled
                 or RunPhase.RolledBack)
@@ -922,11 +835,40 @@ public sealed class HeadlessShell
                 break;
             }
 
+            if (state?.Mutation is { IsApplied: false, IsRolledBack: false, RequiredApproval: not MutationApprovalLevel.PolicyAutoApproved } pending)
+            {
+                StagedMutationSet? review;
+                try
+                {
+                    review = await _dispatcher.DispatchAsync(new GetMutationReviewCommand(sessionId, pending.MutationSetId), cancellationToken);
+                }
+                catch (SourceEditReviewUnavailableException)
+                {
+                    review = null;
+                }
+
+                if (review?.MutationSet.RunId == runId)
+                {
+                    approvalRequired = true;
+                    await _output.WriteLineAsync("Exact edit approval is required. This headless run stopped without applying the pending edit; earlier applied edits remain recorded.".AsMemory(), cancellationToken);
+                    await _dispatcher.DispatchAsync(new CancelRunCommand(sessionId, runId), cancellationToken);
+                    try
+                    {
+                        await _dispatcher.DispatchAsync(new WaitForRunCommand(runId), cancellationToken);
+                    }
+                    catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                    {
+                        // The owned run has released its pending review and staging.
+                    }
+
+                    break;
+                }
+            }
+
             await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
         }
 
-        var pendingPlan = state?.Phase == RunPhase.AwaitingPlanApproval;
-        var succeeded = !pendingPlan && await _dispatcher.DispatchAsync(
+        var succeeded = !approvalRequired && await _dispatcher.DispatchAsync(
             new WaitForRunCommand(runId),
             cancellationToken);
         if (state is null)
@@ -1049,7 +991,7 @@ public sealed class HeadlessShell
             && tool.Error?.StartsWith("DirectAuthorizationRequired", StringComparison.Ordinal) == true);
         return directAuthorizationRequired
             ? DirectAuthorizationRequiredExitCode
-            : pendingPlan ? 2 : succeeded ? 0 : 1;
+            : approvalRequired ? 2 : succeeded ? 0 : 1;
     }
 
     private async Task<bool> OpenRepositoryForHeadlessRunAsync(

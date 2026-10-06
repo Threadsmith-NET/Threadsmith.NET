@@ -264,7 +264,11 @@ internal sealed class HostFoundation : IAsyncDisposable
     internal static OperationalLimits LoadOperationalLimits(IConfiguration configuration, IConfiguration? trustedConfiguration = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        var limits = configuration.GetSection("limits").Get<OperationalLimits>(options => options.ErrorOnUnknownConfiguration = true)
+        var supportedLimits = new ConfigurationBuilder().AddInMemoryCollection(
+            configuration.GetSection("limits").AsEnumerable(makePathsRelative: true)
+                .Where(pair => !pair.Key.Equals("plan", StringComparison.OrdinalIgnoreCase)
+                    && !RetiredPlanningConfiguration.IsRetired("limits:" + pair.Key))).Build();
+        var limits = supportedLimits.Get<OperationalLimits>(options => options.ErrorOnUnknownConfiguration = true)
             ?? new OperationalLimits();
         limits = limits with
         {
@@ -328,13 +332,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             MaxModelRounds = configuration.GetValue(
                 "execution:maxModelRounds",
                 ExecutionLimits.DefaultMaxModelRounds),
-            MaxPlanningToolRounds = configuration.GetValue(
-                "execution:maxPlanningToolRounds",
-                ExecutionLimits.DefaultMaxPlanningToolRounds),
             MaxCorrectiveTurns = maximumCorrectiveTurns,
-            Plan = operationalLimits.Plan,
             MaxSourceFrontierEntries = configuration.GetValue("execution:maxSourceFrontierEntries", 256),
-            MaxPlanSanityIssues = configuration.GetValue("execution:maxPlanSanityIssues", 32),
             MaxSteeringCharacters = configuration.GetValue("execution:maxSteeringCharacters", 100000),
             MaxAgentDisplayFragments = configuration.GetValue("execution:maxAgentDisplayFragments", 256),
             MaxAgentDisplayFragmentCharacters = configuration.GetValue("execution:maxAgentDisplayFragmentCharacters", 4096),
@@ -349,20 +348,6 @@ internal sealed class HostFoundation : IAsyncDisposable
                 4096),
             MaxModelOutputBatchCharacters = configuration.GetValue("execution:maxModelOutputBatchCharacters", 4096),
             ModelOutputFlushIntervalMilliseconds = configuration.GetValue("execution:modelOutputFlushIntervalMilliseconds", 50),
-            MutationBatching = new MutationBatchingOptions
-            {
-                TargetMutations = configuration.GetValue("execution:mutationBatching:targetMutations", 8),
-                TargetFiles = configuration.GetValue("execution:mutationBatching:targetFiles", 3),
-                TargetMutationCharacters = configuration.GetValue<long>(
-                    "execution:mutationBatching:targetMutationCharacters",
-                    24_000),
-            },
-            IncrementalPlanning = new IncrementalPlanningOptions
-            {
-                Enabled = configuration.GetValue("planning:incrementalPlans:enabled", true),
-                TargetSteps = configuration.GetValue("planning:incrementalPlans:targetSteps", 4),
-                TargetFiles = configuration.GetValue("planning:incrementalPlans:targetFiles", 8),
-            },
         };
         var toolLimits = CreateToolLimits(configuration);
         executionLimits.Validate();
@@ -451,7 +436,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                     new UserFileSecretProvider(userSecretsPath, secretLimits),
                 ],
                 secretLimits);
-            semanticEngines = new SemanticEngineRegistry(events, loggerFactory, resourceLimits: operationalLimits.Semantic);
+            semanticEngines = new SemanticEngineRegistry(events, loggerFactory, promptLoader, resourceLimits: operationalLimits.Semantic);
             semanticRefreshPublicationGate = new SemanticRefreshPublicationGateRouter();
             semanticRefreshCoordinator = new SemanticRefreshCoordinator(
                 semanticEngines,
@@ -840,6 +825,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 "persistence:retention:conversationMessageBodyAge",
                 TimeSpan.FromDays(30)),
         };
+        var executionStore = new ExecutionCheckpointStore(connectionString);
         await new RetentionService(
             eventStore,
             artifactStore,
@@ -847,7 +833,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             loggerFactory.CreateLogger<RetentionService>(),
             TimeProvider.System,
             conversationStore,
-            skillStateStore).RunAsync();
+            skillStateStore,
+            executionStore).RunAsync();
         return new PersistenceServices(
             eventStore,
             conversationStore,
@@ -855,7 +842,7 @@ internal sealed class HostFoundation : IAsyncDisposable
             sessionLifecycleStore,
             sessionRestorer,
             artifactStore,
-            new ExecutionCheckpointStore(connectionString),
+            executionStore,
             new DelegationCheckpointStore(connectionString),
             skillStateStore,
             new SqliteHookStore(connectionString));
@@ -1091,7 +1078,6 @@ internal sealed class HostFoundation : IAsyncDisposable
                 processManager,
                 promptLoader,
                 limits,
-                allowedExecutables,
                 requireRunProcessApproval,
                 shellExecutable),
             new DateTimeTool(promptLoader),

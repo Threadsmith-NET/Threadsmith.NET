@@ -250,7 +250,6 @@ public sealed class DelegateAgentsTool : Tool<DelegateAgentsInput, DelegateAgent
             // Assignment deadlines and caller cancellation already control the delegation lifetime.
             Timeout = Timeout.InfiniteTimeSpan,
             MaximumOutputBytes = options.EffectiveToolOutputBytes(),
-            ConversationAvailable = true,
             SubagentAvailable = false,
             RequiresWorkspace = true,
             PreferStrictArguments = true,

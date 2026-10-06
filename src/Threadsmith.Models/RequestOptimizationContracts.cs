@@ -812,13 +812,13 @@ public static class ModelWireEstimator
             components.Add(new("provider-instructions", "System prompt", providerInstructions.SectionId, "Provider instructions", providerInstructionTokens));
         }
 
-        var phasePolicyIndex = messages.Select((message, index) => (message, index))
-            .Where(item => item.message.SectionId == "phase-policy")
+        var conversationPolicyIndex = messages.Select((message, index) => (message, index))
+            .Where(item => item.message.SectionId == "conversation-policy")
             .Select(item => item.index)
             .DefaultIfEmpty(-1)
             .First();
-        var nativeToolInsertionIndex = phasePolicyIndex >= 0
-            ? phasePolicyIndex
+        var nativeToolInsertionIndex = conversationPolicyIndex >= 0
+            ? conversationPolicyIndex
             : messages.TakeWhile(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer).Count();
         var nativeToolsInStablePrefix = tools.NativeToolTokens > 0
             && nativeToolInsertionIndex <= stablePrefixMessageCount;

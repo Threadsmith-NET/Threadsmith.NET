@@ -9,7 +9,7 @@ public enum MutationApprovalPolicy
     /// <summary>Automatically approves ordinary edits and pauses for risk indicators.</summary>
     ReviewRisky,
 
-    /// <summary>Automatically approves mutations contained by the accepted plan.</summary>
+    /// <summary>Reserved legacy value; loaded configuration is treated as ReviewAll.</summary>
     TrustPlan,
 
     /// <summary>Automatically approves in-repository mutations for the current session.</summary>
@@ -75,10 +75,13 @@ public interface IMutationApprovalPolicy
         CancellationToken cancellationToken = default);
 
     /// <summary>Determines whether the classified mutation set requires explicit approval.</summary>
-    bool RequiresApproval(MutationRiskAssessment risk, bool isWithinPlan);
+    bool RequiresApproval(MutationRiskAssessment risk);
 
     /// <summary>Rejects a mutation set that violates policy-invariant guardrails.</summary>
     void Validate(MutationSet mutations, string repositoryRoot);
+
+    /// <summary>Rejects prohibited endpoints before source capture or instruction materialization.</summary>
+    void ValidatePaths(IEnumerable<string> relativePaths, string repositoryRoot);
 }
 
 /// <summary>Thrown when a mutation violates a policy-invariant hard guardrail.</summary>

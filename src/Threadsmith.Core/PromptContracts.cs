@@ -134,35 +134,11 @@ public static class PromptFileNames
     /// <summary>Gets the conditional session scratchpad guidance asset.</summary>
     public const string SystemScratchpad = "System-Scratchpad.md";
 
-    /// <summary>Gets the stable filename for the SystemPhaseEvidenceCollection prompt asset.</summary>
-    public const string SystemPhaseEvidenceCollection = "System-Phase-EvidenceCollection.md";
+    /// <summary>Gets the stable filename for the SystemConversationGuidance prompt asset.</summary>
+    public const string SystemConversationGuidance = "System-ConversationGuidance.md";
 
-    /// <summary>Gets the stable filename for the SystemPhaseChangePlanning prompt asset.</summary>
-    public const string SystemPhaseChangePlanning = "System-Phase-ChangePlanning.md";
-
-    /// <summary>Gets the stable filename for the SystemPhaseMutationProposal prompt asset.</summary>
-    public const string SystemPhaseMutationProposal = "System-Phase-MutationProposal.md";
-
-    /// <summary>Gets the stable filename for the SystemPhaseAwaitingMutationApproval prompt asset.</summary>
-    public const string SystemPhaseAwaitingMutationApproval = "System-Phase-AwaitingMutationApproval.md";
-
-    /// <summary>Gets the stable filename for the SystemPhaseCompilation prompt asset.</summary>
-    public const string SystemPhaseCompilation = "System-Phase-Compilation.md";
-
-    /// <summary>Gets the stable filename for the SystemPhaseValidation prompt asset.</summary>
-    public const string SystemPhaseValidation = "System-Phase-Validation.md";
-
-    /// <summary>Gets the stable filename for the SystemPhaseDefault prompt asset.</summary>
-    public const string SystemPhaseDefault = "System-Phase-Default.md";
-
-    /// <summary>Gets the stable filename for the SystemRequiredOutputEvidenceCollection prompt asset.</summary>
-    public const string SystemRequiredOutputEvidenceCollection = "System-RequiredOutput-EvidenceCollection.md";
-
-    /// <summary>Gets the stable filename for the SystemRequiredOutputMutationProposal prompt asset.</summary>
-    public const string SystemRequiredOutputMutationProposal = "System-RequiredOutput-MutationProposal.md";
-
-    /// <summary>Gets the stable filename for the SystemRequiredOutputPlan prompt asset.</summary>
-    public const string SystemRequiredOutputPlan = "System-RequiredOutput-Plan.md";
+    /// <summary>Gets the stable filename for the SystemConversationOutput prompt asset.</summary>
+    public const string SystemConversationOutput = "System-ConversationOutput.md";
 
     /// <summary>Gets the stable filename for the SystemRepositoryInstructionsNone prompt asset.</summary>
     public const string SystemRepositoryInstructionsNone = "System-RepositoryInstructions-None.md";
@@ -206,17 +182,23 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextActiveRunSteering prompt asset.</summary>
     public const string ContextActiveRunSteering = "Context-ActiveRun-Steering.md";
 
+    /// <summary>Gets bounded versioned advisory edit feedback delivered at ordinary provider boundaries.</summary>
+    public const string ContextSourceEditFeedback = "Context-SourceEdit-Feedback.md";
+
+    /// <summary>Gets the stable filename for the ContextSourceEditMembershipRefresh prompt asset.</summary>
+    public const string ContextSourceEditMembershipRefresh = "Context-SourceEdit-MembershipRefresh.md";
+
+    /// <summary>Gets the stable filename for the ContextSourceEditNewSourceParseOptions prompt asset.</summary>
+    public const string ContextSourceEditNewSourceParseOptions = "Context-SourceEdit-NewSourceParseOptions.md";
+
+    /// <summary>Gets the stable filename for the ContextSourceEditOmittedProjectCoverage prompt asset.</summary>
+    public const string ContextSourceEditOmittedProjectCoverage = "Context-SourceEdit-OmittedProjectCoverage.md";
+
     /// <summary>Gets the current memory snapshot wrapper appended at a replay-compatible continuation boundary.</summary>
     public const string ContextRepositoryMemoryRefresh = "Context-RepositoryMemory-Refresh.md";
 
     /// <summary>Gets the stable filename for the ContextExecutionOutcome prompt asset.</summary>
     public const string ContextExecutionOutcome = "Context-ExecutionOutcome.md";
-
-    /// <summary>Gets the incremental objective-planning guidance rendered by the host.</summary>
-    public const string ContextIncrementalPlanning = "Context-IncrementalPlanning.md";
-
-    /// <summary>Gets guidance for replacing unfinished work after a replan request.</summary>
-    public const string ContextReplanning = "Context-Replanning.md";
 
     /// <summary>Gets the stable filename for the ContextCurrentTurnHostAuthorizedUserUrl prompt asset.</summary>
     public const string ContextCurrentTurnHostAuthorizedUserUrl = "Context-CurrentTurn-HostAuthorizedUserUrl.md";
@@ -410,19 +392,10 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for discovery results and skill selection guidance.</summary>
     public const string ToolInspectSkillDiscoveryGuidance = "Tool-inspect_skill-DiscoveryGuidance.md";
 
-    /// <summary>Gets the stable filename for the ToolProposePlanDescription prompt asset.</summary>
-    public const string ToolProposePlanDescription = "Tool-propose_plan-Description.md";
+    /// <summary>Gets the stable filename for direct source editing guidance.</summary>
+    public const string ToolSourceEditDescription = "Tool-edit_source-Description.md";
 
-    /// <summary>Gets the description of the explicit objective-completion decision.</summary>
-    public const string ToolCompleteObjectiveDescription = "Tool-complete_objective-Description.md";
-
-    /// <summary>Gets the stable filename for the ToolProposeMutationsDescription prompt asset.</summary>
-    public const string ToolProposeMutationsDescription = "Tool-propose_mutations-Description.md";
-
-    /// <summary>Gets the description of the implementation replanning decision.</summary>
-    public const string ToolRequestReplanDescription = "Tool-request_replan-Description.md";
-
-    /// <summary>Gets the stable filename for the ToolDelegateAgentsDescription prompt asset.</summary>
+    /// <summary>Gets the stable filename for the delegation tool guidance.</summary>
     public const string ToolDelegateAgentsDescription = "Tool-delegate_agents-Description.md";
 
     /// <summary>Gets the stable filename for the AdapterMcpExplicitReadPolicyDescription prompt asset.</summary>
@@ -482,63 +455,6 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the CorrectionToolPipelineUnavailable prompt asset.</summary>
     public const string CorrectionToolPipelineUnavailable = "Correction-ToolPipeline-Unavailable.md";
 
-    /// <summary>Gets the stable filename for the CorrectionPlanSchema prompt asset.</summary>
-    public const string CorrectionPlanSchema = "Correction-Plan-Schema.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityEvidence prompt asset.</summary>
-    public const string CorrectionPlanSanityEvidence = "Correction-Plan-SanityEvidence.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityStructuredOutput prompt asset.</summary>
-    public const string CorrectionPlanSanityStructuredOutput = "Correction-Plan-SanityStructuredOutput.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueEmptyFileIntents prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueEmptyFileIntents = "Correction-PlanSanity-Issue-EmptyFileIntents.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueRequiresDestination prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueRequiresDestination = "Correction-PlanSanity-Issue-RequiresDestination.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueForbidsDestination prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueForbidsDestination = "Correction-PlanSanity-Issue-ForbidsDestination.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueEmptyPath prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueEmptyPath = "Correction-PlanSanity-Issue-EmptyPath.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueGlobLikeExactFiles prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueGlobLikeExactFiles = "Correction-PlanSanity-Issue-GlobLikeExactFiles.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueNormalizedPath prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueNormalizedPath = "Correction-PlanSanity-Issue-NormalizedPath.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueDirectoryExactFiles prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueDirectoryExactFiles = "Correction-PlanSanity-Issue-DirectoryExactFiles.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueBarePathResolved prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueBarePathResolved = "Correction-PlanSanity-Issue-BarePathResolved.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanSanityIssueBarePathAmbiguous prompt asset.</summary>
-    public const string CorrectionPlanSanityIssueBarePathAmbiguous = "Correction-PlanSanity-Issue-BarePathAmbiguous.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanWrongPhase prompt asset.</summary>
-    public const string CorrectionPlanWrongPhase = "Correction-Plan-WrongPhase.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPlanProposalExclusiveToolOutput prompt asset.</summary>
-    public const string CorrectionPlanProposalExclusiveToolOutput = "Correction-PlanProposal-ExclusiveToolOutput.md";
-
-    /// <summary>Gets the stable filename for the CorrectionMutationProposal prompt asset.</summary>
-    public const string CorrectionMutationProposal = "Correction-Mutation-Proposal.md";
-
-    /// <summary>Gets the stable filename for the CorrectionMutationPostApplyValidation prompt asset.</summary>
-    public const string CorrectionMutationPostApplyValidation = "Correction-Mutation-PostApplyValidation.md";
-
-    /// <summary>Gets the stable filename for the CorrectionMutationImplementationRequiresTool prompt asset.</summary>
-    public const string CorrectionMutationImplementationRequiresTool = "Correction-Mutation-ImplementationRequiresTool.md";
-
-    /// <summary>Requires one exclusive implementation decision.</summary>
-    public const string CorrectionMutationExclusiveDecision = "Correction-Mutation-ExclusiveDecision.md";
-
-    /// <summary>Explains the minimal replanning request shape.</summary>
-    public const string CorrectionMutationReplanArguments = "Correction-Mutation-ReplanArguments.md";
-
     /// <summary>Gets the stable filename for the CorrectionMutationRenameSymbolSemanticUnavailable prompt asset.</summary>
     public const string CorrectionMutationRenameSymbolSemanticUnavailable = "Correction-Mutation-RenameSymbolSemanticUnavailable.md";
 
@@ -547,33 +463,6 @@ public static class PromptFileNames
 
     /// <summary>Gets the stable filename for the CorrectionMutationReplaceTextAmbiguousExpectedText prompt asset.</summary>
     public const string CorrectionMutationReplaceTextAmbiguousExpectedText = "Correction-Mutation-ReplaceTextAmbiguousExpectedText.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPreMutationBlockingDiagnostics prompt asset.</summary>
-    public const string CorrectionPreMutationBlockingDiagnostics = "Correction-PreMutation-BlockingDiagnostics.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPreMutationDiagnosticFileFallback prompt asset.</summary>
-    public const string CorrectionPreMutationDiagnosticFileFallback = "Correction-PreMutation-DiagnosticFileFallback.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPreMutationContainingSymbolBlock prompt asset.</summary>
-    public const string CorrectionPreMutationContainingSymbolBlock = "Correction-PreMutation-ContainingSymbolBlock.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPreMutationChangedHunkBlock prompt asset.</summary>
-    public const string CorrectionPreMutationChangedHunkBlock = "Correction-PreMutation-ChangedHunkBlock.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPreMutationDiagnosticItem prompt asset.</summary>
-    public const string CorrectionPreMutationDiagnosticItem = "Correction-PreMutation-DiagnosticItem.md";
-
-    /// <summary>Gets the stable filename for the CorrectionPreMutationOmissionItem prompt asset.</summary>
-    public const string CorrectionPreMutationOmissionItem = "Correction-PreMutation-OmissionItem.md";
-
-    /// <summary>Gets the stable filename for the CorrectionValidationCompiler prompt asset.</summary>
-    public const string CorrectionValidationCompiler = "Correction-Validation-Compiler.md";
-
-    /// <summary>Gets the stable filename for the CorrectionValidationTest prompt asset.</summary>
-    public const string CorrectionValidationTest = "Correction-Validation-Test.md";
-
-    /// <summary>Gets the stable filename for the CorrectionValidationGeneral prompt asset.</summary>
-    public const string CorrectionValidationGeneral = "Correction-Validation-General.md";
 
     /// <summary>Gets the stable filename for the CorrectionSemanticFirstSearchExactPath prompt asset.</summary>
     public const string CorrectionSemanticFirstSearchExactPath = "Correction-SemanticFirstSearch-ExactPath.md";
@@ -1094,16 +983,8 @@ public static class PromptFileNames
         SystemSystemPrompt,
         SystemRepositoryInspection,
         SystemScratchpad,
-        SystemPhaseEvidenceCollection,
-        SystemPhaseChangePlanning,
-        SystemPhaseMutationProposal,
-        SystemPhaseAwaitingMutationApproval,
-        SystemPhaseCompilation,
-        SystemPhaseValidation,
-        SystemPhaseDefault,
-        SystemRequiredOutputEvidenceCollection,
-        SystemRequiredOutputMutationProposal,
-        SystemRequiredOutputPlan,
+        SystemConversationGuidance,
+        SystemConversationOutput,
         SystemRepositoryInstructionsNone,
         SystemRepositoryMemoryGuidance,
         SystemStandingPreferenceGuidance,
@@ -1118,10 +999,13 @@ public static class PromptFileNames
         ContextActiveTurnSummaryUntrustedWrapper,
         ContextActiveTurnSummaryHostFileLists,
         ContextActiveRunSteering,
+        ContextSourceEditFeedback,
+        ContextSourceEditMembershipRefresh,
+        ContextSourceEditNewSourceParseOptions,
+        ContextSourceEditOmittedProjectCoverage,
+
         ContextRepositoryMemoryRefresh,
         ContextExecutionOutcome,
-        ContextIncrementalPlanning,
-        ContextReplanning,
         ContextCurrentTurnHostAuthorizedUserUrl,
         ToolListFilesDescription,
         ToolReadFileDescription,
@@ -1186,10 +1070,7 @@ public static class PromptFileNames
         ToolInspectSkillDescription,
         ToolInspectSkillGuidance,
         ToolInspectSkillDiscoveryGuidance,
-        ToolProposePlanDescription,
-        ToolCompleteObjectiveDescription,
-        ToolProposeMutationsDescription,
-        ToolRequestReplanDescription,
+        ToolSourceEditDescription,
         ToolDelegateAgentsDescription,
         AdapterMcpExplicitReadPolicyDescription,
         AdapterMcpImportedToolFallbackDescription,
@@ -1204,31 +1085,6 @@ public static class PromptFileNames
         CorrectionToolDuplicateInvocation,
         CorrectionToolUnavailable,
         CorrectionToolPipelineUnavailable,
-        CorrectionPlanSchema,
-        CorrectionPlanSanityEvidence,
-        CorrectionPlanSanityStructuredOutput,
-        CorrectionPlanSanityIssueEmptyFileIntents,
-        CorrectionPlanSanityIssueRequiresDestination,
-        CorrectionPlanSanityIssueForbidsDestination,
-        CorrectionPlanSanityIssueEmptyPath,
-        CorrectionPlanSanityIssueGlobLikeExactFiles,
-        CorrectionPlanSanityIssueNormalizedPath,
-        CorrectionPlanSanityIssueDirectoryExactFiles,
-        CorrectionPlanSanityIssueBarePathResolved,
-        CorrectionPlanSanityIssueBarePathAmbiguous,
-        CorrectionPlanWrongPhase,
-        CorrectionPlanProposalExclusiveToolOutput,
-        CorrectionMutationProposal,
-        CorrectionMutationPostApplyValidation,
-        CorrectionPreMutationBlockingDiagnostics,
-        CorrectionPreMutationDiagnosticFileFallback,
-        CorrectionPreMutationContainingSymbolBlock,
-        CorrectionPreMutationChangedHunkBlock,
-        CorrectionPreMutationDiagnosticItem,
-        CorrectionPreMutationOmissionItem,
-        CorrectionValidationCompiler,
-        CorrectionValidationTest,
-        CorrectionValidationGeneral,
         CorrectionSemanticFirstSearchExactPath,
         CorrectionSemanticFirstSearchExactSymbol,
         CorrectionSemanticFirstSearchFindSymbol,
@@ -1239,9 +1095,6 @@ public static class PromptFileNames
         CorrectionGitBlameInvalidRevision,
         CorrectionSearchBounds,
         CorrectionRunProcessUnsupportedShell,
-        CorrectionMutationImplementationRequiresTool,
-        CorrectionMutationExclusiveDecision,
-        CorrectionMutationReplanArguments,
         CorrectionMutationRenameSymbolSemanticUnavailable,
         CorrectionMutationRenameSymbolOverlap,
         CorrectionMutationReplaceTextAmbiguousExpectedText,
@@ -1442,16 +1295,8 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemSystemPrompt,
             PromptFileNames.SystemRepositoryInspection,
             PromptFileNames.SystemScratchpad,
-            PromptFileNames.SystemPhaseEvidenceCollection,
-            PromptFileNames.SystemPhaseChangePlanning,
-            PromptFileNames.SystemPhaseMutationProposal,
-            PromptFileNames.SystemPhaseAwaitingMutationApproval,
-            PromptFileNames.SystemPhaseCompilation,
-            PromptFileNames.SystemPhaseValidation,
-            PromptFileNames.SystemPhaseDefault,
-            PromptFileNames.SystemRequiredOutputEvidenceCollection,
-            PromptFileNames.SystemRequiredOutputMutationProposal,
-            PromptFileNames.SystemRequiredOutputPlan,
+            PromptFileNames.SystemConversationGuidance,
+            PromptFileNames.SystemConversationOutput,
             PromptFileNames.SystemRepositoryInstructionsNone,
             PromptFileNames.SystemRepositoryMemoryGuidance,
             PromptFileNames.SystemStandingPreferenceGuidance,
@@ -1463,16 +1308,11 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextActiveTurnCompactionOutputContract,
             PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper,
             PromptFileNames.ContextActiveTurnSummaryHostFileLists,
-            PromptFileNames.ContextIncrementalPlanning,
-            PromptFileNames.ContextReplanning,
             PromptFileNames.SystemToolInventoryNativeSeparate,
         };
         var executionAssets = new HashSet<string>(StringComparer.Ordinal)
         {
-            PromptFileNames.ToolProposePlanDescription,
-            PromptFileNames.ToolCompleteObjectiveDescription,
-            PromptFileNames.ToolProposeMutationsDescription,
-            PromptFileNames.ToolRequestReplanDescription,
+            PromptFileNames.ToolSourceEditDescription,
             PromptFileNames.ToolDelegateAgentsDescription,
             PromptFileNames.CorrectionProviderInvocationInvalid,
             PromptFileNames.CorrectionEmptyResponse,
@@ -1485,38 +1325,10 @@ public static class PromptAssetCatalog
             PromptFileNames.CorrectionToolDuplicateInvocation,
             PromptFileNames.CorrectionToolUnavailable,
             PromptFileNames.CorrectionToolPipelineUnavailable,
-            PromptFileNames.CorrectionPlanSchema,
-            PromptFileNames.CorrectionPlanSanityEvidence,
-            PromptFileNames.CorrectionPlanSanityStructuredOutput,
-            PromptFileNames.CorrectionPlanSanityIssueEmptyFileIntents,
-            PromptFileNames.CorrectionPlanSanityIssueRequiresDestination,
-            PromptFileNames.CorrectionPlanSanityIssueForbidsDestination,
-            PromptFileNames.CorrectionPlanSanityIssueEmptyPath,
-            PromptFileNames.CorrectionPlanSanityIssueGlobLikeExactFiles,
-            PromptFileNames.CorrectionPlanSanityIssueNormalizedPath,
-            PromptFileNames.CorrectionPlanSanityIssueDirectoryExactFiles,
-            PromptFileNames.CorrectionPlanSanityIssueBarePathResolved,
-            PromptFileNames.CorrectionPlanSanityIssueBarePathAmbiguous,
-            PromptFileNames.CorrectionPlanWrongPhase,
-            PromptFileNames.CorrectionPlanProposalExclusiveToolOutput,
-            PromptFileNames.CorrectionMutationProposal,
-            PromptFileNames.CorrectionMutationPostApplyValidation,
-            PromptFileNames.CorrectionPreMutationBlockingDiagnostics,
-            PromptFileNames.CorrectionPreMutationDiagnosticFileFallback,
-            PromptFileNames.CorrectionPreMutationContainingSymbolBlock,
-            PromptFileNames.CorrectionPreMutationChangedHunkBlock,
-            PromptFileNames.CorrectionPreMutationDiagnosticItem,
-            PromptFileNames.CorrectionPreMutationOmissionItem,
-            PromptFileNames.CorrectionValidationCompiler,
-            PromptFileNames.CorrectionValidationTest,
-            PromptFileNames.CorrectionValidationGeneral,
             PromptFileNames.CorrectionSemanticFirstSearchExactPath,
             PromptFileNames.CorrectionSemanticFirstSearchExactSymbol,
             PromptFileNames.CorrectionSemanticFirstSearchFindSymbol,
             PromptFileNames.CorrectionSemanticFirstSearchRejected,
-            PromptFileNames.CorrectionMutationImplementationRequiresTool,
-            PromptFileNames.CorrectionMutationExclusiveDecision,
-            PromptFileNames.CorrectionMutationReplanArguments,
             PromptFileNames.CorrectionMutationRenameSymbolSemanticUnavailable,
             PromptFileNames.CorrectionMutationRenameSymbolOverlap,
             PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText,
@@ -1551,6 +1363,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolDelegateAgentsDelegationOmission,
             PromptFileNames.ToolDelegateAgentsSteering,
             PromptFileNames.ContextActiveRunSteering,
+            PromptFileNames.ContextSourceEditFeedback,
             PromptFileNames.ContextRepositoryMemoryRefresh,
             PromptFileNames.ContextExecutionOutcome,
             PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl,
@@ -1570,6 +1383,13 @@ public static class PromptAssetCatalog
                         || fileName.StartsWith("Tool-code_explore-SourceGuarantee", StringComparison.Ordinal)
                         || fileName.StartsWith("Tool-code_explore-Guidance", StringComparison.Ordinal))),
             StringComparer.Ordinal);
+        dotNetAssets.UnionWith(
+        [
+            PromptFileNames.ContextSourceEditMembershipRefresh,
+            PromptFileNames.ContextSourceEditNewSourceParseOptions,
+            PromptFileNames.ContextSourceEditOmittedProjectCoverage,
+        ]);
+
         var skillAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.ToolInvokeSkillDescription,
@@ -1680,7 +1500,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.SystemLegacyRequestEnvelope] = Set(
                         "SystemPolicy",
                         "RepositoryInstructions",
-                        "PhaseInstructions",
+                        "ConversationInstructions",
                         "Task",
                         "CurrentTurn",
                         "AdditionalMessages",
@@ -1695,12 +1515,10 @@ public static class PromptAssetCatalog
                     [PromptFileNames.ContextActiveTurnSummaryUntrustedWrapper] = Set("Version", "SummaryContent"),
                     [PromptFileNames.ContextActiveTurnSummaryHostFileLists] = Set("FilesRead", "FilesChanged"),
                     [PromptFileNames.ContextActiveRunSteering] = Set("Sequence", "SubmittedAt", "Text"),
+                    [PromptFileNames.ContextSourceEditFeedback] = Set("FeedbackJson"),
+                    [PromptFileNames.ContextSourceEditOmittedProjectCoverage] = Set("ProjectCount"),
                     [PromptFileNames.ContextRepositoryMemoryRefresh] = Set("Text"),
                     [PromptFileNames.ContextExecutionOutcome] = Set("OutcomeJson"),
-                    [PromptFileNames.ContextIncrementalPlanning] = Set(
-                        "PlansUsed",
-                        "TargetSteps",
-                        "TargetFiles"),
                     [PromptFileNames.ContextCurrentTurnHostAuthorizedUserUrl] = Set("Ordinal", "UserUrlId"),
                     [PromptFileNames.SystemToolInventoryTextFallback] = Set("ToolId", "Description", "Schema"),
                     [PromptFileNames.ToolRunProcessDescription] = Set("ShellLanguage"),
@@ -1764,55 +1582,8 @@ public static class PromptAssetCatalog
                     [PromptFileNames.CorrectionToolBatchPreflightFailed] = Set("Ordinal", "Tool", "Reason"),
                     [PromptFileNames.CorrectionToolDuplicateInvocation] = Set("ToolName"),
                     [PromptFileNames.CorrectionToolUnavailable] = Set("ToolName"),
-                    [PromptFileNames.CorrectionPlanSchema] = Set("Reason"),
-                    [PromptFileNames.CorrectionPlanSanityEvidence] = Set(
-                        "AttemptNumber",
-                        "MaximumAttempts",
-                        "Reason"),
-                    [PromptFileNames.CorrectionPlanSanityStructuredOutput] = Set(
-                        "AttemptNumber",
-                        "MaximumAttempts",
-                        "Reason"),
-                    [PromptFileNames.CorrectionPlanSanityIssueEmptyFileIntents] = Set("StepTitle"),
-                    [PromptFileNames.CorrectionPlanSanityIssueRequiresDestination] = Set("IntentKind"),
-                    [PromptFileNames.CorrectionPlanSanityIssueForbidsDestination] = Set("IntentKind"),
-                    [PromptFileNames.CorrectionPlanSanityIssueGlobLikeExactFiles] = Set("Path"),
-                    [PromptFileNames.CorrectionPlanSanityIssueNormalizedPath] = Set(
-                        "DeclaredPath",
-                        "NormalizedPath"),
-                    [PromptFileNames.CorrectionPlanSanityIssueDirectoryExactFiles] = Set("Path"),
-                    [PromptFileNames.CorrectionPlanSanityIssueBarePathResolved] = Set(
-                        "DeclaredPath",
-                        "ResolvedPath"),
-                    [PromptFileNames.CorrectionPlanSanityIssueBarePathAmbiguous] = Set("Path"),
-                    [PromptFileNames.CorrectionMutationProposal] = Set(
-                        "AttemptNumber",
-                        "MaximumAttempts",
-                        "Reason",
-                        "RecoveryEvidence"),
-                    [PromptFileNames.CorrectionMutationPostApplyValidation] = Set(
-                        "AttemptNumber",
-                        "MaximumAttempts",
-                        "Reason"),
                     [PromptFileNames.CorrectionMutationRenameSymbolOverlap] = Set("RelativePath"),
                     [PromptFileNames.CorrectionMutationReplaceTextAmbiguousExpectedText] = Set("RelativePath"),
-                    [PromptFileNames.CorrectionPreMutationBlockingDiagnostics] = Set(
-                        "DiagnosticItems",
-                        "OmissionItems"),
-                    [PromptFileNames.CorrectionPreMutationContainingSymbolBlock] = Set("ContainingSymbol"),
-                    [PromptFileNames.CorrectionPreMutationChangedHunkBlock] = Set("ChangedHunk"),
-                    [PromptFileNames.CorrectionPreMutationDiagnosticItem] = Set(
-                        "File",
-                        "Range",
-                        "Code",
-                        "Source",
-                        "Message",
-                        "ContainingSymbolBlock",
-                        "ChangedHunkBlock"),
-                    [PromptFileNames.CorrectionPreMutationOmissionItem] = Set("Omission"),
-                    [PromptFileNames.CorrectionValidationCompiler] = Set("Code", "Location", "Message"),
-                    [PromptFileNames.CorrectionValidationTest] = Set("ProjectName", "FailedCount"),
-                    [PromptFileNames.CorrectionValidationGeneral] = Set("Reasons"),
                     [PromptFileNames.CorrectionSemanticFirstSearchExactPath] = Set("SuggestedQuery"),
                     [PromptFileNames.CorrectionSemanticFirstSearchExactSymbol] = Set("SuggestedQuery"),
                     [PromptFileNames.CorrectionSemanticFirstSearchFindSymbol] = Set("SuggestedQuery"),

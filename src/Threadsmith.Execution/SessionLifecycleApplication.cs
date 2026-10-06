@@ -22,6 +22,7 @@ public sealed class SessionLifecycleApplication :
     private readonly Func<CancellationToken, Task<IReadOnlyList<string>>>? _prepareNewSession;
     private readonly InMemoryProjectionStore _projections;
     private readonly ISessionRestorer _restorer;
+    private readonly IExecutionCheckpointStore? _executionCheckpoints;
     private readonly SemaphoreSlim _transitionGate = new(1, 1);
     private readonly SessionApplication _sessions;
     private readonly SessionUsageProjection _usage;
@@ -44,7 +45,8 @@ public sealed class SessionLifecycleApplication :
         ActiveModelSelectionService? activeModels = null,
         TimeProvider? timeProvider = null,
         JsonlModelExchangeLog? modelExchangeLog = null,
-        Func<CancellationToken, Task<IReadOnlyList<string>>>? prepareNewSession = null)
+        Func<CancellationToken, Task<IReadOnlyList<string>>>? prepareNewSession = null,
+        IExecutionCheckpointStore? executionCheckpoints = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         ArgumentNullException.ThrowIfNull(lifecycleStore);
@@ -61,6 +63,7 @@ public sealed class SessionLifecycleApplication :
         _modelExchangeLog = modelExchangeLog;
         _prepareNewSession = prepareNewSession;
         _restorer = restorer;
+        _executionCheckpoints = executionCheckpoints;
         _sessions = sessions;
         _projections = projections;
         _events = events;
@@ -447,6 +450,12 @@ public sealed class SessionLifecycleApplication :
         if (!string.IsNullOrWhiteSpace(restoration.Warnings))
         {
             warnings.Add(restoration.Warnings);
+        }
+
+        if (_executionCheckpoints is not null
+            && await _executionCheckpoints.HasUnresolvedLegacyEffectsAsync(_repositoryIdentity, cancellationToken))
+        {
+            warnings.Add("Legacy execution has unproven disk effects. History remains readable and ordinary conversation is available, but source edits require explicit repository recovery. Old plans cannot be resumed.");
         }
 
         var selectionRequired = false;

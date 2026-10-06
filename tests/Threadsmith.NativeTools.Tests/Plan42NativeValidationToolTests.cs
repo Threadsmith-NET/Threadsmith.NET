@@ -309,7 +309,9 @@ public sealed class Plan42NativeValidationToolTests
         process.Results.Enqueue(new ProcessExecutionResult(
             1,
             0,
-            "  Example.Tests.CalculatorTests.Add",
+            """
+            {"schemaVersion":1,"tests":[{"uid":"runner-case-1","displayName":"Example.Tests.CalculatorTests.Add(left: 1, right: 2)"}]}
+            """,
             string.Empty,
             false,
             false,
@@ -341,10 +343,11 @@ public sealed class Plan42NativeValidationToolTests
         Assert.Equal(12345, process.Requests[0].MaximumOutputCharacters);
         Assert.DoesNotContain("--filter", process.Requests[0].Arguments);
         Assert.Contains("Category=Fast", process.Requests[0].Arguments);
-        Assert.Contains("--filter-method", process.Requests[1].Arguments);
+        Assert.Contains("--filter-uid", process.Requests[1].Arguments);
         Assert.DoesNotContain("--filter", process.Requests[1].Arguments);
-        Assert.Contains("Example.Tests.CalculatorTests.Add", process.Requests[1].Arguments);
-        Assert.Equal("Example.Tests.CalculatorTests.Add", result.EffectiveFilter);
+        Assert.Contains("runner-case-1", process.Requests[1].Arguments);
+        Assert.Contains("json", process.Requests[0].Arguments);
+        Assert.Equal("Example.Tests.CalculatorTests.Add(left: 1, right: 2)", result.EffectiveFilter);
     }
 
     /// <summary>Verifies retained diagnostics and discovered-test identities remain repository-bound.</summary>
@@ -462,6 +465,15 @@ public sealed class Plan42NativeValidationToolTests
         ];
 
         Assert.Equal(7, tools.Select(tool => tool.Definition.Id).Distinct(StringComparer.Ordinal).Count());
+        var history = new ToolCallHistory();
+        foreach (var tool in tools)
+        {
+            Assert.True(history.TryAdd(tool.Definition, "{}"));
+            var nextBatch = new ToolCallHistory(history);
+            Assert.True(nextBatch.TryAdd(tool.Definition, "{}"));
+            Assert.False(nextBatch.TryAdd(tool.Definition, "{}"));
+        }
+
         string[] descriptionAssets =
         [
             PromptFileNames.ToolNugetHealthDescription,

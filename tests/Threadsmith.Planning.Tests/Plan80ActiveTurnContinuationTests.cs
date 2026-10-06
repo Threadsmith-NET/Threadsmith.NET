@@ -550,8 +550,8 @@ public static class Plan80ActiveTurnContinuationTests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            // The expanded system prompt must leave room for summary admission, while the final continuation still requires delivered-result reduction.
-            var profile = CreateProfile() with { ContextWindow = 4_300 };
+            // Bound the ordinary tool envelope so its final continuation still requires delivered-result reduction.
+            var profile = CreateProfile() with { ContextWindow = 4_100 };
             var assembler = CreateAssembler(
                 events,
                 evidence,
@@ -830,13 +830,12 @@ public static class Plan80ActiveTurnContinuationTests
                 TimeSpan.FromMinutes(2)));
             var registry = new ToolRegistry(
             [
-                new ConversationAvailableTool(new DotNetBuildTool(
+                new DotNetBuildTool(
                     new BaselineNativeValidationService(hiddenValidationOutput),
-                    TestPromptLoader.Instance)),
+                    TestPromptLoader.Instance),
                 new RunProcessTool(
                     new BaselineProcessManager(opaqueOutput),
                     TestPromptLoader.Instance,
-                    allowedExecutables: ["powershell"],
                     requireApproval: false,
                     shellExecutable: "powershell"),
             ]);
@@ -927,14 +926,14 @@ public static class Plan80ActiveTurnContinuationTests
             var cumulativeReplay = replayRequests.Sum(item => (long)item.WireInputTokens);
             var failedRetryCumulative = retryAttempt.WireInputTokens * 2L;
 
-            Assert.Equal(1_808, overlapping.WireInputTokens);
-            Assert.Equal(3_281, unique.WireInputTokens);
-            Assert.Equal(1_808, replayRequests[^1].WireInputTokens);
-            Assert.Equal(4_795, cumulativeReplay);
-            Assert.Equal(1_176, overlapping.NativeToolTokens);
+            // Keep payload baselines independent of wording changes to advertised tool descriptions.
+            Assert.Equal(632, overlapping.WireInputTokens - overlapping.NativeToolTokens);
+            Assert.Equal(2_105, unique.WireInputTokens - unique.NativeToolTokens);
+            Assert.Equal(overlapping.WireInputTokens, replayRequests[^1].WireInputTokens);
+            Assert.Equal(1_267, cumulativeReplay - replayRequests.Sum(item => (long)item.NativeToolTokens));
+            Assert.True(overlapping.NativeToolTokens > 0);
             Assert.Equal(12, overlapping.FramingTokens);
-            Assert.Equal(3_473, model.Requests[1].WireEstimate?.WireInputTokens);
-            Assert.Equal(4_047, model.Requests[2].WireEstimate?.WireInputTokens);
+            Assert.True(model.Requests[2].WireEstimate?.WireInputTokens > model.Requests[1].WireEstimate?.WireInputTokens);
             Assert.True(unique.WireInputTokens > overlapping.WireInputTokens);
             Assert.True(cumulativeReplay > replayRequests[^1].WireInputTokens);
             Assert.Equal(retryAttempt.WireInputTokens * 2L, failedRetryCumulative);
@@ -1245,8 +1244,8 @@ public static class Plan80ActiveTurnContinuationTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             var content = input.Sequence <= 2
-                ? new string('x', 3_500)
-                : new string('y', 50);
+                ? new string('x', 5_000)
+                : new string('y', 2_500);
             return Task.FromResult(new ToolExecution<TestDeterministicOutput>(
                 new TestDeterministicOutput(content),
                 []));
@@ -1343,66 +1342,6 @@ public static class Plan80ActiveTurnContinuationTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromException<TargetedTestResult>(new NotSupportedException());
-        }
-    }
-
-    private sealed class ConversationAvailableTool(ITool inner) : ITool
-    {
-        public ToolDefinition Definition { get; } = inner.Definition with
-        {
-            ConversationAvailable = true,
-        };
-
-        public object DeserializeInput(string argumentsJson)
-        {
-            return inner.DeserializeInput(argumentsJson);
-        }
-
-        public string? GetActivityDetail(object input)
-        {
-            return inner.GetActivityDetail(input);
-        }
-
-        public IReadOnlyList<string> GetResourcePaths(
-            object input,
-            ToolInvocationContext context)
-        {
-            return inner.GetResourcePaths(input, context);
-        }
-
-        public IReadOnlyList<string> GetSecretReferences(object input)
-        {
-            return inner.GetSecretReferences(input);
-        }
-
-        public string? GetExecutable(object input)
-        {
-            return inner.GetExecutable(input);
-        }
-
-        public string? GetExecutable(object input, ToolInvocationContext context)
-        {
-            return inner.GetExecutable(input, context);
-        }
-
-        public IReadOnlyList<string> GetNetworkHosts(object input)
-        {
-            return inner.GetNetworkHosts(input);
-        }
-
-        public IReadOnlyList<ToolResourceClaim> GetSchedulingClaims(
-            object input,
-            ToolInvocationContext context)
-        {
-            return inner.GetSchedulingClaims(input, context);
-        }
-
-        public Task<ToolExecutionEnvelope> ExecuteAsync(
-            object input,
-            ToolExecutionContext context,
-            CancellationToken cancellationToken = default)
-        {
-            return inner.ExecuteAsync(input, context, cancellationToken);
         }
     }
 

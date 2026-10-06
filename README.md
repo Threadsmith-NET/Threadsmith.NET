@@ -2,7 +2,7 @@
 
 A .NET-native, terminal-first coding harness that treats C# code as code, not just text.
 
-Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild, gives models governed tools backed by compiler semantics, requires host-validated plans before repository changes, stages mutations transactionally, and performs semantic checks before the project is built. Interactive use defaults to a full-screen TUIKit interface; the same application workflows are available headlessly for scripts and CI.
+Threadsmith.NET opens real .NET repositories with Roslyn and MSBuild and runs an ordinary model conversation with governed tools backed by compiler semantics. The model reads source, chooses related edits, and calls `edit_source`; the host authorizes exact diffs, applies changes transactionally, and returns advisory compiler feedback. Builds and tests require explicit tool calls. Interactive use defaults to a full-screen TUIKit interface; the same application workflows are available headlessly for scripts and CI.
 
 Threadsmith.NET is currently in beta and under active testing and refinement. For current implementation status, see the [milestone plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/milestones.md).
 
@@ -13,8 +13,9 @@ Many coding agents treat a repository primarily as text and depend on repeated e
 Threadsmith is designed for unfamiliar or large C# solutions, multi-project changes, refactoring, API evolution, and work where dependencies or overloads make text-only editing unreliable. Its core principles are:
 
 - **Compiler-aware evidence** — Roslyn and MSBuild provide symbol, reference, caller, project, and diagnostic context.
-- **Human-governed changes** — models cannot authorize their own plans or mutations.
-- **Transactional mutation** — proposed changes are scope-checked, staged, shown as exact diffs, approved under host policy, applied transactionally, and validated.
+- **Human-governed changes** — mutation policy controls exact-diff review or auto-authorization; models cannot grant themselves write authority.
+- **Transactional mutation** — proposed changes are confined to permitted paths, staged, shown as exact diffs, authorized under host policy, and applied transactionally with source preconditions and committed-byte verification.
+- **Advisory compiler feedback** — versioned findings disclose coverage and omissions, support repairs in the same conversation, and never establish build or test success. A written plan is optional conversation text.
 - **Host-owned control flow** — trust, policy, approvals, containment, cancellation, and validation remain outside the model.
 - **Interactive/headless parity** — the terminal and automation adapters project the same application commands and state.
 - **Replaceable integrations** — model providers, extensions, MCP, Roslyn, and terminal libraries remain behind host-owned contracts.

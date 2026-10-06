@@ -65,7 +65,7 @@ public sealed partial class Plan89CodeExploreTests
             }
 
             var events = new DomainEventStream();
-            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+            var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
             var workspace = WorkspaceId.New();
             var load = await registry.LoadAsync(
                 new SemanticLoadRequest(SessionId.New(), workspace, root, Path.Combine(root, "Fixture.csproj"), RepositoryTrustLevel.TrustedBuild),

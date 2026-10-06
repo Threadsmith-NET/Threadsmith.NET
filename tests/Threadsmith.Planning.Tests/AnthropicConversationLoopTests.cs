@@ -54,36 +54,46 @@ public static class AnthropicConversationLoopTests
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public static async Task MixedPlanBatch_RejectsEveryOrdinalBeforeAnyToolEffects(bool validPlan, bool planLast)
+    public static async Task MixedInvalidToolBatch_RejectsEveryOrdinalBeforeAnyToolEffects(bool unknownTool, bool invalidLast)
     {
-        var plan = ("wire_plan", "propose_plan", validPlan ? PlanJson("candidate") : "{}");
+        var invalid = ("wire_invalid", unknownTool ? "unknown_tool" : "deterministic_output", "{}");
         var tool = ("wire_tool", "deterministic_output", "{\"sequence\":1}");
         await using var harness = new NativeLoopHarness(
-            ToolStream(planLast ? [tool, plan] : [plan, tool]),
+            ToolStream(invalidLast ? [tool, invalid] : [invalid, tool]),
             TextStream("Batch corrected."));
         await harness.RunToCompletionAsync();
 
         Assert.Empty(harness.Observed.OfType<ToolInvocationStarted>());
         Assert.Equal(2, harness.Handler.Requests.Count);
-        Assert.Equal(ModelCorrectionCategory.ToolBatch, Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>()).Category);
-        AssertRejectedResults(harness.Handler.Requests[1], planLast ? ["wire_tool", "wire_plan"] : ["wire_plan", "wire_tool"]);
+        Assert.Equal(
+            unknownTool ? ModelCorrectionCategory.ProviderInvocation : ModelCorrectionCategory.ToolBatch,
+            Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>()).Category);
+        if (unknownTool)
+        {
+            // The native adapter rejects unadvertised tools before accepting a replayable turn.
+            Assert.DoesNotContain(harness.Model.Requests[1].Messages, message => message.Role == ModelMessageRole.Tool);
+            Assert.False(harness.Model.HadReplay[1]);
+            return;
+        }
+
+        AssertRejectedResults(harness.Handler.Requests[1], invalidLast ? ["wire_tool", "wire_invalid"] : ["wire_invalid", "wire_tool"]);
         AssertSignedReplay(harness.Handler.Requests[1]);
         Assert.All(harness.Model.Requests[1].Messages.Where(message => message.Role == ModelMessageRole.Tool), message => Assert.True(message.IsError));
     }
 
     /// <summary>Exercises canonical host requests against native protocol constraints.</summary>
     [Fact]
-    public static async Task InvalidSinglePlan_UsesExistingBindingAndValidCorrectiveRequest()
+    public static async Task InvalidSingleTool_UsesExistingBindingAndValidCorrectiveRequest()
     {
         await using var harness = new NativeLoopHarness(
-            ToolStream([("wire_plan", "propose_plan", "{}")]),
-            TextStream("Plan corrected."));
+            ToolStream([("wire_invalid", "deterministic_output", "{}")]),
+            TextStream("Call corrected."));
         await harness.RunToCompletionAsync();
 
         Assert.Empty(harness.Observed.OfType<ToolInvocationStarted>());
         Assert.Equal(2, harness.Handler.Requests.Count);
-        Assert.Equal(ModelCorrectionCategory.PlanSchema, Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>()).Category);
-        AssertRejectedResults(harness.Handler.Requests[1], ["wire_plan"]);
+        Assert.Equal(ModelCorrectionCategory.ToolBatch, Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>()).Category);
+        AssertRejectedResults(harness.Handler.Requests[1], ["wire_invalid"]);
         AssertSignedReplay(harness.Handler.Requests[1]);
     }
 
@@ -118,24 +128,6 @@ public static class AnthropicConversationLoopTests
             AssertSignedReplay(harness.Handler.Requests[correctionRound]);
             Assert.Single(harness.Observed.OfType<ToolInvocationStarted>());
         }
-    }
-
-    /// <summary>Exercises canonical host requests against native protocol constraints.</summary>
-    [Fact]
-    public static async Task PlanSanityCorrection_IsUserMessageAfterTerminalReplayRelease()
-    {
-        await using var harness = new NativeLoopHarness(
-            ToolStream([("wire_plan", "propose_plan", PlanJson("missing", "src/missing.cs"))]),
-            TextStream("I will revise the missing path."));
-        harness.CheckPlanSanity = true;
-        await harness.RunToCompletionAsync();
-
-        Assert.Equal(2, harness.Handler.Requests.Count);
-        Assert.Equal(ModelCorrectionCategory.PlanSanity, Assert.Single(harness.Observed.OfType<ModelCorrectionAttempted>()).Category);
-        var correction = Assert.Single(harness.Model.Requests[1].Messages, message => message.SectionId?.StartsWith("active-turn-plan-sanity-correction:", StringComparison.Ordinal) == true);
-        Assert.Equal(ModelMessageRole.User, correction.Role);
-        Assert.False(harness.Model.HadReplay[1]);
-        Assert.DoesNotContain(harness.Model.Requests[1].Messages, message => message.ToolCallId is not null);
     }
 
     /// <summary>Exercises canonical host requests against native protocol constraints.</summary>
@@ -177,20 +169,21 @@ public static class AnthropicConversationLoopTests
         Assert.Contains(harness.Observed.OfType<EvidenceAdded>(), item => item.Kind == EvidenceKind.ToolResult.ToString());
     }
 
-    /// <summary>A corrected exclusive native plan releases its replay and enters governed review.</summary>
+    /// <summary>A corrected ordinary tool call preserves native replay through the final response.</summary>
     [Fact]
-    public static async Task CorrectedSinglePlan_CompletesReplayAndEntersReview()
+    public static async Task CorrectedSingleTool_CompletesReplayAndConversation()
     {
         await using var harness = new NativeLoopHarness(
-            ToolStream([("wire_bad_plan", "propose_plan", "{}")]),
-            ToolStream([("wire_good_plan", "propose_plan", PlanJson("repaired native plan"))]));
-        harness.ExpectedPlanSummary = "repaired native plan";
+            ToolStream([("wire_bad_tool", "deterministic_output", "{}")]),
+            ToolStream([("wire_good_tool", "deterministic_output", "{\"sequence\":1}")]),
+            TextStream("Done."));
         await harness.RunToCompletionAsync();
 
-        Assert.Equal(2, harness.Handler.Requests.Count);
-        Assert.Empty(harness.Observed.OfType<ToolInvocationStarted>());
-        AssertRejectedResults(harness.Handler.Requests[1], ["wire_bad_plan"]);
-        Assert.All(harness.Model.Requests, request => Assert.False(request.TransientState!.HasResponses));
+        Assert.Equal(3, harness.Handler.Requests.Count);
+        Assert.Single(harness.Observed.OfType<ToolInvocationStarted>());
+        AssertRejectedResults(harness.Handler.Requests[1], ["wire_bad_tool"]);
+        Assert.True(harness.Model.HadReplay[2]);
+        Assert.DoesNotContain(harness.Observed, item => item is PlanProposed);
     }
 
     private static void AssertRejectedResults(JsonElement request, string[] expectedIds)
@@ -208,27 +201,6 @@ public static class AnthropicConversationLoopTests
         var assistant = Assert.Single(request.GetProperty("messages").EnumerateArray(), message => message.GetProperty("role").GetString() == "assistant");
         Assert.Equal("signed-native-loop", assistant.GetProperty("content")[0].GetProperty("signature").GetString());
         Assert.Equal("private native reasoning", assistant.GetProperty("content")[0].GetProperty("thinking").GetString());
-    }
-
-    private static string PlanJson(string summary, string path = "src/example.cs")
-    {
-        return JsonSerializer.Serialize(new
-        {
-            summary,
-            steps = new[]
-        {
-            new
-            {
-                title = "Update file",
-                description = "Apply the reviewed change.",
-                fileIntents = new[] { new { kind = "Modify", path } },
-                expectedOutcome = "Updated file.",
-                validation = new[] { "Build succeeds." },
-            },
-        },
-            risks = Array.Empty<string>(),
-            outstandingQuestions = Array.Empty<string>(),
-        });
     }
 
     private static string Event(string type, object body)
@@ -320,10 +292,6 @@ public static class AnthropicConversationLoopTests
 
         internal Action<IDomainEvent>? OnEvent { get; set; }
 
-        internal bool CheckPlanSanity { get; set; }
-
-        internal string? ExpectedPlanSummary { get; set; }
-
         internal SessionId SessionId { get; private set; }
 
         internal RunId RunId { get; private set; }
@@ -365,45 +333,16 @@ public static class AnthropicConversationLoopTests
                 _catalog.DefaultModelId,
                 new ExecutionLimits { MaxModelRounds = 4, MaxCorrectiveTurns = 2 },
                 sessionUsage: Usage,
-                planSanityChecker: CheckPlanSanity ? new PlanSanityChecker(TestPromptLoader.Instance) : null,
-                planSanityRequestFactory: CheckPlanSanity ? (_, plan, _) => Task.FromResult<PlanSanityCheckRequest?>(new PlanSanityCheckRequest
-                {
-                    Plan = plan,
-                    RepositoryRoot = _root,
-                    Baseline = new WorkspaceBaseline(WorkspaceId.New(), _root, DateTimeOffset.UtcNow, [], TrustLevel: RepositoryTrustLevel.TrustedMutation),
-                    TrustLevel = RepositoryTrustLevel.TrustedMutation,
-                }) : null,
                 steering: Steering,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
             SessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("native loop integration"));
             RunId = await dispatcher.DispatchAsync(new SubmitRequestCommand(SessionId, "Inspect the repository and report."));
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-            if (ExpectedPlanSummary is not null)
-            {
-                SessionProjection? review;
-                do
-                {
-                    review = await projections.GetAsync<SessionProjection>(new ProjectionKey("session", SessionId.Value.ToString("D")), timeout.Token);
-                    if (review?.Phase is not (RunPhase.AwaitingPlanApproval or RunPhase.Failed))
-                    {
-                        await Task.Delay(TimeSpan.FromMilliseconds(10), timeout.Token);
-                    }
-                }
-                while (review?.Phase is not (RunPhase.AwaitingPlanApproval or RunPhase.Failed));
-
-                Assert.Null(review.Error);
-                Assert.Equal(ExpectedPlanSummary, review.Plan?.Plan.Summary);
-                Assert.True(await dispatcher.DispatchAsync(new RejectPlanCommand(SessionId, RunId, "test complete"), timeout.Token));
-                Assert.False(await dispatcher.DispatchAsync(new WaitForRunCommand(RunId), timeout.Token));
-            }
-            else
-            {
-                var succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(RunId), timeout.Token);
-                var projection = await projections.GetAsync<SessionProjection>(new ProjectionKey("session", SessionId.Value.ToString("D")), timeout.Token);
-                Assert.True(succeeded, projection?.Error);
-            }
+            var ct = TestContext.Current.CancellationToken;
+            var succeeded = await dispatcher.DispatchAsync(new WaitForRunCommand(RunId), ct);
+            var projection = await projections.GetAsync<SessionProjection>(new ProjectionKey("session", SessionId.Value.ToString("D")), ct);
+            Assert.True(succeeded, projection?.Error);
         }
     }
 

@@ -694,7 +694,7 @@ internal sealed class ChildAgentModelLoop
                 MalformedInvocationFailureKind.ArgumentSchemaMismatch,
                 preflight.FailedOrdinal,
                 preflight.FailedToolId,
-                preflight.SafeReason ?? new CorrectiveMessageFactory(_prompts, _sanitizer).GetToolBatchPreflightFailedReason(),
+                preflight.SafeReason ?? new CorrectiveMessageFactory(_prompts).GetToolBatchPreflightFailedReason(),
                 requests.Count));
         }
 
@@ -709,7 +709,7 @@ internal sealed class ChildAgentModelLoop
                 childContext,
                 semanticToolAttempted,
                 toolDefinitions,
-                new CorrectiveMessageFactory(_prompts, _sanitizer),
+                new CorrectiveMessageFactory(_prompts),
                 out var reason))
             {
                 throw new MalformedInvocationException(CorrectiveMessageFactory.CreateToolBatchDiagnostic(
@@ -726,7 +726,7 @@ internal sealed class ChildAgentModelLoop
                     MalformedInvocationFailureKind.PhaseInvalidTool,
                     ordinal,
                     request.ToolName,
-                    new CorrectiveMessageFactory(_prompts, _sanitizer).CreateDuplicateToolInvocationReason(request.ToolName),
+                    new CorrectiveMessageFactory(_prompts).CreateDuplicateToolInvocationReason(request.ToolName),
                     requests.Count));
             }
 
@@ -926,7 +926,7 @@ internal sealed class ChildAgentModelLoop
         };
         var attemptNumber = correctiveTurns.BeginAttemptOrThrow(diagnostic);
         ledger.Charge(new AgentResourceUsage { Corrections = 1 });
-        var corrections = new CorrectiveMessageFactory(_prompts, _sanitizer);
+        var corrections = new CorrectiveMessageFactory(_prompts);
         var summary = corrections.CreateToolBatchFailureSummary(diagnostic.ToolOrdinal, diagnostic.ToolName, diagnostic.SafeMessage);
         var resultsAdded = false;
         for (var ordinal = 0; ordinal < requests.Count; ordinal++)

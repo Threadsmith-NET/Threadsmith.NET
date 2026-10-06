@@ -422,9 +422,11 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             traitFilter,
             TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds),
             cancellationToken);
-        DiscoveredTest[] discovered = [.. cases
+        var discoveredCases = cases
             .Where(testCase => testCase.FullyQualifiedName.Length <= 1024)
-            .Select(testCase => CreateDiscoveredTest(root, testCase))];
+            .Select(testCase => new StoredDiscoveredTest(root, CreateDiscoveredTest(root, testCase), testCase.Id))
+            .ToDictionary(stored => stored.Test.Id.Value, StringComparer.Ordinal);
+        DiscoveredTest[] discovered = [.. discoveredCases.Values.Select(stored => stored.Test)];
         var overlongNamesOmitted = discovered.Length != cases.Count;
         if (request.Trait is { } selectedTrait)
         {
@@ -441,7 +443,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         DiscoveredTest[] bounded = [.. all.Take(_limits.MaximumDiscoveredTests)];
         foreach (var test in bounded)
         {
-            _discoveredTests[test.Id.Value] = new StoredDiscoveredTest(root, test);
+            _discoveredTests[test.Id.Value] = discoveredCases[test.Id.Value] with { Test = test };
         }
 
         var discoveryId = CreateIdentity(string.Join('|', projectPath, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
@@ -507,7 +509,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
             effectiveFilter = test.FullyQualifiedName;
             arguments.AddRange(["test", "--project", projectPath, "--no-restore", "--no-build"]);
             AddConfigurationAndFramework(arguments, request.Configuration, request.TargetFramework);
-            arguments.AddRange(["--", "--filter-method", effectiveFilter]);
+            arguments.AddRange(["--", "--filter-uid", stored.RunnerId]);
         }
         else
         {
@@ -1023,7 +1025,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         var testNamespace = segments.Length > 2 ? string.Join('.', segments[..^2]) : null;
         var relativeProject = Path.GetRelativePath(root, testCase.ProjectPath).Replace('\\', '/');
         var repositoryIdentity = OperatingSystem.IsWindows() ? root.ToUpperInvariant() : root;
-        var id = CreateIdentity($"{repositoryIdentity}|{relativeProject}|{name}");
+        var id = CreateIdentity($"{repositoryIdentity}|{relativeProject}|{testCase.Id}");
         return new DiscoveredTest(
             new DiscoveredTestId(id),
             name,
@@ -1148,7 +1150,7 @@ public sealed partial class NativeValidationToolService : INativeValidationToolS
         int Offset,
         DateTimeOffset CreatedAt);
 
-    private sealed record StoredDiscoveredTest(string RepositoryPath, DiscoveredTest Test);
+    private sealed record StoredDiscoveredTest(string RepositoryPath, DiscoveredTest Test, string RunnerId);
 
     private sealed class NuGetQueryContext : IDisposable
     {

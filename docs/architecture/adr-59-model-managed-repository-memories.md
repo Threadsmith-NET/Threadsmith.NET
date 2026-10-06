@@ -1,5 +1,7 @@
 # ADR-59: Model-managed repository memories with hybrid retrieval
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 Status: Accepted
 
 Supersedes the automatic creation, authority categories, invalidation, preservation, and retrieval decisions in [ADR-50](adr-50-repository-scoped-cross-session-memory.md). The ignored repository-local SQLite boundary and canonical repository identity remain.
@@ -53,3 +55,7 @@ The calibrated `0.47` value is the default for both `tools:config:memories:Recal
 Repository memory configuration is captured when the repository is bound for an operation or user turn; editing a configuration file requires restart or repository reopen rather than live-file reload. The effective threshold is part of the ranking-cache key and appears in diagnostics. A threshold-only change reranks cached selection while reusing compatible query vectors; it does not rebuild stored vectors or alter the embedding `SpaceId`.
 
 Memory search configuration has exactly two scenario blocks: `Recall` and `Reconciliation`. Both own semantic, reranker, concept, fuzzy and lexical expansion settings and use the same search engine. One fuzzy policy per scenario controls text and concepts. Enabled reconciliation requires its explicit reranker setting to be true. Top-level memory settings apply across operations; recall-only limits belong under `Recall`. Retired ambiguous paths are rejected with migration guidance.
+
+## Direct-editing amendment (2026-10-05)
+
+Active-run memory selections persist across ordinary tool/model continuations. Plan tranches are no longer an execution boundary; new-run, repository and child-run isolation remain unchanged. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

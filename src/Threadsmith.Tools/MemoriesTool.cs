@@ -72,7 +72,6 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         _definition = definition with
         {
             DisplayName = "Memories",
-            ConversationAvailable = true,
 
             // Lists must observe intervening writes; repeated mutations retain service-owned fences.
             AllowDuplicateInvocations = true,

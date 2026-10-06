@@ -156,12 +156,9 @@ public static class DelegationPlanValidator
             throw new InvalidDataException("Assignment context exceeds the bounded text limit.");
         }
 
-        var implementer = assignment.Role == AgentRole.Implementer;
-        var mutationWorker = assignment.Mode == AgentRunMode.IsolatedWorktreeMutation;
-        if (mutationWorker && (!implementer || !plan.ImplementationAuthorized || assignment.PlanStepIds.Count == 0))
+        if (assignment.Mode == AgentRunMode.IsolatedWorktreeMutation)
         {
-            throw new UnauthorizedAccessException(
-                "Only explicitly authorized implementers may use isolated-worktree mutation mode.");
+            throw new InvalidDataException("Plan-step isolated mutation workers are retired; use ordinary delegation and parent source edits.");
         }
 
         var reviewer = assignment.Role is AgentRole.SecurityReviewer
@@ -180,12 +177,12 @@ public static class DelegationPlanValidator
             throw new InvalidDataException("Explorers require read-only baseline mode.");
         }
 
-        if (!mutationWorker && !sharedWorkspace && assignment.Policy.TrustCeiling > RepositoryTrustLevel.TrustedBuild)
+        if (!sharedWorkspace && assignment.Policy.TrustCeiling > RepositoryTrustLevel.TrustedBuild)
         {
             throw new UnauthorizedAccessException("Read-only children cannot receive mutation trust.");
         }
 
-        if (!mutationWorker && !sharedWorkspace && assignment.Policy.AllowedToolIds.Any(IsMutationTool))
+        if (!sharedWorkspace && assignment.Policy.AllowedToolIds.Any(IsMutationTool))
         {
             throw new UnauthorizedAccessException("Read-only children cannot receive mutation tools.");
         }
@@ -320,173 +317,6 @@ public static class DelegationPlanValidator
     private static bool Exceeds(int value, int maximum)
     {
         return maximum > 0 && value > maximum;
-    }
-}
-
-/// <summary>Conservatively partitions assignment ownership and falls back to serial execution.</summary>
-public sealed class AssignmentPartitioner : IAssignmentPartitioner
-{
-    private static readonly string[] ExclusiveNames =
-    [
-        "directory.build.props",
-        "directory.build.targets",
-        "directory.packages.props",
-        "global.json",
-        "nuget.config",
-    ];
-
-    /// <inheritdoc />
-    public AssignmentPartitionDecision Partition(DelegationPlan plan)
-    {
-        DelegationPlanValidator.Validate(plan);
-        AgentAssignment[] workers =
-        [
-            .. plan.Assignments
-                .Where(item => item.Role == AgentRole.Implementer)
-                .OrderBy(item => item.AssignmentId.Value),
-        ];
-        var conflicts = new List<AgentConflict>();
-        var serial = new HashSet<AgentAssignmentId>();
-        for (var leftIndex = 0; leftIndex < workers.Length; leftIndex++)
-        {
-            var left = workers[leftIndex];
-            if (!left.Scope.IsOwnershipProven)
-            {
-                AddConflict(conflicts, serial, "ownership-unproven", "Assignment ownership is not proven.", left);
-            }
-
-            if (HasExclusiveSurface(left.Scope))
-            {
-                AddConflict(conflicts, serial, "shared-surface", "Assignment owns an exclusive shared surface.", left);
-            }
-
-            for (var rightIndex = leftIndex + 1; rightIndex < workers.Length; rightIndex++)
-            {
-                var right = workers[rightIndex];
-                var paths = FindOverlap(left.Scope, right.Scope);
-                if (paths.Count == 0)
-                {
-                    continue;
-                }
-
-                serial.Add(left.AssignmentId);
-                serial.Add(right.AssignmentId);
-                conflicts.Add(new AgentConflict(
-                    "assignment-overlap",
-                    "Implementation ownership overlaps or is ambiguous.",
-                    [left.AssignmentId, right.AssignmentId],
-                    paths));
-            }
-        }
-
-        AgentAssignmentId[] serialIds = [.. serial.OrderBy(item => item.Value)];
-        AgentAssignmentId[] parallelIds =
-        [
-            .. workers
-                .Select(item => item.AssignmentId)
-                .Where(id => !serial.Contains(id)),
-        ];
-        return new AssignmentPartitionDecision
-        {
-            ParallelAssignments = parallelIds,
-            SerialAssignments = serialIds,
-            Conflicts = conflicts,
-            IsParallelSafe = serialIds.Length == 0,
-        };
-    }
-
-    private static void AddConflict(
-        List<AgentConflict> conflicts,
-        HashSet<AgentAssignmentId> serial,
-        string code,
-        string summary,
-        AgentAssignment assignment)
-    {
-        serial.Add(assignment.AssignmentId);
-        conflicts.Add(new AgentConflict(
-            code,
-            summary,
-            [assignment.AssignmentId],
-            [.. assignment.Scope.Files.Concat(assignment.Scope.SharedSurfaces)]));
-    }
-
-    private static bool HasExclusiveSurface(AgentAssignmentScope scope)
-    {
-        return scope.SharedSurfaces.Count > 0
-            || scope.Files.Any(file => ExclusiveNames.Contains(
-                Path.GetFileName(file),
-                StringComparer.OrdinalIgnoreCase))
-            || scope.Files.Any(file => Path.GetExtension(file).Equals(".sln", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static IReadOnlyList<string> FindOverlap(
-        AgentAssignmentScope left,
-        AgentAssignmentScope right)
-    {
-        var overlaps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        string[] leftFiles = [.. left.Files.Select(Normalize)];
-        string[] rightFiles = [.. right.Files.Select(Normalize)];
-        foreach (var file in leftFiles.Intersect(rightFiles, StringComparer.OrdinalIgnoreCase))
-        {
-            overlaps.Add(file);
-        }
-
-        foreach (var file in leftFiles)
-        {
-            foreach (var directory in right.Directories.Select(Normalize))
-            {
-                if (IsUnder(file, directory))
-                {
-                    overlaps.Add(file);
-                }
-            }
-        }
-
-        foreach (var file in rightFiles)
-        {
-            foreach (var directory in left.Directories.Select(Normalize))
-            {
-                if (IsUnder(file, directory))
-                {
-                    overlaps.Add(file);
-                }
-            }
-        }
-
-        foreach (var directory in left.Directories.Select(Normalize))
-        {
-            foreach (var other in right.Directories.Select(Normalize))
-            {
-                if (IsUnder(directory, other) || IsUnder(other, directory))
-                {
-                    overlaps.Add(directory.Length <= other.Length ? directory : other);
-                }
-            }
-        }
-
-        foreach (var symbol in left.Symbols.Intersect(right.Symbols, StringComparer.Ordinal))
-        {
-            overlaps.Add($"symbol:{symbol}");
-        }
-
-        foreach (var project in left.Projects.Intersect(right.Projects, StringComparer.OrdinalIgnoreCase))
-        {
-            overlaps.Add($"project:{Normalize(project)}");
-        }
-
-        return [.. overlaps.OrderBy(item => item, StringComparer.Ordinal)];
-    }
-
-    private static bool IsUnder(string path, string directory)
-    {
-        var prefix = directory.EndsWith("/", StringComparison.Ordinal) ? directory : directory + "/";
-        return path.Equals(directory, StringComparison.OrdinalIgnoreCase)
-            || path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string Normalize(string path)
-    {
-        return path.Replace('\\', '/').Trim('/');
     }
 }
 
@@ -913,9 +743,6 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             {
                 AgentRole.Explorer => outcome.Findings is not null
                     && outcome.Review is null && outcome.ChangeSet is null && outcome.Implementation is null,
-                AgentRole.Implementer when assignment.Mode == AgentRunMode.IsolatedWorktreeMutation =>
-                    outcome.ChangeSet is not null && outcome.Findings is null
-                    && outcome.Review is null && outcome.Implementation is null,
                 AgentRole.Implementer => outcome.Implementation is not null && outcome.Findings is not null
                     && outcome.ChangeSet is null && outcome.Review is null,
                 AgentRole.SecurityReviewer or AgentRole.TestReviewer
@@ -1610,11 +1437,6 @@ public sealed class DelegationCoordinator :
 
     private static DelegationCheckpointPhase ResolveJoinPhase(DelegationPlan plan)
     {
-        if (plan.Assignments.Any(item => item.Mode == AgentRunMode.IsolatedWorktreeMutation))
-        {
-            return DelegationCheckpointPhase.WorkersFrozen;
-        }
-
         return plan.Assignments.Any(item => item.Mode == AgentRunMode.ReadOnlyReview)
             ? DelegationCheckpointPhase.ReviewsJoined
             : DelegationCheckpointPhase.ResearchJoined;
@@ -1651,7 +1473,6 @@ public sealed class DelegationCoordinator :
         return phase switch
         {
             DelegationCheckpointPhase.ResearchJoined => "synthesize validated findings at the parent boundary",
-            DelegationCheckpointPhase.WorkersFrozen => "run independent reviews and select worker change sets",
             DelegationCheckpointPhase.ReviewsJoined => "resolve required findings before integration",
             DelegationCheckpointPhase.Failed => "inspect failures and revise or serialize the delegation",
             DelegationCheckpointPhase.Cancelled => "resume from the last durable boundary after revalidation",
@@ -1662,7 +1483,6 @@ public sealed class DelegationCoordinator :
     private static bool IsJoinedPhase(DelegationCheckpointPhase phase)
     {
         return phase is DelegationCheckpointPhase.ResearchJoined
-            or DelegationCheckpointPhase.WorkersFrozen
             or DelegationCheckpointPhase.ReviewsJoined;
     }
 

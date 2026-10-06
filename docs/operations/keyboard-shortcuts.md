@@ -46,7 +46,7 @@ Selectors are centered, padded below their headings, and block background mouse 
 - `/thinking [on|off]`: enable, disable, or toggle live streaming of future sanitized reasoning using the `Reasoning` semantic style, equivalent to `Ctrl+T` on an empty composer when no argument is supplied. Previously displayed reasoning remains in the retained transcript.
 - `/trust [inspect|read|build|mutation|automation]`: show the trust selector or set/upgrade the active repository trust directly. Persisted higher trust is not downgraded.
 
-Repository trust and multi-solution choices use selection dialogs; themes use a filtered single-selection modal. Plan and mutation approvals remain fail-closed. Invalid choices do not authorize an action. State-changing choices submit application commands; the terminal adapter does not call execution services directly.
+Repository trust and multi-solution choices use selection dialogs; themes use a filtered single-selection modal. Exact mutation review remains fail-closed; there is no plan-approval dialog in ordinary conversation. Invalid choices do not authorize an action. State-changing choices submit application commands; the terminal adapter does not call execution services directly.
 
 The prompt is `Threadsmith >`; its fixed footer identifies the repository. Agent tabs have a one-cell gap using `AgentTabHeaderRole`. Names are bounded for terminal stability. TUIKit keeps activity and session status in fixed rows. During a turn, MAIN shows `ENTER to steer; ESC-ESC to cancel` after its activity timer; this transient hint disappears at completion or pause.
 

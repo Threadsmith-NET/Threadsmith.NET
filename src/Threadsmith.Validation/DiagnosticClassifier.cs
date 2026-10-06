@@ -11,12 +11,21 @@ public sealed class DiagnosticClassifier
     /// <param name="currentConfidence">Confidence for the current affected-project build.</param>
     /// <returns>Classified detached diagnostic records.</returns>
     public static IReadOnlyList<Diagnostic> Classify(
-        BaselineCapture baseline,
+        BaselineCapture? baseline,
         IReadOnlyList<Diagnostic> currentDiagnostics,
         SemanticConfidenceLevel currentConfidence)
     {
-        ArgumentNullException.ThrowIfNull(baseline);
         ArgumentNullException.ThrowIfNull(currentDiagnostics);
+        if (baseline is null)
+        {
+            return currentDiagnostics.Select(diagnostic => diagnostic with
+            {
+                Confidence = currentConfidence,
+                IsBaselineDiagnostic = false,
+                Classification = DiagnosticClassification.OriginUnknown,
+            }).ToArray();
+        }
+
         var effectiveConfidence = (SemanticConfidenceLevel)Math.Min(
             (int)baseline.Confidence,
             (int)currentConfidence);
@@ -135,6 +144,12 @@ public sealed class AcceptanceGate
         if (authoritativeErrors.Length > 0)
         {
             reasons.Add($"{authoritativeErrors.Length} introduced compiler error(s) remain.");
+        }
+
+        var unattributedErrors = request.Diagnostics.Count(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error && diagnostic.Classification == DiagnosticClassification.OriginUnknown);
+        if (unattributedErrors > 0)
+        {
+            reasons.Add($"{unattributedErrors} compiler error(s) remain; their pre-edit origins were not established.");
         }
 
         if (request.Tests is { Failed: > 0 } tests)

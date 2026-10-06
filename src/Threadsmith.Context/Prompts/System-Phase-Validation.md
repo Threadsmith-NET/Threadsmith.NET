@@ -1,1 +1,0 @@
-Analyze validation evidence without widening the approved change scope.

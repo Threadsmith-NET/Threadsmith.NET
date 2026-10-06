@@ -130,12 +130,6 @@ public sealed record ModelStreamRequest
     /// <summary>Profile resolved by host policy before provider invocation.</summary>
     public ModelProfileId? ResolvedProfileId { get; init; }
 
-    /// <summary>Host-owned mutation validation limits, shared with transactional staging; never sent as provider instructions.</summary>
-    public WorkspaceResourceLimits MutationLimits { get; init; } = new();
-
-    /// <summary>Host-configured structured-plan admission limits.</summary>
-    public PlanResourceLimits PlanLimits { get; init; } = new();
-
     /// <summary>Optional per-request output ceiling; providers reject values above the resolved profile limit.</summary>
     public int? MaximumOutputTokens { get; init; }
 
@@ -670,7 +664,7 @@ public sealed class FakeModelProvider : IModelProvider
 
             if (turn.Output is not null)
             {
-                ModelOutputValidator.Validate(turn.Output, mutationLimits: request.MutationLimits, planLimits: request.PlanLimits);
+                ModelOutputValidator.Validate(turn.Output);
                 yield return new ModelChunk { Output = turn.Output };
             }
 

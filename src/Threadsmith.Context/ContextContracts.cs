@@ -245,18 +245,6 @@ public sealed record ContextAssemblyRequest
     /// <summary>User or session default model, which takes precedence over advisory hints.</summary>
     public ModelProfileId? DefaultModelProfileId { get; init; }
 
-    /// <summary>Pending plan supplied as explicit governed state during revision.</summary>
-    public ImplementationPlan? PlanUnderRevision { get; init; }
-
-    /// <summary>Approved plan that bounds mutation preparation.</summary>
-    public ImplementationPlan? ApprovedPlan { get; init; }
-
-    /// <summary>Immutable baseline identity and hashes supplied for mutation preparation.</summary>
-    public WorkspaceBaseline? MutationBaseline { get; init; }
-
-    /// <summary>Host-selected approved-step and batch progress for mutation preparation.</summary>
-    public MutationExecutionScope? MutationExecutionScope { get; init; }
-
     /// <summary>Transient host context visible only to the current assembled request.</summary>
     public IReadOnlyList<string> CurrentTurnHostContext { get; init; } = [];
 

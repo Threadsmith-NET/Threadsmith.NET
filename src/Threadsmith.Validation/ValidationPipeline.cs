@@ -96,7 +96,7 @@ public sealed class ValidationPipeline
     /// <returns>Structured build, classified diagnostics, and acceptance decision.</returns>
     public async Task<MutationValidationResult> ValidateAsync(
         BuildValidationRequest request,
-        BaselineCapture baselineCapture,
+        BaselineCapture? baselineCapture,
         MutationSet mutationSet,
         bool requiredApprovalsPresent,
         bool finalDiffAvailable,
@@ -104,11 +104,10 @@ public sealed class ValidationPipeline
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(baselineCapture);
         ArgumentNullException.ThrowIfNull(mutationSet);
-        if (request.Baseline.WorkspaceId != baselineCapture.WorkspaceId
-            || request.Baseline.CapturedAt != baselineCapture.BaselineCapturedAt
-            || mutationSet.WorkspaceId != baselineCapture.WorkspaceId)
+        if (mutationSet.WorkspaceId != request.Baseline.WorkspaceId
+            || (baselineCapture is not null && (request.Baseline.WorkspaceId != baselineCapture.WorkspaceId
+                || request.Baseline.CapturedAt != baselineCapture.BaselineCapturedAt)))
         {
             throw new InvalidOperationException(
                 "Validation evidence, build request, and mutation set must share one immutable baseline identity.");
@@ -387,7 +386,7 @@ public sealed class ValidationPipeline
             return SemanticCheckOutcome.Degraded;
         }
 
-        if (phase != SemanticCheckPhase.PostMutation || baselineCapture is null)
+        if (phase != SemanticCheckPhase.PostMutation)
         {
             return SemanticCheckOutcome.Completed;
         }
@@ -414,7 +413,7 @@ public sealed class ValidationPipeline
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(result);
-        if (!result.Completed || phase != SemanticCheckPhase.PostMutation || baselineCapture is null)
+        if (!result.Completed || phase != SemanticCheckPhase.PostMutation)
         {
             return 0;
         }
@@ -429,7 +428,7 @@ public sealed class ValidationPipeline
     private static bool IsIntroducedBlockingSemanticDiagnostic(Diagnostic diagnostic)
     {
         return diagnostic.Severity == DiagnosticSeverity.Error
-            && diagnostic.Classification == DiagnosticClassification.Introduced;
+            && diagnostic.Classification is DiagnosticClassification.Introduced or DiagnosticClassification.OriginUnknown;
     }
 
     private static bool IsPossiblyIntroducedSemanticError(Diagnostic diagnostic)
@@ -486,7 +485,7 @@ public sealed class ValidationPipeline
         return diagnostic.Severity == DiagnosticSeverity.Error
             && !diagnostic.IsBaselineDiagnostic
             && diagnostic.Classification is DiagnosticClassification.Introduced
-                or DiagnosticClassification.ConfidenceDegraded;
+                or DiagnosticClassification.ConfidenceDegraded or DiagnosticClassification.OriginUnknown;
     }
 
     private sealed record SemanticDiagnosticsResult(

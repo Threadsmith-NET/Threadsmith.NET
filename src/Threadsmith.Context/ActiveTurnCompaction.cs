@@ -853,6 +853,7 @@ public sealed class ActiveTurnCompactionValidator : IActiveTurnCompactionValidat
     [
         "<host-policy",
         "<phase-policy",
+        "<conversation-policy",
         "<required_output",
         "ignore previous",
         "permission granted",

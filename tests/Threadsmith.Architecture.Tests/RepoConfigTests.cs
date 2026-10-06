@@ -242,12 +242,12 @@ public static class RepoConfigTests
         Assert.Equal(500, config.GetValue("mutation:largeDiffThreshold", 0));
     }
 
-    /// <summary>Plan-75 plan approval defaults bind to safe manual-review behavior.</summary>
+    /// <summary>Retired planning settings are absent from the shipped configuration.</summary>
     [Fact]
-    public static void PlanApprovalPolicyBindsToSafeDefaults()
+    public static void RetiredPlanningSettingsAreAbsent()
     {
         var config = LoadConfigExample();
-        Assert.Equal("reviewAll", config["planning:approvalPolicy"]);
+        Assert.Null(config["planning:approvalPolicy"]);
         Assert.DoesNotContain(config.AsEnumerable(), item => item.Key.Equals("planning:approvalRepositoryIdentity", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -257,7 +257,7 @@ public static class RepoConfigTests
     {
         var config = LoadConfigExample();
         Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, config.GetValue("execution:maxModelRounds", 0));
-        Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, config.GetValue("execution:maxPlanningToolRounds", 0));
+        Assert.Null(config["execution:maxPlanningToolRounds"]);
         Assert.Equal(3, config.GetValue("execution:maxCorrectiveTurns", 0));
         Assert.Equal(32, config.GetValue("agents:queueCapacity", 0));
         Assert.Equal(4, config.GetValue("agents:maxActiveGlobal", 0));
@@ -271,12 +271,12 @@ public static class RepoConfigTests
         Assert.Equal(4096, config.GetValue("execution:toolResultPreviewCharacters", 0));
         Assert.Equal(4096, config.GetValue("execution:maxModelOutputBatchCharacters", 0));
         Assert.Equal(50, config.GetValue("execution:modelOutputFlushIntervalMilliseconds", 0));
-        Assert.Equal(8, config.GetValue("execution:mutationBatching:targetMutations", 0));
-        Assert.Equal(3, config.GetValue("execution:mutationBatching:targetFiles", 0));
-        Assert.Equal(24_000L, config.GetValue<long>("execution:mutationBatching:targetMutationCharacters", 0));
-        Assert.True(config.GetValue("planning:incrementalPlans:enabled", false));
-        Assert.Equal(4, config.GetValue("planning:incrementalPlans:targetSteps", 0));
-        Assert.Equal(8, config.GetValue("planning:incrementalPlans:targetFiles", 0));
+        Assert.Null(config["execution:mutationBatching:targetMutations"]);
+        Assert.Null(config["execution:mutationBatching:targetFiles"]);
+        Assert.Null(config["execution:mutationBatching:targetMutationCharacters"]);
+        Assert.Null(config["planning:incrementalPlans:enabled"]);
+        Assert.Null(config["planning:incrementalPlans:targetSteps"]);
+        Assert.Null(config["planning:incrementalPlans:targetFiles"]);
         var validationStages = config.GetSection("validation:stages").Get<string[]>() ?? [];
         Assert.Equal(["semantic", "compile", "diagnostics", "tests"], validationStages);
         Assert.Equal(1_048_576L, config.GetValue<long>("repository:configurationBytes", 0));
@@ -373,13 +373,13 @@ public static class RepoConfigTests
                 .Build();
             // The scaffold carries the documented defaults, so the catalog keys bind.
             Assert.Equal(ExecutionLimits.DefaultMaxModelRounds, scaffolded.GetValue("execution:maxModelRounds", 0));
-            Assert.Equal(ExecutionLimits.DefaultMaxPlanningToolRounds, scaffolded.GetValue("execution:maxPlanningToolRounds", 0));
-            Assert.Equal(8, scaffolded.GetValue("execution:mutationBatching:targetMutations", 0));
-            Assert.Equal(3, scaffolded.GetValue("execution:mutationBatching:targetFiles", 0));
-            Assert.Equal(24_000L, scaffolded.GetValue<long>("execution:mutationBatching:targetMutationCharacters", 0));
-            Assert.True(scaffolded.GetValue("planning:incrementalPlans:enabled", false));
-            Assert.Equal(4, scaffolded.GetValue("planning:incrementalPlans:targetSteps", 0));
-            Assert.Equal(8, scaffolded.GetValue("planning:incrementalPlans:targetFiles", 0));
+            Assert.Null(scaffolded["execution:maxPlanningToolRounds"]);
+            Assert.Null(scaffolded["execution:mutationBatching:targetMutations"]);
+            Assert.Null(scaffolded["execution:mutationBatching:targetFiles"]);
+            Assert.Null(scaffolded["execution:mutationBatching:targetMutationCharacters"]);
+            Assert.Null(scaffolded["planning:incrementalPlans:enabled"]);
+            Assert.Null(scaffolded["planning:incrementalPlans:targetSteps"]);
+            Assert.Null(scaffolded["planning:incrementalPlans:targetFiles"]);
             Assert.Equal(200, scaffolded.GetValue("tools:listFiles:defaultEntries", 0));
             Assert.Equal(60, scaffolded.GetValue("tools:runProcess:maxTimeoutSeconds", 0));
 

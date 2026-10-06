@@ -1,5 +1,7 @@
 # ADR-56: Repository-only approval policy preferences
 
+> **Direct-editing amendment (2026-10-05):** The execution workflow portions of the original decision below are superseded as described in the amendment at the end of this document.
+
 Status: Accepted
 
 ## Context
@@ -17,3 +19,7 @@ Writes retain confined paths, case-insensitive JSON keys, unrelated settings, sh
 ## Consequences
 
 Repository configuration now fully expresses saved approval preferences without a user-side grant. Copying repository configuration carries these preferences. Session overrides remain temporary and preserve the policy that will be restored later.
+
+## Direct-editing amendment (2026-10-05)
+
+`/plan-policy`, planning approval settings and plan-specific trust writers are removed. `/policy` retains supported mutation policies. Legacy `TrustPlan` is read conservatively as exact review and cannot be newly selected; narrowly known retired planning keys are removed or ignored with a diagnostic. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.

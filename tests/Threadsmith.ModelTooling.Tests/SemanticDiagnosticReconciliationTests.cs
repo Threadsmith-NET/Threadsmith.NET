@@ -18,11 +18,12 @@ public static class SemanticDiagnosticReconciliationTests
     {
         using var fixture = new RepositoryFixture(3, 32);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        using var measurement = new ReconciliationMeasurement();
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var (pipeline, request, mutation) = await fixture.LoadAsync(events, registry);
         var engine = registry.GetEngine(request.Baseline.WorkspaceId);
         var snapshot = engine.CaptureAdvancedSnapshot();
-        using var measurement = new ReconciliationMeasurement();
+        measurement.Reset();
         var baseline = await pipeline.CaptureSemanticBaselineAsync(request, mutation, TestContext.Current.CancellationToken);
         Assert.Equal(3, measurement.Reads);
         Assert.Equal(fixture.TotalCharacters, measurement.Characters);
@@ -56,14 +57,15 @@ public static class SemanticDiagnosticReconciliationTests
     {
         using var fixture = new RepositoryFixture(3, 32, linkedProject: true);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        using var measurement = new ReconciliationMeasurement();
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var (_, request, _) = await fixture.LoadAsync(events, registry);
         var engine = registry.GetEngine(request.Baseline.WorkspaceId);
         var path = Path.Combine(fixture.Root, "File0.cs");
         Assert.Equal(2, engine.CaptureAdvancedSnapshot().Solution.GetDocumentIdsWithFilePath(path).Length);
         var original = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
         await File.WriteAllTextAsync(path, original.Replace("int Value;", "int Value ", StringComparison.Ordinal), TestContext.Current.CancellationToken);
-        using var measurement = new ReconciliationMeasurement();
+        measurement.Reset();
         var all = await engine.GetDiagnosticsAsync([], [path, "File0.cs", path], TestContext.Current.CancellationToken);
         Assert.Equal(3, measurement.Reads);
         Assert.Equal(1, measurement.Texts);
@@ -82,7 +84,7 @@ public static class SemanticDiagnosticReconciliationTests
     {
         using var fixture = new RepositoryFixture(3, 32);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var (pipeline, request, mutation) = await fixture.LoadAsync(events, registry);
         var gate = new BlockingPublicationGate();
         await using var refresh = new SemanticRefreshCoordinator(
@@ -117,10 +119,11 @@ public static class SemanticDiagnosticReconciliationTests
     {
         using var fixture = new RepositoryFixture(24, 96_000);
         await using var events = new DomainEventStream();
-        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance);
+        using var measurement = new ReconciliationMeasurement();
+        await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var (pipeline, request, mutation) = await fixture.LoadAsync(events, registry);
         await pipeline.CaptureSemanticBaselineAsync(request, mutation, TestContext.Current.CancellationToken);
-        using var measurement = new ReconciliationMeasurement();
+        measurement.Reset();
         const int iterations = 5;
         var before = GC.GetTotalAllocatedBytes(precise: true);
         for (var iteration = 0; iteration < iterations; iteration++)

@@ -1,1 +1,0 @@
-Corrective turn {{AttemptNumber}} of {{MaximumAttempts}}: The structured plan was rejected before approval. Nothing from the rejected plan was accepted. {{Reason}} Re-emit propose_plan once with corrected fileIntents and plan scope.

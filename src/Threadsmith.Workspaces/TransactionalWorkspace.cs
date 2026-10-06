@@ -21,7 +21,6 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     private static readonly Counter<long> _rollbacks = WorkspaceMutationMetrics.Meter.CreateCounter<long>(
         "threadsmith.workspace.mutation.rollbacks");
 
-    private readonly Dictionary<string, BaselineFileSnapshot> _baselineFiles;
     private readonly IDomainEventStream _events;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly ILogger<TransactionalWorkspace> _logger;
@@ -33,7 +32,9 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     private readonly ISemanticHostMutationAttribution? _semanticMutationAttribution;
     private readonly Dictionary<MutationSetId, StagingState> _staging = [];
     private readonly IMutationTransactionObserver _transactionObserver;
+    private Dictionary<string, BaselineFileSnapshot> _baselineFiles;
     private bool _disposed;
+    private MutationSetId? _lastCommittedMutationSetId;
 
     private TransactionalWorkspace(
         WorkspaceBaseline baseline,
@@ -107,7 +108,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     }
 
     /// <inheritdoc />
-    public WorkspaceBaseline Baseline { get; }
+    public WorkspaceBaseline Baseline { get; private set; }
 
     /// <inheritdoc />
     public WorkspaceIsolation Isolation { get; }
@@ -264,6 +265,86 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     }
 
     /// <inheritdoc />
+    public async Task<MutationEffectSnapshot> CaptureEffectAsync(
+        MutationSetId mutationSetId,
+        MutationApproval approval,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(approval);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (!_staging.TryGetValue(mutationSetId, out var state) || state.IsCommitted)
+            {
+                throw new InvalidOperationException("Only an uncommitted staged set can record new effect intent.");
+            }
+
+            var approved = SelectAuthorizedMutations(state, approval);
+            var conflicts = await DetectConflictsAsync(approved, cancellationToken);
+            if (conflicts.Count > 0)
+            {
+                throw new WorkspaceConflictException(new ConflictReport(mutationSetId, conflicts));
+            }
+
+            var files = approved.Length == state.MutationSet.Mutations.Count ? state.Files : BuildStagedFiles(approved);
+            return new MutationEffectSnapshot(
+                mutationSetId,
+                approved.Select(item => item.MutationId).ToArray(),
+                files.Values.Select(file => new MutationEndpointSnapshot(
+                    file.RelativePath,
+                    file.Original?.Sha256,
+                    file.FinalSha256)
+                {
+                    FinalBytes = file.FinalText is null ? null : file.EncodeFinal(),
+                }).ToArray());
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public void ValidateEditPaths(IEnumerable<string> relativePaths)
+    {
+        _mutationApprovalPolicy.ValidatePaths(relativePaths, Isolation.RepositoryPath);
+    }
+
+    /// <inheritdoc />
+    public async Task<MutationEffectReconciliation> ReconcileEffectAsync(
+        MutationEffectSnapshot snapshot,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Endpoints.Count == 0 || snapshot.Endpoints.Count > _resourceLimits.MaximumMutations * 2)
+        {
+            throw new InvalidDataException("The effect contains no bounded endpoint identities.");
+        }
+
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var original = true;
+            var applied = true;
+            foreach (var endpoint in snapshot.Endpoints)
+            {
+                var current = await ReadCurrentHashAsync(endpoint.RelativePath, cancellationToken);
+                original &= HashesEqual(endpoint.BeforeSha256, current);
+                applied &= HashesEqual(endpoint.AfterSha256, current);
+            }
+
+            return applied && !original ? MutationEffectReconciliation.Applied
+                : original ? MutationEffectReconciliation.Original : MutationEffectReconciliation.Indeterminate;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<MutationCommitResult> CommitAsync(
         MutationSetId mutationSetId,
         MutationApproval approval,
@@ -284,53 +365,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 throw new InvalidOperationException("The mutation set is already committed.");
             }
 
-            if (Baseline.TrustLevel < RepositoryTrustLevel.TrustedMutation)
-            {
-                throw new UnauthorizedAccessException(
-                    "Mutation commit requires TrustedMutation. Reopen the repository with mutation trust and recapture the baseline.");
-            }
-
-            _mutationApprovalPolicy.Validate(state.MutationSet, Isolation.RepositoryPath);
-            if (approval.Level == MutationApprovalLevel.PreviewOnly
-                || state.MutationSet.RequiredApproval == MutationApprovalLevel.PreviewOnly)
-            {
-                throw new UnauthorizedAccessException("Preview-only authorization cannot commit mutations.");
-            }
-
-            if (approval.Level == MutationApprovalLevel.PolicyAutoApproved
-                && state.MutationSet.RequiredApproval != MutationApprovalLevel.PolicyAutoApproved)
-            {
-                throw new UnauthorizedAccessException(
-                    "Policy auto-approval requires an independently authorized policy proposal.");
-            }
-
-            if (approval.Level != MutationApprovalLevel.PolicyAutoApproved
-                && state.MutationSet.RequiredApproval == MutationApprovalLevel.PolicyAutoApproved)
-            {
-                throw new UnauthorizedAccessException(
-                    "A policy-authorized proposal must use host policy approval.");
-            }
-
-            if (approval.ApprovalId != state.ApprovalId)
-            {
-                throw new UnauthorizedAccessException("The mutation approval does not match the staged request.");
-            }
-
-            var selectedFiles = approval.SelectedFiles
-                .Select(NormalizeRelativePath)
-                .ToHashSet(_pathComparer);
-            var selectedMutations = approval.SelectedMutations.ToHashSet();
-            Mutation[] approved = [.. state.MutationSet.Mutations.Where(mutation => approval.Level switch
-            {
-                MutationApprovalLevel.SelectedFiles => selectedFiles.Contains(
-                    NormalizeRelativePath(mutation.RelativePath)),
-                MutationApprovalLevel.SelectedMutations => selectedMutations.Contains(mutation.MutationId),
-                _ => true,
-            })];
-            if (approved.Length == 0)
-            {
-                throw new UnauthorizedAccessException("The approval selected no mutations to commit.");
-            }
+            var approved = SelectAuthorizedMutations(state, approval);
 
             var conflicts = await DetectConflictsAsync(approved, cancellationToken);
             if (conflicts.Count > 0)
@@ -344,6 +379,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 : BuildStagedFiles(approved);
             var temporaryFiles = new Dictionary<string, string>(_pathComparer);
             var changed = new List<string>();
+            var ownedEndpoints = new Dictionary<string, string?>(StringComparer.Ordinal);
             SemanticHostMutationRegistration? semanticAttributionRegistration = null;
             state.CommitAttempted = true;
             try
@@ -362,11 +398,11 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                         MutationTransactionPoint.BeforeTemporaryWrite,
                         file.RelativePath,
                         cancellationToken);
+                    temporaryFiles[file.RelativePath] = temporaryPath;
                     await File.WriteAllBytesAsync(
                         temporaryPath,
                         file.EncodeFinal(),
                         cancellationToken);
-                    temporaryFiles[file.RelativePath] = temporaryPath;
                     await _transactionObserver.ObserveAsync(
                         MutationTransactionPoint.AfterTemporaryWrite,
                         file.RelativePath,
@@ -394,7 +430,9 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                         MutationTransactionPoint.BeforeBaselineRemoval,
                         file.RelativePath,
                         cancellationToken);
+                    await VerifyCurrentIdentityAsync(file.RelativePath, file.Original?.Sha256, cancellationToken);
                     File.Delete(ResolveConfinedPath(file.RelativePath, mustExist: false));
+                    ownedEndpoints[file.RelativePath] = null;
                     changed.Add(file.RelativePath);
                     await _transactionObserver.ObserveAsync(
                         MutationTransactionPoint.AfterBaselineRemoval,
@@ -412,14 +450,16 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                         cancellationToken);
                     File.Move(temporaryFiles[file.RelativePath], fullPath, overwrite: false);
                     temporaryFiles.Remove(file.RelativePath);
-                    await _transactionObserver.ObserveAsync(
-                        MutationTransactionPoint.AfterFinalPublication,
-                        file.RelativePath,
-                        cancellationToken);
+                    ownedEndpoints[file.RelativePath] = file.FinalSha256;
                     if (!changed.Contains(file.RelativePath, StringComparer.Ordinal))
                     {
                         changed.Add(file.RelativePath);
                     }
+
+                    await _transactionObserver.ObserveAsync(
+                        MutationTransactionPoint.AfterFinalPublication,
+                        file.RelativePath,
+                        cancellationToken);
                 }
 
                 foreach (var file in files.Values)
@@ -453,7 +493,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     mutationSetId);
                 state.CompensationAttempted = true;
                 var compensationFailures = new List<Exception>();
-                foreach (var file in files.Values.Where(item => item.Original is null))
+                foreach (var file in files.Values.Where(item => item.Original is null && ownedEndpoints.ContainsKey(item.RelativePath)))
                 {
                     try
                     {
@@ -461,6 +501,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                             MutationTransactionPoint.BeforeCompensationRemoval,
                             file.RelativePath,
                             CancellationToken.None);
+                        await VerifyCurrentIdentityAsync(file.RelativePath, ownedEndpoints[file.RelativePath], CancellationToken.None);
                         File.Delete(ResolveConfinedPath(file.RelativePath, mustExist: false));
                         await _transactionObserver.ObserveAsync(
                             MutationTransactionPoint.AfterCompensationRemoval,
@@ -473,7 +514,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     }
                 }
 
-                foreach (var file in files.Values.Where(item => item.Original is not null))
+                foreach (var file in files.Values.Where(item => item.Original is not null && ownedEndpoints.ContainsKey(item.RelativePath)))
                 {
                     try
                     {
@@ -487,6 +528,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                             MutationTransactionPoint.BeforeCompensationRestore,
                             file.RelativePath,
                             CancellationToken.None);
+                        await VerifyCurrentIdentityAsync(file.RelativePath, ownedEndpoints[file.RelativePath], CancellationToken.None);
                         await File.WriteAllBytesAsync(
                             fullPath,
                             file.Original?.Bytes ?? [],
@@ -526,6 +568,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             }
 
             state.IsCommitted = true;
+            _lastCommittedMutationSetId = mutationSetId;
             state.Files = files;
             state.AppliedMutations = approved.Select(item => item.MutationId).ToArray();
             foreach (var mutation in approved)
@@ -670,20 +713,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             if (!state.IsCommitted)
             {
                 _staging.Remove(mutationSetId);
-                await _events.PublishAsync(
-                    new ApprovalDenied(
-                        state.MutationSet.SessionId,
-                        DateTimeOffset.UtcNow,
-                        state.ApprovalId,
-                        "Mutation staging was discarded."),
-                    cancellationToken);
-                await _events.PublishAsync(
-                    new MutationSetRolledBack(
-                        state.MutationSet.SessionId,
-                        DateTimeOffset.UtcNow,
-                        mutationSetId,
-                        []),
-                    cancellationToken);
+                await PublishStagingDiscardedAsync(state, cancellationToken);
                 return new MutationRollbackResult(
                     mutationSetId,
                     [],
@@ -716,6 +746,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             }
 
             var restored = new List<string>();
+            var removedEndpoints = new HashSet<string>(_pathComparer);
             SemanticHostMutationRegistration? semanticAttributionRegistration = null;
             try
             {
@@ -731,10 +762,12 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                         cancellationToken);
                 }
 
-                foreach (var file in state.Files.Values.Where(item => item.Original is null))
+                foreach (var file in state.Files.Values.Where(item => item.Original is null && item.FinalText is not null))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    await VerifyCurrentIdentityAsync(file.RelativePath, file.FinalSha256, cancellationToken);
                     File.Delete(ResolveConfinedPath(file.RelativePath, mustExist: false));
+                    removedEndpoints.Add(file.RelativePath);
                     restored.Add(file.RelativePath);
                 }
 
@@ -745,6 +778,10 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     var directory = Path.GetDirectoryName(fullPath)
                         ?? throw new InvalidOperationException("A rollback target has no parent directory.");
                     Directory.CreateDirectory(directory);
+                    await VerifyCurrentIdentityAsync(
+                        file.RelativePath,
+                        removedEndpoints.Contains(file.RelativePath) ? null : file.FinalSha256,
+                        cancellationToken);
                     await File.WriteAllBytesAsync(
                         fullPath,
                         file.Original?.Bytes ?? [],
@@ -843,7 +880,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     }
 
     /// <summary>Creates the next immutable generation by rereading only the specified paths.</summary>
-    internal async Task<TransactionalWorkspace> CreatePromotedAsync(
+    internal async Task<(WorkspaceBaseline Baseline, IReadOnlyList<MutationSetId> Invalidated)> PromoteBaselineAsync(
         IReadOnlyList<string> changedFiles,
         CancellationToken cancellationToken)
     {
@@ -884,7 +921,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     throw new InvalidOperationException("Promoted workspace content exceeds the configured baseline-byte limit.");
                 }
 
-                snapshots[path] = BaselineFileSnapshot.FromBytes(bytes, Hash(bytes));
+                snapshots[GetExistingPathSpelling(path)] = BaselineFileSnapshot.FromBytes(bytes, Hash(bytes));
             }
 
             var baseline = Baseline with
@@ -894,23 +931,42 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     .Select(pair => new WorkspaceFileHash(pair.Key, pair.Value.Sha256, pair.Value.Bytes.LongLength))
                     .ToArray(),
             };
-            var promoted = new TransactionalWorkspace(
-                baseline,
-                _events,
-                Isolation,
-                _logger,
-                _maximumBaselineContentBytes,
-                _mutationApprovalPolicy,
-                _transactionObserver,
-                _semanticMutationAttribution,
-                _resourceLimits);
-            foreach (var (path, snapshot) in snapshots)
+
+            // Promotion invalidates old uncommitted authorization. Retain only the latest committed
+            // transaction for exact rollback; a conversation must not retain every full-file version.
+            var rollback = _lastCommittedMutationSetId is { } committedId
+                && _staging.TryGetValue(committedId, out var committed) ? committed : null;
+            var invalidated = _staging.Keys.Where(id => id != rollback?.MutationSet.MutationSetId).ToArray();
+            _staging.Clear();
+            if (rollback is not null)
             {
-                // BaselineFileSnapshot byte arrays are private immutable captured content.
-                promoted._baselineFiles.Add(path, snapshot);
+                _staging.Add(rollback.MutationSet.MutationSetId, rollback);
             }
 
-            return promoted;
+            _baselineFiles = snapshots;
+            Baseline = baseline;
+            return (baseline, invalidated);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>Releases abandoned staging without undoing or losing any attempted write.</summary>
+    internal async Task<bool> DiscardUnattemptedAsync(MutationSetId mutationSetId, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!_staging.TryGetValue(mutationSetId, out var state) || state.CommitAttempted)
+            {
+                return false;
+            }
+
+            _staging.Remove(mutationSetId);
+            await PublishStagingDiscardedAsync(state, cancellationToken);
+            return true;
         }
         finally
         {
@@ -1051,16 +1107,15 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 ? BuildStagedFiles(mutationSet.Mutations)
                 : new Dictionary<string, StagedFile>(_pathComparer);
             var preview = conflicts.Count == 0
-                ? CreatePreview(mutationSet, files)
+                ? CreatePreview(mutationSet, files, cancellationToken)
                 : new MutationPreview(mutationSet.MutationSetId, string.Empty, [], 0, 0);
             var risk = MutationRiskCalculator.Calculate(
                 mutationSet,
                 preview,
                 Isolation.RepositoryPath,
                 _mutationApprovalPolicy.LargeDiffThreshold);
-            var requiresApproval = _mutationApprovalPolicy.RequiresApproval(
-                risk,
-                mutationSet.IsWithinApprovedPlan);
+            var requiresApproval = mutationSet.RequireExplicitReview || _mutationApprovalPolicy.RequiresApproval(
+                risk);
             mutationSet = mutationSet with
             {
                 RequiredApproval = requiresApproval
@@ -1133,107 +1188,65 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         Mutation[] mutationArray = [.. mutations];
         var conflicts = new MutationConflict?[mutationArray.Length];
         var checks = new List<ConflictHashCheck>();
+        var present = new Dictionary<string, bool>(_pathComparer);
+        var checkedPaths = new HashSet<string>(_pathComparer);
         for (var index = 0; index < mutationArray.Length; index++)
         {
             var mutation = mutationArray[index];
-            string relativePath;
             try
             {
-                relativePath = NormalizeRelativePath(mutation.RelativePath);
-                var fullPath = ResolveConfinedPath(relativePath, mustExist: false);
-                var baselineHash = _baselineFiles.GetValueOrDefault(relativePath)?.Sha256;
-                var expectedHash = mutation.BaselineSha256 ?? baselineHash;
-                if (mutation.Type == MutationType.CreateFile)
+                var relativePath = NormalizeRelativePath(mutation.RelativePath);
+                var baseline = _baselineFiles.GetValueOrDefault(relativePath);
+                var exists = present.GetValueOrDefault(relativePath, baseline is not null);
+                if (exists == (mutation.Type == MutationType.CreateFile))
                 {
-                    var actualHash = File.Exists(fullPath)
-                        ? await HashFileAsync(fullPath, cancellationToken)
-                        : null;
-                    if (actualHash is not null || expectedHash is not null)
-                    {
-                        conflicts[index] = new MutationConflict(
-                            mutation.MutationId,
-                            relativePath,
-                            "A create-file mutation requires an absent baseline path.",
-                            null,
-                            actualHash);
-                    }
+                    throw new InvalidOperationException($"Operation '{mutation.Type}' has an invalid source state at '{relativePath}' in the selected operation order.");
+                }
 
-                    continue;
+                if ((mutation.BaselineSha256 is { } expected && !HashesEqual(expected, baseline?.Sha256))
+                    || (mutation.ExpectedIdentity is { } identity
+                        && (!HashesEqual(identity.Sha256, baseline?.Sha256) || identity.ByteLength != baseline?.Bytes.LongLength)))
+                {
+                    throw new InvalidOperationException("The mutation was proposed against a different baseline identity.");
+                }
+
+                if (checkedPaths.Add(relativePath))
+                {
+                    var diskPath = relativePath;
+                    checks.Add(new ConflictHashCheck(index, mutation, diskPath, ResolveConfinedPath(diskPath, mustExist: false), baseline?.Sha256));
                 }
 
                 if (mutation.Type == MutationType.MoveFile)
                 {
-                    var destination = NormalizeRelativePath(
-                        mutation.DestinationRelativePath
-                            ?? throw new ArgumentException("A move-file mutation requires a destination path."));
-                    var destinationPath = ResolveConfinedPath(destination, mustExist: false);
-                    var caseOnlyMove = string.Equals(relativePath, destination, _pathComparison)
+                    var destination = NormalizeRelativePath(mutation.DestinationRelativePath
+                        ?? throw new ArgumentException("A move-file mutation requires a destination path."));
+                    var destinationBaseline = _baselineFiles.GetValueOrDefault(destination);
+                    var caseOnlyMove = _pathComparer.Equals(relativePath, destination)
                         && !string.Equals(relativePath, destination, StringComparison.Ordinal);
-                    var destinationBaselineHash = caseOnlyMove
-                        ? null
-                        : _baselineFiles.GetValueOrDefault(destination)?.Sha256;
-                    var destinationActualHash = caseOnlyMove
-                        ? null
-                        : File.Exists(destinationPath)
-                            ? await HashFileAsync(destinationPath, cancellationToken)
-                            : null;
-                    if (string.Equals(relativePath, destination, StringComparison.Ordinal))
+                    if (string.Equals(relativePath, destination, StringComparison.Ordinal)
+                        || (!caseOnlyMove && present.GetValueOrDefault(destination, destinationBaseline is not null)))
                     {
-                        conflicts[index] = new MutationConflict(
-                            mutation.MutationId,
-                            relativePath,
-                            "A move-file source and destination must differ.");
-                        continue;
+                        throw new InvalidOperationException($"Move destination '{destination}' must be absent in the selected operation order.");
                     }
 
-                    if (destinationBaselineHash is not null || destinationActualHash is not null)
+                    if (checkedPaths.Add(destination))
                     {
-                        conflicts[index] = new MutationConflict(
-                            mutation.MutationId,
-                            destination,
-                            "A move-file mutation requires an absent destination path.",
-                            null,
-                            destinationActualHash ?? destinationBaselineHash);
-                        continue;
+                        var diskPath = destination;
+                        checks.Add(new ConflictHashCheck(index, mutation, diskPath, ResolveConfinedPath(diskPath, mustExist: false), destinationBaseline?.Sha256));
                     }
-                }
 
-                if (baselineHash is null)
-                {
-                    conflicts[index] = new MutationConflict(
-                        mutation.MutationId,
-                        relativePath,
-                        "The target is not present in the immutable workspace baseline.");
-                }
-                else if (!string.Equals(expectedHash, baselineHash, StringComparison.OrdinalIgnoreCase)
-                    || (mutation.ExpectedIdentity is not null
-                        && (!string.Equals(
-                            mutation.ExpectedIdentity.Sha256,
-                            baselineHash,
-                            StringComparison.OrdinalIgnoreCase)
-                            || mutation.ExpectedIdentity.ByteLength
-                                != _baselineFiles[relativePath].Bytes.LongLength)))
-                {
-                    conflicts[index] = new MutationConflict(
-                        mutation.MutationId,
-                        relativePath,
-                        "The mutation was proposed against a different baseline identity.",
-                        baselineHash,
-                        mutation.ExpectedIdentity?.Sha256 ?? expectedHash);
+                    present[relativePath] = false;
+                    present[destination] = true;
                 }
                 else
                 {
-                    checks.Add(new ConflictHashCheck(index, mutation, relativePath, fullPath, baselineHash));
+                    present[relativePath] = mutation.Type != MutationType.DeleteFile;
                 }
             }
             catch (Exception exception) when (exception is ArgumentException
-                or UnauthorizedAccessException
-                or IOException)
+                or InvalidOperationException or UnauthorizedAccessException or IOException)
             {
-                conflicts[index] = new MutationConflict(
-                    mutation.MutationId,
-                    mutation.RelativePath,
-                    exception.Message);
+                conflicts[index] = new MutationConflict(mutation.MutationId, mutation.RelativePath, exception.Message);
             }
         }
 
@@ -1289,15 +1302,97 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         return [.. conflicts.OfType<MutationConflict>()];
     }
 
+    private async Task PublishStagingDiscardedAsync(StagingState state, CancellationToken cancellationToken)
+    {
+        await _events.PublishAsync(
+            new ApprovalDenied(
+                state.MutationSet.SessionId,
+                DateTimeOffset.UtcNow,
+                state.ApprovalId,
+                "Mutation staging was discarded."),
+            cancellationToken);
+        await _events.PublishAsync(
+            new MutationSetRolledBack(
+                state.MutationSet.SessionId,
+                DateTimeOffset.UtcNow,
+                state.MutationSet.MutationSetId,
+                []),
+            cancellationToken);
+    }
+
+    private Mutation[] SelectAuthorizedMutations(StagingState state, MutationApproval approval)
+    {
+        if (!Enum.IsDefined(approval.Level))
+        {
+            throw new UnauthorizedAccessException("The mutation approval level is invalid.");
+        }
+
+        if (Baseline.TrustLevel < RepositoryTrustLevel.TrustedMutation)
+        {
+            throw new UnauthorizedAccessException(
+                "Mutation commit requires TrustedMutation. Reopen the repository with mutation trust and recapture the baseline.");
+        }
+
+        _mutationApprovalPolicy.Validate(state.MutationSet, Isolation.RepositoryPath);
+        if (approval.Level == MutationApprovalLevel.PreviewOnly
+            || state.MutationSet.RequiredApproval == MutationApprovalLevel.PreviewOnly)
+        {
+            throw new UnauthorizedAccessException("Preview-only authorization cannot commit mutations.");
+        }
+
+        if (approval.Level == MutationApprovalLevel.PolicyAutoApproved
+            && state.MutationSet.RequiredApproval != MutationApprovalLevel.PolicyAutoApproved)
+        {
+            throw new UnauthorizedAccessException(
+                "Policy auto-approval requires an independently authorized policy proposal.");
+        }
+
+        if (approval.Level != MutationApprovalLevel.PolicyAutoApproved
+            && state.MutationSet.RequiredApproval == MutationApprovalLevel.PolicyAutoApproved)
+        {
+            throw new UnauthorizedAccessException(
+                "A policy-authorized proposal must use host policy approval.");
+        }
+
+        if (approval.ApprovalId != state.ApprovalId)
+        {
+            throw new UnauthorizedAccessException("The mutation approval does not match the staged request.");
+        }
+
+        var selectedFiles = approval.SelectedFiles
+            .Select(NormalizeRelativePath)
+            .ToHashSet(_pathComparer);
+        var selectedMutations = approval.SelectedMutations.ToHashSet();
+        Mutation[] approved = [.. state.MutationSet.Mutations.Where(mutation => approval.Level switch
+        {
+            MutationApprovalLevel.SelectedFiles => selectedFiles.Contains(
+                NormalizeRelativePath(mutation.RelativePath)),
+            MutationApprovalLevel.SelectedMutations => selectedMutations.Contains(mutation.MutationId),
+            _ => true,
+        })];
+        if (approved.Length == 0)
+        {
+            throw new UnauthorizedAccessException("The approval selected no mutations to commit.");
+        }
+
+        return approved;
+    }
+
     private Dictionary<string, StagedFile> BuildStagedFiles(IEnumerable<Mutation> mutations)
     {
         var files = new Dictionary<string, StagedFile>(StringComparer.Ordinal);
+        var originalOwners = new HashSet<string>(_pathComparer);
         foreach (var mutation in mutations)
         {
             var relativePath = NormalizeRelativePath(mutation.RelativePath);
             if (!files.TryGetValue(relativePath, out var staged))
             {
                 _baselineFiles.TryGetValue(relativePath, out var original);
+                if (original is not null && !originalOwners.Add(relativePath))
+                {
+                    original = null;
+                }
+
                 staged = new StagedFile(relativePath, original, original?.Text);
                 files.Add(relativePath, staged);
             }
@@ -1307,29 +1402,39 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 var destination = NormalizeRelativePath(
                     mutation.DestinationRelativePath
                         ?? throw new ArgumentException("A move-file mutation requires a destination path."));
-                var movedText = mutation.Content?.Text
-                    ?? staged.FinalText
-                    ?? throw new InvalidOperationException($"File '{relativePath}' does not exist.");
-                var exactMovedBytes = mutation.Content is null
-                    && staged.Original is not null
-                    && string.Equals(movedText, staged.Original.Text, StringComparison.Ordinal)
-                        ? staged.Original.Bytes
-                        : null;
-                staged.FinalText = null;
-                files.Add(
+                if (staged.FinalText is null)
+                {
+                    throw new InvalidOperationException($"File '{relativePath}' does not exist.");
+                }
+
+                var movedText = mutation.Content?.Text ?? staged.FinalText;
+                var exactMovedBytes = mutation.Content is null ? staged.EncodeFinal() : null;
+                var destinationOriginal = _baselineFiles.GetValueOrDefault(destination);
+                if (destinationOriginal is not null && !originalOwners.Add(destination))
+                {
+                    destinationOriginal = null;
+                }
+
+                if (files.TryGetValue(destination, out var priorDestination) && priorDestination.FinalText is not null)
+                {
+                    throw new InvalidOperationException($"File '{destination}' already exists.");
+                }
+
+                files[destination] = new StagedFile(
                     destination,
-                    new StagedFile(
-                        destination,
-                        null,
-                        movedText,
-                        mutation.Content,
-                        staged.Original,
-                        exactMovedBytes));
+                    priorDestination?.Original ?? destinationOriginal,
+                    movedText,
+                    mutation.Content ?? staged.Content,
+                    staged.EncodingSource ?? staged.Original,
+                    exactMovedBytes);
+                staged.FinalText = null;
+                staged.ExactFinalBytes = null;
                 continue;
             }
 
             staged.FinalText = ApplyMutationToText(mutation, staged.FinalText, relativePath);
-            staged.Content = mutation.Content;
+            staged.ExactFinalBytes = null;
+            staged.Content = mutation.Content ?? staged.Content;
         }
 
         foreach (var file in files.Values)
@@ -1358,7 +1463,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
     private MutationPreview CreatePreview(
         MutationSet mutationSet,
-        IReadOnlyDictionary<string, StagedFile> files)
+        IReadOnlyDictionary<string, StagedFile> files,
+        CancellationToken cancellationToken)
     {
         var changes = new List<MutationDiff>();
         var rolling = new Dictionary<string, string?>(_pathComparer);
@@ -1378,11 +1484,11 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             var destination = mutation.DestinationRelativePath is null
                 ? null
                 : NormalizeRelativePath(mutation.DestinationRelativePath);
-            var operationDiff = CreateUnifiedDiff(relativePath, before, after, out _, out _);
+            var operationDiff = CreateUnifiedDiff(relativePath, before, after, out _, out _, cancellationToken);
             if (destination is not null)
             {
                 var movedText = mutation.Content?.Text ?? before;
-                operationDiff += CreateUnifiedDiff(destination, null, movedText, out _, out _);
+                operationDiff += CreateUnifiedDiff(destination, null, movedText, out _, out _, cancellationToken);
             }
 
             changes.Add(new MutationDiff(
@@ -1415,7 +1521,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                 file.Original?.Text,
                 file.FinalText,
                 out var fileAdded,
-                out var fileRemoved));
+                out var fileRemoved,
+                cancellationToken));
             added += fileAdded;
             removed += fileRemoved;
         }
@@ -1552,7 +1659,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         string? before,
         string? after,
         out int addedLines,
-        out int removedLines)
+        out int removedLines,
+        CancellationToken cancellationToken)
     {
         return UnifiedTextDiff.Create(
             relativePath,
@@ -1560,7 +1668,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             after,
             _resourceLimits.MaximumDiffLinesForLcs,
             out addedLines,
-            out removedLines);
+            out removedLines,
+            cancellationToken);
     }
 
     private string NormalizeRelativePath(string relativePath)
@@ -1634,6 +1743,27 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         }
 
         return fullPath;
+    }
+
+    private string GetExistingPathSpelling(string relativePath)
+    {
+        var current = Isolation.RepositoryPath;
+        var parts = NormalizeRelativePath(relativePath).Split('/');
+        var actual = new List<string>(parts.Length);
+        foreach (var part in parts)
+        {
+            var entry = new DirectoryInfo(current).EnumerateFileSystemInfos(part, new EnumerationOptions
+            {
+                MatchCasing = _pathComparer.Equals("a", "A") ? MatchCasing.CaseInsensitive : MatchCasing.CaseSensitive,
+                AttributesToSkip = 0,
+                IgnoreInaccessible = false,
+            }).SingleOrDefault(item => _pathComparer.Equals(item.Name, part))
+                ?? throw new FileNotFoundException("A baseline endpoint changed while capturing its exact spelling.");
+            actual.Add(entry.Name);
+            current = entry.FullName;
+        }
+
+        return string.Join('/', actual);
     }
 
     private static bool FileExistsAsSpecified(string fullPath)
@@ -1720,6 +1850,16 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         return FileExistsAsSpecified(fullPath)
             ? await HashFileAsync(fullPath, cancellationToken)
             : null;
+    }
+
+    private async Task VerifyCurrentIdentityAsync(string relativePath, string? expectedHash, CancellationToken cancellationToken)
+    {
+        var fullPath = ResolveConfinedPath(relativePath, mustExist: false);
+        var actualHash = File.Exists(fullPath) ? await HashFileAsync(fullPath, cancellationToken) : null;
+        if (!HashesEqual(actualHash, expectedHash))
+        {
+            throw new IOException($"Mutation target '{relativePath}' changed outside this transaction; its current bytes were preserved.");
+        }
     }
 
     private static bool HashesEqual(string? left, string? right)
@@ -1863,7 +2003,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         Mutation Mutation,
         string RelativePath,
         string FullPath,
-        string BaselineHash);
+        string? BaselineHash);
 
     private sealed class ConflictHashTarget
     {
@@ -1904,7 +2044,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
         public BaselineFileSnapshot? EncodingSource { get; }
 
-        public byte[]? ExactFinalBytes { get; }
+        public byte[]? ExactFinalBytes { get; set; }
 
         public string? FinalSha256 { get; set; }
 
@@ -1936,12 +2076,12 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             {
                 FileTextEncoding.Utf8 => new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
                 FileTextEncoding.Utf8Bom => new UTF8Encoding(encoderShouldEmitUTF8Identifier: true),
-                _ => (Original ?? EncodingSource)?.Encoding
+                _ => (EncodingSource ?? Original)?.Encoding
                     ?? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
             };
             var content = encoding.GetBytes(normalizedText);
             var includePreamble = Content?.Encoding == FileTextEncoding.Utf8Bom
-                || (Content?.Encoding is null && (Original ?? EncodingSource)?.HasPreamble == true);
+                || (Content?.Encoding is null && (EncodingSource ?? Original)?.HasPreamble == true);
             if (!includePreamble)
             {
                 return content;
@@ -1956,41 +2096,6 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
     {
         public static readonly Meter Meter = new("Threadsmith.Workspaces.Mutations");
     }
-}
-
-/// <summary>Signals that on-disk state no longer matches the immutable mutation baseline.</summary>
-public sealed class WorkspaceConflictException : Exception
-{
-    /// <summary>Initializes a new instance of the <see cref="WorkspaceConflictException"/> class.</summary>
-    public WorkspaceConflictException()
-        : this(new ConflictReport(default, []))
-    {
-    }
-
-    /// <summary>Initializes a new instance of the <see cref="WorkspaceConflictException"/> class.</summary>
-    public WorkspaceConflictException(string message)
-        : base(message)
-    {
-        Report = new ConflictReport(default, []);
-    }
-
-    /// <summary>Initializes a new instance of the <see cref="WorkspaceConflictException"/> class.</summary>
-    public WorkspaceConflictException(string message, Exception innerException)
-        : base(message, innerException)
-    {
-        Report = new ConflictReport(default, []);
-    }
-
-    /// <summary>Initializes a new instance of the <see cref="WorkspaceConflictException"/> class.</summary>
-    public WorkspaceConflictException(ConflictReport report)
-        : base("The mutation set conflicts with current workspace files.")
-    {
-        ArgumentNullException.ThrowIfNull(report);
-        Report = report;
-    }
-
-    /// <summary>Detailed conflicts that blocked application.</summary>
-    public ConflictReport Report { get; }
 }
 
 /// <summary>Registers repository baselines and exposes mutation lifecycle commands.</summary>
@@ -2012,6 +2117,7 @@ public sealed class TransactionalWorkspaceCoordinator :
     private readonly Lock _registrationGate = new();
     private readonly ConcurrentDictionary<WorkspaceId, TransactionalWorkspace> _workspaces = new();
     private readonly ConcurrentDictionary<MutationSetId, MutationOwner> _mutationWorkspaces = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _editGates = new(StringComparer.Ordinal);
 
     /// <summary>Initializes a new instance of the <see cref="TransactionalWorkspaceCoordinator"/> class.</summary>
     public TransactionalWorkspaceCoordinator(
@@ -2055,6 +2161,25 @@ public sealed class TransactionalWorkspaceCoordinator :
     }
 
     /// <inheritdoc />
+    public async Task<IAsyncDisposable> AcquireEditLeaseAsync(WorkspaceId workspaceId, CancellationToken cancellationToken = default)
+    {
+        var identity = RepositoryIdentity.Create(GetWorkspace(workspaceId).Isolation.RepositoryPath);
+        var gate = _editGates.GetOrAdd(identity, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken);
+        return new EditLease(gate);
+    }
+
+    /// <inheritdoc />
+    public async Task DiscardUnattemptedEditAsync(WorkspaceId workspaceId, MutationSetId mutationSetId, CancellationToken cancellationToken = default)
+    {
+        var workspace = (TransactionalWorkspace)GetWorkspace(workspaceId);
+        if (await workspace.DiscardUnattemptedAsync(mutationSetId, cancellationToken))
+        {
+            _mutationWorkspaces.TryRemove(mutationSetId, out _);
+        }
+    }
+
+    /// <inheritdoc />
     public Task<StagedMutationSet> StageAsync(
         MutationSet mutationSet,
         CancellationToken cancellationToken = default)
@@ -2070,39 +2195,21 @@ public sealed class TransactionalWorkspaceCoordinator :
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(changedFiles);
-        var previous = (TransactionalWorkspace)GetWorkspace(workspaceId);
-        var promoted = await previous.CreatePromotedAsync(changedFiles, cancellationToken);
-        var published = false;
-        try
+        var workspace = (TransactionalWorkspace)GetWorkspace(workspaceId);
+        var promoted = await workspace.PromoteBaselineAsync(changedFiles, cancellationToken);
+        lock (_registrationGate)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            lock (_registrationGate)
+            if (!_workspaces.TryGetValue(workspaceId, out var current) || !ReferenceEquals(current, workspace))
             {
-                if (!_workspaces.TryGetValue(workspaceId, out var current) || !ReferenceEquals(current, previous))
-                {
-                    throw new InvalidOperationException("The workspace changed while its baseline was being promoted.");
-                }
-
-                _workspaces[workspaceId] = promoted;
-                foreach (var mutationSetId in _mutationWorkspaces
-                    .Where(item => item.Value.WorkspaceId == workspaceId)
-                    .Select(item => item.Key))
-                {
-                    _mutationWorkspaces.TryRemove(mutationSetId, out _);
-                }
-
-                published = true;
+                throw new InvalidOperationException("The workspace changed while its baseline was being promoted.");
             }
-        }
-        finally
-        {
-            if (!published)
+
+            foreach (var mutationSetId in promoted.Invalidated)
             {
-                await promoted.DisposeAsync();
+                _mutationWorkspaces.TryRemove(mutationSetId, out _);
             }
         }
 
-        await previous.DisposeAsync();
         return promoted.Baseline;
     }
 
@@ -2141,11 +2248,15 @@ public sealed class TransactionalWorkspaceCoordinator :
         _mutationWorkspaces[command.MutationSet.MutationSetId] = new MutationOwner(
             command.MutationSet.WorkspaceId,
             command.MutationSet.SessionId);
-        await TransactionalWorkspace.PublishReviewEventsAsync(
-            _events,
-            staged,
-            workspace.Isolation.Mode,
-            cancellationToken);
+        if (!staged.Conflicts.HasConflicts)
+        {
+            await TransactionalWorkspace.PublishReviewEventsAsync(
+                _events,
+                staged,
+                workspace.Isolation.Mode,
+                cancellationToken);
+        }
+
         return staged;
     }
 
@@ -2208,6 +2319,22 @@ public sealed class TransactionalWorkspaceCoordinator :
 
         _workspaces.Clear();
         _mutationWorkspaces.Clear();
+    }
+
+    private sealed class EditLease : IAsyncDisposable
+    {
+        private SemaphoreSlim? _gate;
+
+        public EditLease(SemaphoreSlim gate)
+        {
+            _gate = gate;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Exchange(ref _gate, null)?.Release();
+            return ValueTask.CompletedTask;
+        }
     }
 
     /// <summary>Registers captured content through the ordinary transactional admission and replacement path.</summary>

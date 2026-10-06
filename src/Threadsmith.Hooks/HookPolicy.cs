@@ -73,7 +73,6 @@ public static class HookDescriptorValidator
     {
         return point is HookPoint.BeforeModelRequest
         or HookPoint.BeforeToolInvocation
-        or HookPoint.PlanProposed
         or HookPoint.MutationStaged
         or HookPoint.BeforeValidation;
     }

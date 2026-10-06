@@ -519,15 +519,3 @@ public sealed record ContextInspectionProjection
     /// <summary>Whether native or textual tool transport is used.</summary>
     public string ToolTransportMode { get; init; } = "unknown";
 }
-
-/// <summary>Approves the pending plan for a run.</summary>
-public sealed record ApprovePlanCommand(SessionId SessionId, RunId RunId) : ICommand<bool>;
-
-/// <summary>Rejects the pending plan for a run.</summary>
-public sealed record RejectPlanCommand(SessionId SessionId, RunId RunId, string Reason) : ICommand<bool>;
-
-/// <summary>Requests a new plan proposal using governed revision instructions.</summary>
-public sealed record RevisePlanCommand(
-    SessionId SessionId,
-    RunId RunId,
-    string RevisionInstructions) : ICommand<bool>;

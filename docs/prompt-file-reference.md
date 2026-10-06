@@ -1,8 +1,8 @@
 # Prompt File Reference
 
-Planning and mutation prompt assets describe syntax-only batch screening and one cumulative compilation/test validation after all approved plan steps are applied. Intermediate steps may contain incomplete API migrations; the complete plan must restore compilation. Completion-only proposals refer to applied work, not an intermediate compiler result. These assets do not change host-owned approval or scope enforcement.
+Stable conversation and direct-edit assets describe exact authorization, ordered source operations and advisory versioned compiler feedback. Explicitly requested build/test validation remains authoritative; response completion does not invoke it.
 
-`Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-Phase-EvidenceCollection.md` route report/data saves through the direct allowlisted writer. `useLastResponse:true` copies the previous archived answer without regeneration. These assets describe existing authority; only code and `tools.writeFile.allowedFolders` control writable locations.
+`Tool-write_file-Description.md`, `System-SystemPrompt.md`, and `System-ConversationGuidance.md` route report/data saves through the direct allowlisted writer. `useLastResponse:true` copies the previous archived answer without regeneration. These assets describe existing authority; only code and `tools.writeFile.allowedFolders` control writable locations.
 
 This guide explains how Threadsmith uses the editable Markdown files in the deployed `prompts/` directory. It lists the complete shipped catalog by category and defines every case-sensitive `{{Placeholder}}` that Threadsmith may substitute.
 
@@ -16,9 +16,9 @@ The files control model-visible wording and formatting only. They cannot change 
 
 Every placeholder name is case-sensitive. Preserve every required marker exactly, including both pairs of braces. A file whose table entry says `None` is exact text and must not contain a `{{...}}` marker. Tokens explicitly labeled optional may be omitted by the caller; Threadsmith then substitutes an empty string. Startup fails before model or tool activity when a required marker is missing or a marker is undeclared, malformed, or otherwise violates the catalog contract. Repeating a declared marker is valid and inserts the same value at each occurrence.
 
-Ordinary delegated children receive a common host-policy message plus a role-specific system amendment. Role amendments guide activity without prescribing answer fields, citation identifiers, or a JSON format. Task context, repository instructions, and evidence keep their separate framing. Technical tool errors may receive feedback, but answers are not sent through role-format correction rounds. The joined child response is unparsed text inside host-owned result metadata; separately approved mutation preparation uses its own protocol. The original Explorer output-policy and format-correction assets remain cataloged but are not sent to ordinary children.
+Ordinary delegated children receive a common host-policy message plus a role-specific system amendment. Role amendments guide activity without prescribing answer fields, citation identifiers, or a JSON format. Task context, repository instructions, and evidence keep their separate framing. Technical tool errors may receive feedback, but answers are not sent through role-format correction rounds. The joined child response is unparsed text inside host-owned result metadata; source writes remain unavailable to ordinary delegated children. The original Explorer output-policy and format-correction assets remain cataloged but are not sent to ordinary children.
 
-The child task asset distinguishes its workspace fingerprint from a Git revision. The delegation description distinguishes concurrent children in one `agents` array from sequential tool invocations. Child policy excludes process/code-execution tools; permitted inspection tools can still use their declared executable dependencies. These are descriptions of existing behavior, not additional permissions or scheduling controls.
+The child task asset distinguishes its workspace fingerprint from a Git revision. The delegation description distinguishes concurrent children in one `agents` array from sequential tool invocations. Explicit `readOnly` child policy excludes process/code-execution tools; permitted inspection tools can still use their declared executable dependencies. These are descriptions of existing behavior, not additional permissions or scheduling controls.
 
 The repository-inspection tool descriptions, semantic-first correction assets, and shared `System-RepositoryInspection.md` direct agents to use the narrowest sufficient operation: direct `read_file` for a known file, relationship-specific semantic tools for known C# declarations and direct relationships, and scoped search or syntax-pattern inspection for local variables and parameters. File inventory, shell execution, delegation, and broad semantic traversal are not substitutes for one known narrow lookup. Parent and child agents receive the same tool-selection, batching, evidence reuse, and completion guidance. Focused `code_explore` is reserved for unfamiliar or cross-cutting C# behavior, unknown discovery, and multi-hop relationships that one targeted semantic operation cannot establish; its returned source ranges count as already read and should not be retrieved again. Semantic evidence must match the reviewed revision; another revision requires ref-based evidence. This is retrieval guidance, not an expansion of tool permissions.
 
@@ -39,22 +39,22 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System and phase prompts | 29 | System policy, governed phase instructions, request envelopes, and required-output contracts. |
-| Context prompts | 20 | Active-turn, summary, steering, incremental planning, execution outcomes, and delegated-child context framing. |
-| Correction prompts | 53 | Host-authored retry, validation, malformed-output, plan, mutation, and recovery messages. |
-| Tool prompts | 201 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| System prompts | 21 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
+| Context prompts | 22 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
+| Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **321** | Complete deployed catalog. |
+| **Total** | **284** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
 The placeholder column is authoritative for each file. All listed placeholders are required unless the cell explicitly labels them optional. Follow each placeholder link to its definition in the glossary.
 
-### System and phase prompts
+### System prompts
 
-System policy, governed phase instructions, request envelopes, and required-output contracts.
+System policy, stable conversation instructions, request envelopes, and required-output contracts.
 
 #### `ChildAgent` family
 
@@ -80,19 +80,13 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-LegacyRequestEnvelope.md` | System framing for `LegacyRequestEnvelope`. | [`SystemPolicy`](#placeholder-systempolicy), [`RepositoryInstructions`](#placeholder-repositoryinstructions), [`PhaseInstructions`](#placeholder-phaseinstructions), [`Task`](#placeholder-task), [`CurrentTurn`](#placeholder-currentturn), [`AdditionalMessages`](#placeholder-additionalmessages), [`RecentTurns`](#placeholder-recentturns), [`ConversationSummary`](#placeholder-conversationsummary), [`RetrievedMemory`](#placeholder-retrievedmemory), [`RepositoryMemory`](#placeholder-repositorymemory), [`GovernedState`](#placeholder-governedstate), [`EvidenceSet`](#placeholder-evidenceset), [`AvailableTools`](#placeholder-availabletools), [`RequiredOutput`](#placeholder-requiredoutput) |
+| `System-LegacyRequestEnvelope.md` | System framing for `LegacyRequestEnvelope`. | [`SystemPolicy`](#placeholder-systempolicy), [`RepositoryInstructions`](#placeholder-repositoryinstructions), [`ConversationInstructions`](#placeholder-conversationinstructions), [`Task`](#placeholder-task), [`CurrentTurn`](#placeholder-currentturn), [`AdditionalMessages`](#placeholder-additionalmessages), [`RecentTurns`](#placeholder-recentturns), [`ConversationSummary`](#placeholder-conversationsummary), [`RetrievedMemory`](#placeholder-retrievedmemory), [`RepositoryMemory`](#placeholder-repositorymemory), [`GovernedState`](#placeholder-governedstate), [`EvidenceSet`](#placeholder-evidenceset), [`AvailableTools`](#placeholder-availabletools), [`RequiredOutput`](#placeholder-requiredoutput) |
 
 #### `Phase` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-Phase-AwaitingMutationApproval.md` | System guidance for the `AwaitingMutationApproval` phase. | `None` |
-| `System-Phase-ChangePlanning.md` | Planning guidance requiring compilable boundaries for every validated step and mutation batch, with required API migrations kept atomic. | `None` |
-| `System-Phase-Compilation.md` | System guidance for the `Compilation` phase. | `None` |
-| `System-Phase-Default.md` | System guidance for the `Default` phase. | `None` |
-| `System-Phase-EvidenceCollection.md` | System guidance for the `EvidenceCollection` phase. | `None` |
-| `System-Phase-MutationProposal.md` | Active-step mutation guidance requiring every batch to preserve compilation, including incomplete steps; replan before breaking edits when required migrations exceed approved scope or hard limits. The host scope's `CanCompleteWithoutChanges` grants no mutation authority. | `None` |
-| `System-Phase-Validation.md` | System guidance for the `Validation` phase. | `None` |
+| `System-ConversationGuidance.md` | Stable inspection/edit guidance, advisory compiler feedback, model-selected builds/tests after compiler repairs, and honest completion. | `None` |
 
 #### `RepositoryInstructions` family
 
@@ -106,16 +100,14 @@ System policy, governed phase instructions, request envelopes, and required-outp
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-RequiredOutput-EvidenceCollection.md` | Required-output guidance for `EvidenceCollection`. | `None` |
-| `System-RequiredOutput-MutationProposal.md` | Mutation proposal fields, host-owned bookkeeping exclusions, and exclusive replan output guidance when advertised. | `None` |
-| `System-RequiredOutput-Plan.md` | Flat plan-content JSON guidance; the host assigns schema version, revision and step IDs. | `None` |
+| `System-ConversationOutput.md` | Ordinary assistant text and advertised tool calls without a phase-specific output protocol. | `None` |
 
 #### `SystemPrompt` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `System-SystemPrompt.md` | Main-agent host authority, planning, skill routing, artifact guidance, and native-tool concept hints. | `None` |
-| `System-RepositoryInspection.md` | Shared parent/child inspection, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
+| `System-SystemPrompt.md` | Main-agent host authority, ordinary inspection/edit workflow, skill routing, artifact guidance, and native-tool concept hints. | `None` |
+| `System-RepositoryInspection.md` | Shared parent/child inspection, scoped reads for local edits and undo, focused precedent searches, semantic-tool selection, evidence reuse, batching, revision applicability, inspection without repository scratch writes, change-focused review procedure, and completion guidance. | `None` |
 | `System-Scratchpad.md` | Conditional main/child guidance for the active session-scoped transient scratchpad. | [`ScratchpadPath`](#placeholder-scratchpadpath) |
 
 #### `ToolInventory` family
@@ -135,9 +127,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
-| `Context-ExecutionOutcome.md` | Historical host execution outcome framed as data. | [`OutcomeJson`](#placeholder-outcomejson) |
-| `Context-IncrementalPlanning.md` | Plans used, soft tranche targets, compilable step and batch boundaries, atomic API migrations, explicit completion, and resumable blockers; no plan-count limit. | [`PlansUsed`](#placeholder-plansused), [`TargetSteps`](#placeholder-targetsteps), [`TargetFiles`](#placeholder-targetfiles) |
-| `Context-Replanning.md` | Carries unfinished-plan investigation, retained applied work/failures, replacement scope, and unavailable completion into ordinary planning. | `None` |
+| `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
 
@@ -173,6 +163,11 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Context-CurrentTurn-HostAuthorizedUserUrl.md` | Host-authorized current-turn URL guidance. | [`Ordinal`](#placeholder-ordinal), [`UserUrlId`](#placeholder-userurlid) |
+
+| `Context-SourceEdit-Feedback.md` | Bounded versioned compiler feedback, repair of introduced errors within the requested scope, explicit incomplete coverage, correction of stale validation claims, and accurate distinction between builds and separate analyzer checks. | [`FeedbackJson`](#placeholder-feedbackjson) |
+| `Context-SourceEdit-MembershipRefresh.md` | Coverage omission for changed membership or non-source input. | `None` |
+| `Context-SourceEdit-NewSourceParseOptions.md` | Default parsing and pending evaluated membership for new source. | `None` |
+| `Context-SourceEdit-OmittedProjectCoverage.md` | Explicit bounded omission of prior edited projects. | [`ProjectCount`](#placeholder-projectcount) |
 
 ### Correction prompts
 
@@ -218,54 +213,9 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-Mutation-ImplementationRequiresTool.md` | Corrective guidance requiring a proposal tool or an advertised exclusive replan request. | `None` |
-| `Correction-Mutation-ExclusiveDecision.md` | Rejects mixed or repeated implementation decisions before staging. | `None` |
-| `Correction-Mutation-ReplanArguments.md` | Requests a single nonempty reason object through existing corrective feedback. | `None` |
-| `Correction-Mutation-PostApplyValidation.md` | Corrective or retry guidance for `Mutation-PostApplyValidation`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
-| `Correction-Mutation-Proposal.md` | Corrective or retry guidance for `Mutation-Proposal`, including bounded untrusted `ReplaceText` mismatch evidence when available. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason), [`RecoveryEvidence`](#placeholder-recoveryevidence) |
 | `Correction-Mutation-RenameSymbolOverlap.md` | Corrective guidance for overlapping semantic and text mutations. | [`RelativePath`](#placeholder-relativepath) |
 | `Correction-Mutation-RenameSymbolSemanticUnavailable.md` | Corrective guidance when semantic rename support is unavailable. | `None` |
 | `Correction-Mutation-ReplaceTextAmbiguousExpectedText.md` | Corrective guidance for ambiguous `ReplaceText` expected text. | [`RelativePath`](#placeholder-relativepath) |
-
-#### `Plan` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Correction-Plan-SanityEvidence.md` | Corrective or retry guidance for `Plan-SanityEvidence`. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
-| `Correction-Plan-SanityStructuredOutput.md` | Revision correction using the same flat plan-content JSON shape. | [`AttemptNumber`](#placeholder-attemptnumber), [`MaximumAttempts`](#placeholder-maximumattempts), [`Reason`](#placeholder-reason) |
-| `Correction-Plan-Schema.md` | Field-specific plan-content correction (`Reason`); no model-authored bookkeeping fields. | [`Reason`](#placeholder-reason) |
-| `Correction-Plan-WrongPhase.md` | Rejects planning decisions outside their advertised availability, including completion of unfinished plans. | `None` |
-
-#### `PlanProposal` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Correction-PlanProposal-ExclusiveToolOutput.md` | Requires propose_plan or complete_objective to be the sole tool-producing output; inspection belongs in an earlier response. | `None` |
-
-#### `PlanSanity` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Correction-PlanSanity-Issue-BarePathAmbiguous.md` | Repair instruction for an ambiguous bare path. | [`Path`](#placeholder-path) |
-| `Correction-PlanSanity-Issue-BarePathResolved.md` | Repair instruction for a uniquely resolved bare path. | [`DeclaredPath`](#placeholder-declaredpath), [`ResolvedPath`](#placeholder-resolvedpath) |
-| `Correction-PlanSanity-Issue-DirectoryExactFiles.md` | Repair instruction for a directory file-intent path. | [`Path`](#placeholder-path) |
-| `Correction-PlanSanity-Issue-EmptyFileIntents.md` | Repair instruction for missing structured file intents. | [`StepTitle`](#placeholder-steptitle) |
-| `Correction-PlanSanity-Issue-EmptyPath.md` | Repair instruction for an empty file-intent path. | `None` |
-| `Correction-PlanSanity-Issue-ForbidsDestination.md` | Repair instruction for a forbidden destination path. | [`IntentKind`](#placeholder-intentkind) |
-| `Correction-PlanSanity-Issue-GlobLikeExactFiles.md` | Repair instruction for a glob-like file-intent path. | [`Path`](#placeholder-path) |
-| `Correction-PlanSanity-Issue-NormalizedPath.md` | Repair instruction for a non-normalized file-intent path. | [`DeclaredPath`](#placeholder-declaredpath), [`NormalizedPath`](#placeholder-normalizedpath) |
-| `Correction-PlanSanity-Issue-RequiresDestination.md` | Repair instruction for a required destination path. | [`IntentKind`](#placeholder-intentkind) |
-
-#### `PreMutation` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Correction-PreMutation-BlockingDiagnostics.md` | Corrective or retry guidance for `PreMutation-BlockingDiagnostics`. | [`DiagnosticItems`](#placeholder-diagnosticitems), [`OmissionItems`](#placeholder-omissionitems) |
-| `Correction-PreMutation-ChangedHunkBlock.md` | Optional changed-hunk block for a pre-mutation diagnostic item. | [`ChangedHunk`](#placeholder-changedhunk) |
-| `Correction-PreMutation-ContainingSymbolBlock.md` | Optional containing-symbol block for a pre-mutation diagnostic item. | [`ContainingSymbol`](#placeholder-containingsymbol) |
-| `Correction-PreMutation-DiagnosticFileFallback.md` | Fallback file label for a pre-mutation diagnostic. | `None` |
-| `Correction-PreMutation-DiagnosticItem.md` | Complete pre-mutation diagnostic item. | [`File`](#placeholder-file), [`Range`](#placeholder-range), [`Code`](#placeholder-code), [`Source`](#placeholder-source), [`Message`](#placeholder-message), [`ContainingSymbolBlock`](#placeholder-containingsymbolblock), [`ChangedHunkBlock`](#placeholder-changedhunkblock) |
-| `Correction-PreMutation-OmissionItem.md` | Complete pre-mutation omission item. | [`Omission`](#placeholder-omission) |
 
 #### `ProviderInvocation` family
 
@@ -322,9 +272,6 @@ Host-authored retry, validation, malformed-output, plan, mutation, and recovery 
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Correction-Validation-Compiler.md` | Corrective or retry guidance for `Validation-Compiler`. | [`Code`](#placeholder-code), [`Location`](#placeholder-location), [`Message`](#placeholder-message) |
-| `Correction-Validation-General.md` | Corrective or retry guidance for `Validation-General`. | [`Reasons`](#placeholder-reasons) |
-| `Correction-Validation-Test.md` | Corrective or retry guidance for `Validation-Test`. | [`ProjectName`](#placeholder-projectname), [`FailedCount`](#placeholder-failedcount) |
 
 ### Tool prompts
 
@@ -514,6 +461,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-delegate_agents-ChildStatus.md` | Joined delegation result block for `ChildStatus`. | [`AssignmentId`](#placeholder-assignmentid), [`Role`](#placeholder-role), [`ToolAccess`](#placeholder-toolaccess), [`Status`](#placeholder-status) |
 | `Tool-delegate_agents-ChildSummary.md` | Joined child response and usage; `Summary` holds full ordinary response text or a legacy child summary. | [`AssignmentId`](#placeholder-assignmentid), [`Summary`](#placeholder-summary), [`ModelTokens`](#placeholder-modeltokens), [`ToolCalls`](#placeholder-toolcalls) |
 | `Tool-delegate_agents-DelegationOmission.md` | Joined delegation result block for `DelegationOmission`. | [`Omission`](#placeholder-omission) |
+| `Tool-edit_source-Description.md` | Ordered source operations through exact authorization and the shared writer; operation scope distinguishes partial edits from file deletion, and undo preserves unrelated changes. Compiler findings do not gate writes; the model must repair introduced errors within the requested scope before finishing or explain a conflict with the request. Missing counts are unknown and incomplete coverage cannot establish clean validation. Builds/tests require explicit tool calls. | `None` |
 | `Tool-delegate_agents-Description.md` | Delegation tool guidance for role selection including concrete Explorer tasks, concurrent assignments, inherited tools with subagent visibility exclusions, explicit read-only access, and shared-workspace coordination. | [`AgentCountDescription`](#placeholder-agentcountdescription) |
 | `Tool-delegate_agents-Disagreement.md` | Joined delegation result block for `Disagreement`. | [`Disagreement`](#placeholder-disagreement) |
 | `Tool-delegate_agents-Finding.md` | Joined delegation result block for `Finding`. | [`AssignmentId`](#placeholder-assignmentid), [`Title`](#placeholder-title), [`Evidence`](#placeholder-evidence), [`Confidence`](#placeholder-confidence); optional: [`FilePathBlock`](#placeholder-filepathblock), [`SymbolBlock`](#placeholder-symbolblock), [`UncertaintyBlock`](#placeholder-uncertaintyblock) |
@@ -537,7 +485,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-dotnet_build-Description.md` | Advertised description for `dotnet_build`. | `None` |
+| `Tool-dotnet_build-Description.md` | Build execution and accurate reporting of configured analyzers versus separately invoked analyzer checks. | `None` |
 
 #### `dotnet_format_check` family
 
@@ -642,25 +590,11 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, and revision-aware collision resolution. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
 | `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
 
-#### `propose_mutations` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Tool-propose_mutations-Description.md` | Active-step mutation guidance requiring compilable batches, atomic required API migrations, and replanning for inadequate scope or hard limits; retains completion hints and host-owned identity/policy boundaries. | `None` |
-| `Tool-request_replan-Description.md` | Exclusive implementation/correction decision returning to the existing evidence/planning/approval cycle without writes or completion. | `None` |
-
-#### `propose_plan` family
-
-| File | What Threadsmith uses it for | Placeholders |
-|---|---|---|
-| `Tool-propose_plan-Description.md` | Advertised plan proposal requiring compilable step and batch boundaries and atomic required API migrations; the host owns version, revision and step identity. | `None` |
-| `Tool-complete_objective-Description.md` | Explicit no-argument completion decision after validated plan execution; questions and blockers remain resumable. | `None` |
-
 #### `read_file` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-read_file-Description.md` | Bounded line reads and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
+| `Tool-read_file-Description.md` | Scoped reads for local edits and undo, whole-file reads when needed, and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
 | `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of historical sanitized evidence explicitly referenced by the current request. | `None` |
 | `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
 
@@ -668,13 +602,13 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-run_process-Description.md` | Process execution guidance and clamped timeout-hint semantics. | [`ShellLanguage`](#placeholder-shelllanguage) |
+| `Tool-run_process-Description.md` | Process execution guidance, clamped timeout-hint semantics, and preservation of unrelated changes when undoing edits or considering whole-file Git restoration. | [`ShellLanguage`](#placeholder-shelllanguage) |
 
 #### `search` family
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-search-Description.md` | Search guidance, concise-query bounds, and clamped `maximumMatches` hint semantics. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
+| `Tool-search-Description.md` | Focused pattern and diagnostic precedent searches, concise-query bounds, and clamped `maximumMatches` hint semantics. | [`MaximumQueryCharacters`](#placeholder-maximumquerycharacters) |
 
 #### `symbol_impact` family
 
@@ -814,27 +748,19 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-callerpluralsuffix"></a>`CallerPluralSuffix` | Grammar suffix selected from the returned caller count. |
 | <a id="placeholder-callsitefile"></a>`CallSiteFile` | Repository-relative file containing a call site. |
 | <a id="placeholder-callsiterange"></a>`CallSiteRange` | Source range containing a call site. |
-| <a id="placeholder-changedhunk"></a>`ChangedHunk` | Sanitized changed-hunk excerpt associated with a pre-mutation diagnostic. |
-| <a id="placeholder-changedhunkblock"></a>`ChangedHunkBlock` | Already-rendered optional changed-hunk block inserted into a diagnostic item. |
 | <a id="placeholder-classifications"></a>`Classifications` | Comma-separated source classifications, currently generated and/or linked. |
-| <a id="placeholder-code"></a>`Code` | Stable diagnostic or validation code shown with a result. |
 | <a id="placeholder-completeness"></a>`Completeness` | Host-computed source completeness state, such as complete, partial, drifted, or omitted. |
-| <a id="placeholder-plansused"></a>`PlansUsed` | Number of approved plan tranches used by the current objective, including interrupted plans. |
 | <a id="placeholder-confidence"></a>`Confidence` | Host- or child-reported confidence attached to a finding or semantic result. |
-| <a id="placeholder-containingsymbol"></a>`ContainingSymbol` | Symbol that contains the reported diagnostic location. |
-| <a id="placeholder-containingsymbolblock"></a>`ContainingSymbolBlock` | Already-rendered optional containing-symbol block inserted into a diagnostic item. |
 | <a id="placeholder-conversationsummary"></a>`ConversationSummary` | Empty compatibility field; retired automatic conversation snapshots are not included. Model-generated active-turn summaries have their own message framing. |
 | <a id="placeholder-count"></a>`Count` | Host-computed count whose specific subject is identified by the surrounding prompt file. |
 | <a id="placeholder-currentturn"></a>`CurrentTurn` | Current untrusted user/turn content placed in the request envelope. |
 | <a id="placeholder-cursor"></a>`Cursor` | Opaque host-issued continuation or retry cursor shown for a bounded follow-up. |
-| <a id="placeholder-declaredpath"></a>`DeclaredPath` | Path exactly as declared before host normalization or resolution. |
 | <a id="placeholder-delegationid"></a>`DelegationId` | Stable identifier for one parent delegation operation. |
 | <a id="placeholder-delivered"></a>`Delivered` | Number of submitted steering messages delivered to child agents. |
 | <a id="placeholder-depth"></a>`Depth` | Traversal or hierarchy depth of the displayed item. |
 | <a id="placeholder-description"></a>`Description` | Description of a tool, capability, mode, or catalog item; tool descriptions may come from built-ins or an imported MCP server and are escaped before insertion. |
 | <a id="placeholder-detail"></a>`Detail` | Bounded explanatory detail for the surrounding result or correction. |
 | <a id="placeholder-detailsjson"></a>`DetailsJson` | Host-serialized sanitized child DTO details: model-selection provenance and implementation proposals in ChildDetails, or advisory reviewer fields such as severity, confidence, title, category, path, line, citations, consequence, and recommendation in ReviewDetails. |
-| <a id="placeholder-diagnosticitems"></a>`DiagnosticItems` | Fully rendered collection of bounded pre-mutation diagnostic rows. |
 | <a id="placeholder-direction"></a>`Direction` | Traversal direction, such as caller-to-callee or reverse. |
 | <a id="placeholder-disagreement"></a>`Disagreement` | One structured disagreement reported across delegated child results. |
 | <a id="placeholder-dispatchkind"></a>`DispatchKind` | Compiler-known call dispatch classification. |
@@ -844,10 +770,8 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-endline"></a>`EndLine` | One-based inclusive ending line for a bounded source range. |
 | <a id="placeholder-evidence"></a>`Evidence` | Bounded evidence text supporting a result or delegated finding. |
 | <a id="placeholder-evidenceset"></a>`EvidenceSet` | Governed evidence collection supplied to the model for the current phase. |
-| <a id="placeholder-failedcount"></a>`FailedCount` | Number of operations, children, or checks that failed in the surrounding summary. |
 | <a id="placeholder-failuresummary"></a>`FailureSummary` | Bounded host-produced summary of a failure. |
 | <a id="placeholder-fieldname"></a>`FieldName` | Name of the invalid or missing structured field being corrected. |
-| <a id="placeholder-file"></a>`File` | Display-safe file name or repository-relative path for a diagnostic. |
 | <a id="placeholder-filecount"></a>`FileCount` | Number of distinct files represented by the result. |
 | <a id="placeholder-filepath"></a>`FilePath` | Repository-relative file path associated with the item. |
 | <a id="placeholder-filepathblock"></a>`FilePathBlock` | Already-rendered optional file-path fragment inserted into a larger item. |
@@ -862,7 +786,6 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-impactitems"></a>`ImpactItems` | Fully rendered set of symbol/project/test impact entries. |
 | <a id="placeholder-implementationpluralsuffix"></a>`ImplementationPluralSuffix` | Grammar suffix selected from the implementation count. |
 | <a id="placeholder-inputjson"></a>`InputJson` | Serialized skill invocation input placed inside the governed procedure request's `skill_input` data block. |
-| <a id="placeholder-intentkind"></a>`IntentKind` | Host-classified kind of plan or mutation intent. |
 | <a id="placeholder-items"></a>`Items` | Fully rendered repeated rows for the surrounding section. |
 | <a id="placeholder-iteration"></a>`Iteration` | Current workflow or model-loop iteration number. |
 | <a id="placeholder-kind"></a>`Kind` | Host-owned classification of the surrounding item. |
@@ -880,7 +803,6 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-maximumtextcharacters"></a>`MaximumTextCharacters` | Current repository memory character limit; refreshed when repository settings change. |
 | <a id="placeholder-maximumfreshnessdays"></a>`MaximumFreshnessDays` | Configured maximum web-search freshness window in days. |
 | <a id="placeholder-maximumquerycharacters"></a>`MaximumQueryCharacters` | Configured maximum characters in the advertised file-search or web-search query. |
-| <a id="placeholder-message"></a>`Message` | Bounded message content for the surrounding item. |
 | <a id="placeholder-modedescription"></a>`ModeDescription` | User-facing explanation of the selected execution or tool mode. |
 | <a id="placeholder-modeltokens"></a>`ModelTokens` | Measured model-token usage for a child or operation. |
 | <a id="placeholder-name"></a>`Name` | Display name of the surrounding capability, server, package, or item. |
@@ -889,29 +811,24 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-newsources"></a>`NewSources` | Number of distinct attributable evidence sources added during the current delegated-child tool round. |
 | <a id="placeholder-nodecount"></a>`NodeCount` | Number of graph or hierarchy nodes represented by the result. |
 | <a id="placeholder-nodeplural"></a>`NodePlural` | Grammar word or suffix selected from the node count. |
-| <a id="placeholder-normalizedpath"></a>`NormalizedPath` | Repository-relative path after host normalization. |
 | <a id="placeholder-objective"></a>`Objective` | Host-approved delegated-child objective. |
 | <a id="placeholder-outcomejson"></a>`OutcomeJson` | Compact, host-serialized sanitized JSON receipt for a terminal execution outcome. Text fields are historical data rather than instructions; reported status remains authoritative when a failed execution lists changed files. |
 | <a id="placeholder-omission"></a>`Omission` | One bounded explanation of evidence or detail not returned. |
-| <a id="placeholder-omissionitems"></a>`OmissionItems` | Fully rendered collection of bounded omission rows. |
 | <a id="placeholder-ordinal"></a>`Ordinal` | One-based position of either a host-authorized URL candidate in current-turn context or a sibling tool request in a batch-preflight correction. |
 | <a id="placeholder-origin"></a>`Origin` | Canonical public HTTPS origin (scheme plus server) of the exact URL awaiting direct-fetch authorization. |
 | <a id="placeholder-originfile"></a>`OriginFile` | Repository-relative source file from which an associated artifact was inferred. |
 | <a id="placeholder-packagedigest"></a>`PackageDigest` | Digest that pins the exact skill or package content. |
 | <a id="placeholder-packageid"></a>`PackageId` | Stable skill or package identifier. |
 | <a id="placeholder-packageversion"></a>`PackageVersion` | Resolved skill or package version. |
-| <a id="placeholder-path"></a>`Path` | Plan-sanity files use the relevant repository path; direct-fetch authorization uses the escaped, redacted URL path without query values or a fragment. |
-| <a id="placeholder-phaseinstructions"></a>`PhaseInstructions` | System instructions selected for the current governed phase. |
+| <a id="placeholder-path"></a>`Path` | Direct-fetch authorization uses the escaped, redacted URL path without query values or a fragment. |
+| <a id="placeholder-conversationinstructions"></a>`ConversationInstructions` | Stable conversation instructions shared by ordinary inspection and source editing. |
 | <a id="placeholder-plural"></a>`Plural` | Grammar word or suffix selected from the adjacent count. |
 | <a id="placeholder-pluralsuffix"></a>`PluralSuffix` | Usually an empty string or s selected from the adjacent count. |
-| <a id="placeholder-projectname"></a>`ProjectName` | Project associated with a semantic result or source item. |
 | <a id="placeholder-projectpluralsuffix"></a>`ProjectPluralSuffix` | Grammar suffix selected from the project count. |
+| <a id="placeholder-projectcount"></a>`ProjectCount` | Number of prior edited projects omitted from bounded source-edit coverage. |
 | <a id="placeholder-proof"></a>`Proof` | Compiler-derived proof or explanation for a call-flow edge. |
-| <a id="placeholder-range"></a>`Range` | Display-safe source range, including code-owned punctuation where applicable. |
 | <a id="placeholder-reason"></a>`Reason` | Bounded explanation for the surrounding outcome, omission, or correction. |
-| <a id="placeholder-reasons"></a>`Reasons` | Fully rendered or joined explanations for the surrounding outcome. |
 | <a id="placeholder-recentturns"></a>`RecentTurns` | Bounded recent conversation turns retained verbatim in the request. |
-| <a id="placeholder-recoveryevidence"></a>`RecoveryEvidence` | JSON-encoded, bounded, untrusted baseline evidence for a recoverable mutation mismatch, or `null` when none is available. |
 | <a id="placeholder-rejectedquery"></a>`RejectedQuery` | Bounded query text that the host rejected. |
 | <a id="placeholder-relationship"></a>`Relationship` | Relationship between an artifact/symbol and its origin. |
 | <a id="placeholder-relationshipcount"></a>`RelationshipCount` | Number of relationships represented by the result. |
@@ -919,8 +836,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-relativepath"></a>`RelativePath` | Repository-relative path after confinement and normalization. |
 | <a id="placeholder-repositoryinstructions"></a>`RepositoryInstructions` | Repository instruction bundle supplied below host policy. |
 | <a id="placeholder-repositorymemory"></a>`RepositoryMemory` | Bounded explicit repository-memory reference blocks containing only stable IDs and escaped text; usage, scores, timestamps, and provenance remain in diagnostics. |
-| <a id="placeholder-requiredoutput"></a>`RequiredOutput` | Phase-specific output contract supplied to the model. |
-| <a id="placeholder-resolvedpath"></a>`ResolvedPath` | Concrete repository-relative path produced by host resolution. |
+| <a id="placeholder-requiredoutput"></a>`RequiredOutput` | Stable ordinary conversation output guidance supplied to the model. |
 | <a id="placeholder-retrievedmemory"></a>`RetrievedMemory` | Empty compatibility field; retired automatic conversation-memory retrieval is not used. |
 | <a id="placeholder-returnedcallers"></a>`ReturnedCallers` | Number of caller entries actually returned after bounds. |
 | <a id="placeholder-returnedimplementations"></a>`ReturnedImplementations` | Number of implementation entries actually returned after bounds. |
@@ -935,13 +851,11 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-shellexecutable"></a>`ShellExecutable` | Resolved shell program used by run_process. |
 | <a id="placeholder-shelllanguage"></a>`ShellLanguage` | Shell language whose command rules are being described. |
 | <a id="placeholder-skillassets"></a>`SkillAssets` | Bounded skill asset content selected for the current workflow step. |
-| <a id="placeholder-source"></a>`Source` | Originating diagnostic, evidence, semantic, or tool source. |
 | <a id="placeholder-sourcerange"></a>`SourceRange` | Source range represented by a code or evidence block. |
 | <a id="placeholder-startline"></a>`StartLine` | One-based starting line for a bounded source range or continuation. |
 | <a id="placeholder-status"></a>`Status` | Host-owned status of the surrounding operation, child, result, or capability. |
 | <a id="placeholder-stepid"></a>`StepId` | Stable identifier of the current plan or skill workflow step. |
 | <a id="placeholder-stepkind"></a>`StepKind` | Host-owned classification of the current workflow step. |
-| <a id="placeholder-steptitle"></a>`StepTitle` | Display title of the current plan or workflow step. |
 | <a id="placeholder-submitted"></a>`Submitted` | Number of steering messages submitted for a delegation. |
 | <a id="placeholder-submittedat"></a>`SubmittedAt` | Timestamp at which steering or task input was submitted. |
 | <a id="placeholder-suggestedcall"></a>`SuggestedCall` | Host-produced example tool invocation for recovery. |
@@ -962,8 +876,6 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-task"></a>`Task` | Current user task or one delegated-child task statement. |
 | <a id="placeholder-tasks"></a>`Tasks` | Fully rendered list of delegated-child questions or task statements. |
 | <a id="placeholder-taskstate"></a>`TaskState` | Host-owned state describing the current task lifecycle. |
-| <a id="placeholder-targetfiles"></a>`TargetFiles` | Configured soft preferred maximum distinct affected paths in one plan tranche. |
-| <a id="placeholder-targetsteps"></a>`TargetSteps` | Configured soft preferred maximum steps in one plan tranche. |
 | <a id="placeholder-testpluralsuffix"></a>`TestPluralSuffix` | Grammar suffix selected from the test count. |
 | <a id="placeholder-text"></a>`Text` | Bounded text payload identified by the surrounding prompt. |
 | <a id="placeholder-title"></a>`Title` | Display title of the surrounding finding, step, or result. |
@@ -990,6 +902,8 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-userurlid"></a>`UserUrlId` | Host-issued identifier for a user-authorized URL. |
 | <a id="placeholder-version"></a>`Version` | Schema, wrapper, package, or protocol version identified by the surrounding prompt. |
 | <a id="placeholder-workspacefilename"></a>`WorkspaceFileName` | Display name of the current workspace or repository file. |
+
+| <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with status, generation, coverage, diagnostics and omissions; pending, obsolete, or unmeasured error counts are omitted. |
 
 ## Related references
 

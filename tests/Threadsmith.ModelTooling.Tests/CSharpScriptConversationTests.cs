@@ -24,7 +24,7 @@ public static class CSharpScriptConversationTests
     [InlineData(true, RepositoryTrustLevel.TrustedMutation, "none", false)]
     [InlineData(true, RepositoryTrustLevel.FullyTrustedAutomation, "deny", false)]
     [InlineData(true, RepositoryTrustLevel.FullyTrustedAutomation, "allow-other", false)]
-    [InlineData(true, RepositoryTrustLevel.FullyTrustedAutomation, "approval", false)]
+    [InlineData(true, RepositoryTrustLevel.FullyTrustedAutomation, "approval", true)]
     [InlineData(true, RepositoryTrustLevel.FullyTrustedAutomation, "deny-all", false)]
     public static async Task CSharpScript_Conversation_RespectsGatesAndReturnsWorkerResult(
         bool enabled,
@@ -129,6 +129,12 @@ public static class CSharpScriptConversationTests
             var started = Assert.Single(observed.OfType<ToolInvocationStarted>());
             Assert.Equal("csharp_script", started.ToolName);
             var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
+            if (policy == "approval")
+            {
+                Assert.False(completed.Succeeded);
+                return;
+            }
+
             Assert.True(completed.Succeeded, completed.Error);
             Assert.NotNull(completed.ResultJson);
             var output = JsonSerializer.Deserialize<CSharpScriptOutput>(completed.ResultJson);

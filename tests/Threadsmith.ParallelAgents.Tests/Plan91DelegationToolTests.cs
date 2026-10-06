@@ -234,7 +234,7 @@ public sealed class Plan91DelegationToolTests
                 "run_process",
                 ToolCategory.ProcessExecution,
                 ToolSideEffect.ExecutesCode,
-                conversationAvailable: true),
+                requiredApproval: ApprovalLevel.None),
             new MetadataTool("web_search", ToolCategory.ExternalSearch, ToolSideEffect.ReadOnly),
             new MetadataTool(
                 "jira",
@@ -1039,7 +1039,6 @@ public sealed class Plan91DelegationToolTests
             string id,
             ToolCategory category,
             ToolSideEffect sideEffect,
-            bool conversationAvailable = false,
             ApprovalLevel requiredApproval = ApprovalLevel.None,
             bool subagentAvailable = true,
             bool readOnlySubagentNetworkAvailable = false,
@@ -1061,7 +1060,6 @@ public sealed class Plan91DelegationToolTests
                 SupportsCancellation = true,
                 Timeout = TimeSpan.FromSeconds(1),
                 MaximumOutputBytes = 1_024,
-                ConversationAvailable = conversationAvailable,
                 SubagentAvailable = subagentAvailable,
                 ReadOnlySubagentNetworkAvailable = readOnlySubagentNetworkAvailable,
             };

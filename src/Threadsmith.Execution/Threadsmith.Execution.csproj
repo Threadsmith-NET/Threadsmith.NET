@@ -19,6 +19,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.ParallelAgents.Tests" />
     <InternalsVisibleTo Include="Threadsmith.Planning.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Mutations.Tests" />
   </ItemGroup>
 
 </Project>

@@ -951,7 +951,7 @@ public sealed class Plan50OpenAiCodexTests
     public async Task Provider_IncompleteResponse_IsTransientWithoutReplayingPartialOutput(bool transportThrows)
     {
         const string partial = "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"partial proposal\"}\n\n"
-            + "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"propose_mutations\",\"arguments\":\"{}\"}}\n\n";
+            + "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"inspect_file\",\"arguments\":\"{}\"}}\n\n";
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = transportThrows

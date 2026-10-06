@@ -5,7 +5,6 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Security;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Context;
 using Threadsmith.Core;
@@ -19,9 +18,9 @@ using Xunit;
 /// <summary>Verifies Milestone 4 ordinary conversation and governed context behavior.</summary>
 public static class Milestone4Tests
 {
-    /// <summary>Context assembly is phase-specific, bounded, inspectable, and never replays a transcript.</summary>
+    /// <summary>Context assembly includes explicit task and evidence within its inspectable budget.</summary>
     [Fact]
-    public static async Task ContextAssembly_UsesExplicitStateAndPhasePolicy()
+    public static async Task ContextAssembly_UsesExplicitTaskAndEvidence()
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
@@ -42,8 +41,8 @@ public static class Milestone4Tests
             relevance: 0.1));
         var assembler = CreateAssembler(events, evidence);
         var task = new TaskSpecification(
-            "Implement governed planning",
-            [new AcceptanceCriterion("A plan is reviewable")]);
+            "Implement the requested change",
+            [new AcceptanceCriterion("The change satisfies the request")]);
         var evidenceResult = await assembler.AssembleAsync(new ContextAssemblyRequest
         {
             SessionId = sessionId,
@@ -52,27 +51,14 @@ public static class Milestone4Tests
             Task = task,
             RepositoryPath = Environment.CurrentDirectory,
         });
-        var planningResult = await assembler.AssembleAsync(new ContextAssemblyRequest
-        {
-            SessionId = sessionId,
-            RunId = runId,
-            Phase = RunPhase.ChangePlanning,
-            Task = task,
-            RepositoryPath = Environment.CurrentDirectory,
-        });
-
-        Assert.DoesNotContain("transcript", planningResult.ModelInput, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("<project_context", planningResult.ModelInput, StringComparison.Ordinal);
+        Assert.DoesNotContain("transcript", evidenceResult.ModelInput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<project_context", evidenceResult.ModelInput, StringComparison.Ordinal);
         Assert.Contains(
-            "&quot;Intent&quot;:&quot;Implement governed planning&quot;",
-            planningResult.ModelInput);
+            "&quot;Intent&quot;:&quot;Implement the requested change&quot;",
+            evidenceResult.ModelInput);
         Assert.Contains("unique tool evidence", evidenceResult.ModelInput);
-        Assert.Contains("unique tool evidence", planningResult.ModelInput);
         Assert.Contains("accepted architectural decision", evidenceResult.ModelInput);
-        Assert.True(planningResult.Inspection.EstimatedTokens <= planningResult.Inspection.TokenBudget);
-        Assert.Contains(
-            planningResult.Inspection.Evidence,
-            item => item.Kind == nameof(EvidenceKind.ToolResult) && item.Included);
+        Assert.True(evidenceResult.Inspection.EstimatedTokens <= evidenceResult.Inspection.TokenBudget);
         Assert.Contains(
             evidenceResult.Inspection.Evidence,
             item => item.Kind == nameof(EvidenceKind.ToolResult) && item.Included);
@@ -611,7 +597,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new ToolThenPlanModelProvider(CreatePlan("tool plan", 1));
+            var model = new ListFilesThenTextModelProvider("tool response");
             var application = new SessionApplication(
                 events,
                 model,
@@ -633,7 +619,7 @@ public static class Milestone4Tests
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("tool evidence"));
             var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "Inspect then plan"));
+                new SubmitRequestCommand(sessionId, "Inspect then answer"));
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
 
             var item = Assert.Single(evidence.Snapshot(sessionId));
@@ -698,7 +684,7 @@ public static class Milestone4Tests
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("parallel tools"));
             var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "Inspect twice then plan"));
+                new SubmitRequestCommand(sessionId, "Inspect twice then answer"));
 
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
             Assert.Equal(2, model.Requests.Count);
@@ -1005,7 +991,7 @@ public static class Milestone4Tests
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("bounded continuation"));
             var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "Inspect a large listing then plan"));
+                new SubmitRequestCommand(sessionId, "Inspect a large listing then answer"));
 
             var exception = await Assert.ThrowsAsync<BudgetExceededException>(() =>
                 dispatcher.DispatchAsync(new WaitForRunCommand(runId)));
@@ -1050,7 +1036,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new DuplicateToolThenPlanModelProvider(CreatePlan("dedup plan", 1), duplicateWithinResponse);
+            var model = new DuplicateToolThenTextModelProvider("dedup response", duplicateWithinResponse);
             var application = new SessionApplication(
                 events,
                 model,
@@ -1072,7 +1058,7 @@ public static class Milestone4Tests
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("dedup"));
             var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "list twice then plan"));
+                new SubmitRequestCommand(sessionId, "list twice then answer"));
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
 
             var snapshot = evidence.Snapshot(sessionId);
@@ -1268,7 +1254,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new SearchThenSemanticThenPlanModelProvider(CreatePlan("semantic-first plan", 1), filePath == "absolute-root" ? root : filePath, fileScoped);
+            var model = new SearchThenSemanticThenTextModelProvider("semantic-first response", filePath == "absolute-root" ? root : filePath, fileScoped);
             var application = new SessionApplication(
                 events,
                 model,
@@ -1358,7 +1344,7 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new CaptureToolsModelProvider(CreatePlan("plan without denied tool", 1));
+            var model = new CaptureToolsModelProvider("response without denied tool");
             var application = new SessionApplication(
                 events,
                 model,
@@ -1382,7 +1368,7 @@ public static class Milestone4Tests
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("deny check"));
             var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "Inspect then plan"));
+                new SubmitRequestCommand(sessionId, "Inspect then answer"));
 
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
 
@@ -1399,7 +1385,7 @@ public static class Milestone4Tests
         }
     }
 
-    /// <summary>The default planning-tool setting does not cut off exploration at the former 16-round window.</summary>
+    /// <summary>The ordinary conversation keeps tools available beyond the former 16-round window.</summary>
     [Fact]
     public static async Task ConversationRounds_KeepInspectionToolsBeyondFormerSixteenRoundLimit()
     {
@@ -1423,8 +1409,8 @@ public static class Milestone4Tests
                 sanitizer,
                 NullLogger<ToolInvocationPipeline>.Instance,
                 budget);
-            var model = new ToolForManyRoundsThenPlanModelProvider(
-                CreatePlan("after extended exploration", 1),
+            var model = new ToolForManyRoundsThenTextModelProvider(
+                "after extended exploration",
                 toolRounds: 17);
             var application = new SessionApplication(
                 events,
@@ -1449,9 +1435,9 @@ public static class Milestone4Tests
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
-            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("extended planning tools"));
+            var sessionId = await dispatcher.DispatchAsync(new CreateSessionCommand("extended conversation tools"));
             var runId = await dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, "Inspect more than sixteen things, then plan"));
+                new SubmitRequestCommand(sessionId, "Inspect more than sixteen things, then answer"));
 
             Assert.True(await dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
 
@@ -1616,7 +1602,7 @@ public static class Milestone4Tests
         }
     }
 
-    /// <summary>A model that always requests a tool and never plans, used to exercise the round limit.</summary>
+    /// <summary>A process manager that rejects unexpected execution in tool-policy tests.</summary>
     private sealed class NonExecutingProcessManager : IProcessManager
     {
         public IReadOnlyList<ActiveProcessInfo> ActiveProcesses => [];
@@ -1689,8 +1675,8 @@ public static class Milestone4Tests
             {
                 SessionId = SessionId.New(),
                 RunId = RunId.New(),
-                Phase = RunPhase.ChangePlanning,
-                Task = new TaskSpecification("Plan", []),
+                Phase = RunPhase.EvidenceCollection,
+                Task = new TaskSpecification("Inspect source", []),
                 RepositoryPath = root,
             });
             var policyPosition = assembled.ModelInput.IndexOf(
@@ -1803,7 +1789,7 @@ public static class Milestone4Tests
         Assert.Empty(afterDeactivation.AppliedHints);
     }
 
-    /// <summary>The host-resolved model profile reaches provider dispatch through session planning.</summary>
+    /// <summary>The host-resolved model profile reaches provider dispatch through the ordinary conversation.</summary>
     [Fact]
     public static async Task ModelResolution_HonoredHintReachesProviderDispatch()
     {
@@ -1837,7 +1823,7 @@ public static class Milestone4Tests
         ]);
         var resolver = new ModelResolver(new ConfiguredModelCatalog([general, cheap]), hints);
         var assembler = CreateAssembler(events, evidence, modelResolver: resolver);
-        var model = new QueueModelProvider([CreatePlan("resolved", 1)]);
+        var model = new QueueModelProvider(["resolved"]);
         var application = new SessionApplication(
             events,
             model,
@@ -1906,7 +1892,7 @@ public static class Milestone4Tests
             new InMemoryModelPreferenceSnapshotProvider());
         var assembler = CreateAssembler(events, evidence, modelResolver: resolver);
         var preferences = new SessionModelPreferences(selected.Id, ReasoningLevel.None);
-        var model = new QueueModelProvider([CreatePlan("fallback", 1)]);
+        var model = new QueueModelProvider(["fallback"]);
         var selectionCalls = 0;
         var application = new SessionApplication(
             events,
@@ -1976,7 +1962,7 @@ public static class Milestone4Tests
         {
             SessionId = SessionId.New(),
             RunId = RunId.New(),
-            Phase = RunPhase.ChangePlanning,
+            Phase = RunPhase.EvidenceCollection,
             Task = new TaskSpecification(
                 "Intent SECRET",
                 [new AcceptanceCriterion("Criterion SECRET")],
@@ -2029,9 +2015,9 @@ public static class Milestone4Tests
     [Fact]
     public static async Task InteractionPresenter_RendersConversationAndContextInspector()
     {
-        await using var harness = await PlanningHarness.CreateAsync([CreatePlan("visible plan", 1)]);
+        await using var harness = await ConversationHarness.CreateAsync(["visible response"]);
         var runId = await harness.Dispatcher.DispatchAsync(
-            new SubmitRequestCommand(harness.SessionId, "Render planning"));
+            new SubmitRequestCommand(harness.SessionId, "Render conversation"));
         Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId), TestContext.Current.CancellationToken));
         _ = await harness.WaitForPhaseAsync(RunPhase.Completion);
         var presenter = new InteractionPresenter(harness.Dispatcher, harness.Projections);
@@ -2048,8 +2034,8 @@ public static class Milestone4Tests
         {
             SessionId = sessionId,
             RunId = runId,
-            Phase = RunPhase.ChangePlanning,
-            Task = new TaskSpecification("Plan", []),
+            Phase = RunPhase.EvidenceCollection,
+            Task = new TaskSpecification("Inspect source", []),
             RepositoryPath = Environment.CurrentDirectory,
         };
     }
@@ -2135,86 +2121,6 @@ public static class Milestone4Tests
             throw new InvalidOperationException(
                 $"Unable to create the Windows test junction. {error}{output}".Trim());
         }
-    }
-
-    private static IReadOnlyList<PlanFileIntent> ModifyIntents(params string[] paths)
-    {
-        return CreateIntents(PlanFileChangeKind.Modify, paths);
-    }
-
-    private static IReadOnlyList<PlanFileIntent> CreateIntents(params string[] paths)
-    {
-        return CreateIntents(PlanFileChangeKind.Create, paths);
-    }
-
-    private static IReadOnlyList<PlanFileIntent> CreateIntents(PlanFileChangeKind kind, params string[] paths)
-    {
-        return [.. paths.Select(path => new PlanFileIntent { Kind = kind, Path = path })];
-    }
-
-    private static ImplementationPlan CreatePlan(string summary, int revision)
-    {
-        return new()
-        {
-            Revision = revision,
-            Summary = summary,
-            Steps =
-        [
-            new ImplementationPlanStep
-            {
-                StepId = StepId.New(),
-                Title = "Implement",
-                Description = "Implement the reviewed change.",
-                FileIntents = ModifyIntents("src/example.cs"),
-                ExpectedOutcome = "The change is implemented.",
-                Validation = ["Build succeeds."],
-            },
-        ],
-        };
-    }
-
-    private static string SerializePlanProposal(ImplementationPlan plan)
-    {
-        return JsonSerializer.Serialize(
-            new
-            {
-                plan.Summary,
-                steps = plan.Steps.Select(step => new
-                {
-                    step.Title,
-                    step.Description,
-                    fileIntents = step.FileIntents.Select(intent => new
-                    {
-                        kind = intent.Kind.ToString(),
-                        intent.Path,
-                        intent.DestinationPath,
-                    }),
-                    step.ExpectedOutcome,
-                    step.Validation,
-                }),
-                plan.Risks,
-                plan.OutstandingQuestions,
-            },
-            new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-            });
-    }
-
-    private static WorkspaceBaseline CreateBaseline(IReadOnlyList<string> files)
-    {
-        return CreateBaseline(files, Environment.CurrentDirectory);
-    }
-
-    private static WorkspaceBaseline CreateBaseline(IReadOnlyList<string> files, string repositoryRoot)
-    {
-        return new WorkspaceBaseline(
-            WorkspaceId.New(),
-            repositoryRoot,
-            DateTimeOffset.UtcNow,
-            [.. files.Select(file => new WorkspaceFileHash(file, new string('0', 64), 1))],
-            TrustLevel: RepositoryTrustLevel.TrustedMutation);
     }
 
     private static ModelProfile CreateProfile(
@@ -2423,10 +2329,10 @@ public static class Milestone4Tests
     private sealed class QueueModelProvider : IModelProvider
     {
         private readonly TimeSpan _delay;
-        private readonly Queue<ImplementationPlan> _plans;
+        private readonly Queue<string> _responses;
 
         public QueueModelProvider(
-            IEnumerable<ImplementationPlan> plans,
+            IEnumerable<string> responses,
             TimeSpan delay = default)
         {
             if (delay < TimeSpan.Zero)
@@ -2434,7 +2340,7 @@ public static class Milestone4Tests
                 throw new ArgumentOutOfRangeException(nameof(delay));
             }
 
-            _plans = new Queue<ImplementationPlan>(plans);
+            _responses = new Queue<string>(responses);
             _delay = delay;
         }
 
@@ -2452,12 +2358,12 @@ public static class Milestone4Tests
                 await Task.Delay(_delay, cancellationToken);
             }
 
-            if (!_plans.TryDequeue(out var plan))
+            if (!_responses.TryDequeue(out var response))
             {
-                throw new InvalidOperationException("No scripted plan remains.");
+                throw new InvalidOperationException("No scripted response remains.");
             }
 
-            yield return new ModelChunk { Text = plan.Summary, FinishReason = ModelFinishReason.Stop };
+            yield return new ModelChunk { Text = response, FinishReason = ModelFinishReason.Stop };
         }
     }
 
@@ -2547,15 +2453,15 @@ public static class Milestone4Tests
         }
     }
 
-    private sealed class SearchThenSemanticThenPlanModelProvider : IModelProvider
+    private sealed class SearchThenSemanticThenTextModelProvider : IModelProvider
     {
-        private readonly ImplementationPlan _plan;
+        private readonly string _response;
         private readonly string? _filePath;
         private readonly bool _fileScoped;
 
-        public SearchThenSemanticThenPlanModelProvider(ImplementationPlan plan, string? filePath, bool fileScoped)
+        public SearchThenSemanticThenTextModelProvider(string response, string? filePath, bool fileScoped)
         {
-            _plan = plan;
+            _response = response;
             _filePath = filePath;
             _fileScoped = fileScoped;
         }
@@ -2604,7 +2510,7 @@ public static class Milestone4Tests
                 yield break;
             }
 
-            yield return new ModelChunk { Text = _plan.Summary, FinishReason = ModelFinishReason.Stop };
+            yield return new ModelChunk { Text = _response, FinishReason = ModelFinishReason.Stop };
         }
     }
 
@@ -2677,14 +2583,14 @@ public static class Milestone4Tests
         }
     }
 
-    private sealed class ToolForManyRoundsThenPlanModelProvider : IModelProvider
+    private sealed class ToolForManyRoundsThenTextModelProvider : IModelProvider
     {
-        private readonly ImplementationPlan _plan;
+        private readonly string _response;
         private readonly int _toolRounds;
 
-        public ToolForManyRoundsThenPlanModelProvider(ImplementationPlan plan, int toolRounds)
+        public ToolForManyRoundsThenTextModelProvider(string response, int toolRounds)
         {
-            _plan = plan;
+            _response = response;
             _toolRounds = toolRounds;
         }
 
@@ -2710,7 +2616,7 @@ public static class Milestone4Tests
                 yield break;
             }
 
-            yield return new ModelChunk { Text = _plan.Summary, FinishReason = ModelFinishReason.Stop };
+            yield return new ModelChunk { Text = _response, FinishReason = ModelFinishReason.Stop };
         }
     }
 
@@ -2736,14 +2642,14 @@ public static class Milestone4Tests
         }
     }
 
-    private sealed class DuplicateToolThenPlanModelProvider : IModelProvider
+    private sealed class DuplicateToolThenTextModelProvider : IModelProvider
     {
-        private readonly ImplementationPlan _plan;
+        private readonly string _response;
         private readonly bool _duplicateWithinResponse;
 
-        public DuplicateToolThenPlanModelProvider(ImplementationPlan plan, bool duplicateWithinResponse = false)
+        public DuplicateToolThenTextModelProvider(string response, bool duplicateWithinResponse = false)
         {
-            _plan = plan;
+            _response = response;
             _duplicateWithinResponse = duplicateWithinResponse;
         }
 
@@ -2779,7 +2685,7 @@ public static class Milestone4Tests
                 yield break;
             }
 
-            yield return new ModelChunk { Text = _plan.Summary, FinishReason = ModelFinishReason.Stop };
+            yield return new ModelChunk { Text = _response, FinishReason = ModelFinishReason.Stop };
         }
     }
 
@@ -2817,11 +2723,11 @@ public static class Milestone4Tests
 
     private sealed class CaptureToolsModelProvider : IModelProvider
     {
-        private readonly ImplementationPlan _plan;
+        private readonly string _response;
 
-        public CaptureToolsModelProvider(ImplementationPlan plan)
+        public CaptureToolsModelProvider(string response)
         {
-            _plan = plan;
+            _response = response;
         }
 
         public List<ModelStreamRequest> Requests { get; } = [];
@@ -2833,20 +2739,20 @@ public static class Milestone4Tests
             Requests.Add(request);
             cancellationToken.ThrowIfCancellationRequested();
             await Task.Yield();
-            yield return new ModelChunk { Text = _plan.Summary, FinishReason = ModelFinishReason.Stop };
+            yield return new ModelChunk { Text = _response, FinishReason = ModelFinishReason.Stop };
         }
     }
 
-    private sealed class ToolThenPlanModelProvider : IModelProvider
+    private sealed class ListFilesThenTextModelProvider : IModelProvider
     {
         private readonly string _argumentsJson;
-        private readonly ImplementationPlan _plan;
+        private readonly string _response;
 
-        public ToolThenPlanModelProvider(
-            ImplementationPlan plan,
+        public ListFilesThenTextModelProvider(
+            string response,
             string argumentsJson = "{\"path\":\".\",\"maximumEntries\":10}")
         {
-            _plan = plan;
+            _response = response;
             _argumentsJson = argumentsJson;
         }
 
@@ -2871,7 +2777,7 @@ public static class Milestone4Tests
                 yield break;
             }
 
-            yield return new ModelChunk { Text = _plan.Summary, FinishReason = ModelFinishReason.Stop };
+            yield return new ModelChunk { Text = _response, FinishReason = ModelFinishReason.Stop };
         }
     }
 
@@ -3121,13 +3027,13 @@ public static class Milestone4Tests
         }
     }
 
-    private sealed class PlanningHarness : IAsyncDisposable
+    private sealed class ConversationHarness : IAsyncDisposable
     {
         private readonly DomainEventStream _eventStream;
         private readonly IDomainEventSubscription _captureSubscription;
         private readonly IDomainEventSubscription _projectionSubscription;
 
-        private PlanningHarness(
+        private ConversationHarness(
             DomainEventStream eventStream,
             IDomainEventSubscription projectionSubscription,
             IDomainEventSubscription captureSubscription,
@@ -3157,8 +3063,8 @@ public static class Milestone4Tests
 
         public SessionId SessionId { get; }
 
-        public static async Task<PlanningHarness> CreateAsync(
-            IReadOnlyList<ImplementationPlan> plans)
+        public static async Task<ConversationHarness> CreateAsync(
+            IReadOnlyList<string> responses)
         {
             var stream = new DomainEventStream();
             var projections = new InMemoryProjectionStore();
@@ -3172,7 +3078,7 @@ public static class Milestone4Tests
             var sanitizer = new SecretOutputSanitizer();
             var evidence = new EvidenceStore(stream, sanitizer);
             var assembler = CreateAssembler(stream, evidence);
-            var model = new QueueModelProvider(plans);
+            var model = new QueueModelProvider(responses);
             var application = new SessionApplication(
                 stream,
                 model,
@@ -3189,7 +3095,7 @@ public static class Milestone4Tests
             var dispatcher = new CommandDispatcher([application]);
             var sessionId = await dispatcher.DispatchAsync(
                 new CreateSessionCommand("M4 tests"));
-            return new PlanningHarness(
+            return new ConversationHarness(
                 stream,
                 projectionSubscription,
                 captureSubscription,

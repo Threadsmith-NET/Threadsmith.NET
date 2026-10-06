@@ -146,20 +146,16 @@ public static class Plan113ActiveTurnSourceProjectionTests
             Assert.True(inspection.SummaryAvoidedBySourceProjection);
             Assert.Equal(1, inspection.SourceRemovedRangeCount);
             Assert.Equal(36_615, inspection.SourceReclaimedCharacters);
-            // Exact ordinary-conversation envelope including model-selected validation guidance.
-            Assert.Equal(21_602, inspection.BeforeInputTokens);
-            Assert.Equal(12_539, inspection.AfterInputTokens);
-            Assert.Equal(2_582, model.Requests[0].WireEstimate?.WireInputTokens);
-            Assert.Equal(12_069, model.Requests[1].WireEstimate?.WireInputTokens);
-            Assert.Equal(12_539, projectedRequest.WireEstimate?.WireInputTokens);
+            // Prompt wording and advertised schemas may grow; the source reduction must still
+            // reclaim the fixture's payload and account for the complete dispatched request.
+            Assert.True(inspection.BeforeInputTokens - inspection.AfterInputTokens > 9_000);
+            Assert.Equal(inspection.AfterInputTokens, projectedRequest.WireEstimate?.WireInputTokens);
+            Assert.True(model.Requests[1].WireEstimate?.WireInputTokens > model.Requests[0].WireEstimate?.WireInputTokens);
+            var unreducedTotal = model.Requests.Take(2).Sum(request => request.WireEstimate?.WireInputTokens)
+                + inspection.BeforeInputTokens;
             Assert.Equal(
-                36_253,
-                model.Requests[0].WireEstimate?.WireInputTokens
-                    + model.Requests[1].WireEstimate?.WireInputTokens
-                    + inspection.BeforeInputTokens);
-            Assert.Equal(
-                27_190,
-                model.Requests.Sum(request => request.WireEstimate?.WireInputTokens));
+                inspection.BeforeInputTokens - inspection.AfterInputTokens,
+                unreducedTotal - model.Requests.Sum(request => request.WireEstimate?.WireInputTokens));
             Assert.Equal(0, summaryProvider.PrepareCalls);
             Assert.Collection(
                 activityEvents,

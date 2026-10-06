@@ -288,7 +288,11 @@ public sealed class SourceEditApplication :
             return null;
         }
 
-        await using var lease = await _workspaces.AcquireEditLeaseAsync(owner.WorkspaceId, cancellationToken);
+        // A cancelled run must not wait behind another run's pending exact approval.
+        // Its durable receipts remain authoritative; current-disk evidence requires the lease.
+        var reconcileDisk = status != ExecutionCheckpointPhase.Cancelled;
+        await using var lease = reconcileDisk
+            ? await _workspaces.AcquireEditLeaseAsync(owner.WorkspaceId, cancellationToken) : null;
         var workspace = _workspaces.GetWorkspace(owner.WorkspaceId);
         var comparer = RepositoryPathPolicy.GetPathComparer(workspace.Isolation.RepositoryPath);
         var originals = new Dictionary<string, ExecutionArtifactReference?>(comparer);
@@ -352,9 +356,14 @@ public sealed class SourceEditApplication :
             }
         }
 
-        var matches = true;
+        var matches = reconcileDisk;
         foreach (var chunk in finalEndpoints.Values.Chunk(checked(_workspaceLimits.MaximumMutations * 2)))
         {
+            if (!reconcileDisk)
+            {
+                break;
+            }
+
             var reconciliation = await workspace.ReconcileEffectAsync(new(lastMutation, [], chunk), cancellationToken);
 
             // Equal pre/post bytes are ambiguous for interrupted-write recovery, but prove the final state.
@@ -367,11 +376,15 @@ public sealed class SourceEditApplication :
             }
         }
 
-        var baselineHashes = workspace.Baseline.Files.ToDictionary(file => file.RelativePath, file => file.Sha256, comparer);
-        var baselineMatches = finalEndpoints.Values.All(endpoint => string.Equals(endpoint.AfterSha256, baselineHashes.GetValueOrDefault(endpoint.RelativePath), StringComparison.OrdinalIgnoreCase));
+        var baselineHashes = reconcileDisk ? workspace.Baseline.Files.ToDictionary(file => file.RelativePath, file => file.Sha256, comparer) : null;
+        var baselineMatches = baselineHashes is not null && finalEndpoints.Values.All(endpoint => string.Equals(endpoint.AfterSha256, baselineHashes.GetValueOrDefault(endpoint.RelativePath), StringComparison.OrdinalIgnoreCase));
         var diff = matches && continuous && baselineMatches
             ? await _diffs.PublishAsync(sessionId, workspace, changed, originals, cancellationToken) : new MutationDiffEvidenceResult(null, false);
-        if (!matches)
+        if (!reconcileDisk)
+        {
+            risks.Add("Cancellation outcome records durable edit receipts without acquiring the repository edit lease; current disk state, cumulative diff, and rollback availability were not verified.");
+        }
+        else if (!matches)
         {
             risks.Add("Current source differs from this run's last proven effects; cumulative diff evidence is omitted to avoid attributing other changes to the run.");
         }
@@ -381,7 +394,7 @@ public sealed class SourceEditApplication :
             risks.Add("Source changed outside this run between edits; cumulative diff evidence is omitted to avoid including those changes.");
         }
 
-        if (!baselineMatches)
+        if (reconcileDisk && !baselineMatches)
         {
             risks.Add("The transactional baseline does not match final edit identities; cumulative diff text is unavailable.");
         }

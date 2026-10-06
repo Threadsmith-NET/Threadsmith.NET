@@ -59,6 +59,7 @@ public sealed class SemanticRefreshCoordinator :
     private readonly Lock _gate = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly ILogger<SemanticRefreshCoordinator> _logger;
+    private readonly SemanticStartupProgress? _startupProgress;
     private readonly TimeSpan _maximumBurstWindow;
     private readonly ISemanticPathSafetyValidator? _pathSafetyValidator;
     private readonly ISemanticRefreshPublicationGate? _publicationGate;
@@ -95,6 +96,7 @@ public sealed class SemanticRefreshCoordinator :
             resourceLimits: resourceLimits)
     {
         semanticEngines.SetConfidencePublisher(PublishWorkspaceConfidenceAsync);
+        _startupProgress = semanticEngines.StartupProgress;
     }
 
     /// <inheritdoc />
@@ -175,7 +177,8 @@ public sealed class SemanticRefreshCoordinator :
         ISemanticPathSafetyValidator? pathSafetyValidator = null,
         TimeSpan? recentHostEchoLifetime = null,
         Func<string, FileSystemWatcher>? watcherFactory = null,
-        SemanticRefreshResourceLimits? resourceLimits = null)
+        SemanticRefreshResourceLimits? resourceLimits = null,
+        SemanticStartupProgress? startupProgress = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(events);
@@ -196,6 +199,7 @@ public sealed class SemanticRefreshCoordinator :
         }
 
         _backend = backend;
+        _startupProgress = startupProgress;
         _events = events;
         _fileSnapshotReader = fileSnapshotReader;
         _logger = logger;
@@ -321,12 +325,16 @@ public sealed class SemanticRefreshCoordinator :
 
         try
         {
+            using var monitoringProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.StartMonitoring, cancellationToken);
             binding.StartWatching(
                 change => QueueChange(binding, change),
                 () => QueueRecovery(binding, restartWatcher: true));
+            monitoringProgress?.Complete();
+            using var documentsProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.ReadDocuments, cancellationToken);
             var loadedDocuments = (await _backend.GetLoadedDocumentsAsync(
                 request.WorkspaceId,
                 cancellationToken)).Where(document => !SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(request.RepositoryPath, document.Path)).ToArray();
+            documentsProgress?.Complete();
             lock (binding.Gate)
             {
                 foreach (var document in loadedDocuments)
@@ -337,11 +345,13 @@ public sealed class SemanticRefreshCoordinator :
 
             // Add exact non-recursive roots for loaded documents that intentionally live beneath
             // a normally ignored directory without interrupting the already-active monitor.
+            using var reconciliationProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.ReconcileSnapshots, cancellationToken);
             binding.StartWatching(
                 change => QueueChange(binding, change),
                 () => QueueRecovery(binding, restartWatcher: true));
             await SeedAuthoritativeInputIdentitiesAsync(binding, cancellationToken);
             await ReconcileBoundDocumentsAsync(binding, loadedDocuments, cancellationToken);
+            reconciliationProgress?.Complete();
             lock (binding.Gate)
             {
                 ThrowIfObsolete(binding);
@@ -667,7 +677,7 @@ public sealed class SemanticRefreshCoordinator :
         foreach (var write in writes)
         {
             var fullPath = NormalizePath(binding, write.RelativePath);
-            if (fullPath is null)
+            if (fullPath is null || !IsPotentiallyRelevant(binding, fullPath, SemanticFileChangeKind.Changed))
             {
                 continue;
             }
@@ -760,6 +770,11 @@ public sealed class SemanticRefreshCoordinator :
                 foreach (var path in paths)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (!IsPotentiallyRelevant(binding, path, SemanticFileChangeKind.Changed))
+                    {
+                        continue;
+                    }
+
                     var content = await ReadStableFileAsync(binding, path, cancellationToken);
                     if (!content.IsStable)
                     {
@@ -978,6 +993,7 @@ public sealed class SemanticRefreshCoordinator :
             {
                 // Initial load reconciliation compares this snapshot with the loaded workspace. Starting
                 // native monitoring first would expose its bounded buffer to design-time build output.
+                using var snapshotProgress = _startupProgress?.Begin(request.SessionId, SemanticStartupPhase.CaptureSnapshots, cancellationToken);
                 var initialSnapshot = await CaptureAuthoritativeInputSnapshotAsync(
                     binding,
                     _backend.GetRefreshInventory(binding.Request.WorkspaceId),
@@ -993,6 +1009,8 @@ public sealed class SemanticRefreshCoordinator :
                     ThrowIfObsolete(binding);
                     binding.InitialInputSnapshot = initialSnapshot;
                 }
+
+                snapshotProgress?.Complete();
             }
             catch (Exception exception)
             {
@@ -1302,7 +1320,7 @@ public sealed class SemanticRefreshCoordinator :
             return false;
         }
 
-        if (kind == SemanticFileChangeKind.Uncertain)
+        if (kind == SemanticFileChangeKind.Uncertain && PathComparer.Equals(path, binding.Request.RepositoryPath))
         {
             return true;
         }
@@ -1316,6 +1334,8 @@ public sealed class SemanticRefreshCoordinator :
 
             if (binding.IsLoading)
             {
+                // Evaluated membership is unavailable until load completes. Retain notifications
+                // without reading them; batch preparation applies the shared policy afterward.
                 return !SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, path);
             }
         }
@@ -1333,36 +1353,11 @@ public sealed class SemanticRefreshCoordinator :
             return false;
         }
 
-        if (inventory.SourceDocuments.Contains(path))
-        {
-            return !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(
-                binding.Request.RepositoryPath,
-                path);
-        }
-
-        if (inventory.AdditionalDocuments.Contains(path)
-            || inventory.AnalyzerConfigDocuments.Contains(path))
-        {
-            return true;
-        }
-
-        if (SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, path))
-        {
-            return false;
-        }
-
-        if (inventory.FullReloadInputs.Contains(path)
-            || IsGraphControlPath(path)
-            || path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-            || Directory.Exists(path))
-        {
-            return true;
-        }
-
-        var isLifecycleChange = kind is SemanticFileChangeKind.Created
-            or SemanticFileChangeKind.Deleted
-            or SemanticFileChangeKind.Renamed;
-        return isLifecycleChange;
+        return SemanticRefreshPathPolicy.Classify(binding.Request.RepositoryPath, path, inventory) != SemanticInputKind.None
+            || (kind is SemanticFileChangeKind.Created or SemanticFileChangeKind.Deleted or SemanticFileChangeKind.Renamed or SemanticFileChangeKind.Uncertain
+                && binding.HasCompilerDescendants(path, inventory))
+            || (!SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, path)
+                && (Directory.Exists(path) || binding.WatchesDirectory(path)));
     }
 
     private bool IsStopping(WorkspaceBinding binding)
@@ -1628,6 +1623,11 @@ public sealed class SemanticRefreshCoordinator :
 
         if (!prepared.ForceFull && prepared.Changes.Count == 0)
         {
+            if (batch.RestartWatcher)
+            {
+                binding.RestartWatching(change => QueueChange(binding, change), () => QueueRecovery(binding, restartWatcher: true));
+            }
+
             lock (binding.Gate)
             {
                 ThrowIfObsolete(binding);
@@ -1887,7 +1887,8 @@ public sealed class SemanticRefreshCoordinator :
             var classification = Classify(
                 change,
                 inventory,
-                binding.Request.RepositoryPath);
+                binding,
+                cancellationToken);
             if (classification == SemanticChangeClassification.Irrelevant)
             {
                 continue;
@@ -2323,11 +2324,6 @@ public sealed class SemanticRefreshCoordinator :
                 continue;
             }
 
-            if (SemanticRefreshPathPolicy.IsIgnoredPath(binding.Request.RepositoryPath, normalized))
-            {
-                continue;
-            }
-
             paths.Add(normalized);
             currentPaths.Add(normalized);
             binaryPaths.Add(normalized);
@@ -2383,8 +2379,8 @@ public sealed class SemanticRefreshCoordinator :
                         continue;
                     }
 
-                    var isGraphControl = IsGraphControlPath(entry);
-                    var isSource = entry.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+                    var isGraphControl = SemanticRefreshPathPolicy.IsGraphControlPath(entry);
+                    var isSource = SemanticRefreshPathPolicy.Classify(binding.Request.RepositoryPath, entry) == SemanticInputKind.Source;
                     var isPotentialBinaryInput = includePotentialBinaryInputs
                         && IsPotentialBinaryInputPath(entry);
                     if (!isGraphControl && !isPotentialBinaryInput && !isSource)
@@ -2465,85 +2461,81 @@ public sealed class SemanticRefreshCoordinator :
     private static SemanticChangeClassification Classify(
         SemanticFileChange change,
         SemanticRefreshInventory inventory,
-        string repositoryPath)
+        WorkspaceBinding binding,
+        CancellationToken cancellationToken)
     {
-        if (SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(repositoryPath, change.Path))
-        {
-            return SemanticChangeClassification.Irrelevant;
-        }
-
-        if (change.Kind == SemanticFileChangeKind.Uncertain)
-        {
-            return SemanticChangeClassification.Full;
-        }
-
+        var request = binding.Request;
+        var repositoryPath = request.RepositoryPath;
         var path = change.Path;
-        var isSourceDocument = inventory.SourceDocuments.Contains(path);
-        var isAdditionalDocument = inventory.AdditionalDocuments.Contains(path);
-        var isAnalyzerConfigDocument = inventory.AnalyzerConfigDocuments.Contains(path);
-        var isFullReloadInput = inventory.FullReloadInputs.Contains(path);
-        if (SemanticRefreshPathPolicy.IsIgnoredPath(repositoryPath, path)
-            && !(isSourceDocument && !SemanticRefreshPathPolicy.IsIgnoredGeneratedSourceDocument(repositoryPath, path))
-            && !isAdditionalDocument
-            && !isAnalyzerConfigDocument)
+        var input = SemanticRefreshPathPolicy.Classify(repositoryPath, path, inventory);
+        if (input == SemanticInputKind.None || Directory.Exists(path) || binding.WatchesDirectory(path))
         {
-            return SemanticChangeClassification.Irrelevant;
+            if (change.Kind == SemanticFileChangeKind.Uncertain && PathComparer.Equals(path, repositoryPath))
+            {
+                return SemanticChangeClassification.Full;
+            }
+
+            return binding.HasCompilerDescendants(path, inventory)
+                || DirectoryContainsCompilerInputs(request, path, inventory, cancellationToken)
+                ? SemanticChangeClassification.Full
+                : SemanticChangeClassification.Irrelevant;
         }
 
-        if (IsGraphControlPath(path))
-        {
-            return SemanticChangeClassification.Full;
-        }
-
-        if (isAdditionalDocument || isAnalyzerConfigDocument || isFullReloadInput)
-        {
-            return SemanticChangeClassification.Full;
-        }
-
-        if (path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-        {
-            return isSourceDocument
-                && File.Exists(path)
-                ? SemanticChangeClassification.Incremental
-                : SemanticChangeClassification.Full;
-        }
-
-        if (change.Kind is SemanticFileChangeKind.Created
-            or SemanticFileChangeKind.Deleted
-            or SemanticFileChangeKind.Renamed
-            || Directory.Exists(path))
-        {
-            return SemanticChangeClassification.Full;
-        }
-
-        return isSourceDocument
-            ? SemanticChangeClassification.Full
-            : SemanticChangeClassification.Irrelevant;
+        return input == SemanticInputKind.Source
+            && inventory.SourceDocuments.Contains(path)
+            && File.Exists(path)
+            && change.Kind != SemanticFileChangeKind.Uncertain
+            ? SemanticChangeClassification.Incremental
+            : SemanticChangeClassification.Full;
     }
 
-    private static bool IsGraphControlPath(string path)
+    private static bool DirectoryContainsCompilerInputs(SemanticLoadRequest request, string directory, SemanticRefreshInventory inventory, CancellationToken cancellationToken)
     {
-        var name = Path.GetFileName(path);
-        var extension = Path.GetExtension(path);
-        return extension.Equals(".csproj", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".fsproj", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".vbproj", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".sln", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".slnx", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".props", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".targets", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".ruleset", StringComparison.OrdinalIgnoreCase)
-            || extension.Equals(".editorconfig", StringComparison.OrdinalIgnoreCase)
-            || name.Equals(".globalconfig", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("global.json", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("nuget.config", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("Directory.Packages.props", StringComparison.OrdinalIgnoreCase)
-            || name.StartsWith("Directory.Build.", StringComparison.OrdinalIgnoreCase);
+        var repositoryPath = request.RepositoryPath;
+        if (!Directory.Exists(directory) || SemanticRefreshPathPolicy.IsIgnoredPath(repositoryPath, directory))
+        {
+            return false;
+        }
+
+        var pending = new Stack<string>();
+        pending.Push(directory);
+        while (pending.TryPop(out var current))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(current))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (NormalizePath(request, entry) is null || SemanticRefreshPathPolicy.IsIgnoredPath(repositoryPath, entry))
+                    {
+                        continue;
+                    }
+
+                    if (Directory.Exists(entry))
+                    {
+                        pending.Push(entry);
+                    }
+                    else if (SemanticRefreshPathPolicy.Classify(repositoryPath, entry, inventory) != SemanticInputKind.None)
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Authoritative refresh must resolve inaccessible directory membership.
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IReadOnlySet<string> CaptureRelevantWatcherEntries(
         SemanticLoadRequest request,
-        IReadOnlyList<string> roots)
+        IReadOnlyList<string> roots,
+        IReadOnlyDictionary<string, string> knownInputs)
     {
         var entriesByPath = new HashSet<string>(PathComparer);
         foreach (var root in roots)
@@ -2564,12 +2556,17 @@ public sealed class SemanticRefreshCoordinator :
                 foreach (var entry in entries)
                 {
                     var normalized = NormalizePath(request, entry);
-                    if (normalized is null || SemanticRefreshPathPolicy.IsIgnoredPath(request.RepositoryPath, normalized))
+                    if (normalized is null || SemanticRefreshPathPolicy.IsIgnoredGeneratedDocument(request.RepositoryPath, normalized))
                     {
                         continue;
                     }
 
-                    entriesByPath.Add(normalized);
+                    if (!Directory.Exists(normalized)
+                        && (knownInputs.ContainsKey(normalized)
+                            || SemanticRefreshPathPolicy.Classify(request.RepositoryPath, normalized) != SemanticInputKind.None))
+                    {
+                        entriesByPath.Add(normalized);
+                    }
                 }
             }
             catch (Exception exception) when (exception is IOException
@@ -2923,6 +2920,9 @@ public sealed class SemanticRefreshCoordinator :
         private readonly Func<string, FileSystemWatcher> _watcherFactory;
         private readonly bool _watchFileSystem;
         private readonly List<FileSystemWatcher> _watchers = [];
+        private IReadOnlySet<string> _watchedDirectories = new HashSet<string>(PathComparer);
+        private SemanticRefreshInventory? _ancestorInventory;
+        private HashSet<string> _compilerAncestorDirectories = new(PathComparer);
 
         public WorkspaceBinding(
             SemanticLoadRequest request,
@@ -3054,9 +3054,10 @@ public sealed class SemanticRefreshCoordinator :
                         watcher.EnableRaisingEvents = true;
                     }
 
+                    Volatile.Write(ref _watchedDirectories, new HashSet<string>(_watchers.Select(watcher => watcher.Path), PathComparer));
                     QueueTopologyChangeIfNeeded(
                         before,
-                        CaptureWatcherTopology(GetWatcherRoots()),
+                        GetWatcherRoots(),
                         changed);
                 }
                 catch
@@ -3066,6 +3067,38 @@ public sealed class SemanticRefreshCoordinator :
                 }
             }
         }
+
+        public bool HasCompilerDescendants(string path, SemanticRefreshInventory inventory)
+        {
+            lock (Gate)
+            {
+                if (!ReferenceEquals(_ancestorInventory, inventory))
+                {
+                    var ancestors = new HashSet<string>(PathComparer);
+                    foreach (var input in inventory.SourceDocuments.Concat(inventory.AdditionalDocuments)
+                        .Concat(inventory.AnalyzerConfigDocuments).Concat(inventory.FullReloadInputs))
+                    {
+                        if (SemanticRefreshPathPolicy.Classify(Request.RepositoryPath, input, inventory) == SemanticInputKind.None)
+                        {
+                            continue;
+                        }
+
+                        var directory = Path.GetDirectoryName(input);
+                        while (directory is not null && ancestors.Add(directory))
+                        {
+                            directory = Path.GetDirectoryName(directory);
+                        }
+                    }
+
+                    _compilerAncestorDirectories = ancestors;
+                    _ancestorInventory = inventory;
+                }
+
+                return _compilerAncestorDirectories.Contains(Path.TrimEndingDirectorySeparator(path));
+            }
+        }
+
+        public bool WatchesDirectory(string path) => Volatile.Read(ref _watchedDirectories).Contains(path);
 
         public void RestartWatching(
             Action<SemanticFileChange> changed,
@@ -3099,9 +3132,10 @@ public sealed class SemanticRefreshCoordinator :
                         watcher.Dispose();
                     }
 
+                    Volatile.Write(ref _watchedDirectories, new HashSet<string>(_watchers.Select(watcher => watcher.Path), PathComparer));
                     QueueTopologyChangeIfNeeded(
                         before,
-                        CaptureWatcherTopology(GetWatcherRoots()),
+                        GetWatcherRoots(),
                         changed);
                 }
                 catch
@@ -3150,7 +3184,19 @@ public sealed class SemanticRefreshCoordinator :
                 args.OldFullPath,
                 SemanticFileChangeKind.Deleted,
                 SemanticRefreshReason.ExternalChange));
-            watcher.Error += (_, _) => failed();
+            watcher.Error += (_, _) =>
+            {
+                if (!Directory.Exists(path))
+                {
+                    // Windows reports a removed or moved watcher root as an error. Reconcile
+                    // its directory lifecycle; compiler descendants determine semantic work.
+                    changed(new SemanticFileChange(Request.SessionId, path, SemanticFileChangeKind.Deleted));
+                }
+                else
+                {
+                    failed();
+                }
+            };
             return watcher;
         }
 
@@ -3162,6 +3208,7 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             _watchers.Clear();
+            Volatile.Write(ref _watchedDirectories, new HashSet<string>(PathComparer));
         }
 
         private IReadOnlyList<string> GetWatcherRoots()
@@ -3228,24 +3275,37 @@ public sealed class SemanticRefreshCoordinator :
 
         private IReadOnlySet<string> CaptureWatcherTopology(IReadOnlyList<string> roots)
         {
-            return CaptureRelevantWatcherEntries(Request, roots);
+            return CaptureRelevantWatcherEntries(Request, roots, AppliedIdentities);
         }
 
         private void QueueTopologyChangeIfNeeded(
             IReadOnlySet<string> before,
-            IReadOnlySet<string> after,
+            IReadOnlyList<string> roots,
             Action<SemanticFileChange> changed)
         {
-            if (before.SetEquals(after))
+            var after = CaptureWatcherTopology(roots);
+            if (!before.SetEquals(after))
             {
-                return;
+                changed(new SemanticFileChange(
+                    Request.SessionId,
+                    Request.RepositoryPath,
+                    SemanticFileChangeKind.Uncertain,
+                    SemanticRefreshReason.ExternalChange));
             }
 
-            changed(new SemanticFileChange(
-                Request.SessionId,
-                Request.RepositoryPath,
-                SemanticFileChangeKind.Uncertain,
-                SemanticRefreshReason.ExternalChange));
+            // File membership and monitoring topology have different consequences. Compare
+            // discovered roots with installed coverage even when a new directory is empty.
+            var installed = Volatile.Read(ref _watchedDirectories);
+            var discovered = new HashSet<string>(roots, PathComparer);
+            foreach (var directory in discovered.Except(installed, PathComparer))
+            {
+                changed(new SemanticFileChange(Request.SessionId, directory, SemanticFileChangeKind.Created));
+            }
+
+            foreach (var directory in installed.Except(discovered, PathComparer))
+            {
+                changed(new SemanticFileChange(Request.SessionId, directory, SemanticFileChangeKind.Deleted));
+            }
         }
 
         private bool IsSafeExplicitWatcherDirectory(string directory)

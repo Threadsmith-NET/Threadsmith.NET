@@ -70,7 +70,8 @@ internal static class InteractiveFrontendRunner
                 .Capture(repositoryIdentity)
                 .StandingPreferenceWarningThreshold,
             agentDisplay: context.Applications.AgentDisplay,
-            agentNames: names.Catalog);
+            agentNames: names.Catalog,
+            semanticStartupProgress: context.SemanticStartupProgress);
     }
 
     private static Task RunCoordinatorAsync(InteractionCoordinator coordinator, ShellRunContext context, CancellationToken cancellationToken)

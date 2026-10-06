@@ -171,8 +171,12 @@ public sealed class SourceEditApplication :
 
                 try
                 {
-                    _analyzer?.ConfirmApplied(command.WorkspaceId, command.EffectId);
-                    await RefreshSemanticsAsync(command.SessionId, CancellationToken.None);
+                    if (analysis is not null || _analyzer is null)
+                    {
+                        _analyzer?.ConfirmApplied(command.WorkspaceId, command.EffectId);
+                        await RefreshSemanticsAsync(command.SessionId, CancellationToken.None);
+                    }
+
                     analysis = _analyzer?.GetLatestAnalysis(command.SessionId, command.RunId, command.WorkspaceId, command.EffectId) ?? analysis;
                     if (analysis is not null)
                     {
@@ -537,10 +541,18 @@ public sealed class SourceEditApplication :
 
             result = written ?? new(command.MutationSetId, receipt.ChangedFiles, new ConflictReport(command.MutationSetId, []));
             _rollbackEdits.TryRemove(owned.Key, out _);
-            _feedback.TryRemove(current.RunId, out _);
+            var requiresSemanticRefresh = _analyzer?.HasSemanticInputs(owned.Key, workspace.Isolation.RepositoryPath, reverse) != false;
+            if (requiresSemanticRefresh)
+            {
+                _feedback.TryRemove(current.RunId, out _);
+            }
+
             _runs.TryAdd(current.RunId, (current.SessionId, owned.Key));
             await _workspaces.PromoteBaselineAsync(owned.Key, result.RestoredFiles, CancellationToken.None);
-            await RefreshSemanticsAsync(command.SessionId, CancellationToken.None);
+            if (requiresSemanticRefresh)
+            {
+                await RefreshSemanticsAsync(command.SessionId, CancellationToken.None);
+            }
         }
 
         _ = await RecordRunOutcomeAsync(command.SessionId, owned.Value.RunId, ExecutionCheckpointPhase.RolledBack, CancellationToken.None);
@@ -613,6 +625,11 @@ public sealed class SourceEditApplication :
 
         try
         {
+            if (!_analyzer.HasSemanticInputs(command.WorkspaceId, repositoryPath, snapshot))
+            {
+                return null;
+            }
+
             if (!await RefreshSemanticsAsync(command.SessionId, cancellationToken))
             {
                 return new SourceEditAnalysis { EffectId = command.EffectId, Omissions = ["Semantic publication is pending or unavailable; the authorized write remains independent."] };

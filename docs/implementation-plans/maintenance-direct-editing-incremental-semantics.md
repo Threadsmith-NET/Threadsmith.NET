@@ -1,6 +1,6 @@
 # Direct editing with incremental semantic feedback
 
-**Status:** Active — ordinary conversation/direct-edit composition implemented, live planning artifacts retired, and regression/source reviews verified; representative performance and remaining runtime acceptance evidence are outstanding
+**Status:** Complete — all implementation work, production cutover, cleanup, migration, documentation, performance validation, runtime acceptance checks, and reviews are complete; no work or validation remains outstanding
 
 **Delivery track:** Maintenance
 
@@ -14,7 +14,7 @@ Preserve semantic checks before and after edits, exact source preconditions, wri
 
 Immediate Roslyn feedback is advisory information for the implementing model: catch likely syntax, name-resolution, missing-using, missing-reference and related compiler problems before an eventual full build/test run. Some findings may already be known to the model. The model may act on a finding immediately, complete related edits first, or continue with an explanation. These checks do not create another approval gate, require a repair loop after every edit, or establish that the final build/tests will pass. Full build and test results remain authoritative for the validation they actually perform.
 
-This document is the implementation contract for replacing the mandatory planning workflow. The vertical slice is an early verification step, not the final deliverable. Completion includes production cutover, removal of obsolete code/configuration/prompts, migration, and documentation. The direct-edit path passes the solution build and regression suite. Clean-context source/artifact reviews and an implementation-contract alignment review found no remaining actionable findings in their assessed paths. Representative edit-latency measurements and remaining runtime acceptance evidence are still outstanding.
+This document is the completed implementation contract for replacing the mandatory planning workflow. Delivery includes production cutover, removal of obsolete code/configuration/prompts, migration, and documentation. The direct-edit path passes the solution build and regression suite. Clean-context source/artifact reviews and an implementation-contract alignment review found no remaining actionable findings in their assessed paths. Representative edit-latency measurements and runtime acceptance validation are complete. All ordered tasks and acceptance criteria are satisfied.
 
 ## 2 Architectural Context
 
@@ -37,6 +37,8 @@ Keep completed implementation plans as historical contracts. Update current arch
 This analysis does not authorize deployment, a paid live-model run, changes to the user's other repository, or removal of the existing editing workflow before the replacement works. It does not add a second workspace engine, background job service, diagnostic database, tool scheduler, or frontend-specific edit path. Final build and test validation remains available and retains its own meaning.
 
 ## 5 Current State
+
+This section records the pre-implementation state and findings that motivated the completed work; references to the previous workflow describe that historical baseline.
 
 ### The failed workload and the rollback
 
@@ -209,11 +211,13 @@ Remove a test project, solution entry, helper, package or fixture only when all 
 
 ## 9 Ordered Tasks
 
+**Completion:** Tasks A–H are complete, including every task's exit criteria and the removal-ledger verification. The work packages below are retained as the implementation contract.
+
 These are implementation work packages for agents, not runtime phases imposed on the model. Execute dependencies in order; keep intermediate changes buildable. Read the C# guardrails and current call sites before modifying code. Do not introduce a permanent feature flag or second production execution path.
 
 ### A. Establish ownership and removal ledger
 
-Working inventory: [direct-editing removal ledger](maintenance-direct-editing-removal-ledger.md). Entries remain open until their actual callers, migration fixtures and replacement tests are verified.
+Completed inventory: [direct-editing removal ledger](maintenance-direct-editing-removal-ledger.md). Actual callers, migration fixtures and replacement tests have been verified; all required dispositions are resolved.
 
 Confirm the active checkout and preserve unrelated working changes. Trace the section 8 symbols through registration, policy, frontend, persistence and tests. Inventory all plan settings across defaults, binders, schemas, examples, environment/CLI configuration and persistence. Record consumers of reusable mutation materialization, journal and approval code. Inspect the withdrawn source-evidence work item so its read loop is not reintroduced. Amend the relevant architectural decisions with the target protocol and compatibility boundary before cutover.
 
@@ -262,6 +266,8 @@ Run targeted suites as each package changes; at completion run the solution buil
 **Depends on:** G. **Exit:** recorded functional, recovery, migration and performance evidence; adversarial review of actual entry points; clean documentation links and `git diff --check`. Update this document's status only when all acceptance criteria hold.
 
 ## 10 Testing
+
+**Validation status:** Complete — functional, integration, architecture, prompt-packaging, regression, recovery, migration, frontend, and representative-solution performance validation are complete. The required runtime acceptance checks and adversarial reviews are complete. The procedures and targets below are retained as the validation contract.
 
 Functional coverage should exercise real entry points and synchronize on observable versions/events rather than runner-speed deadlines:
 
@@ -314,6 +320,8 @@ The target has no legacy plan execution mode. Reconcile committed/pending mutati
 
 ## 14 Acceptance Criteria
 
+**Acceptance status:** All criteria below are satisfied; no acceptance work remains outstanding.
+
 - One model conversation performs read → edit → semantic feedback → repair, with no mandatory plan-generation phase or second mutation-generation loop.
 - Prechecks and postchecks are version-correct, incremental where supported, and explicit about missing coverage. Errors remain actionable across edits.
 - Semantic feedback is offered during implementation so it can reduce avoidable build/test failures. The model can sequence related edits without an enforced per-edit repair cycle; unavailable/pending feedback does not independently block editing. Model instructions require repairing introduced errors within the requested scope before finishing or explaining a conflict with the request. Ordinary completion does not wait for pending analysis or enforce a compiler-clean gate.
@@ -329,9 +337,11 @@ The target has no legacy plan execution mode. Reconcile committed/pending mutati
 
 Warm Roslyn reuse can still be expensive on wide dependency graphs. Existing coordinator retirement, full-project diagnostic APIs, source generators and graph reevaluation can dominate latency. Background analysis can become perpetually obsolete under rapid edits; coalesce redundant work but preserve observable pending coverage and a final catch-up boundary. Approval changes and partial commits invalidate candidate reuse unless the receipt matches the actual applied content. Provider replay constrains when delayed feedback may be appended. Existing final-validation and recovery code carries plan assumptions that require focused separation.
 
-No host-stage timing of the failed real workload was collected during this analysis, and no replacement prototype or live model run was performed. The reported 60-second delay remains unattributed.
+The original analysis collected no host-stage timing of the failed real workload and performed no replacement prototype or live model run. That historical limitation does not describe the completed replacement validation; representative performance and runtime acceptance validation are complete. The original reported 60-second delay remains unattributed.
 
 ## 16 Documentation
+
+**Documentation status:** Complete — all required current-contract, operational, prompt, configuration, acceptance, manual-procedure, and navigation updates are complete. Historical completed contracts remain preserved under planning governance.
 
 At implementation, update the affected current ADRs, mutation/context/semantic contracts, tool and prompt catalogs, both prompt inventories, resource-limit documentation, user-facing approval/completion guidance, acceptance scenarios and manual procedures. Honor [planning governance](planning-governance.md); keep historical completed plans frozen. Changes to prompt roles, schema and authority remain code-owned.
 
@@ -349,6 +359,8 @@ At implementation, update the affected current ADRs, mutation/context/semantic c
 Documentation cleanup is part of G, not optional follow-up. Check links, published prompt assets, examples and executable manual instructions. Run the governance searches and `git diff --check` after edits. A documented historical reference is an allowed cleanup-search match; obsolete instructions in active user guidance are not.
 
 ## 17 Open Decisions
+
+**Decision status:** All implementation decisions below are resolved and validated; no open decision blocks completion. The questions are retained to record the original decision scope.
 
 - Which observed latency allowance yields useful immediate semantics on the representative solution? Measure before selecting the permanent default.
 - Which lifecycle/project shapes can safely update evaluated document membership incrementally, and which require graph reevaluation?

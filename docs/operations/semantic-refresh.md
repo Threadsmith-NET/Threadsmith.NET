@@ -12,6 +12,8 @@ Incremental publication uses safe operation boundaries and immutable generations
 
 `edit_source` analyzes the authorized candidate within a bounded allowance and applies independently of compiler findings. Matching candidate analysis is reused after commit. Owning and dependent project coverage continues through the existing compilation coordinator. Results identify their generation, partial/pending/complete coverage and omissions. Unchanged cached project findings are reused; bounded carry-forward coverage preserves earlier edit errors or reports omissions explicitly.
 
+The shared input policy also filters exact edit candidates: unrelated endpoints run no diagnostics, preserve pending source analysis, and do not prevent promotion of a mixed source/report edit. A JSON file registered as a generator additional input is relevant; ordinary JSON is not.
+
 Unknown or deleted C# membership, project/reference/option changes and generator inputs use visible graph refresh rather than guessed inclusion. During graph replacement, the old applied analysis is obsolete but replacement feedback remains pending; a conversation poll retains delivery tracking until the verified replacement arrives. Replacement coverage conservatively includes evaluated projects and reports error origins as unknown across the graph change.
 
 Feedback enters ordinary provider boundaries without rewriting delivered tool results. Pending, obsolete or unavailable coverage omits model-facing error totals; missing totals mean unknown. The output window shows plain-text advisory coverage/error summaries instead of serialized analysis. New feedback during a final response permits another model round within existing limits; the host does not wait for pending work. Explicit build/test results remain authoritative for the checks actually run, and response completion starts no validation.
@@ -25,11 +27,13 @@ Threadsmith applies these rules after it confines a notification to the active r
 | Content change or atomic replacement of an existing C# document already loaded in the selected workspace | Incremental refresh when the settled path still exists and its document identity and project membership are exact; otherwise complete refresh. |
 | Content change to any other `.cs` file beneath the repository | Complete refresh, because wildcard project membership may have changed. |
 | Change to a loaded additional document or analyzer-config document | Complete refresh. |
-| Change to a solution or project file, `.props`, `.targets`, `.ruleset`, `.editorconfig`, `.globalconfig`, `global.json`, `nuget.config`, `Directory.Packages.props`, or `Directory.Build.*` | Complete refresh. |
-| Change to another inventoried semantic input, such as an analyzer or reference | Complete refresh, except for normally excluded build-output paths described below. |
-| Create, delete, or rename of any other non-excluded file or directory | Complete refresh. This is intentionally conservative because project and additional-file membership may be defined by wildcards. |
-| Watcher error, overflow, or internal notification-bound overflow | Complete recovery refresh. |
-| Another uncertain change whose stable content can be read | Complete refresh, retaining the original external-change or host-mutation attribution unless recovery was separately requested. |
+| Change to a solution or project file, `.props`, `.targets`, `.ruleset`, `.editorconfig`, `.globalconfig`, `global.json`, `nuget.config`, `Directory.Packages.props`, or `Directory.Build.props` / `Directory.Build.targets` | Complete refresh. |
+| Change to another inventoried semantic input, such as an analyzer or reference | Complete refresh, including explicitly registered references under normally excluded directories. |
+| Edit, create, delete, or rename of an ordinary `.cypher`, Markdown, report, JSON, or other file outside compiler inputs | No semantic refresh or compiler diagnostics. |
+| Create, delete, or rename of a directory | Maintain watcher coverage; refresh only when the directory contains catalogued or registered compiler inputs. |
+| Watcher error or overflow while its directory remains available, or internal notification-bound overflow | Complete recovery refresh. |
+| Native watcher error caused by a removed or moved directory | Reconcile directory lifecycle and rebuild monitoring; compile only when relevant descendants are affected. |
+| An uncertain notification for a compiler input or the repository | Complete refresh, retaining the original attribution unless recovery was separately requested. Unrelated file notifications remain ignored. |
 | A file that does not remain stable long enough to read | No workspace publication. The refresh fails, the workspace remains dirty, and a later stable notification or `/semantic_refresh` can retry. |
 
 The following notifications do not start a refresh:
@@ -38,11 +42,11 @@ The following notifications do not start a refresh:
 - changes beneath `.git`, `.threadsmith`, `.codegraph`, `.idea`, `.inbox`, `.vs`, `.vscode`, `artifacts`, `bin`, `node_modules`, `obj`, or `TestResults`;
 - known editor temporary files: names beginning or ending with `~`, plus `.tmp`, `.swp`, and `.swo` files;
 - paths outside the active repository, configured prohibited paths, and paths reached through a reparse point or symbolic link;
-- content changes to an existing non-C# file that is not a loaded additional/analyzer-config document, graph-control file, or another inventoried semantic input.
+- all lifecycle changes to files outside the finite source/build catalog and evaluated compiler-input membership.
 
-An explicitly loaded source, additional, or analyzer-config document takes precedence over the normal directory exclusions. Conversely, generated binaries and references under excluded output/tooling directories remain ignored. Otherwise-relevant, non-excluded Threadsmith-owned writes follow the same refresh rules; host attribution does not bypass the relevance filter. Their watcher echoes join the same refresh work and are coalesced so they do not produce a second external-change announcement.
+An explicitly loaded source, additional, analyzer-config document, or reference takes precedence over the normal directory exclusions. Known derived generated source and MSBuild editor configuration remain excluded. Unregistered generated binaries remain ignored. Otherwise-relevant, non-excluded Threadsmith-owned writes follow the same refresh rules; host attribution does not bypass the relevance filter. Their watcher echoes join the same refresh work and are coalesced so they do not produce a second external-change announcement.
 
-Before the initial load, the startup consistency snapshot reads repository graph-control files and possible repository-local binary inputs. Excluded directories are not traversed, and ignored temporary files are not captured. Threadsmith imposes no repository file-count, directory-depth, scan-entry, watcher-count, per-file size, or aggregate snapshot-size limit. Binary inputs are hashed through a stream without loading the entire file into memory. Candidate inputs are reconciled with the exact semantic inputs reported by the loaded workspace. A later content-only edit to an uninventoried binary remains an unrelated-file no-op, while a create/delete/rename outside the excluded directories still follows the conservative lifecycle rule above.
+Before the initial load, the startup consistency snapshot reads repository graph-control files and possible repository-local binary inputs. Excluded directories are not traversed, and ignored temporary files are not captured. Threadsmith imposes no repository file-count, directory-depth, scan-entry, watcher-count, per-file size, or aggregate snapshot-size limit. Binary inputs are hashed through a stream without loading the entire file into memory. Candidate inputs are reconciled with the exact semantic inputs reported by the loaded workspace. Later edits, creates, deletes, and renames of uninventoried binaries remain unrelated-file no-ops.
 
 For a successful externally attributed cycle, the interactive terminal prints exactly one start/completion pair:
 

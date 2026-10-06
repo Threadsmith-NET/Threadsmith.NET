@@ -1,0 +1,50 @@
+Type `/help` to discover commands without leaving your conversation.
+Ask “How does this feature work?” to explore C# code using compiler-backed symbols and relationships.
+Before changing an API, ask Threadsmith to find its callers, references, and implementations.
+Describe the change you want directly—Threadsmith can read, edit, and repair code in one conversation.
+Edits can return incremental compiler feedback, helping catch problems before a full build.
+Ask explicitly for a build and relevant tests when you want validation; compiler feedback alone doesn’t prove they pass.
+Review exact diffs when mutation policy requires approval, so you can see precisely what will change.
+Edit files in your usual editor—Threadsmith watches relevant changes and updates its semantic workspace.
+Use `/semantic_refresh` to force a complete semantic refresh.
+Use `/tools` to discover available tools and enable optional capabilities.
+Use `/models` to choose your model and `/reasoning` to select its supported reasoning level.
+Press Enter during an active turn to steer the work with another instruction.
+Press Esc twice during an active turn to cancel it.
+Ask Threadsmith to remember a project preference; use `/memory list` to inspect saved notes.
+Put repository instructions that must always apply in `AGENTS.md`.
+Use `/context inspect` to see which evidence was included, omitted, or considered stale.
+Use `/skills` to discover reusable workflows, including the maintained review skill with five specialist reviewers.
+Use `/agents` to inspect delegated work, and agent tabs to follow individual progress.
+Ask to save an answer as a Markdown report in `.inbox`, the default report destination.
+With PR retrieval configured and enabled, provide a GitHub or Bitbucket Cloud PR URL to review its changes.
+Ask “What implements this interface?” or “Where is this method called?” to navigate compiler-backed relationships.
+Ask which projects and tests could be affected by a change to explore its potential impact.
+`code_explore` accepts natural-language questions, C# symbol names, and source-file paths—start with whichever you know.
+Ask `code_explore` to explain a behavior across files; it gathers relevant source and relationships together.
+Code exploration reports omitted coverage and focused follow-up targets, helping the model investigate further when needed.
+After an edit, the model receives a receipt with changed paths and available compiler diagnostics.
+Broader semantic analysis can continue after an edit; later findings reach the model through the same conversation.
+Semantic feedback identifies its analyzed version and coverage, so partial or pending analysis isn’t mistaken for a clean result.
+Compiler errors don’t automatically reject an edit—the model can finish related changes, then repair the findings.
+Saved memories belong to the current repository and survive new sessions and restarts.
+Use `/memory update <id> <text>` to correct a saved note while preserving its identity.
+When memory reconciliation is enabled, a similar new note prompts the model to decide whether to update an existing memory or keep a distinct one.
+Memory reconciliation leaves existing notes unchanged until the model submits an explicit update or confirms a separate addition.
+Keep memories concise and durable: project conventions and recurring preferences are more useful than routine progress notes.
+Use `/theme` to browse themes; your selection repaints the interface immediately and saves your user default.
+Try `/theme high-contrast` for stronger visual emphasis, or `/theme system` to use your terminal’s colors.
+Create a custom theme under `tui.themes` in configuration, with colors and styling for Markdown, tool outcomes, agent tabs, and more.
+Custom themes support named terminal colors, `#RRGGBB` colors, and decorations such as bold, italic, and underline.
+Use `/mcp` to browse configured MCP connections; press Space to connect or disconnect a server.
+Connecting an MCP server and enabling its tools are separate steps—review and enable the tools you want to use.
+For an OAuth-enabled MCP connection, press F3 in `/mcp` and choose **Sign in / Authenticate**.
+Use `/mcp capabilities` to explore a server’s tools, resources, and prompts, or `/mcp diagnose` to troubleshoot a connection.
+`/skills` groups native and Claude-style skills separately, so you can see each workflow’s format and source.
+Native skills use structured `skill.json` packages with explicit contracts; Claude-style skills use `SKILL.md` instructions and frontmatter.
+Threadsmith discovers Claude-style skills in repository and user `.claude/skills` folders—inspect, verify, and enable one before use.
+Native signed skills offer stronger package verification; Claude-style skills require explicit authorization of their exact content.
+Both skill formats use Threadsmith’s governed execution path: enabling a skill doesn’t grant extra tool permissions.
+Changing a Claude-style skill’s files invalidates its previous authorization—verify and enable the updated version before using it again.
+Threadsmith renders most Markdown right in the terminal.
+You can double-click the context usage meter in the upper-right of the TUI to open a visual view of your context usage.

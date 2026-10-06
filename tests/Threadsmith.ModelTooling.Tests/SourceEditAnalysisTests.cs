@@ -31,6 +31,7 @@ public static class SourceEditAnalysisTests
         var first = Command(session, run, workspace);
         var firstSnapshot = Snapshot(relative, original, broken);
         var analysis = await engine.AnalyzeCandidateAsync(first, root, firstSnapshot, TimeSpan.FromSeconds(20), ct);
+        Assert.NotNull(analysis);
         Assert.False(analysis.Pending);
         Assert.True(analysis.ProjectsInScope >= 2);
         Assert.Contains(analysis.Diagnostics, item => item.Code == "CS0246" && item.Origin == "introduced");
@@ -48,6 +49,7 @@ public static class SourceEditAnalysisTests
         var extended = broken + "\npublic sealed class AnotherEdit { }\n";
         var secondSnapshot = Snapshot(relative, broken, extended);
         var secondAnalysis = await engine.AnalyzeCandidateAsync(second, root, secondSnapshot, TimeSpan.FromSeconds(20), ct);
+        Assert.NotNull(secondAnalysis);
         Assert.Contains(secondAnalysis.Diagnostics, item => item.Code == "CS0246" && item.Origin == "introduced");
         Assert.Equal(0, secondAnalysis.NewErrors);
         engine.ConfirmEditApplied(second.EffectId);
@@ -56,6 +58,7 @@ public static class SourceEditAnalysisTests
         var repair = Command(session, run, workspace);
         var repaired = extended.Replace("MissingType", "int", StringComparison.Ordinal);
         var repairAnalysis = await engine.AnalyzeCandidateAsync(repair, root, Snapshot(relative, extended, repaired), TimeSpan.FromSeconds(20), ct);
+        Assert.NotNull(repairAnalysis);
         Assert.True(repairAnalysis.ResolvedErrors > 0);
         Assert.DoesNotContain(repairAnalysis.Diagnostics, item => item.Code == "CS0246");
         Assert.Equal(1, repairAnalysis.CurrentErrors);
@@ -132,6 +135,7 @@ public static class SourceEditAnalysisTests
             var changed = original + "\npublic sealed class DeferredError { public MissingType Value; }\n";
             var snapshot = Snapshot("Contracts/Services.cs", original, changed);
             var pending = await engine.AnalyzeCandidateAsync(command, root, snapshot, TimeSpan.Zero, ct);
+            Assert.NotNull(pending);
             Assert.True(pending.Pending);
             engine.ConfirmEditApplied(command.EffectId);
             await engine.RefreshDocumentsAsync([new(path, changed, snapshot.Endpoints[0].AfterSha256!)], ct);
@@ -170,6 +174,7 @@ public static class SourceEditAnalysisTests
             Endpoints = [.. existing.Endpoints, new("Contracts/New.cs", null, Hash(added)) { FinalBytes = Encoding.UTF8.GetBytes(added) }],
         };
         var result = await engine.AnalyzeCandidateAsync(command, root, snapshot, TimeSpan.FromSeconds(20), ct);
+        Assert.NotNull(result);
         Assert.False(result.Pending);
         Assert.True(result.ProjectsAnalyzed > 0);
         Assert.Contains(result.Diagnostics, item => item.Code == "CS1513" && item.File == "Contracts/New.cs");
@@ -204,6 +209,7 @@ public static class SourceEditAnalysisTests
             Assert.NotNull(engine.GetLatestEditAnalysis(command.SessionId, command.RunId, command.EffectId)!.CommittedGeneration);
             var next = Command(command.SessionId, command.RunId, command.WorkspaceId);
             var result = await engine.AnalyzeCandidateAsync(next, root, Snapshot("Example.cs", broken, broken + "\nclass Another { }"), TimeSpan.FromSeconds(20), ct);
+            Assert.NotNull(result);
             Assert.Contains(result.Diagnostics, item => item.Code == "CS0246" && item.Origin == "unknown");
             Assert.DoesNotContain(result.Diagnostics, item => item.Code == "CS0246" && item.Origin == "initial");
         }
@@ -211,6 +217,51 @@ public static class SourceEditAnalysisTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    /// <summary>Unrelated edits do not run diagnostics or discard an existing source candidate.</summary>
+    [Fact]
+    public static async Task UnregisteredEndpointsSkipDiagnosticsAndPreserveSourceCandidate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var session = SessionId.New();
+        var workspace = WorkspaceId.New();
+        var run = RunId.New();
+        await engine.LoadAsync(new(session, workspace, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
+        await engine.WaitForWarmAsync(ct);
+        const string relative = "Contracts/Services.cs";
+        var path = Path.Combine(root, relative);
+        var original = await File.ReadAllTextAsync(path, ct);
+        var replacement = original + "\npublic sealed class NewCandidate { }\n";
+        var command = Command(session, run, workspace);
+        var candidate = Snapshot(relative, original, replacement);
+        candidate = candidate with { Endpoints = [.. candidate.Endpoints, .. Snapshot("report.md", "before", "after").Endpoints] };
+        Assert.NotNull(await engine.AnalyzeCandidateAsync(command, root, candidate, TimeSpan.FromSeconds(20), ct));
+        var passes = engine.EditAnalysisStatistics.DiagnosticPasses;
+        foreach (var name in new[] { "notes.md", "migration.cypher", "settings.json", "Directory.Build.md" })
+        {
+            var unrelated = Snapshot(name, "before", "after");
+            foreach (var endpoints in new[]
+            {
+                unrelated.Endpoints,
+                unrelated.Endpoints.Select(endpoint => endpoint with { BeforeSha256 = null }).ToArray(),
+                unrelated.Endpoints.Select(endpoint => endpoint with { AfterSha256 = null, FinalBytes = null }).ToArray(),
+            })
+            {
+                var lifecycle = unrelated with { Endpoints = endpoints };
+                Assert.False(engine.HasSemanticInputs(root, lifecycle));
+                Assert.Null(await engine.AnalyzeCandidateAsync(Command(session, run, workspace), root, lifecycle, TimeSpan.FromSeconds(20), ct));
+            }
+        }
+
+        Assert.Equal(passes, engine.EditAnalysisStatistics.DiagnosticPasses);
+        engine.ConfirmEditApplied(command.EffectId);
+        await engine.RefreshDocumentsAsync([new(path, replacement, candidate.Endpoints[0].AfterSha256!)], ct);
+        Assert.Equal(1, engine.EditAnalysisStatistics.CandidatePromotions);
+        Assert.NotNull(engine.GetLatestEditAnalysis(session, run, command.EffectId));
     }
 
     private static ApplySourceEditCommand Command(SessionId sessionId, RunId runId, WorkspaceId workspaceId)

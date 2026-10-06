@@ -7,6 +7,9 @@ using Threadsmith.Core;
 /// <summary>Owns one independent semantic engine for each opened workspace.</summary>
 public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEditAnalyzer, IAsyncDisposable
 {
+    /// <summary>Gets optional, transient startup phase observations shared by the existing semantic owners.</summary>
+    public SemanticStartupProgress StartupProgress { get; } = new();
+
     private readonly TimeSpan? _cancellationBackstop;
     private readonly SemanticResourceLimits _resourceLimits;
     private readonly ConcurrentDictionary<WorkspaceId, SemanticEngine> _engines = new();
@@ -56,7 +59,13 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
     }
 
     /// <inheritdoc />
-    public Task<SourceEditAnalysis> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
+    public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
+    {
+        return GetEngine(workspaceId).HasSemanticInputs(repositoryPath, snapshot);
+    }
+
+    /// <inheritdoc />
+    public Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
     {
         return GetEngine(command.WorkspaceId).AnalyzeCandidateAsync(command, repositoryPath, snapshot, immediateAllowance, cancellationToken);
     }
@@ -193,7 +202,8 @@ public sealed class SemanticEngineRegistry : ISemanticEngineResolver, ISourceEdi
             _loggerFactory.CreateLogger<SemanticEngine>(),
             _prompts,
             _cancellationBackstop,
-            _resourceLimits));
+            _resourceLimits,
+            StartupProgress));
         if (_confidencePublisher is { } publisher)
         {
             engine.SetConfidencePublisher(publisher);

@@ -44,6 +44,7 @@ public static class InteractiveCommandCatalog
         new("/skills", "/skills [list|refresh|inspect|provenance|install|uninstall|verify|enable|disable|pin|use|continue|resume|status|cancel]", "Browse, verify, and toggle skills"),
         new("/theme", "/theme [id|current]", "Select, change, or report the active theme", IsFrontendLocal: true),
         new("/thinking", "/thinking [on|off]", "Stream future reasoning (Ctrl+T toggles on an empty composer)"),
+        new("/tips", "/tips", "Show all tips locally without adding them to model context"),
         new("/tools", "/tools", "Browse and toggle repository tool availability"),
         new("/trust", "/trust [inspect|read|build|mutation|automation]", "Set or upgrade repository trust"),
     ];

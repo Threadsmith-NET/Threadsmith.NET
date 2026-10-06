@@ -14,6 +14,8 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     private readonly List<string> _startupPhases = [];
     private IReadOnlyList<string> _startupDetails = [];
     private long _startupDwellStart;
+    private StartupTips? _startupTips;
+    private Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? _startupProgress;
 
     /// <inheritdoc />
     public Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default)
@@ -45,23 +47,41 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
 
     /// <inheritdoc />
     [SuppressMessage("Usage", "VSTHRD003", Justification = "The host owns and independently observes the operation represented by this modal.")]
-    public async Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
+    public Task ShowStartupAsync(string logo, string label, Task operation, CancellationToken cancellationToken = default)
+    {
+        return ShowStartupAsync(logo, label, _ => operation, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task SetStartupProgressAsync(Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? snapshots, CancellationToken cancellationToken = default)
+    {
+        return EnqueueAsync(() => _startupProgress = snapshots, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task ShowStartupAsync(string logo, string label, Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
     {
         var modal = new StartupModal(logo, label, _startupPhases.ToArray(), _interrupt, ResolveStyle, _startupDetails);
         await EnqueueAsync(
             () =>
         {
             _startupBlocked = true;
+            _startupTips ??= new StartupTips(TipsCatalog.All);
+            modal.Tips = _startupTips;
+            modal.Progress = _startupProgress;
             _inputEpoch++;
             ClosePalette();
             _ = _app.ShowAsync<string>(modal);
+
+            // Paint on the terminal owner before the host starts synchronous loading work.
+            _app.RenderOnce();
         },
             cancellationToken);
         _ = Interlocked.CompareExchange(ref _startupDwellStart, Stopwatch.GetTimestamp(), 0);
         var outcome = "Completed";
         try
         {
-            await operation.WaitAsync(cancellationToken);
+            await operation(cancellationToken).WaitAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -79,7 +99,13 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             {
                 if (!_stop.IsCancellationRequested && outcome == "Completed")
                 {
-                    await EnqueueAsync(modal.Complete, _stop.Token);
+                    await EnqueueAsync(
+                        () =>
+                    {
+                        modal.Complete();
+                        _app.RenderOnce();
+                    },
+                        _stop.Token);
                     var remaining = TimeSpan.FromMilliseconds(250)
                         - Stopwatch.GetElapsedTime(Volatile.Read(ref _startupDwellStart));
                     if (remaining > TimeSpan.Zero)
@@ -96,11 +122,15 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                     await EnqueueAsync(
                         () =>
                     {
-                        var completed = $"{label} {outcome}";
-                        _startupPhases.Add(completed);
-                        if (outcome == "Completed" && label.StartsWith("Loading ", StringComparison.Ordinal))
+                        var completed = $"{modal.Elapsed.TotalSeconds:0.0}s {label} {outcome}";
+                        if (outcome == "Completed")
                         {
-                            _startupPhases.Add("Reticulating Splines ... Completed");
+                            _startupPhases.Add(completed);
+                        }
+
+                        if (outcome == "Completed" && label.StartsWith("Loading ", StringComparison.Ordinal) && modal.SplinesCompleted)
+                        {
+                            _startupPhases.Add($"{modal.SplinesElapsed.TotalSeconds:0.0}s Reticulating Splines ... Completed");
                         }
 
                         if (outcome != "Completed")

@@ -31,11 +31,20 @@ public static class RepositoryProgressTests
             async (label, operation, token) =>
             {
                 labels.Add(label);
+                if (label.StartsWith("Loading", StringComparison.Ordinal))
+                {
+                    Assert.False(handler.SolutionStarted);
+                }
+                else
+                {
+                    Assert.False(handler.OpenStarted);
+                }
+
                 activeIndicators++;
                 (labels.Count == 1 ? openVisible : solutionVisible).TrySetResult();
                 try
                 {
-                    await operation.WaitAsync(token);
+                    await operation(token).WaitAsync(token);
                 }
                 finally
                 {
@@ -109,6 +118,10 @@ public static class RepositoryProgressTests
 
         internal TaskCompletionSource SolutionGate { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        internal bool OpenStarted { get; private set; }
+
+        internal bool SolutionStarted { get; private set; }
+
         public Task<SessionId> HandleAsync(CreateSessionCommand command, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(SessionId.New());
@@ -121,6 +134,7 @@ public static class RepositoryProgressTests
 
         public async Task<RepositoryOpenResult> HandleAsync(OpenRepositoryCommand command, CancellationToken cancellationToken = default)
         {
+            OpenStarted = true;
             await OpenGate.Task.WaitAsync(cancellationToken);
             return new RepositoryOpenResult(
                 _workspace,
@@ -133,6 +147,7 @@ public static class RepositoryProgressTests
 
         public async Task<SolutionSelectionResult> HandleAsync(SelectSolutionCommand command, CancellationToken cancellationToken = default)
         {
+            SolutionStarted = true;
             await SolutionGate.Task.WaitAsync(cancellationToken);
             return new SolutionSelectionResult(_workspace, command.SolutionPath, ["net10.0"]);
         }

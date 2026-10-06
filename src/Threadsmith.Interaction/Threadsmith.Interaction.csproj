@@ -15,6 +15,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Include="..\..\tips.txt" Link="tips.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.Tui.TuiKit" />
     <InternalsVisibleTo Include="Threadsmith.App" />
     <InternalsVisibleTo Include="Threadsmith.CoreRuntime.Tests" />

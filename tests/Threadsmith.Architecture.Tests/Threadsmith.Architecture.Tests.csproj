@@ -32,6 +32,7 @@
     <ProjectReference Include="..\..\src\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Embeddings.Local\Threadsmith.Embeddings.Local.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.RepositoryIntelligence\Threadsmith.RepositoryIntelligence.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Models\Threadsmith.Models.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Context\Threadsmith.Context.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Tools\Threadsmith.Tools.csproj" />

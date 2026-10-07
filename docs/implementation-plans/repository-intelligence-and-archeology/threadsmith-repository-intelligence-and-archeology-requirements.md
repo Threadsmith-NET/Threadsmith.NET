@@ -23,7 +23,7 @@ This document is the parent specification for later incremental implementation p
 
 The design follows the converged discussion in [Improve Threadsmith Memory Recall](chatgpt-conversation://6aa8abb7-a5a4-83e9-907e-81f6d56c8d7a), including the two profiling experiments and the subsequent hybrid pipeline discussion. The experiments inform the requirements; their output is not treated as verified architectural truth about the current Threadsmith.NET repository.
 
-Context admission and invalidation must preserve the existing [context policy](../architecture/context-policy.md) and [ADR-31 conversation modes](../architecture/adr-31-bounded-conversational-continuity.md). All operations, including nonpersistent investigations, remain subject to the normal [ADR-6 durable session/event model](../architecture/adr-06-event-oriented-durable-session-model.md). The behavioral decisions below extend these boundaries through narrow integration touch points; they do not authorize alternate execution or context paths.
+Context admission and invalidation must preserve the existing [context policy](../../architecture/context-policy.md) and [ADR-31 conversation modes](../../architecture/adr-31-bounded-conversational-continuity.md). All operations, including nonpersistent investigations, remain subject to the normal [ADR-6 durable session/event model](../../architecture/adr-06-event-oriented-durable-session-model.md). The behavioral decisions below extend these boundaries through narrow integration touch points; they do not authorize alternate execution or context paths.
 
 **Must** denotes required behavior. **Should** denotes a preferred outcome that a later plan may vary with an explicit rationale. **May** denotes an optional capability. Requirement identifiers are stable references for implementation plans and acceptance checks; their order is not an implementation sequence.
 
@@ -371,4 +371,3 @@ The following decisions are intentionally deferred:
 These decisions may refine how requirements are achieved. They must not remove fully optional activation, the single new production project and narrow integration boundary, pinned snapshots, evidence provenance, bounded inference, durable reconciliation, honest freshness, progressive disclosure, or the single-user/local-first scope without an explicit revision to this parent specification.
 
 ## 12. Implementation Notes
-

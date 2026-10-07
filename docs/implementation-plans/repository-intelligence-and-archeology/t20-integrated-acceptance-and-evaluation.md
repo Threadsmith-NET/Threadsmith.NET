@@ -8,7 +8,7 @@
 
 **Requirements and parent acceptance outcomes:** NQ-03, NQ-06 and all parent AC-01–25.
 
-**Sources:** [Parent requirements](../threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
+**Sources:** [Parent requirements](threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
 
 **Mandatory order:** Implement production code → run a clean-context adversarial review → address applicable, valid and reasonable findings and repeat fresh reviews until clean → ask the user to accept this task's implementation → wait for explicit acceptance → implement unit tests, other required tests and documentation → validate and complete. Plan approval, a clean review and silence are not user acceptance.
 
@@ -32,7 +32,7 @@ Do not implement later tasks or refactor unrelated infrastructure. Before explic
 
 ## 5 Current State and Required Reads
 
-- [docs/implementation-plans/threadsmith-repository-intelligence-and-archeology-requirements.md](../../../docs/implementation-plans/threadsmith-repository-intelligence-and-archeology-requirements.md)
+- [docs/implementation-plans/repository-intelligence-and-archeology/threadsmith-repository-intelligence-and-archeology-requirements.md](threadsmith-repository-intelligence-and-archeology-requirements.md)
 - [tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs](../../../tests/Threadsmith.Architecture.Tests/DependencyDirectionTests.cs)
 - [docs/implementation-plans/acceptance-scenarios.md](../../../docs/implementation-plans/acceptance-scenarios.md)
 - [docs/implementation-plans/manual-test-plan.md](../../../docs/implementation-plans/manual-test-plan.md)

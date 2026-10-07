@@ -59,6 +59,7 @@ public static class DependencyDirectionTests
         "Threadsmith.Embeddings.Local",
         "Threadsmith.Reranking.Local",
         "Threadsmith.Persistence",
+        "Threadsmith.RepositoryIntelligence",
         "Threadsmith.Models",
         "Threadsmith.Models.OpenAiCompatible",
         "Threadsmith.Models.OpenAiCodex",
@@ -344,6 +345,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.Embeddings.Local"] = ["Threadsmith.Core"],
             ["Threadsmith.Reranking.Local"] = ["Threadsmith.Core"],
             ["Threadsmith.Persistence"] = ["Threadsmith.Core", "Threadsmith.Telemetry"],
+            ["Threadsmith.RepositoryIntelligence"] = ["Threadsmith.Core"],
             ["Threadsmith.Models"] = ["Threadsmith.Core"],
             ["Threadsmith.Models.OpenAiCompatible"] = ["Threadsmith.Core", "Threadsmith.Models"],
             ["Threadsmith.Models.OpenAiCodex"] = ["Threadsmith.Core", "Threadsmith.Models"],
@@ -367,6 +369,7 @@ public static class DependencyDirectionTests
         graph["Threadsmith.App"] =
         [
             "Threadsmith.Core", "Threadsmith.Telemetry", "Threadsmith.Persistence",
+            "Threadsmith.RepositoryIntelligence",
             "Threadsmith.Models", "Threadsmith.Models.OpenAiCompatible", "Threadsmith.Models.OpenAiCodex",
             "Threadsmith.Models.Anthropic",
             "Threadsmith.Context", "Threadsmith.Tools", "Threadsmith.Embeddings.Local", "Threadsmith.Reranking.Local",

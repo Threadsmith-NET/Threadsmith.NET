@@ -3,7 +3,7 @@
 **Status:** Proposed task breakdown; no implementation or code sign-off implied.  
 **Delivery track:** Proposed new capability milestone, to be registered after user sign-off; not Maintenance and not a reopening of completed milestones.  
 **Prerequisites:** Parent requirements approval; task dependencies below; existing tool, model, context, persistence, memory, and delegation contracts. Recheck the active checkout before each implementation increment.  
-**Parent specification:** [Repository Intelligence and Repository Archeology requirements v0.3](threadsmith-repository-intelligence-and-archeology-requirements.md).
+**Parent specification:** [Repository Intelligence and Repository Archeology requirements v0.3](repository-intelligence-and-archeology/threadsmith-repository-intelligence-and-archeology-requirements.md).
 
 ## 1 Objective
 

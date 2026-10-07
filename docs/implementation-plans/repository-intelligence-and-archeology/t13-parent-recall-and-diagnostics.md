@@ -8,7 +8,7 @@
 
 **Requirements and parent acceptance outcomes:** RT-01–04, RT-10–12, MT-10–12, IN-04–05; AC-09, AC-20–21, AC-23–24 (child withholding until T15; assignment-limited admission remains T15-owned).
 
-**Sources:** [Parent requirements](../threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
+**Sources:** [Parent requirements](threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
 
 **Mandatory order:** Implement production code → run a clean-context adversarial review → address applicable, valid and reasonable findings and repeat fresh reviews until clean → ask the user to accept this task's implementation → wait for explicit acceptance → implement unit tests, other required tests and documentation → validate and complete. Plan approval, a clean review and silence are not user acceptance.
 

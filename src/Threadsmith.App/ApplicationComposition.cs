@@ -11,6 +11,7 @@ using Threadsmith.Hooks;
 using Threadsmith.Mcp;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
+using Threadsmith.RepositoryIntelligence;
 using Threadsmith.Reranking.Local;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
@@ -1355,6 +1356,10 @@ internal sealed class ApplicationServices : IAsyncDisposable
 {
     /// <summary>Gets the preflight sharing the live parent and child routing authorities.</summary>
     internal EffectiveConfigurationPreflight ConfigurationPreflight { get; }
+
+    /// <summary>Gets the dormant feature only after an explicit activation path requests it.</summary>
+    internal Lazy<RepositoryIntelligenceFeature> RepositoryIntelligence { get; } =
+        new(() => new RepositoryIntelligenceFeature());
 
     private readonly AgentRunScheduler _agentScheduler;
     private readonly LocalTextEmbeddingGenerator _embeddings;

@@ -53,6 +53,7 @@ Do not duplicate milestone status elsewhere. Change lifecycle status here only; 
 | M31 | Active | Governed Jira Cloud issue-description reads through trusted accounts and the standard tool pipeline. | [Details](milestones/milestone-31-governed-jira-issue-reads.md) |
 | M32 | Planned | In-process public hosting with API-driven TUI composition, final-answer streaming, and shared shutdown. | [Details](milestones/milestone-32-in-process-tui-automation.md) |
 | M33 | Active | Shared memory reconciliation, metadata and progressive concept recall. | [Details](milestones/milestone-33-memory-reconciliation-and-concept-recall.md) |
+| M34 | Active | Optional repository intelligence and evidence-backed archeology. | [Details](milestones/milestone-34-repository-intelligence-and-archeology.md) |
 | Maintenance | Active | Cross-cutting remediation, internal refactoring, hardening, and compatibility work. | [Details](milestones/maintenance-track.md) |
 
 ## Dependency and sequencing

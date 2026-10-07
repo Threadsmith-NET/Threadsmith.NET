@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Threadsmith.RepositoryIntelligence</RootNamespace>
+    <Description>Optional Threadsmith.NET repository intelligence and archeology implementation.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.App" />
+    <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+  </ItemGroup>
+
+</Project>

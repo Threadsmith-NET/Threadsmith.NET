@@ -1,14 +1,14 @@
 # T01 Establish the dormant assembly boundary
 
-**Status:** Proposed; implementation not started or accepted.
+**Status:** Complete; reviewed production implementation accepted and post-acceptance work validated.
 
-**Delivery track:** Proposed Repository Intelligence and Archeology capability; milestone registration follows T01 acceptance.
+**Delivery track:** M34 Repository Intelligence and Archeology.
 
-**Prerequisites:** Parent requirements approval.
+**Prerequisites:** Parent requirements approval, satisfied for T01 by the user's implementation request.
 
 **Requirements and parent acceptance outcomes:** ISO-01–07, OPT-05; AC-15, AC-18.
 
-**Sources:** [Parent requirements](../threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
+**Sources:** [Parent requirements](threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
 
 **Mandatory order:** Implement production code → run a clean-context adversarial review → address applicable, valid and reasonable findings and repeat fresh reviews until clean → ask the user to accept this task's implementation → wait for explicit acceptance → implement unit tests, other required tests and documentation → validate and complete. Plan approval, a clean review and silence are not user acceptance.
 
@@ -106,13 +106,17 @@ Keep unused/disabled behavior cheap and unchanged. Do not initialize feature sto
 
 ## 14 Acceptance Criteria
 
-- [ ] Exactly one new production project is present and the existing solution/App can reference it without cycles or external type leakage.
-- [ ] Default startup, repository open/restore, existing tools and code exploration contain no feature initialization, storage access, scanning, inference or recurring work.
-- [ ] No speculative tool/API, alternate service provider, renderer, repository reader or background host has been added.
-- [ ] Before acceptance, architecture-test edits and the test project are absent; their pending work is disclosed. After acceptance they are implemented and the dependency gate passes.
-- [ ] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
-- [ ] The user has explicitly accepted that reviewed implementation before any task test or documentation implementation begins.
-- [ ] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+- [x] Exactly one new production project is present and the existing solution/App can reference it without cycles or external type leakage.
+- [x] Default startup, repository open/restore, existing tools and code exploration contain no feature initialization, storage access, scanning, inference or recurring work.
+- [x] No speculative tool/API, alternate service provider, renderer, repository reader or background host has been added.
+- [x] Before acceptance, architecture-test edits and the test project were absent; their pending work was disclosed. After acceptance they were implemented and the dependency gate passes.
+- [x] The final production diff passed the clean-context adversarial review loop; all applicable, valid and reasonable findings were resolved and remaining limitations disclosed.
+- [x] The user explicitly accepted the reviewed implementation before any task test or product documentation implementation began.
+- [x] After acceptance, required unit/integration/architecture tests and documentation were implemented, relevant checks passed, and no required gate was silently deferred.
+
+The accepted production change adds `Threadsmith.RepositoryIntelligence` with a Core-only project edge, plus an App project reference and unresolved `Lazy<RepositoryIntelligenceFeature>` in `ApplicationServices`. The solution entry is the only other production integration touch point. Clean-context reviews found no actionable production findings after the relocated parent requirements links were repaired. Runtime integration now constructs the normal host, opens a repository, restores its session after shutdown, and confirms the feature remains unresolved and absent from the tool catalog.
+
+Validation: `dotnet build src/Threadsmith.sln --no-restore` passed with zero warnings; dedicated feature tests passed (3), architecture tests passed (328 with one optional live test skipped), repository lifecycle tests passed (38), conversation context tests passed (199), and model/tooling tests passed (979 with 16 optional or environment-dependent skips). The task has no required live-provider or performance gate. The new M34 index, detail, and dependency edge own the durable capability registration.
 
 ## 15 Risks
 

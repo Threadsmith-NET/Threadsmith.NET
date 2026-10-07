@@ -5,7 +5,6 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Threadsmith.Core;
-using Threadsmith.Execution;
 using Threadsmith.Models;
 using Threadsmith.Models.Anthropic;
 using Xunit;
@@ -105,15 +104,27 @@ public sealed partial class SessionConversationTests
 
         public RepositoryMemoryEntry Entry { get; set; } = new()
         {
-            Id = RepositoryMemoryId.New(), RepositoryIdentity = "test", Text = "Preserve iterator cancellation during subsequent edits.",
-            ContentHash = "test", Revision = 1, Origin = RepositoryMemoryOrigin.Manual, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch,
+            Id = RepositoryMemoryId.New(),
+            RepositoryIdentity = "test",
+            Text = "Preserve iterator cancellation during subsequent edits.",
+            ContentHash = "test",
+            Revision = 1,
+            Origin = RepositoryMemoryOrigin.Manual,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
         };
 
         public List<RepositoryMemoryRetrievalRequest> Requests { get; } = [];
 
-        public RepositoryMemoryOptions CaptureCurrent() => new() { ConceptRecallEnabled = true, };
+        public RepositoryMemoryOptions CaptureCurrent()
+        {
+            return new() { ConceptRecallEnabled = true, };
+        }
 
-        public RepositoryMemoryOptions Capture(string repositoryIdentity) => CaptureCurrent();
+        public RepositoryMemoryOptions Capture(string repositoryIdentity)
+        {
+            return CaptureCurrent();
+        }
 
         public Task<RepositoryMemoryRetrievalResult> RetrieveAsync(RepositoryMemoryRetrievalRequest request, CancellationToken cancellationToken = default)
         {
@@ -123,14 +134,24 @@ public sealed partial class SessionConversationTests
         }
 
         public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
-            => Task.FromResult(new RepositoryMemoryReadSnapshot(repositoryIdentity, Entry.Revision, Matches ? [Entry] : [], [], []));
+        {
+            return Task.FromResult(new RepositoryMemoryReadSnapshot(repositoryIdentity, Entry.Revision, Matches ? [Entry] : [], [], []));
+        }
 
-        public Task<RepositoryMemoryOperationResult> ExecuteAsync(RepositoryMemoryOperationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<RepositoryMemoryOperationResult> ExecuteAsync(RepositoryMemoryOperationRequest request, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
         public Task<IReadOnlyList<RepositoryMemoryId>> EnforceCapacityAsync(string repositoryIdentity, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
-            => Task.FromResult<IReadOnlyList<RepositoryMemoryId>>([]);
+        {
+            return Task.FromResult<IReadOnlyList<RepositoryMemoryId>>([]);
+        }
 
-        public Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default)
+        {
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class MemoryReplayProvider : IModelProvider, IModelRequestPreparationResolver
@@ -143,9 +164,14 @@ public sealed partial class SessionConversationTests
         {
             _profile = new ModelProfile
             {
-                Id = ModelProfileId.New(), Name = "memory replay fixture", Provider = "anthropic",
-                ModelId = "claude-test", Endpoint = AnthropicProviderRegistration.MessagesEndpoint,
-                ContextWindow = 200000, MaximumOutputTokens = 8192, RequestOutputTokenReserve = 4096,
+                Id = ModelProfileId.New(),
+                Name = "memory replay fixture",
+                Provider = "anthropic",
+                ModelId = "claude-test",
+                Endpoint = AnthropicProviderRegistration.MessagesEndpoint,
+                ContextWindow = 200000,
+                MaximumOutputTokens = 8192,
+                RequestOutputTokenReserve = 4096,
                 Capabilities = new ModelCapabilitySet { Streaming = true, ToolCalls = true },
                 SupportedReasoningLevels = [ReasoningLevel.None],
                 ReasoningCapability = new EffectiveReasoningCapability { SupportsReasoningOff = true },
@@ -154,20 +180,27 @@ public sealed partial class SessionConversationTests
             };
             var compatibility = new AnthropicModelCompatibility
             {
-                ModelId = _profile.ModelId, SupportsStrictSchemas = true, SupportsReasoningOff = true,
+                ModelId = _profile.ModelId,
+                SupportsStrictSchemas = true,
+                SupportsReasoningOff = true,
                 ThinkingMode = AnthropicThinkingMode.Disabled,
                 Prices = new AnthropicModelPrices { InputPerMillionTokens = 2, CacheWritePerMillionTokens = 2.5m, CacheReadPerMillionTokens = 0.2m, OutputPerMillionTokens = 10 },
             };
             _definition = new ConfiguredModelDefinition
             {
-                Profile = _profile, ProviderId = "memory-replay", Registration = new AnthropicProviderRegistration(),
+                Profile = _profile,
+                ProviderId = "memory-replay",
+                Registration = new AnthropicProviderRegistration(),
                 ProviderConfiguration = new AnthropicProviderConfiguration { Id = "memory-replay", Name = "fixture", Models = [] },
                 ModelConfiguration = new AnthropicModelConfiguration { Id = _profile.Id, Name = _profile.Name, ModelId = _profile.ModelId, Compatibility = compatibility },
             };
             _inner = _definition.Registration.CreateProvider(new ModelProviderActivationContext
             {
-                HttpClient = client, Profile = _profile, ResolvedSecret = "test-key",
-                ProviderConfiguration = _definition.ProviderConfiguration, ModelConfiguration = _definition.ModelConfiguration,
+                HttpClient = client,
+                Profile = _profile,
+                ResolvedSecret = "test-key",
+                ProviderConfiguration = _definition.ProviderConfiguration,
+                ModelConfiguration = _definition.ModelConfiguration,
             });
         }
 
@@ -175,9 +208,12 @@ public sealed partial class SessionConversationTests
 
         public List<ModelResponseReplayEnvelope> RetainedResponses { get; } = [];
 
-        public ModelStreamRequest Prepare(ModelStreamRequest request) => ModelRequestPreparation.Apply(
+        public ModelStreamRequest Prepare(ModelStreamRequest request)
+        {
+            return ModelRequestPreparation.Apply(
             _definition,
             request with { ResolvedProfileId = _profile.Id, ReasoningLevel = ReasoningLevel.None, ToolTransportMode = ToolTransportMode.Native, MaximumOutputTokens = 4096 });
+        }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {
@@ -231,6 +267,9 @@ public sealed partial class SessionConversationTests
             return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(stream, Encoding.UTF8, "text/event-stream") };
         }
 
-        private static string Event(string name, object value) => "event: " + name + "\ndata: " + JsonSerializer.Serialize(value) + "\n\n";
+        private static string Event(string name, object value)
+        {
+            return "event: " + name + "\ndata: " + JsonSerializer.Serialize(value) + "\n\n";
+        }
     }
 }

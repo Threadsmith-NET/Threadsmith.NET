@@ -112,7 +112,10 @@ public static class MemoryConceptRecallTests
         using var retriever = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder());
         var request = new RepositoryMemorySearchRequest
         {
-            RepositoryIdentity = MemoryTestData.Repository, Query = "unrelated", UserTurnId = RunId.New(), Concepts = ["cancelation"],
+            RepositoryIdentity = MemoryTestData.Repository,
+            Query = "unrelated",
+            UserTurnId = RunId.New(),
+            Concepts = ["cancelation"],
             Options = Options with { ConceptFuzzyEnabled = true, ConceptFuzzyMaximumDistance = 20 },
         };
         var failed = await retriever.SearchAsync(request);
@@ -164,7 +167,9 @@ public static class MemoryConceptRecallTests
         public int Resolutions { get; private set; }
 
         public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, IReadOnlyList<string> lexicalTerms, CancellationToken cancellationToken = default)
-            => Task.FromResult(Snapshot);
+        {
+            return Task.FromResult(Snapshot);
+        }
 
         public Task<MemoryTermResolution> ResolveTermsAsync(RepositoryMemoryVocabularySnapshot snapshot, IReadOnlyList<string> queries, int maximumDistance, CancellationToken cancellationToken = default)
         {
@@ -174,18 +179,39 @@ public static class MemoryConceptRecallTests
                 : new MemoryTermResolution(snapshot.Vocabulary.Contains("cancellation") ? [new("cancelation", "cancellation", 10)] : []));
         }
 
-        public Task<RepositoryMemoryWriteResult> AddAsync(string repositoryIdentity, RepositoryMemoryWrite write, TextEmbeddingModelDescriptor model, TextEmbeddingResult embedding, RepositoryMemoryOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<RepositoryMemoryWriteResult> AddAsync(string repositoryIdentity, RepositoryMemoryWrite write, TextEmbeddingModelDescriptor model, TextEmbeddingResult embedding, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task<RepositoryMemoryWriteResult> UpdateAsync(string repositoryIdentity, RepositoryMemoryId id, long expectedRevision, RepositoryMemoryWrite write, TextEmbeddingModelDescriptor? model, TextEmbeddingResult? embedding, RepositoryMemoryOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<RepositoryMemoryWriteResult> UpdateAsync(string repositoryIdentity, RepositoryMemoryId id, long expectedRevision, RepositoryMemoryWrite write, TextEmbeddingModelDescriptor? model, TextEmbeddingResult? embedding, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task<RepositoryMemoryEntry?> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<RepositoryMemoryEntry?> RemoveAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task<IReadOnlyList<RepositoryMemoryId>> EnforceCapacityAsync(string repositoryIdentity, RepositoryMemoryOptions options, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<RepositoryMemoryId>> EnforceCapacityAsync(string repositoryIdentity, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task<bool> AttachEmbeddingAsync(string repositoryIdentity, RepositoryMemoryId id, long expectedRevision, string expectedContentHash, TextEmbeddingModelDescriptor model, TextEmbeddingResult embedding, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> AttachEmbeddingAsync(string repositoryIdentity, RepositoryMemoryId id, long expectedRevision, string expectedContentHash, TextEmbeddingModelDescriptor model, TextEmbeddingResult embedding, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
 
-        public Task PruneInclusionsAsync(string repositoryIdentity, RunId runId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task PruneInclusionsAsync(string repositoryIdentity, RunId runId, CancellationToken cancellationToken = default)
+        {
+            throw new NotSupportedException();
+        }
     }
 }

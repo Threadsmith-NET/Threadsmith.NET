@@ -309,6 +309,9 @@ public sealed class MutationMaterializerTests
 
     private sealed class PassthroughSanitizer : IOutputSanitizer
     {
-        public string Sanitize(string value) => value;
+        public string Sanitize(string value)
+        {
+            return value;
+        }
     }
 }

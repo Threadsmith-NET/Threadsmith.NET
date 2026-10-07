@@ -101,7 +101,10 @@ public static partial class Milestone1Tests
 
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
-        public override long GetTimestamp() => Elapsed.Ticks;
+        public override long GetTimestamp()
+        {
+            return Elapsed.Ticks;
+        }
     }
 
     private sealed class ReadinessProjections : IProjectionStore
@@ -115,7 +118,9 @@ public static partial class Milestone1Tests
         }
 
         public Task ApplyAsync(IDomainEvent domainEvent, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public Task<TProjection?> GetAsync<TProjection>(ProjectionKey key, CancellationToken cancellationToken = default)
             where TProjection : class, IProjection

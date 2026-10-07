@@ -11,5 +11,8 @@ internal static class TipsCatalog
     internal static IReadOnlyList<string> All => Loaded.Value;
 
     /// <summary>Formats tips for local output without conversation admission.</summary>
-    internal static string FormatBullets() => string.Concat(All.Select(tip => $"- {tip}\n"));
+    internal static string FormatBullets()
+    {
+        return string.Concat(All.Select(tip => $"- {tip}\n"));
+    }
 }

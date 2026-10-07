@@ -94,7 +94,10 @@ public sealed partial class SourceEditApplicationTests
     {
         private readonly Func<RunId, CancellationToken, Task> _edit;
 
-        public CancellationEditProvider(Func<RunId, CancellationToken, Task> edit) => _edit = edit;
+        public CancellationEditProvider(Func<RunId, CancellationToken, Task> edit)
+        {
+            _edit = edit;
+        }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {

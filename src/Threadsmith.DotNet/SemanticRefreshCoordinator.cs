@@ -3098,7 +3098,10 @@ public sealed class SemanticRefreshCoordinator :
             }
         }
 
-        public bool WatchesDirectory(string path) => Volatile.Read(ref _watchedDirectories).Contains(path);
+        public bool WatchesDirectory(string path)
+        {
+            return Volatile.Read(ref _watchedDirectories).Contains(path);
+        }
 
         public void RestartWatching(
             Action<SemanticFileChange> changed,
@@ -3498,7 +3501,10 @@ internal interface ISemanticRefreshBackend
     }
 
     /// <summary>Stops preparation after the last workspace binding owner detaches.</summary>
-    Task RetirePreparationAsync(WorkspaceId workspaceId, bool retainCurrentPreparation, CancellationToken cancellationToken) => Task.CompletedTask;
+    Task RetirePreparationAsync(WorkspaceId workspaceId, bool retainCurrentPreparation, CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
 
     /// <summary>Gets current workspace confidence.</summary>
     SemanticConfidenceLevel GetConfidence(WorkspaceId workspaceId);
@@ -3507,7 +3513,10 @@ internal interface ISemanticRefreshBackend
     Task PublishCurrentConfidenceAsync(
         WorkspaceId workspaceId,
         Func<SemanticConfidenceLevel, CancellationToken, Task> publication,
-        CancellationToken cancellationToken) => publication(GetConfidence(workspaceId), cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        return publication(GetConfidence(workspaceId), cancellationToken);
+    }
 
     /// <summary>Gets exact loaded semantic document membership by Roslyn document kind.</summary>
     SemanticRefreshInventory GetRefreshInventory(WorkspaceId workspaceId);

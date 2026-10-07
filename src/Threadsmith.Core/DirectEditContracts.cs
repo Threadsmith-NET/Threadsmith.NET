@@ -134,7 +134,9 @@ public interface IMutationEffectStore
 {
     /// <summary>Streams one owner's effects in durable insertion order for cumulative evidence without loading other runs.</summary>
     IAsyncEnumerable<MutationEffectRecord> ReadRunEffectsAsync(SessionId sessionId, RunId runId, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException("Run effect history is unavailable.");
+    {
+        throw new NotSupportedException("Run effect history is unavailable.");
+    }
 
     /// <summary>Atomically inserts immutable intent; false means the identity already exists.</summary>
     Task<bool> TryBeginEffectAsync(MutationEffectRecord record, CancellationToken cancellationToken = default);

@@ -52,8 +52,14 @@ public static class StartupTipsTests
 
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
-        public override long GetTimestamp() => _timestamp;
+        public override long GetTimestamp()
+        {
+            return _timestamp;
+        }
 
-        internal void Advance(TimeSpan duration) => _timestamp += duration.Ticks;
+        internal void Advance(TimeSpan duration)
+        {
+            _timestamp += duration.Ticks;
+        }
     }
 }

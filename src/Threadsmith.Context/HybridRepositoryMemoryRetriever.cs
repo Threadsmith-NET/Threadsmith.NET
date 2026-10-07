@@ -45,15 +45,15 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         var query = BuildQuery(request, out var bounded);
         return SearchAsync(
             new RepositoryMemorySearchRequest
-        {
-            RepositoryIdentity = request.RepositoryIdentity,
-            Query = query,
-            QueryBounded = bounded,
-            Options = RepositoryMemorySearchOptions.ForRecall(request.Options),
-            UserTurnId = request.UserTurnId,
-            Concepts = request.Concepts,
-            RetainedMemories = request.RetainedMemories,
-        },
+            {
+                RepositoryIdentity = request.RepositoryIdentity,
+                Query = query,
+                QueryBounded = bounded,
+                Options = RepositoryMemorySearchOptions.ForRecall(request.Options),
+                UserTurnId = request.UserTurnId,
+                Concepts = request.Concepts,
+                RetainedMemories = request.RetainedMemories,
+            },
             cancellationToken);
     }
 

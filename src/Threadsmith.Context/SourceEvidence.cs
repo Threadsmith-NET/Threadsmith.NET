@@ -1,7 +1,5 @@
 namespace Threadsmith.Context;
 
-using Threadsmith.Core;
-
 /// <summary>Normalizes source identity for evidence admission and invalidation.</summary>
 public static class SourceEvidence
 {

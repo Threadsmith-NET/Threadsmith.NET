@@ -28,9 +28,12 @@ public static class MemorySharedDiscoveryTests
         var service = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: search);
         var options = new RepositoryMemoryOptions
         {
-            ReconciliationEnabled = true, ReconciliationSemanticMinimum = 1,
-            ConceptRecallEnabled = false, MaxRepoMemoriesInContext = 0,
-            ReconciliationConceptFuzzyEnabled = fuzzy, ReconciliationConceptFuzzyMaximumDistance = 20,
+            ReconciliationEnabled = true,
+            ReconciliationSemanticMinimum = 1,
+            ConceptRecallEnabled = false,
+            MaxRepoMemoriesInContext = 0,
+            ReconciliationConceptFuzzyEnabled = fuzzy,
+            ReconciliationConceptFuzzyMaximumDistance = 20,
         };
         var proposal = MemoryTestData.Operation("add", "Propagate tokens") with { Concepts = [fuzzy ? "cancelation" : "cancellation"], Origin = origin, Options = options };
         var collision = await service.ExecuteAsync(proposal, ct);
@@ -57,7 +60,9 @@ public static class MemorySharedDiscoveryTests
         using var search = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder());
         var options = new RepositoryMemoryOptions
         {
-            SemanticMinimum = 1, ReconciliationSemanticMinimum = 1, RerankerEnabled = true,
+            SemanticMinimum = 1,
+            ReconciliationSemanticMinimum = 1,
+            RerankerEnabled = true,
             ReconciliationEnabled = true,
             Lexical = new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20 },
             ReconciliationLexical = new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20 },
@@ -123,7 +128,8 @@ public static class MemorySharedDiscoveryTests
         using var search = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder());
         var options = new RepositoryMemoryOptions
         {
-            SemanticMinimum = 1, ReconciliationEnabled = true,
+            SemanticMinimum = 1,
+            ReconciliationEnabled = true,
             Lexical = new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20 },
             ReconciliationLexical = new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20 },
         };

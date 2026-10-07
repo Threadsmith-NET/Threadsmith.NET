@@ -328,9 +328,15 @@ public static class ModelOutputCoalescerTests
 
         public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
-        public override long GetTimestamp() => Interlocked.Read(ref _ticks);
+        public override long GetTimestamp()
+        {
+            return Interlocked.Read(ref _ticks);
+        }
 
-        public override DateTimeOffset GetUtcNow() => DateTimeOffset.UnixEpoch.AddTicks(GetTimestamp());
+        public override DateTimeOffset GetUtcNow()
+        {
+            return DateTimeOffset.UnixEpoch.AddTicks(GetTimestamp());
+        }
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
@@ -389,7 +395,10 @@ public static class ModelOutputCoalescerTests
                 }
             }
 
-            public void Fire() => _callback(_state);
+            public void Fire()
+            {
+                _callback(_state);
+            }
 
             public void Dispose()
             {

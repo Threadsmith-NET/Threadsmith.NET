@@ -286,7 +286,10 @@ public sealed partial class SourceEditApplicationTests
             _events = events;
         }
 
-        public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot) => _inner.HasSemanticInputs(workspaceId, repositoryPath, snapshot);
+        public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
+        {
+            return _inner.HasSemanticInputs(workspaceId, repositoryPath, snapshot);
+        }
 
         public async Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
         {
@@ -326,9 +329,15 @@ public sealed partial class SourceEditApplicationTests
                 : latest;
         }
 
-        public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId) => _inner.ConfirmApplied(workspaceId, effectId);
+        public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId)
+        {
+            _inner.ConfirmApplied(workspaceId, effectId);
+        }
 
-        public void DiscardCandidate(WorkspaceId workspaceId, Guid effectId) => _inner.DiscardCandidate(workspaceId, effectId);
+        public void DiscardCandidate(WorkspaceId workspaceId, Guid effectId)
+        {
+            _inner.DiscardCandidate(workspaceId, effectId);
+        }
     }
 
     private sealed class TestPublicationGate : ISemanticRefreshPublicationGate
@@ -351,7 +360,10 @@ public sealed partial class SourceEditApplicationTests
 
         public List<string> RequestText { get; } = [];
 
-        public ModelStreamRequest Prepare(ModelStreamRequest request) => request with { ResolvedProfileId = _profileId };
+        public ModelStreamRequest Prepare(ModelStreamRequest request)
+        {
+            return request with { ResolvedProfileId = _profileId };
+        }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, [EnumeratorCancellation] CancellationToken cancellationToken = default)
         {

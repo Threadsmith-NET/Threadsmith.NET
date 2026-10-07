@@ -200,7 +200,8 @@ public sealed class EvidenceStore : IEvidenceStore
                 Store(evidence with
                 {
                     SessionId = destinationSessionId,
-                    FileDependencies = evidence.FileDependencies.ToArray(), InvalidationKeys = evidence.InvalidationKeys.ToArray(),
+                    FileDependencies = evidence.FileDependencies.ToArray(),
+                    InvalidationKeys = evidence.InvalidationKeys.ToArray(),
                 });
             }
         }

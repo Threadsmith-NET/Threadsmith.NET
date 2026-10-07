@@ -134,10 +134,14 @@ public sealed partial class SourceEditApplicationTests
         var artifact = await fixture.Artifacts.PublishAsync(fixture.SessionId, "mutationEffectSnapshot", JsonSerializer.Serialize(snapshot), ct);
         var intent = new MutationEffectRecord
         {
-            EffectId = command.EffectId, SessionId = command.SessionId, RunId = command.RunId, WorkspaceId = command.WorkspaceId,
+            EffectId = command.EffectId,
+            SessionId = command.SessionId,
+            RunId = command.RunId,
+            WorkspaceId = command.WorkspaceId,
             RepositoryIdentity = RepositoryIdentity.Create(fixture.Repository),
             RequestIdentity = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command.Instructions))),
-            MutationSetId = snapshot.MutationSetId, SnapshotArtifact = artifact,
+            MutationSetId = snapshot.MutationSetId,
+            SnapshotArtifact = artifact,
         };
         Assert.True(await fixture.Store.TryBeginEffectAsync(intent, ct));
         if (committed)
@@ -240,12 +244,18 @@ public sealed partial class SourceEditApplicationTests
         });
         var request = new ToolInvocationRequest
         {
-            SessionId = fixture.SessionId, RunId = fixture.RunId, ToolId = "edit_source", InvocationKey = "call_1",
+            SessionId = fixture.SessionId,
+            RunId = fixture.RunId,
+            ToolId = "edit_source",
+            InvocationKey = "call_1",
             ArgumentsJson = """{"rationale":"Change the type name","mutations":[{"relativePath":"Example.cs","type":"ReplaceText","expectedText":"Example","replacementText":"Changed"}]}""",
             Context = new()
             {
-                RepositoryPath = fixture.Repository, WorkspaceId = fixture.WorkspaceId, TrustLevel = RepositoryTrustLevel.TrustedMutation,
-                RequestedBy = "model", RequireApprovalToolIds = ["edit_source"],
+                RepositoryPath = fixture.Repository,
+                WorkspaceId = fixture.WorkspaceId,
+                TrustLevel = RepositoryTrustLevel.TrustedMutation,
+                RequestedBy = "model",
+                RequireApprovalToolIds = ["edit_source"],
             },
         };
         var invocation = pipeline.InvokeAsync(request, ct);
@@ -423,7 +433,10 @@ public sealed partial class SourceEditApplicationTests
         Assert.Equal("class Following { }", await File.ReadAllTextAsync(fixture.SourcePath, ct));
     }
 
-    private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    private static string Hash(string text)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    }
 
     private sealed class EditFixture : IAsyncDisposable
     {
@@ -485,7 +498,9 @@ public sealed partial class SourceEditApplicationTests
             return new(root, workspaceId, events, workspaces, store, artifacts, limits);
         }
 
-        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null) => new(
+        public SourceEditApplication CreateApplication(IMutationEffectStore? effects = null, ISourceEditAnalyzer? analyzer = null, ISemanticRefreshCoordinator? refresh = null)
+        {
+            return new(
             _workspaces,
             Commits,
             _workspaces,
@@ -500,6 +515,7 @@ public sealed partial class SourceEditApplicationTests
             semanticRefresh: refresh,
             reviews: _workspaces,
             previews: _workspaces);
+        }
 
         public ApplySourceEditCommand Replace(string expected, string replacement, bool requireReview)
         {
@@ -536,13 +552,25 @@ public sealed partial class SourceEditApplicationTests
             _store = store;
         }
 
-        public Task<bool> TryBeginEffectAsync(MutationEffectRecord record, CancellationToken cancellationToken = default) => _store.TryBeginEffectAsync(record, cancellationToken);
+        public Task<bool> TryBeginEffectAsync(MutationEffectRecord record, CancellationToken cancellationToken = default)
+        {
+            return _store.TryBeginEffectAsync(record, cancellationToken);
+        }
 
-        public Task<MutationEffectRecord?> GetEffectAsync(Guid effectId, CancellationToken cancellationToken = default) => _store.GetEffectAsync(effectId, cancellationToken);
+        public Task<MutationEffectRecord?> GetEffectAsync(Guid effectId, CancellationToken cancellationToken = default)
+        {
+            return _store.GetEffectAsync(effectId, cancellationToken);
+        }
 
-        public Task CompleteEffectAsync(Guid effectId, SourceEditReceipt receipt, CancellationToken cancellationToken = default) => throw new IOException("Simulated terminal store failure.");
+        public Task CompleteEffectAsync(Guid effectId, SourceEditReceipt receipt, CancellationToken cancellationToken = default)
+        {
+            throw new IOException("Simulated terminal store failure.");
+        }
 
-        public Task<IReadOnlyList<MutationEffectRecord>> GetUnresolvedEffectsAsync(string repositoryIdentity, CancellationToken cancellationToken = default) => _store.GetUnresolvedEffectsAsync(repositoryIdentity, cancellationToken);
+        public Task<IReadOnlyList<MutationEffectRecord>> GetUnresolvedEffectsAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+        {
+            return _store.GetUnresolvedEffectsAsync(repositoryIdentity, cancellationToken);
+        }
     }
 
     private sealed class CountingCommits : ICommandHandler<CommitMutationSetCommand, MutationCommitResult>

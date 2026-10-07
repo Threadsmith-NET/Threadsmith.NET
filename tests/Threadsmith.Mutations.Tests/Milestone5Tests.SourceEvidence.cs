@@ -17,9 +17,12 @@ public static partial class Milestone5Tests
         var store = new EvidenceStore(events, new PassthroughSanitizer());
         var original = new Evidence
         {
-            EvidenceId = EvidenceId.New(), SessionId = repository.SessionId, Content = "original",
+            EvidenceId = EvidenceId.New(),
+            SessionId = repository.SessionId,
+            Content = "original",
             Provenance = new EvidenceProvenance { Source = "index fixture", RepositoryPath = repository.Root },
-            FileDependencies = [new("a.txt", "v1"), new("b.txt", null)], CollectedAt = DateTimeOffset.UtcNow,
+            FileDependencies = [new("a.txt", "v1"), new("b.txt", null)],
+            CollectedAt = DateTimeOffset.UtcNow,
         };
         await store.AddAsync(original, token);
         var copiedSession = SessionId.New();
@@ -62,8 +65,11 @@ public static partial class Milestone5Tests
         var before = DateTimeOffset.UtcNow;
         var old = new Evidence
         {
-            EvidenceId = EvidenceId.New(), SessionId = repository.SessionId, Kind = EvidenceKind.SourceExcerpt,
-            Content = "old multi-file", CollectedAt = before,
+            EvidenceId = EvidenceId.New(),
+            SessionId = repository.SessionId,
+            Kind = EvidenceKind.SourceExcerpt,
+            Content = "old multi-file",
+            CollectedAt = before,
             Provenance = new EvidenceProvenance { Source = "test", RepositoryPath = repository.Root, SourcePath = "a.txt" },
             FileDependencies = [new("a.txt", "old"), new(Path.Combine(repository.Root, "b.txt"), "old")],
         };
@@ -76,7 +82,9 @@ public static partial class Milestone5Tests
         var hash = repository.Baseline.Files.Single(file => file.RelativePath == "a.txt").Sha256;
         var current = old with
         {
-            EvidenceId = EvidenceId.New(), Content = "current first range", CollectedAt = before.AddSeconds(1),
+            EvidenceId = EvidenceId.New(),
+            Content = "current first range",
+            CollectedAt = before.AddSeconds(1),
             FileDependencies = [new("a.txt", hash, new SourceRange(1, 1, 1, 2))],
         };
         await store.AddAsync(current, token);

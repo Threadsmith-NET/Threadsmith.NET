@@ -260,7 +260,10 @@ public sealed partial class SourceEditApplicationTests
             _omissions = omissions;
         }
 
-        public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot) => true;
+        public bool HasSemanticInputs(WorkspaceId workspaceId, string repositoryPath, MutationEffectSnapshot snapshot)
+        {
+            return true;
+        }
 
         public Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
         {
@@ -269,13 +272,25 @@ public sealed partial class SourceEditApplicationTests
             return Task.FromResult<SourceEditAnalysis?>(_analysis);
         }
 
-        public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId) => _analysis;
+        public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId)
+        {
+            return _analysis;
+        }
 
-        public void Publish(SourceEditAnalysis analysis) => _analysis = analysis;
+        public void Publish(SourceEditAnalysis analysis)
+        {
+            _analysis = analysis;
+        }
 
-        public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId) => _analysis = _analysis! with { CommittedGeneration = 1 };
+        public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId)
+        {
+            _analysis = _analysis! with { CommittedGeneration = 1 };
+        }
 
-        public void DiscardCandidate(WorkspaceId workspaceId, Guid effectId) => _analysis = null;
+        public void DiscardCandidate(WorkspaceId workspaceId, Guid effectId)
+        {
+            _analysis = null;
+        }
     }
 
     private sealed class CompletionProvider : IModelProvider

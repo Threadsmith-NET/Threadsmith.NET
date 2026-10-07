@@ -90,10 +90,10 @@ public static class MemorySearchContractTests
         var selected = Assert.Single(initial.Selected);
         var retained = await search.SearchAsync(
             request with
-        {
-            Options = request.Options with { ConceptRecallEnabled = true, },
-            RetainedMemories = [new(selected.Entry.Id, selected.Entry.Revision)],
-        },
+            {
+                Options = request.Options with { ConceptRecallEnabled = true, },
+                RetainedMemories = [new(selected.Entry.Id, selected.Entry.Revision)],
+            },
             ct);
         var retainedCandidate = Assert.Single(retained.Selected);
         Assert.Equal(selected.Entry.Id, retainedCandidate.Entry.Id);
@@ -120,11 +120,11 @@ public static class MemorySearchContractTests
         using var search = new HybridRepositoryMemoryRetriever(store, generator, truncated ? encoder : null);
         var result = await search.SearchAsync(
             new RepositoryMemorySearchRequest
-        {
-            RepositoryIdentity = MemoryTestData.Repository,
-            Query = "cancellation",
-            Options = new RepositoryMemorySearchOptions { SemanticMinimum = 1, RerankerEnabled = true },
-        },
+            {
+                RepositoryIdentity = MemoryTestData.Repository,
+                Query = "cancellation",
+                Options = new RepositoryMemorySearchOptions { SemanticMinimum = 1, RerankerEnabled = true },
+            },
             ct);
         Assert.False(result.IsComplete);
         Assert.Single(result.Selected);

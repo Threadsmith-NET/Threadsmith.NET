@@ -1,15 +1,8 @@
 namespace Threadsmith.ExecutionOrchestration.Tests;
 
-using System.Runtime.CompilerServices;
-using System.Text;
-using System.Text.Json;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
-using Threadsmith.Execution;
-using Threadsmith.Models;
 using Threadsmith.Persistence;
-using Threadsmith.Telemetry;
 using Xunit;
 
 /// <summary>Verifies historical checkpoint compatibility and current durable storage.</summary>

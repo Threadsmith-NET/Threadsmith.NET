@@ -72,7 +72,9 @@ public sealed partial class SessionConversationTests
                     token.ThrowIfCancellationRequested();
                     return Task.FromResult(new ToolInvocationContext
                     {
-                        RepositoryPath = directory, TrustLevel = RepositoryTrustLevel.TrustedMutation, RequestedBy = "conversation-test",
+                        RepositoryPath = directory,
+                        TrustLevel = RepositoryTrustLevel.TrustedMutation,
+                        RequestedBy = "conversation-test",
                     });
                 },
                 contextAssembler: assembler,

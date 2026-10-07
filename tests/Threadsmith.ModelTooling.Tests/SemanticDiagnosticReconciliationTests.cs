@@ -193,9 +193,15 @@ public static class SemanticDiagnosticReconciliationTests
 
                 switch (instrument.Name)
                 {
-                    case "threadsmith.semantic.diagnostics.file_reads": Reads += value; break;
-                    case "threadsmith.semantic.diagnostics.characters_read": Characters += value; break;
-                    case "threadsmith.semantic.diagnostics.texts_created": Texts += value; break;
+                    case "threadsmith.semantic.diagnostics.file_reads":
+                        Reads += value;
+                        break;
+                    case "threadsmith.semantic.diagnostics.characters_read":
+                        Characters += value;
+                        break;
+                    case "threadsmith.semantic.diagnostics.texts_created":
+                        Texts += value;
+                        break;
                 }
             });
             _listener.Start();
@@ -207,7 +213,10 @@ public static class SemanticDiagnosticReconciliationTests
 
         public long Texts { get; private set; }
 
-        public void Reset() => Reads = Characters = Texts = 0;
+        public void Reset()
+        {
+            Reads = Characters = Texts = 0;
+        }
 
         public void Dispose()
         {
@@ -305,7 +314,10 @@ public static class SemanticDiagnosticReconciliationTests
             return (pipeline, request, mutation);
         }
 
-        public void Dispose() => Directory.Delete(Root, recursive: true);
+        public void Dispose()
+        {
+            Directory.Delete(Root, recursive: true);
+        }
     }
 
     private sealed class UnusedProcessManager : IProcessManager

@@ -70,9 +70,15 @@ public static class MemoryToolFlowTests
 
     private sealed class FlowOptions : IRepositoryMemoryOptionsProvider
     {
-        public RepositoryMemoryOptions CaptureCurrent() => new() { ReconciliationEnabled = true, };
+        public RepositoryMemoryOptions CaptureCurrent()
+        {
+            return new() { ReconciliationEnabled = true, };
+        }
 
-        public RepositoryMemoryOptions Capture(string repositoryIdentity) => CaptureCurrent();
+        public RepositoryMemoryOptions Capture(string repositoryIdentity)
+        {
+            return CaptureCurrent();
+        }
     }
 
     private sealed class CollisionModel : IModelProvider

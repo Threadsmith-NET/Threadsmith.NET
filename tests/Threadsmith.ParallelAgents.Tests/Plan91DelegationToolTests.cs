@@ -1187,7 +1187,9 @@ public sealed class Plan91DelegationToolTests
         public WorkspaceIsolation Isolation { get; }
 
         public Task VerifyBaselineAsync(IReadOnlyList<string> additionalPaths, CancellationToken cancellationToken = default)
-            => throw new NotSupportedException();
+        {
+            throw new NotSupportedException();
+        }
 
         public ValueTask DisposeAsync()
         {

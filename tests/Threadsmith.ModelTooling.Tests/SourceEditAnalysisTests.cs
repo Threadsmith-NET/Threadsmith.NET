@@ -274,5 +274,8 @@ public static class SourceEditAnalysisTests
         return new(MutationSetId.New(), [], [new(path, Hash(before), Hash(after)) { FinalBytes = Encoding.UTF8.GetBytes(after) }]);
     }
 
-    private static string Hash(string text) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    private static string Hash(string text)
+    {
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    }
 }

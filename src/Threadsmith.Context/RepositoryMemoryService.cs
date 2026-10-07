@@ -128,15 +128,15 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
                 {
                     var matches = await search.SearchAsync(
                         new RepositoryMemorySearchRequest
-                    {
-                        RepositoryIdentity = request.RepositoryIdentity,
-                        Query = text,
-                        Concepts = concepts,
-                        IncludeStandingPreferences = true,
-                        PreparedEmbedding = embedding,
-                        PreparedEmbeddingSpaceId = model.SpaceId,
-                        Options = RepositoryMemorySearchOptions.ForReconciliation(request.Options),
-                    },
+                        {
+                            RepositoryIdentity = request.RepositoryIdentity,
+                            Query = text,
+                            Concepts = concepts,
+                            IncludeStandingPreferences = true,
+                            PreparedEmbedding = embedding,
+                            PreparedEmbeddingSpaceId = model.SpaceId,
+                            Options = RepositoryMemorySearchOptions.ForReconciliation(request.Options),
+                        },
                         cancellationToken);
                     searchDetails = matches.SearchDetails;
                     if (!matches.IsComplete || matches.MemorySetRevision is null)

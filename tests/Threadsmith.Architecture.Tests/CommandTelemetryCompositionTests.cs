@@ -6,7 +6,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Telemetry;
-using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Production composition wiring tests for Plan 64 (AR-01) command telemetry.</summary>

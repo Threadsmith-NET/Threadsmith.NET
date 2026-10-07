@@ -1,7 +1,6 @@
 namespace Threadsmith.Execution;
 
 using System.Text;
-using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Invalid mutation instructions, distinct from advisory compiler diagnostics.</summary>

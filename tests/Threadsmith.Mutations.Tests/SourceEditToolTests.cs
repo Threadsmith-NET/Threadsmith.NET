@@ -3,7 +3,6 @@ namespace Threadsmith.Mutations.Tests;
 using System.Text.Json;
 using Threadsmith.Core;
 using Threadsmith.Execution;
-using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Verifies the model-facing edit receipt preserves evidence without claiming unmeasured success.</summary>
@@ -20,8 +19,12 @@ public sealed class SourceEditToolTests
     {
         var analysis = new SourceEditAnalysis
         {
-            EffectId = Guid.NewGuid(), Pending = pending, Obsolete = obsolete,
-            ProjectsAnalyzed = projectsAnalyzed, ProjectsInScope = 2, CurrentErrors = 3,
+            EffectId = Guid.NewGuid(),
+            Pending = pending,
+            Obsolete = obsolete,
+            ProjectsAnalyzed = projectsAnalyzed,
+            ProjectsInScope = 2,
+            CurrentErrors = 3,
         };
 
         var summary = SourceEditAnalysisProjection.CreateDisplaySummary(analysis);
@@ -45,9 +48,13 @@ public sealed class SourceEditToolTests
     {
         var analysis = new SourceEditAnalysis
         {
-            EffectId = Guid.NewGuid(), Pending = pending, Obsolete = obsolete,
-            ProjectsAnalyzed = projectsAnalyzed, ProjectsInScope = 2,
-            CurrentErrors = projectsAnalyzed == 0 ? 0 : 3, NewErrors = 0,
+            EffectId = Guid.NewGuid(),
+            Pending = pending,
+            Obsolete = obsolete,
+            ProjectsAnalyzed = projectsAnalyzed,
+            ProjectsInScope = 2,
+            CurrentErrors = projectsAnalyzed == 0 ? 0 : 3,
+            NewErrors = 0,
             Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial")],
         };
         var receipt = new SourceEditReceipt(analysis.EffectId, MutationSetId.New(), SourceEditStatus.Applied, ["Example.cs"], "Applied") { Analysis = analysis };
@@ -76,7 +83,10 @@ public sealed class SourceEditToolTests
     {
         private readonly SourceEditReceipt _receipt;
 
-        public ReceiptHandler(SourceEditReceipt receipt) => _receipt = receipt;
+        public ReceiptHandler(SourceEditReceipt receipt)
+        {
+            _receipt = receipt;
+        }
 
         public Task<SourceEditReceipt> HandleAsync(ApplySourceEditCommand command, CancellationToken cancellationToken = default)
         {

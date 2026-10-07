@@ -1041,7 +1041,10 @@ public static class SemanticCompilationCoordinatorTests
         Assert.Throws<InvalidOperationException>(() => engine.CaptureMutationSnapshot());
     }
 
-    private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static TaskCompletionSource Signal()
+    {
+        return new(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
     private static Solution CreateSolution(AdhocWorkspace workspace, int count)
     {
@@ -1056,7 +1059,10 @@ public static class SemanticCompilationCoordinatorTests
 
     private sealed class CandidateSourceReader : ICodeExploreSourceReader
     {
-        public bool IsPathAllowed(string path) => true;
+        public bool IsPathAllowed(string path)
+        {
+            return true;
+        }
 
         public Task<CodeExploreSourceText> ReadTextAsync(string path, int maximumBytes, CancellationToken cancellationToken = default)
         {

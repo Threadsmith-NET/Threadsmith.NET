@@ -2,7 +2,6 @@ namespace Threadsmith.NativeTools.Tests;
 
 using Threadsmith.Core;
 using Threadsmith.Validation;
-using Threadsmith.Workspaces;
 using Xunit;
 
 /// <summary>Verifies Plan-44 lifecycle endpoints remain integrated with validation and isolated workers.</summary>

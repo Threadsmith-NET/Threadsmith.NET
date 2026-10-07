@@ -90,11 +90,13 @@ public static class NativeConceptTransportTests
             var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
             var result = await pipeline.InvokeAsync(
                 new ToolInvocationRequest
-            {
-                SessionId = SessionId.New(), RunId = RunId.New(), ToolId = tool.Definition.Id,
-                ArgumentsJson = invalid ? "{\"concepts\":[\"not a concept\"]}" : "{\"concepts\":[\" Cancellation \",\"cancellation\"]}",
-                Context = new ToolInvocationContext { RepositoryPath = root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model", DeniedToolIds = denied ? [tool.Definition.Id] : [] },
-            },
+                {
+                    SessionId = SessionId.New(),
+                    RunId = RunId.New(),
+                    ToolId = tool.Definition.Id,
+                    ArgumentsJson = invalid ? "{\"concepts\":[\"not a concept\"]}" : "{\"concepts\":[\" Cancellation \",\"cancellation\"]}",
+                    Context = new ToolInvocationContext { RepositoryPath = root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model", DeniedToolIds = denied ? [tool.Definition.Id] : [] },
+                },
                 TestContext.Current.CancellationToken);
             Assert.Equal(!denied && !invalid, result.Succeeded);
             Assert.Equal(denied || invalid ? [] : new[] { "cancellation" }, result.Concepts);

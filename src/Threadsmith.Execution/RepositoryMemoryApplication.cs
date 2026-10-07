@@ -29,18 +29,18 @@ public sealed class RepositoryMemoryApplication :
     {
         return _memories.ExecuteAsync(
             new RepositoryMemoryOperationRequest
-        {
-            RepositoryIdentity = command.RepositoryIdentity,
-            Action = "add",
-            Text = command.Text,
-            MemoryType = command.MemoryType,
-            Kind = command.Kind,
-            Concepts = command.Concepts,
-            ConfirmDistinctFrom = command.ConfirmDistinctFrom,
-            Origin = RepositoryMemoryOrigin.Manual,
-            SourceSessionId = command.SessionId.Value.ToString("D"),
-            Options = _options.Capture(command.RepositoryIdentity),
-        },
+            {
+                RepositoryIdentity = command.RepositoryIdentity,
+                Action = "add",
+                Text = command.Text,
+                MemoryType = command.MemoryType,
+                Kind = command.Kind,
+                Concepts = command.Concepts,
+                ConfirmDistinctFrom = command.ConfirmDistinctFrom,
+                Origin = RepositoryMemoryOrigin.Manual,
+                SourceSessionId = command.SessionId.Value.ToString("D"),
+                Options = _options.Capture(command.RepositoryIdentity),
+            },
             cancellationToken);
     }
 

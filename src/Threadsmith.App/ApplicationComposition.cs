@@ -1125,10 +1125,9 @@ internal sealed class RepositoryScopedBindingCoordinator
     private SkillCatalog? _nativeSkills;
     private SessionLifecycleApplication? _sessionLifecycle;
     private ScratchpadLifecycle? _scratchpad;
-    private IReadOnlyList<string> _lastWarnings = [];
 
     /// <summary>Gets warnings from the latest successful repository binding.</summary>
-    internal IReadOnlyList<string> LastWarnings => _lastWarnings;
+    internal IReadOnlyList<string> LastWarnings { get; private set; } = [];
 
     /// <summary>Initializes a new instance of the <see cref="RepositoryScopedBindingCoordinator"/> class.</summary>
     internal RepositoryScopedBindingCoordinator(
@@ -1201,7 +1200,7 @@ internal sealed class RepositoryScopedBindingCoordinator
         await _gate.WaitAsync(cancellationToken);
         try
         {
-            _lastWarnings = [];
+            LastWarnings = [];
             var previousRepositoryRoot = _currentRepositoryRoot;
             var pathComparison = OperatingSystem.IsWindows()
                 ? StringComparison.OrdinalIgnoreCase
@@ -1261,7 +1260,7 @@ internal sealed class RepositoryScopedBindingCoordinator
                 }
 
                 _currentRepositoryRoot = nextRepositoryRoot;
-                _lastWarnings = [
+                LastWarnings = [
                     .. !sameRepository ? _scratchpad?.LastActivationWarnings ?? [] : [],
                     .. configurationWarning is null ? Array.Empty<string>() : [configurationWarning],
                 ];

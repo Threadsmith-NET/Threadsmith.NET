@@ -902,7 +902,8 @@ public sealed class AdvancedSemanticQueryService : IAdvancedSemanticQueryService
             readiness.Confidence,
             repositoryPath,
             workspacePath,
-            readiness.SourceGeneration) { SourceSolution = solution };
+            readiness.SourceGeneration)
+        { SourceSolution = solution };
         CodeExploreRepositoryScale repositoryScale;
         try
         {

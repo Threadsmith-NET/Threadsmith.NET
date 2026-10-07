@@ -2823,7 +2823,10 @@ public static class SemanticRefreshCoordinatorTests
 
     private sealed class ErrorProbeWatcher(string path) : FileSystemWatcher(path)
     {
-        public void RaiseError() => OnError(new ErrorEventArgs(new IOException("Synthetic native watcher failure.")));
+        public void RaiseError()
+        {
+            OnError(new ErrorEventArgs(new IOException("Synthetic native watcher failure.")));
+        }
     }
 
     private sealed class TemporaryRepository : IDisposable

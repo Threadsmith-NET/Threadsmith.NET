@@ -36,11 +36,15 @@ public interface IStartupProgressSurface
 
     /// <summary>Shows startup before invoking the operation exactly once with the supplied cancellation token.</summary>
     Task ShowStartupAsync(string logo, string label, Func<CancellationToken, Task> operation, CancellationToken cancellationToken = default)
-        => ShowStartupAsync(logo, label, operation(cancellationToken), cancellationToken);
+    {
+        return ShowStartupAsync(logo, label, operation(cancellationToken), cancellationToken);
+    }
 
     /// <summary>Connects transient host-owned phase snapshots to the existing startup projection.</summary>
     Task SetStartupProgressAsync(Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? snapshots, CancellationToken cancellationToken = default)
-        => Task.CompletedTask;
+    {
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>One stable setting in an immutable availability catalog.</summary>

@@ -29,8 +29,11 @@ internal static class RetiredPlanningConfiguration
     };
 
     /// <summary>Identifies retired properties and their obsolete value subtrees.</summary>
-    internal static bool IsRetired(string key) => Keys.Contains(key)
+    internal static bool IsRetired(string key)
+    {
+        return Keys.Contains(key)
         || Keys.Any(retired => key.StartsWith(retired + ":", StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>Reports external or read-only retired settings once without exposing their values.</summary>
     internal static string? GetWarning(IConfiguration configuration)

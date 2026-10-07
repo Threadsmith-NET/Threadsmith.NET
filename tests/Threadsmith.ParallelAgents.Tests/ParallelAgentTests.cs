@@ -6,7 +6,6 @@ using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Persistence;
 using Threadsmith.Tools;
-using Threadsmith.Workspaces;
 using Xunit;
 
 /// <summary>Verifies bounded in-process delegation, partitioning, persistence, policy, and worktree isolation.</summary>

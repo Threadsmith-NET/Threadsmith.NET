@@ -1,7 +1,4 @@
 namespace Threadsmith.Execution;
-
-using Threadsmith.Core;
-
 /// <summary>
 /// Host-owned operational limits for the execution subsystem, sourced from layered
 /// configuration (strategy §21.1). Bound once at the composition root and injected into

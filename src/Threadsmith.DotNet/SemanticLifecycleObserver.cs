@@ -432,7 +432,9 @@ internal interface ISemanticLifecycleLoader
 
     /// <summary>Releases or aborts the exact binding's background publication barrier.</summary>
     Task CompletePublicationAsync(SemanticLoadResult result, bool succeeded, CancellationToken cancellationToken)
-        => Task.CompletedTask;
+    {
+        return Task.CompletedTask;
+    }
 }
 
 /// <summary>Adapts the engine registry to lifecycle candidate loading.</summary>

@@ -909,7 +909,7 @@ public sealed class ContextAssembler : IContextAssembler
             : await _conversationStore.GetSnapshotAsync(
                 request.SessionId,
                 includeBodies: true,
-                cancellationToken);
+                cancellationToken: cancellationToken);
         var mode = request.ConversationModeOverride
             ?? (_conversationStore is null ? _options.Conversation.Mode : state.Mode);
         var modeSource = request.ConversationModeOverride is not null

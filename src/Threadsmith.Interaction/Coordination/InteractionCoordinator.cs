@@ -1131,6 +1131,12 @@ public sealed partial class InteractionCoordinator
                     var result = await controller.ResumeSessionAsync(target, lifetime.Token);
                     _webFetchAuthorization?.RevokeAll();
                     sessionId = result.ActiveSession.SessionId;
+                    var history = await _presenter.GetConversationHistoryAsync(
+                        sessionId,
+                        new ConversationHistoryWindow(
+                            _displayOptions.Limits.MaximumTranscriptLines,
+                            Math.Max(1, _displayOptions.Limits.MaximumTranscriptBytes / 4)),
+                        lifetime.Token);
                     if (agents is not null)
                     {
                         await agents.AttachAsync(sessionId, lifetime.Token);
@@ -1144,13 +1150,7 @@ public sealed partial class InteractionCoordinator
 
                     latestContextInspection = null;
                     snapshot = await controller.RenderAsync(lifetime.Token);
-                    var warnings = result.Warnings.Count == 0
-                        ? string.Empty
-                        : "\nWarning: " + string.Join(" ", result.Warnings);
-                    await _surface.WriteAsync(
-                        $"Threadsmith: Resumed session {sessionId.Value:D}.{warnings}\n",
-                        result.Warnings.Count == 0 ? PresentationTextRole.Status : PresentationTextRole.Warning,
-                        lifetime.Token);
+                    await PresentResumedConversationAsync(history, result, lifetime.Token);
                     continue;
                 }
 
@@ -2508,7 +2508,7 @@ public sealed partial class InteractionCoordinator
     private static string FormatActiveSemanticCheckLabel(SemanticCheckStarted started)
     {
         ArgumentNullException.ThrowIfNull(started);
-        return $"SEMANTIC CHECKS: {started.CheckName}";
+        return $"SEMANTIC CHECKS: {InteractionPresentationFormatter.GetSemanticCheckTitle(started.Phase, started.CheckName)}";
     }
 
     private static bool TryGetLatestSemanticActivity(

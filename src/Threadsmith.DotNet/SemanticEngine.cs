@@ -1143,7 +1143,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                 {
                     if (ReferenceEquals(replacement, candidate.Solution))
                     {
-                        candidate.Result = candidate.Result with { CommittedGeneration = _solutionGeneration, Revision = candidate.Result.Revision + 1 };
+                        candidate.Result = candidate.Result with { CommittedGeneration = _solutionGeneration, CandidateReused = true, Revision = candidate.Result.Revision + 1 };
                         Interlocked.Increment(ref _editCandidatePromotions);
                         SemanticLoadMetrics.EditCandidatePromotions.Add(1);
                         candidate.Promotion.TrySetResult();

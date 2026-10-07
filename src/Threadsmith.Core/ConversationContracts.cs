@@ -230,6 +230,11 @@ public sealed record ConversationStateSnapshot
     public IReadOnlyList<string> Warnings { get; init; } = [];
 }
 
+/// <summary>Bounds a newest-first archive read returned in chronological order for presentation.</summary>
+/// <param name="MaximumMessages">Maximum recent messages to inspect.</param>
+/// <param name="MaximumCharacters">Maximum retained body characters across the window.</param>
+public sealed record ConversationHistoryWindow(int MaximumMessages, int MaximumCharacters);
+
 /// <summary>Archives and restores sanitized conversation state.</summary>
 public interface IConversationStore
 {
@@ -248,6 +253,7 @@ public interface IConversationStore
     Task<ConversationStateSnapshot> GetSnapshotAsync(
         SessionId sessionId,
         bool includeBodies = true,
+        ConversationHistoryWindow? historyWindow = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>Removes retained message bodies while preserving metadata and provenance.</summary>
@@ -264,7 +270,11 @@ public sealed record SetConversationContextModeCommand(
 /// <summary>Queries durable archive and governed-memory metadata.</summary>
 public sealed record GetConversationStateCommand(
     SessionId SessionId,
-    bool IncludeBodies = false) : ICommand<ConversationStateSnapshot>;
+    bool IncludeBodies = false) : ICommand<ConversationStateSnapshot>
+{
+    /// <summary>Gets optional presentation limits; null preserves the complete archive query.</summary>
+    public ConversationHistoryWindow? HistoryWindow { get; init; }
+}
 
 /// <summary>Queries the latest context inspection for a run.</summary>
 public sealed record GetContextInspectionCommand(RunId RunId, SessionId? SessionId = null) : ICommand<ContextInspectionProjection?>;

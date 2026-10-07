@@ -277,6 +277,51 @@ public static class Plan33ConversationArchiveTests
         Assert.Equal(body, await fixture.Artifacts.ReadAsync(newMessage.ContentHash));
     }
 
+    /// <summary>Presentation queries restore only the recent window without changing the archive.</summary>
+    [Fact]
+    public static async Task History_window_reads_latest_messages_in_chronological_order_and_restores_artifacts()
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
+        var sessionId = SessionId.New();
+        foreach (var content in new[] { "older message", "latest question", "latest answer" })
+        {
+            await fixture.Store.ArchiveMessageAsync(
+                CreateMessage(sessionId, RunId.New(), ConversationRole.User, content), token);
+        }
+
+        var history = await fixture.Store.GetSnapshotAsync(
+            sessionId, historyWindow: new ConversationHistoryWindow(2, 100), cancellationToken: token);
+
+        Assert.Equal(new[] { "latest question", "latest answer" }, history.Messages.Select(message => message.Content));
+        Assert.Equal(new long[] { 2, 3 }, history.Messages.Select(message => message.Sequence));
+        Assert.Contains("Older conversation messages omitted from the output window.", history.Warnings);
+        Assert.Equal(3, (await fixture.Store.GetSnapshotAsync(sessionId, cancellationToken: token)).Messages.Count);
+    }
+
+    /// <summary>Oversized restored artifacts retain a valid Unicode tail within the window budget.</summary>
+    [Theory]
+    [InlineData(5, " tail")]
+    [InlineData(6, " tail")]
+    [InlineData(7, "😀 tail")]
+    public static async Task History_window_bounds_body_characters_without_splitting_surrogates(int characters, string expected)
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync(artifactThreshold: 8);
+        var sessionId = SessionId.New();
+        await fixture.Store.ArchiveMessageAsync(
+            CreateMessage(sessionId, RunId.New(), ConversationRole.User, "old question"), token);
+        await fixture.Store.ArchiveMessageAsync(
+            CreateMessage(sessionId, RunId.New(), ConversationRole.Assistant, "large answer 😀 tail"), token);
+
+        var history = await fixture.Store.GetSnapshotAsync(
+            sessionId, historyWindow: new ConversationHistoryWindow(100, characters), cancellationToken: token);
+
+        Assert.Equal(expected, Assert.Single(history.Messages).Content);
+        Assert.Contains("Earlier conversation text omitted from the output window.", history.Warnings);
+        Assert.Contains("Older conversation messages omitted from the output window.", history.Warnings);
+    }
+
     private static ConversationMessage CreateMessage(
         SessionId sessionId,
         RunId runId,

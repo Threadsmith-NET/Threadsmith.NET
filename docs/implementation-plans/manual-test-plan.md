@@ -142,10 +142,10 @@ Expected: exact symbol/path exploration is a read-only, repository-confined, gen
 
 ## MTP-241 — Advisory incremental compiler feedback
 
-1. Apply syntax-error and unresolved-symbol source edits; confirm applied writes plus advisory findings.
+1. Apply syntax-error and unresolved-symbol source edits; confirm applied writes plus advisory findings. Inspect `SEMANTIC CHECKS`: candidate/committed phase, completed syntax checks, affected project-instance coverage, measured errors and comparable new/resolved deltas, bounded diagnostic codes/locations/origins, and omissions must be visible. Errors must not change advisory completion into a write rejection.
 2. Perform rapid edits across independent projects, including a conflicted second edit.
 3. Verify earlier findings persist or unavailable coverage is explicitly delivered.
-4. Repair and verify the matching generation; create/move/project edits must show graph refresh/omissions. Poll during obsolete/pending replacement analysis and confirm later verified diagnostics still reach the continuing model, with unknown origins across graph replacement.
+4. Repair and verify the matching generation; the `edit_source` completion detail must identify reused candidate analysis (and pending broader work when applicable). Create/move/project edits must show graph refresh/omissions. Poll during obsolete/pending replacement analysis and confirm later verified diagnostics still reach the continuing model, with unknown origins and unavailable before/after comparisons across graph replacement.
 5. Inspect pending, obsolete and unavailable receipts: model-facing error totals must be absent rather than zero. Verify user-visible advisory summaries show coverage and measured errors in plain text, without serialized analysis.
 6. Arrange findings that become ready during a final response. Confirm another permitted round receives them, the earlier response remains in history, and outdated validation claims can be corrected. Repeat at the model-round limit: expect a visible advisory notification and no extra request. Leave analysis pending and verify completion does not wait for it.
 7. Explicitly invoke build/test checks for authoritative validation and report failed or omitted checks honestly. End a separate edit-only response and confirm no automatic validation starts.
@@ -153,7 +153,7 @@ Expected: exact symbol/path exploration is a read-only, repository-confined, gen
 ## MTP-240 — Tool and diff presentation
 
 1. Run supporting reads and `edit_source`.
-2. Verify visible starts, exact review, commit, semantic progress and completion remain correlated.
+2. Verify visible starts, exact review, commit, semantic progress and completion remain correlated. The `edit_source` completion detail must name actual changed files from the writer receipt (including selected subsets), retain candidate-reuse status, and disclose additional files when the compact list is bounded. Resume the session and confirm changed paths remain visible from the durable result.
 3. Toggle preview and approve a subset; compare the displayed applied IDs with the writer receipt.
 4. Decline/cancel and verify honest non-applied status.
 
@@ -1840,7 +1840,8 @@ Expected: missing counters remain unavailable rather than zero; reported values 
 1. Complete multiple turns with visible archive, explicitly saved repository notes, usage, and a context inspection; record the session ID.
 2. Run `/new`, verify a distinct ID, and submit a new request.
 3. Confirm repository, trust, solution, enabled tools, and policy remain while the new request contains no prior-session conversation, usage, run, inspection, or provider continuation; explicit repository notes remain eligible by relevance/mode and retired automatic snapshots stay absent.
-4. Run `/resume <recorded-id>` and confirm restored conversation mode, usage, model/reasoning, and status.
+4. Detach output scrolling and select some existing output. Run `/resume <recorded-id>` and confirm restored conversation mode, usage, model/reasoning, and status. Verify the output is replaced with chronological saved user messages and assistant replies, positioned at the latest exchange with selection cleared. Press Home and resize; previous-session output must remain absent and restored messages must remain correctly styled.
+5. Repeat through `/resume` selection, including the current session, and with an empty archive, expired message bodies, and history beyond the output retention limits. Verify empty history clears output, missing bodies receive placeholders, omissions are reported, and historical tools/reasoning/progress are not replayed. Attempt a missing or other-repository ID and confirm existing output remains intact.
 
 Expected: transitions complete only at a safe boundary and status contains no values retained from the session being left.
 

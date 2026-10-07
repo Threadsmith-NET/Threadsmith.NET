@@ -112,7 +112,7 @@ public sealed class SessionRestorer : ISessionRestorer
             : await _conversationStore.GetSnapshotAsync(
                 sessionId,
                 includeBodies: false,
-                cancellationToken);
+                cancellationToken: cancellationToken);
         return new SessionRestorationResult
         {
             SessionId = sessionId,

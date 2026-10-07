@@ -29,12 +29,29 @@ public static class SourceEditAnalysisTests
         var original = await File.ReadAllTextAsync(path, ct);
         var broken = original + "\npublic sealed class EditError { public MissingType Value; }\n";
         var first = Command(session, run, workspace);
+        var completion = new TaskCompletionSource<SemanticCheckCompleted>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            if (item is SemanticCheckCompleted check && check.RunId == run && check.Analysis?.EffectId == first.EffectId)
+            {
+                completion.TrySetResult(check);
+            }
+
+            return Task.CompletedTask;
+        });
         var firstSnapshot = Snapshot(relative, original, broken);
         var analysis = await engine.AnalyzeCandidateAsync(first, root, firstSnapshot, TimeSpan.FromSeconds(20), ct);
         Assert.NotNull(analysis);
         Assert.False(analysis.Pending);
         Assert.True(analysis.ProjectsInScope >= 2);
         Assert.Contains(analysis.Diagnostics, item => item.Code == "CS0246" && item.Origin == "introduced");
+        var completed = await completion.Task.WaitAsync(ct);
+        Assert.Equal(SemanticCheckPhase.PreMutation, completed.Phase);
+        Assert.Equal(SemanticCheckOutcome.Completed, completed.Outcome);
+        Assert.Equal(1, completed.Analysis!.SyntaxDocumentsAnalyzed);
+        Assert.Equal(0, completed.Analysis.SyntaxErrors);
+        Assert.True(completed.Analysis.ErrorComparisonAvailable);
+        Assert.Contains(completed.Analysis.Diagnostics, item => item.Code == "CS0246");
         Assert.Null(engine.GetLatestEditAnalysis(session, run, first.EffectId));
         var passes = engine.EditAnalysisStatistics.DiagnosticPasses;
         engine.ConfirmEditApplied(first.EffectId);
@@ -42,6 +59,7 @@ public static class SourceEditAnalysisTests
         var promoted = engine.GetLatestEditAnalysis(session, run, first.EffectId)!;
         Assert.NotNull(promoted.CommittedGeneration);
         Assert.False(promoted.Pending);
+        Assert.True(promoted.CandidateReused);
         Assert.Equal(passes, engine.EditAnalysisStatistics.DiagnosticPasses);
         Assert.Equal(1, engine.EditAnalysisStatistics.CandidatePromotions);
 
@@ -176,6 +194,9 @@ public static class SourceEditAnalysisTests
         var result = await engine.AnalyzeCandidateAsync(command, root, snapshot, TimeSpan.FromSeconds(20), ct);
         Assert.NotNull(result);
         Assert.False(result.Pending);
+        Assert.Equal(2, result.SyntaxDocumentsAnalyzed);
+        Assert.True(result.SyntaxErrors > 0);
+        Assert.False(result.ErrorComparisonAvailable);
         Assert.True(result.ProjectsAnalyzed > 0);
         Assert.Contains(result.Diagnostics, item => item.Code == "CS1513" && item.File == "Contracts/New.cs");
         Assert.True(result.CurrentErrors >= 2);

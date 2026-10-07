@@ -37,6 +37,18 @@ public sealed record SourceEditAnalysis
     /// <summary>Project instances in the conservative affected scope.</summary>
     public int ProjectsInScope { get; init; }
 
+    /// <summary>Document instances checked for syntax, or null when that phase did not complete.</summary>
+    public int? SyntaxDocumentsAnalyzed { get; init; }
+
+    /// <summary>Retained syntax errors, or null when syntax results are unavailable.</summary>
+    public int? SyntaxErrors { get; init; }
+
+    /// <summary>Whether every completed project has comparable, untruncated before/after evidence.</summary>
+    public bool ErrorComparisonAvailable { get; init; }
+
+    /// <summary>Whether exact committed inputs reused this candidate's analysis.</summary>
+    public bool CandidateReused { get; init; }
+
     /// <summary>Current errors within completed coverage; a bounded list does not imply a complete list.</summary>
     public int CurrentErrors { get; init; }
 

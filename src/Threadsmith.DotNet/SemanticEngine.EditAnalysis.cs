@@ -322,26 +322,37 @@ public sealed partial class SemanticEngine
             var syntax = await RunEditCompilerOperationAsync(candidate, async token =>
             {
                 var findings = new List<EditFinding>();
+                var documentsAnalyzed = 0;
                 foreach (var id in candidate.Documents)
                 {
                     var document = candidate.Solution.GetDocument(id);
                     var tree = document is null ? null : await document.GetSyntaxTreeAsync(token);
                     if (tree is not null && document is not null)
                     {
+                        documentsAnalyzed++;
                         findings.AddRange(ProjectEditFindings(tree.GetDiagnostics(token), document.Project, candidate.RepositoryPath));
                     }
                 }
 
                 foreach (var (path, text) in candidate.SyntaxOnly)
                 {
+                    documentsAnalyzed++;
                     var tree = CSharpSyntaxTree.ParseText(text, path: path, cancellationToken: token);
                     findings.AddRange(ProjectEditFindings(tree.GetDiagnostics(token), "unassigned", "unknown", candidate.RepositoryPath).Select(item => item with { Unassigned = true }));
                 }
 
-                return findings.Take(MaximumEditDiagnostics).ToArray();
+                return (Findings: findings.Take(MaximumEditDiagnostics).ToArray(), DocumentsAnalyzed: documentsAnalyzed);
             });
-            UpdateEditResult(candidate, result => result with { Diagnostics = syntax.Select(item => item.Diagnostic).Take(MaximumReportedEditDiagnostics).ToArray(), CurrentErrors = syntax.Length });
-            var syntaxOnlyFindings = syntax.Where(item => item.Unassigned).ToArray();
+            UpdateEditResult(candidate, result => result with
+            {
+                SyntaxDocumentsAnalyzed = candidate.CommittedOnly ? null : syntax.DocumentsAnalyzed,
+                SyntaxErrors = candidate.CommittedOnly ? null : syntax.Findings.Length,
+                Diagnostics = syntax.Findings.Select(item => item.Diagnostic).Take(MaximumReportedEditDiagnostics).ToArray(),
+                CurrentErrors = syntax.Findings.Length,
+                Omissions = syntax.Findings.Length == MaximumEditDiagnostics
+                    ? [.. result.Omissions, "Syntax diagnostic retention is bounded; syntax error counts may be incomplete."] : result.Omissions,
+            });
+            var syntaxOnlyFindings = syntax.Findings.Where(item => item.Unassigned).ToArray();
             foreach (var projectId in candidate.Projects)
             {
                 var result = await RunEditCompilerOperationAsync(candidate, token => AnalyzeEditProjectAsync(candidate, projectId, token));
@@ -362,6 +373,7 @@ public sealed partial class SemanticEngine
                         CurrentErrors = syntaxOnlyFindings.Length + results.Sum(item => item.Count),
                         NewErrors = results.Sum(item => item.New),
                         ResolvedErrors = results.Sum(item => item.Resolved),
+                        ErrorComparisonAvailable = syntaxOnlyFindings.Length == 0 && results.All(item => item.ComparisonAvailable),
                         Diagnostics = syntaxOnlyFindings.Concat(results.SelectMany(item => item.Current)).Select(item => item.Diagnostic).Take(MaximumReportedEditDiagnostics).ToArray(),
                         Omissions = candidate.Result.Omissions.Concat(results.SelectMany(item => item.Omissions)).Distinct(StringComparer.Ordinal).Take(16).ToArray(),
                     };
@@ -393,7 +405,10 @@ public sealed partial class SemanticEngine
                     "advisory edit analysis",
                     outcome,
                     (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds,
-                    "Advisory analysis finished; consult versioned coverage and omissions.");
+                    "Advisory analysis finished; compiler findings do not gate this edit.")
+                {
+                    Analysis = candidate.Result,
+                };
                 await _events.PublishAsync(completed, CancellationToken.None);
             }
             catch (Exception exception)
@@ -460,7 +475,7 @@ public sealed partial class SemanticEngine
         if (candidate.CommittedOnly)
         {
             var current = await GetEditProjectFindingsAsync(project, candidate.RepositoryPath, token);
-            return new(current, current.Length, 0, 0, current.Length == MaximumEditDiagnostics ? ["Diagnostic retention is bounded; error counts may be incomplete."] : []);
+            return new(current, current.Length, 0, 0, false, current.Length == MaximumEditDiagnostics ? ["Diagnostic retention is bounded; error counts may be incomplete."] : []);
         }
 
         var baselineVersion = await baselineProject.GetDependentVersionAsync(token);
@@ -514,6 +529,7 @@ public sealed partial class SemanticEngine
             after.Length,
             afterCounts.Sum(pair => Math.Max(0, pair.Value - beforeCounts.GetValueOrDefault(pair.Key))),
             beforeCounts.Sum(pair => Math.Max(0, pair.Value - afterCounts.GetValueOrDefault(pair.Key))),
+            before.Length < MaximumEditDiagnostics && after.Length < MaximumEditDiagnostics,
             omissions);
     }
 
@@ -594,7 +610,7 @@ public sealed partial class SemanticEngine
 
     private sealed record EditDiagnosticBasis(VersionStamp Version, EditFinding[] Previous, Dictionary<string, int>? Initial);
 
-    private sealed record EditProjectResult(EditFinding[] Current, int Count, int New, int Resolved, IReadOnlyList<string> Omissions);
+    private sealed record EditProjectResult(EditFinding[] Current, int Count, int New, int Resolved, bool ComparisonAvailable, IReadOnlyList<string> Omissions);
 
     private sealed class EditCandidate
     {

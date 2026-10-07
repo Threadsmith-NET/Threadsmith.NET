@@ -313,7 +313,11 @@ public sealed record SemanticCheckCompleted(
     string CheckName,
     SemanticCheckOutcome Outcome,
     long? ElapsedMilliseconds = null,
-    string? Detail = null) : DomainEvent(SessionId, OccurredAt);
+    string? Detail = null) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Bounded advisory results captured at completion; absent in historical or other checks.</summary>
+    public SourceEditAnalysis? Analysis { get; init; }
+}
 
 /// <summary>Approved-plan execution started or retried one governed mutation proposal attempt.</summary>
 public sealed record MutationProposalStarted(

@@ -78,7 +78,10 @@ public sealed class SourceEditTool : Tool<SourceEditInput, SourceEditReceipt>, I
                 modelResult[nameof(receipt.Analysis)] = SourceEditAnalysisProjection.Create(analysis);
             }
 
-            return new(receipt, receipt.ChangedFiles.Select(path => new ToolProvenanceSource("file", path)).ToArray(), ModelResultContent: modelResult.ToJsonString());
+            var reuseDetail = receipt.Status == SourceEditStatus.Applied && receipt.Analysis is { CandidateReused: true, Obsolete: false, CommittedGeneration: not null }
+                ? "Candidate analysis reused for committed source" + (receipt.Analysis.Pending ? "; broader analysis pending" : string.Empty)
+                : null;
+            return new(receipt, receipt.ChangedFiles.Select(path => new ToolProvenanceSource("file", path)).ToArray(), ModelResultContent: modelResult.ToJsonString(), TransientActivityDetail: reuseDetail);
         }
         catch (MutationInstructionException exception)
         {

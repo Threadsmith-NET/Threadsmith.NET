@@ -260,6 +260,26 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     /// <summary>Appends semantic output while preserving streaming chunk continuity.</summary>
     internal void Present(PresentationBatch batch)
     {
+        if (batch.ReplaceOutput)
+        {
+            _items.Clear();
+            _lines.Clear();
+            _rows.Clear();
+            _rowGlyphs.Clear();
+            _rowGlyphRemovals.Clear();
+            _styles.Clear();
+            _toolIndicators.Clear();
+            ToolActivities = [];
+            _itemBytes = RetainedBytes = 0;
+            _nextId = 0;
+            _top = 0;
+            _anchor = _end = null;
+            _clearBeforeId = null;
+            Evicted = 0;
+            AtBottom = true;
+            NewCount = 0;
+        }
+
         foreach (var item in batch.Items)
         {
             Retain(item);
@@ -272,7 +292,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     {
         ArgumentNullException.ThrowIfNull(prompt);
         ArgumentNullException.ThrowIfNull(text);
-        Present(new PresentationBatch([new UserInputEcho(prompt, text)]));
+        Present(new PresentationBatch([new PresentationUserInputItem(prompt, text)]));
     }
 
     /// <summary>Projects shared semantic items using the existing Markdown layout rules.</summary>
@@ -282,7 +302,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
         bool startsAnswer;
         switch (item)
         {
-            case UserInputEcho echo:
+            case PresentationUserInputItem echo:
                 return [new(echo.Prompt, PresentationTextRole.ComposerPrompt), new(echo.Text + "\n", PresentationTextRole.UserPrompt)];
             case PresentationTextItem text:
                 return text.Segments;
@@ -431,7 +451,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
     {
         return item switch
         {
-            UserInputEcho echo => Encoding.UTF8.GetByteCount(echo.Prompt) + Encoding.UTF8.GetByteCount(echo.Text) + 1,
+            PresentationUserInputItem echo => Encoding.UTF8.GetByteCount(echo.Prompt) + Encoding.UTF8.GetByteCount(echo.Text) + 1,
             PresentationTextItem text => text.Segments.Sum(segment => Encoding.UTF8.GetByteCount(segment.Text)),
             PresentationSourceItem source => Encoding.UTF8.GetByteCount(source.SafeSource),
             PresentationMarkdownItem markdown => Encoding.UTF8.GetByteCount(markdown.SafeSource),
@@ -682,7 +702,7 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
 
     private void AppendItem(PresentationItem item)
     {
-        if (item is UserInputEcho)
+        if (item is PresentationUserInputItem)
         {
             NormalizeInputBoundary();
         }
@@ -861,8 +881,6 @@ internal sealed class TranscriptView : IWidget, IFocusable, IMouseAware
             Evicted++;
         }
     }
-
-    private sealed record UserInputEcho(string Prompt, string Text) : PresentationItem;
 
     private sealed record Line(long Id, string Text, CellStyle Style, int Bytes, bool Continued);
 

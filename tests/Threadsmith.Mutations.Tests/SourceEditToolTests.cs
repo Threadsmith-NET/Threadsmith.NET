@@ -25,6 +25,7 @@ public sealed class SourceEditToolTests
             ProjectsAnalyzed = projectsAnalyzed,
             ProjectsInScope = 2,
             CurrentErrors = 3,
+            ErrorComparisonAvailable = true,
         };
 
         var summary = SourceEditAnalysisProjection.CreateDisplaySummary(analysis);
@@ -55,6 +56,7 @@ public sealed class SourceEditToolTests
             ProjectsInScope = 2,
             CurrentErrors = projectsAnalyzed == 0 ? 0 : 3,
             NewErrors = 0,
+            ErrorComparisonAvailable = true,
             Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial")],
         };
         var receipt = new SourceEditReceipt(analysis.EffectId, MutationSetId.New(), SourceEditStatus.Applied, ["Example.cs"], "Applied") { Analysis = analysis };
@@ -77,6 +79,51 @@ public sealed class SourceEditToolTests
         }
 
         Assert.Equal("initial", projected.GetProperty("Diagnostics")[0].GetProperty("Origin").GetString());
+    }
+
+    /// <summary>The ordinary tool completion explains reuse without claiming obsolete results are current.</summary>
+    [Theory]
+    [InlineData(true, false, false, true)]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, false, true, false)]
+    [InlineData(false, false, false, false)]
+    public async Task ToolDetailReportsOnlyCurrentCandidateReuse(bool reused, bool pending, bool obsolete, bool reportsReuse)
+    {
+        var analysis = new SourceEditAnalysis { EffectId = Guid.NewGuid(), CandidateReused = reused, CommittedGeneration = reused ? 1 : null, Pending = pending, Obsolete = obsolete };
+        var receipt = new SourceEditReceipt(analysis.EffectId, MutationSetId.New(), SourceEditStatus.Applied, ["Example.cs"], "Applied") { Analysis = analysis };
+        var tool = new SourceEditTool(new ReceiptHandler(receipt), TestPromptLoader.Instance);
+
+        var result = await tool.ExecuteAsync(
+            new() { Rationale = "Add a field", Mutations = [] },
+            new(ToolInvocationId.New(), SessionId.New(), RunId.New(), new() { RepositoryPath = Path.GetTempPath(), WorkspaceId = WorkspaceId.New(), RequestedBy = "model" }),
+            TestContext.Current.CancellationToken);
+
+        if (reportsReuse)
+        {
+            var detail = Assert.IsType<string>(result.TransientActivityDetail);
+            Assert.Contains("Candidate analysis reused for committed source", detail, StringComparison.Ordinal);
+            Assert.Equal(pending, detail.Contains("broader analysis pending", StringComparison.Ordinal));
+        }
+        else
+        {
+            Assert.Null(result.TransientActivityDetail);
+        }
+    }
+
+    /// <summary>Missing comparable evidence is absent in model counts and explicit in display text.</summary>
+    [Fact]
+    public void MissingComparisonOmitsUnmeasuredDeltas()
+    {
+        var analysis = new SourceEditAnalysis { EffectId = Guid.NewGuid(), ProjectsAnalyzed = 1, ProjectsInScope = 1, CurrentErrors = 2 };
+
+        var projected = SourceEditAnalysisProjection.Create(analysis);
+        var summary = SourceEditAnalysisProjection.CreateDisplaySummary(analysis);
+
+        Assert.Equal(2, projected[nameof(SourceEditAnalysis.CurrentErrors)]!.GetValue<int>());
+        Assert.False(projected.ContainsKey(nameof(SourceEditAnalysis.NewErrors)));
+        Assert.False(projected.ContainsKey(nameof(SourceEditAnalysis.ResolvedErrors)));
+        Assert.Contains("before/after comparison unavailable", summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("0 new", summary, StringComparison.Ordinal);
     }
 
     private sealed class ReceiptHandler : ICommandHandler<ApplySourceEditCommand, SourceEditReceipt>

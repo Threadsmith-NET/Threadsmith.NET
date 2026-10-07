@@ -92,7 +92,7 @@ public sealed partial class SourceEditApplicationTests
         if (feedbackDuringFinalAnswer)
         {
             var diagnostic = Assert.Single(observed.OfType<DiagnosticObserved>(), item => item.Code == "AdvisorySemanticFeedback");
-            Assert.Contains("1 current errors, 0 new errors", diagnostic.Message, StringComparison.Ordinal);
+            Assert.Contains("1 current errors", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("{", diagnostic.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("EffectId", diagnostic.Message, StringComparison.Ordinal);
         }

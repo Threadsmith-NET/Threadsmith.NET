@@ -78,7 +78,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         ConversationMessageId? sourceMessageId = null;
         if (input.UseLastResponse)
         {
-            var snapshot = await _conversations.GetSnapshotAsync(context.SessionId, includeBodies: true, cancellationToken);
+            var snapshot = await _conversations.GetSnapshotAsync(context.SessionId, includeBodies: true, cancellationToken: cancellationToken);
             var message = snapshot.Messages
                 .Where(message => message.SessionId == context.SessionId && message.Role == ConversationRole.Assistant && message.RunId != context.RunId)
                 .MaxBy(message => message.Sequence);

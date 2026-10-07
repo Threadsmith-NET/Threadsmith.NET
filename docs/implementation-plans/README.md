@@ -158,6 +158,27 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 118 | [plan-118-staged-semantic-readiness-and-compilation-warming.md](plan-118-staged-semantic-readiness-and-compilation-warming.md) | Staged semantic readiness with demand-driven project preparation and bounded background warming |
 | 119 | [plan-119-in-process-tui-automation-api.md](plan-119-in-process-tui-automation-api.md) | In-process public API for read-only-composer TUI automation and final-answer streaming |
 | — | [threadsmith-memory-reconciliation-concept-recall-implementation-plan.md](threadsmith-memory-reconciliation-concept-recall-implementation-plan.md) | Repository memory reconciliation and concept-aware recall |
+| — | [threadsmith-repository-intelligence-and-archeology-implementation-plan.md](threadsmith-repository-intelligence-and-archeology-implementation-plan.md) | Repository Intelligence and Archeology incremental implementation tasks |
+| T01 | [t01-dormant-assembly-boundary.md](repository-intelligence-and-archeology/t01-dormant-assembly-boundary.md) | Establish the dormant assembly boundary |
+| T02 | [t02-activation-and-cancellation.md](repository-intelligence-and-archeology/t02-activation-and-cancellation.md) | Add trusted activation and cancellation controls |
+| T03 | [t03-governed-operation-routing.md](repository-intelligence-and-archeology/t03-governed-operation-routing.md) | Route feature operations through host governance |
+| T04 | [t04-pinned-identity-and-structural-facts.md](repository-intelligence-and-archeology/t04-pinned-identity-and-structural-facts.md) | Capture pinned identity and bounded structural facts |
+| T05 | [t05-evidence-and-episode-candidates.md](repository-intelligence-and-archeology/t05-evidence-and-episode-candidates.md) | Build normalized evidence and bounded episode candidates |
+| T06 | [t06-bounded-model-interpretation.md](repository-intelligence-and-archeology/t06-bounded-model-interpretation.md) | Add bounded interpretation using shared model execution |
+| T07 | [t07-invocation-only-archeology.md](repository-intelligence-and-archeology/t07-invocation-only-archeology.md) | Deliver invocation-only Archeology |
+| T08 | [t08-canonical-records-and-storage.md](repository-intelligence-and-archeology/t08-canonical-records-and-storage.md) | Add local canonical records and atomic storage |
+| T09 | [t09-validation-and-reconciliation.md](repository-intelligence-and-archeology/t09-validation-and-reconciliation.md) | Implement validation and reconciliation |
+| T10 | [t10-onboarding-and-checkpoint-recovery.md](repository-intelligence-and-archeology/t10-onboarding-and-checkpoint-recovery.md) | Deliver persistent onboarding and checkpoint recovery |
+| T11 | [t11-freshness-admission.md](repository-intelligence-and-archeology/t11-freshness-admission.md) | Implement current freshness admission |
+| T12 | [t12-explicit-search-and-inspection.md](repository-intelligence-and-archeology/t12-explicit-search-and-inspection.md) | Deliver bounded explicit search and evidence inspection |
+| T13 | [t13-parent-recall-and-diagnostics.md](repository-intelligence-and-archeology/t13-parent-recall-and-diagnostics.md) | Add bounded parent recall and admission diagnostics |
+| T14 | [t14-code-exploration-enrichment.md](repository-intelligence-and-archeology/t14-code-exploration-enrichment.md) | Enrich existing code exploration |
+| T15 | [t15-assignment-limited-child-inspection.md](repository-intelligence-and-archeology/t15-assignment-limited-child-inspection.md) | Add assignment-limited child inspection |
+| T16 | [t16-memory-linkage.md](repository-intelligence-and-archeology/t16-memory-linkage.md) | Link intelligence with existing memory |
+| T17 | [t17-explicit-incremental-maintenance.md](repository-intelligence-and-archeology/t17-explicit-incremental-maintenance.md) | Add explicit incremental maintenance |
+| T18 | [t18-automatic-maintenance-triggers.md](repository-intelligence-and-archeology/t18-automatic-maintenance-triggers.md) | Add opt-in bounded maintenance triggering |
+| T19 | [t19-correction-export-and-reset.md](repository-intelligence-and-archeology/t19-correction-export-and-reset.md) | Deliver correction, suppression, export and reset |
+| T20 | [t20-integrated-acceptance-and-evaluation.md](repository-intelligence-and-archeology/t20-integrated-acceptance-and-evaluation.md) | Complete integrated acceptance and measured evaluation |
 | 88 blueprint | `plan88_plan.md` | Detailed implementation blueprint for conversation-native corrective turns |
 | Maintenance | `maintenance-csharp-script-conversation.md` | C# scripting conversation availability and interactive automation trust |
 | Maintenance | `maintenance-startup-progress.md` | Existing activity indicator during repository opening and restore |
@@ -172,9 +193,11 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-semantic-refresh-readiness-and-visibility.md` | Share startup readiness and retain visible refresh activity with trigger files |
 | Maintenance | `maintenance-semantic-refresh-generated-build-input-churn.md` | Ignore derived MSBuild editor-config churn without weakening semantic freshness |
 | Maintenance | [maintenance-semantic-input-relevance.md](maintenance-semantic-input-relevance.md) | Shared compiler-input relevance for refresh and edit diagnostics |
+| Maintenance | [maintenance-semantic-check-results-presentation.md](maintenance-semantic-check-results-presentation.md) | Show advisory checks, results, coverage and committed candidate reuse |
 | Maintenance | `maintenance-model-output-coalescing.md` | Bound main-chat text batching through the shared durable event stream |
 | Maintenance | `maintenance-semantic-validation-reconciliation.md` | Reuse proven semantic snapshots and bound validation reconciliation work |
 | Maintenance | [maintenance-semantic-startup-progress.md](maintenance-semantic-startup-progress.md) | Early startup presentation and timed semantic initialization status |
+| Maintenance | [maintenance-resumed-conversation-output.md](maintenance-resumed-conversation-output.md) | Replace resumed output with saved conversation at the latest exchange |
 
 ## Update discipline
 

@@ -26,6 +26,8 @@ The model receives an applied/conflict/denied/non-applied/recovery-required rece
 
 User-visible feedback uses plain-text coverage and error summaries; structured analysis is model context. Error totals are omitted when coverage is pending, obsolete, or unavailable and must not be read as zero. Model instructions require repairing introduced errors within the requested scope or explaining a conflict with the request. The host neither waits for pending analysis nor enforces a compiler-clean completion gate.
 
+Semantic-check activity names candidate versus committed-source analysis and reports completed syntax checks, affected project-instance coverage, measured error totals and comparable before/after deltas. Bounded findings include code, source location, project/framework and known origin; coverage omissions remain visible. Completion means the analysis finished, not that source is error-free. Unknown comparisons are not rendered as zero new/resolved errors. The edit tool reports when matching committed inputs reuse candidate analysis, including whether broader analysis remains pending.
+
 Ordinary completion records cumulative disk effects without invoking validation. New feedback arriving during a final response permits a follow-up within the existing round and budget limits. Builds and tests run through explicitly invoked tools or validation commands; only their actual results establish validation. Supporting reads never expand write authority.
 
 Historical plan DTOs, enum values and events exist solely to read supported stored history; they have no live execution producers. See [execution recovery](../operations/execution-resumption.md).

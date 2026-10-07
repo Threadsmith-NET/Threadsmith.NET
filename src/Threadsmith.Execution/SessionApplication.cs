@@ -457,6 +457,7 @@ public sealed partial class SessionApplication :
             : _conversationStore.GetSnapshotAsync(
                 command.SessionId,
                 command.IncludeBodies,
+                command.HistoryWindow,
                 cancellationToken);
     }
 
@@ -588,7 +589,7 @@ public sealed partial class SessionApplication :
                 var conversationState = await _conversationStore.GetSnapshotAsync(
                     command.SessionId,
                     includeBodies: false,
-                    registration.Cancellation.Token);
+                    cancellationToken: registration.Cancellation.Token);
                 registration.ConversationMode = conversationState.Mode;
             }
 

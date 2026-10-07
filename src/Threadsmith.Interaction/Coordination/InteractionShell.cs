@@ -659,6 +659,18 @@ public class InteractionPresenter
             cancellationToken);
     }
 
+    /// <summary>Gets bounded recent archived messages for a resumed conversation view.</summary>
+    public Task<ConversationStateSnapshot> GetConversationHistoryAsync(
+        SessionId sessionId,
+        ConversationHistoryWindow historyWindow,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(historyWindow);
+        return _dispatcher.DispatchAsync(
+            new GetConversationStateCommand(sessionId, IncludeBodies: true) { HistoryWindow = historyWindow },
+            cancellationToken);
+    }
+
     /// <summary>Gets the exact context inspection for a run.</summary>
     public Task<ContextInspectionProjection?> GetContextInspectionAsync(
         RunId runId,

@@ -15,7 +15,9 @@ Transitions require a complete safe boundary. Finish or cancel active model, too
 
 Resume combines tolerant event replay with the conversation archive and persisted session model/reasoning snapshot. Unknown legacy state is reported and is not fabricated. If an exact persisted reasoning level is no longer supported it resets visibly to `none`; a missing or incompatible model reports `/models` guidance rather than silently assigning repository defaults.
 
-Context inspections and process-local provider continuation/cache handles are invalidated. The next request is assembled through the canonical stateless path. Hidden reasoning, raw provider transcripts, credentials, OAuth state, transient activity, and terminal scrollback are neither restored nor cloned.
+Interactive resume replaces the entire retained output with a bounded recent window of saved user messages and assistant replies in chronological order, positioned at the latest exchange. This also applies when selecting the current session. User messages use the ordinary input style and assistant replies follow the current Markdown setting. Earlier output from the session being left is discarded, including selection and scroll position; Home cannot recover it. Empty archives still clear the output, unavailable saved bodies receive a placeholder, and omitted history is reported. Failed transitions leave the existing output intact.
+
+Context inspections and process-local provider continuation/cache handles are invalidated. The next request is assembled through the canonical stateless path. Hidden reasoning, raw provider transcripts, credentials, OAuth state, transient activity, and original terminal scrollback are neither restored nor cloned; the resumed output is rebuilt from the sanitized visible-message archive.
 
 ## Repository scoping and privacy
 

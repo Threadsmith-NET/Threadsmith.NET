@@ -1,6 +1,7 @@
 namespace Threadsmith.CoreRuntime.Tests;
 
 using System.Globalization;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
@@ -226,6 +227,97 @@ public static class OperationDurationFormatterTests
             " TOOLS: read_file - completed",
             transcript.Text,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>Direct-edit completion displays authoritative applied paths, including durable replay, and retains reuse detail.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public static void ConversationTranscript_EditCompletion_ShowsAppliedFileNames(bool multiple, bool replay)
+    {
+        var source = new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "source-edit");
+        var started = new ToolInvocationStarted(SessionId.New(), DateTimeOffset.UtcNow, ToolInvocationId.New(), "edit_source", Source: source);
+        var receipt = new SourceEditReceipt(
+            Guid.NewGuid(),
+            MutationSetId.New(),
+            SourceEditStatus.Applied,
+            multiple ? ["Neo4jMigrationTool/Neo4jMigrator.cs", "Neo4jMigrationTool/Program.cs"] : ["Neo4jMigrationTool/Neo4jMigrator.cs"],
+            "Applied selected operations");
+        var completed = new ToolInvocationCompleted(
+            started.SessionId,
+            DateTimeOffset.UtcNow,
+            started.ToolInvocationId,
+            true,
+            ResultJson: JsonSerializer.Serialize(receipt),
+            Source: source,
+            TransientActivityDetail: "Candidate analysis reused for committed source");
+        if (replay)
+        {
+            completed = Assert.IsType<ToolInvocationCompleted>(DomainEventJson.Deserialize(
+                DomainEventJson.GetDiscriminator(completed), 1, DomainEventJson.Serialize(completed)));
+        }
+
+        var transcript = new ConversationTranscript(string.Empty);
+        Assert.False(transcript.Apply(started));
+        Assert.True(transcript.Apply(completed));
+
+        var expected = multiple
+            ? "built-in source-edit; 2 files: Neo4jMigrationTool/Neo4jMigrator.cs, Neo4jMigrationTool/Program.cs"
+            : "built-in source-edit; Neo4jMigrationTool/Neo4jMigrator.cs";
+        Assert.Contains(expected, transcript.Text, StringComparison.Ordinal);
+        Assert.Equal(!replay, transcript.Text.Contains("Candidate analysis reused", StringComparison.Ordinal));
+    }
+
+    /// <summary>Failed, foreign and malformed results cannot claim that proposed paths were edited.</summary>
+    [Theory]
+    [InlineData("{\"Status\":2,\"ChangedFiles\":[\"Example.cs\"]}", ToolActivitySourceKind.BuiltIn, true)]
+    [InlineData("{\"Status\":4,\"ChangedFiles\":[\"Example.cs\"]}", ToolActivitySourceKind.BuiltIn, true)]
+    [InlineData("{\"Status\":\"Applied\",\"ChangedFiles\":[\"Example.cs\"]}", ToolActivitySourceKind.BuiltIn, true)]
+    [InlineData("{\"Status\":0,\"ChangedFiles\":[{}]}", ToolActivitySourceKind.BuiltIn, true)]
+    [InlineData("{\"Status\":0,\"ChangedFiles\":[\"Example.cs\"]}", ToolActivitySourceKind.Extension, true)]
+    [InlineData("{\"Status\":0,\"ChangedFiles\":[\"Example.cs\"]}", ToolActivitySourceKind.BuiltIn, false)]
+    [InlineData("invalid JSON", ToolActivitySourceKind.BuiltIn, true)]
+    public static void ConversationTranscript_EditCompletion_IgnoresUnprovenPaths(string json, ToolActivitySourceKind kind, bool succeeded)
+    {
+        var source = new ToolActivitySource(kind, "source-edit");
+        var started = new ToolInvocationStarted(SessionId.New(), DateTimeOffset.UtcNow, ToolInvocationId.New(), "edit_source", Source: source);
+        var completed = new ToolInvocationCompleted(started.SessionId, DateTimeOffset.UtcNow, started.ToolInvocationId, succeeded, ResultJson: json, Source: source);
+        var transcript = new ConversationTranscript(string.Empty);
+
+        Assert.False(transcript.Apply(started));
+        Assert.True(transcript.Apply(completed));
+
+        Assert.DoesNotContain("Example.cs", transcript.Text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Compact file lists disclose their remaining scope instead of silently dropping files.</summary>
+    [Fact]
+    public static void ConversationTranscript_EditCompletion_BoundsFileNamesWithRemainingCount()
+    {
+        var source = new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "source-edit");
+        var started = new ToolInvocationStarted(SessionId.New(), DateTimeOffset.UtcNow, ToolInvocationId.New(), "edit_source", Source: source);
+        var receipt = new SourceEditReceipt(
+            Guid.NewGuid(),
+            MutationSetId.New(),
+            SourceEditStatus.Applied,
+            ["One.cs", "Two.cs", "Three.cs", "Four.cs", "Five.cs"],
+            "Applied");
+        var completed = new ToolInvocationCompleted(
+            started.SessionId,
+            DateTimeOffset.UtcNow,
+            started.ToolInvocationId,
+            true,
+            ResultJson: JsonSerializer.Serialize(receipt),
+            Source: source);
+        var transcript = new ConversationTranscript(string.Empty);
+
+        Assert.False(transcript.Apply(started));
+        Assert.True(transcript.Apply(completed));
+
+        Assert.Contains("5 files: One.cs, Two.cs, Three.cs (+2 more)", transcript.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Four.cs", transcript.Text, StringComparison.Ordinal);
     }
 
     /// <summary>Transcript renders semantic checks with the same compact duration and detail layout as tools.</summary>

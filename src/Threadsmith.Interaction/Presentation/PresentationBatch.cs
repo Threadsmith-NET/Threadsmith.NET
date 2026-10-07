@@ -5,6 +5,11 @@ using Threadsmith.Interaction.Markdown;
 /// <summary>Base type for one bounded semantic presentation item.</summary>
 public abstract record PresentationItem;
 
+/// <summary>A committed user message using the same echo layout as live composer input.</summary>
+/// <param name="Prompt">Visible prompt label.</param>
+/// <param name="Text">Visible user-authored content.</param>
+public sealed record PresentationUserInputItem(string Prompt, string Text) : PresentationItem;
+
 /// <summary>Already projected semantic text segments.</summary>
 /// <param name="Segments">Ordered terminal-neutral segments.</param>
 public sealed record PresentationTextItem(IReadOnlyList<PresentationTextSegment> Segments) : PresentationItem
@@ -46,6 +51,9 @@ public sealed record PresentationRawSourceItem(string RawSource) : PresentationI
 /// <param name="Items">Items in authoritative event order.</param>
 public sealed record PresentationBatch(IReadOnlyList<PresentationItem> Items)
 {
+    /// <summary>Gets whether to discard all retained output at the destination before presenting and follow the latest exchange.</summary>
+    public bool ReplaceOutput { get; init; }
+
     /// <summary>Gets the accepted child destination; null preserves MAIN compatibility.</summary>
     public Threadsmith.Interaction.Agents.AgentPresentationTarget? Target { get; init; }
 }

@@ -149,7 +149,7 @@ internal static class InteractionPresentationFormatter
     /// <param name="started">The matching check start event.</param>
     /// <param name="completed">The check completion event.</param>
     /// <param name="showOperationDurations">Whether valid host-measured durations should be shown.</param>
-    /// <returns>A two-line terminal-neutral TUI presentation block.</returns>
+    /// <returns>A terminal-neutral TUI block with bounded advisory evidence when available.</returns>
     internal static string FormatSemanticCheckCompletion(
         SemanticCheckStarted started,
         SemanticCheckCompleted completed,
@@ -169,10 +169,30 @@ internal static class InteractionPresentationFormatter
                 GetElapsedText(completed.ElapsedMilliseconds, showOperationDurations),
                 GetSemanticOutcomeRole(completed.Outcome),
                 GetSemanticOutcomeRole(completed.Outcome)),
-            [new TuiBlockLine(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), PresentationTextRole.Muted)],
+            GetSemanticCheckLines(completed),
             ChildIndent: "  ");
 
         return FormatBlock(block);
+    }
+
+    /// <summary>Names advisory phases consistently in live activity and retained completion blocks.</summary>
+    internal static string GetSemanticCheckTitle(SemanticCheckPhase phase, string checkName)
+    {
+        var sanitizedCheckName = TruncateForDisplay(checkName);
+        if (string.Equals(checkName, "advisory edit analysis", StringComparison.Ordinal))
+        {
+            return phase switch
+            {
+                SemanticCheckPhase.PreMutation => "pre-mutation candidate analysis",
+                SemanticCheckPhase.PostMutation => "post-mutation committed-source analysis",
+                _ => sanitizedCheckName,
+            };
+        }
+
+        return phase == SemanticCheckPhase.Baseline
+            && !sanitizedCheckName.Contains("pre-apply", StringComparison.OrdinalIgnoreCase)
+                ? sanitizedCheckName + " (pre-apply baseline capture)"
+                : sanitizedCheckName;
     }
 
     /// <summary>Formats one structured implementation-plan proposal as a guided interactive lifecycle block.</summary>
@@ -885,12 +905,13 @@ internal static class InteractionPresentationFormatter
         var activityDetail = IsBuiltInMemoryTool(started, source)
             ? started.ActivityDetail
             : completed?.TransientActivityDetail ?? started.TransientActivityDetail ?? started.ActivityDetail;
-        var resultDetail = completed is null ? null : GetBuiltInSearchResultDetail(started, completed, source);
+        var editDetail = completed is null ? null : GetBuiltInEditResultDetail(started, completed, source);
+        var resultDetail = editDetail ?? (completed is null ? null : GetBuiltInSearchResultDetail(started, completed, source));
         if (resultDetail is not null)
         {
             activityDetail = string.IsNullOrWhiteSpace(activityDetail)
                 ? resultDetail
-                : $"{activityDetail} · {resultDetail}";
+                : editDetail is not null ? $"{resultDetail} · {activityDetail}" : $"{activityDetail} · {resultDetail}";
         }
         else if (completed is { Succeeded: true, IsTruncated: true })
         {
@@ -908,6 +929,58 @@ internal static class InteractionPresentationFormatter
         return detail.Length == 0
             ? "no additional detail"
             : TruncateForDisplay(detail.ToString());
+    }
+
+    private static string? GetBuiltInEditResultDetail(
+        ToolInvocationStarted started,
+        ToolInvocationCompleted completed,
+        ToolActivitySource? source)
+    {
+        if (!completed.Succeeded
+            || string.IsNullOrWhiteSpace(completed.ResultJson)
+            || !string.Equals(started.ToolName, "edit_source", StringComparison.Ordinal)
+            || source is { Kind: not ToolActivitySourceKind.BuiltIn })
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(completed.ResultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object
+                || !root.TryGetProperty(nameof(SourceEditReceipt.Status), out var status)
+                || status.ValueKind != JsonValueKind.Number
+                || !status.TryGetInt32(out var statusValue)
+                || statusValue != (int)SourceEditStatus.Applied
+                || !root.TryGetProperty(nameof(SourceEditReceipt.ChangedFiles), out var files)
+                || files.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var count = files.GetArrayLength();
+            var paths = new List<string>();
+            foreach (var file in files.EnumerateArray().Take(3))
+            {
+                var path = file.ValueKind == JsonValueKind.String ? file.GetString() : null;
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    return null;
+                }
+
+                paths.Add(path);
+            }
+
+            var summary = count == 0 ? "no files edited"
+                : count == 1 ? paths[0]
+                : $"{count} files: {string.Join(", ", paths)}" + (count > paths.Count ? $" (+{count - paths.Count} more)" : string.Empty);
+            return completed.IsTruncated ? summary + ", truncated" : summary;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string? GetBuiltInSearchResultDetail(
@@ -967,13 +1040,67 @@ internal static class InteractionPresentationFormatter
         };
     }
 
-    private static string GetSemanticCheckTitle(SemanticCheckPhase phase, string checkName)
+    private static IReadOnlyList<TuiBlockLine> GetSemanticCheckLines(SemanticCheckCompleted completed)
     {
-        var sanitizedCheckName = TruncateForDisplay(checkName);
-        return phase == SemanticCheckPhase.Baseline
-            && !sanitizedCheckName.Contains("pre-apply", StringComparison.OrdinalIgnoreCase)
-                ? sanitizedCheckName + " (pre-apply baseline capture)"
-                : sanitizedCheckName;
+        if (completed.Analysis is not { } analysis)
+        {
+            return [new(TuiBlockLineKind.Item, GetSemanticCheckDetail(completed), PresentationTextRole.Muted)];
+        }
+
+        var lines = new List<TuiBlockLine>();
+        var syntax = analysis.Obsolete ? "Syntax: results obsolete"
+            : analysis.SyntaxDocumentsAnalyzed is > 0 && analysis.SyntaxErrors is { } syntaxErrors
+                ? $"Syntax: {analysis.SyntaxDocumentsAnalyzed} C# document instances checked; {syntaxErrors} retained errors"
+            : analysis.SyntaxDocumentsAnalyzed == 0 ? "Syntax: no candidate documents to check"
+            : completed.Phase == SemanticCheckPhase.PostMutation ? "Syntax: included in project compiler diagnostics; no separate document pass"
+            : "Syntax: results unavailable";
+        lines.Add(new(TuiBlockLineKind.Item, syntax, PresentationTextRole.Muted));
+
+        var coverage = analysis.Obsolete ? "Compiler: results obsolete; current coverage unknown"
+            : analysis.Pending ? $"Compiler: pending; {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} affected project instances analyzed"
+            : analysis.ProjectsAnalyzed == 0 ? "Compiler: unavailable; no project instances analyzed"
+            : $"Compiler: {analysis.ProjectsAnalyzed}/{analysis.ProjectsInScope} affected project instances analyzed"
+                + (analysis.ProjectsAnalyzed < analysis.ProjectsInScope ? "; coverage incomplete" : string.Empty);
+        lines.Add(new(TuiBlockLineKind.Item, coverage, PresentationTextRole.Muted));
+        if (!analysis.Obsolete && !analysis.Pending && analysis.ProjectsAnalyzed > 0 && completed.Outcome == SemanticCheckOutcome.Completed)
+        {
+            var errors = $"Errors in analyzed coverage: {analysis.CurrentErrors} current";
+            errors += analysis.ErrorComparisonAvailable
+                ? $"; {analysis.NewErrors} new; {analysis.ResolvedErrors} resolved"
+                : "; before/after comparison unavailable";
+            lines.Add(new(TuiBlockLineKind.Item, errors, PresentationTextRole.Muted));
+        }
+        else
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "Errors: totals unknown for current coverage", PresentationTextRole.Muted));
+        }
+
+        if (!analysis.Obsolete)
+        {
+            foreach (var diagnostic in analysis.Diagnostics.Take(3))
+            {
+                var location = diagnostic.File is null ? diagnostic.Project : diagnostic.File + (diagnostic.Line is { } line ? $":{line}" : string.Empty);
+                lines.Add(new(TuiBlockLineKind.Item, TruncateForDisplay($"{diagnostic.Code} {location} [{diagnostic.Project}; {diagnostic.TargetFramework}; {diagnostic.Origin}]: {diagnostic.Message}"), PresentationTextRole.Muted));
+            }
+
+            if (analysis.Diagnostics.Count > 3 || analysis.DiagnosticsTruncated)
+            {
+                lines.Add(new(TuiBlockLineKind.Item, "Findings shown are bounded; additional errors may be omitted", PresentationTextRole.Muted));
+            }
+        }
+
+        lines.Add(new(TuiBlockLineKind.Item, "Scope: compiler errors only; analyzer execution, build and tests are separate", PresentationTextRole.Muted));
+        foreach (var omission in analysis.Omissions.Take(4))
+        {
+            lines.Add(new(TuiBlockLineKind.Item, "Limit: " + TruncateForDisplay(omission), PresentationTextRole.Muted));
+        }
+
+        if (analysis.Omissions.Count > 4)
+        {
+            lines.Add(new(TuiBlockLineKind.Item, $"Limits: {analysis.Omissions.Count - 4} additional omissions", PresentationTextRole.Muted));
+        }
+
+        return lines;
     }
 
     private static string GetSemanticCheckDetail(SemanticCheckCompleted completed)

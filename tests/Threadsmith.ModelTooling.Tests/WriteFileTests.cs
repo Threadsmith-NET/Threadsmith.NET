@@ -673,7 +673,7 @@ public static class WriteFileTests
 
         public SessionId? RequestedSession { get; private set; }
 
-        public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, CancellationToken cancellationToken = default)
+        public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, ConversationHistoryWindow? historyWindow = null, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             RequestedSession = sessionId;

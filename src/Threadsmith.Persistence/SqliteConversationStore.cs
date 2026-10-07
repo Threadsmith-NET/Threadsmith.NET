@@ -112,8 +112,15 @@ public sealed class SqliteConversationStore : IConversationStore
     public async Task<ConversationStateSnapshot> GetSnapshotAsync(
         SessionId sessionId,
         bool includeBodies = true,
+        ConversationHistoryWindow? historyWindow = null,
         CancellationToken cancellationToken = default)
     {
+        if (historyWindow is not null)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyWindow.MaximumMessages);
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(historyWindow.MaximumCharacters);
+        }
+
         await using var connection = new SqliteConnection(_connectionString);
         await connection.OpenAsync(cancellationToken);
         var warnings = new List<string>();
@@ -123,6 +130,7 @@ public sealed class SqliteConversationStore : IConversationStore
             sessionId,
             includeBodies,
             warnings,
+            historyWindow,
             cancellationToken);
 
         // Retired automatic memory rows and indexes are historical data, never restoration input.
@@ -342,6 +350,7 @@ public sealed class SqliteConversationStore : IConversationStore
         SessionId sessionId,
         bool includeBodies,
         List<string> warnings,
+        ConversationHistoryWindow? historyWindow,
         CancellationToken cancellationToken)
     {
         var messages = new List<ConversationMessage>();
@@ -349,12 +358,25 @@ public sealed class SqliteConversationStore : IConversationStore
         command.CommandText = """
             SELECT message_id, run_id, sequence, role, body, artifact_id, content_hash,
                    estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version
-            FROM conversation_messages WHERE session_id = $session ORDER BY sequence;
-            """;
+            FROM conversation_messages WHERE session_id = $session
+            """ + (historyWindow is null ? " ORDER BY sequence;" : " ORDER BY sequence DESC LIMIT $limit;");
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
+        if (historyWindow is not null)
+        {
+            command.Parameters.AddWithValue("$limit", historyWindow.MaximumMessages + 1L);
+        }
+
+        var remainingCharacters = historyWindow?.MaximumCharacters ?? int.MaxValue;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
+            if (historyWindow is not null
+                && (messages.Count == historyWindow.MaximumMessages || remainingCharacters == 0))
+            {
+                AddWarning(warnings, "Older conversation messages omitted from the output window.");
+                break;
+            }
+
             var schemaVersion = reader.GetInt32(11);
             if (schemaVersion is < 1 or > ConversationSchemaVersions.Message)
             {
@@ -385,6 +407,26 @@ public sealed class SqliteConversationStore : IConversationStore
                 }
             }
 
+            if (historyWindow is not null && body is not null)
+            {
+                if (body.Length > remainingCharacters)
+                {
+                    var start = body.Length - remainingCharacters;
+                    if (char.IsLowSurrogate(body[start]) && start > 0 && char.IsHighSurrogate(body[start - 1]))
+                    {
+                        start++;
+                    }
+
+                    body = body[start..];
+                    AddWarning(warnings, "Earlier conversation text omitted from the output window.");
+                    remainingCharacters = 0;
+                }
+                else
+                {
+                    remainingCharacters -= body.Length;
+                }
+            }
+
             messages.Add(new ConversationMessage
             {
                 Id = new ConversationMessageId(Guid.Parse(reader.GetString(0))),
@@ -401,6 +443,11 @@ public sealed class SqliteConversationStore : IConversationStore
                 OccurredAt = DateTimeOffset.Parse(reader.GetString(10), CultureInfo.InvariantCulture),
                 SchemaVersion = schemaVersion,
             });
+        }
+
+        if (historyWindow is not null)
+        {
+            messages.Reverse();
         }
 
         return messages;

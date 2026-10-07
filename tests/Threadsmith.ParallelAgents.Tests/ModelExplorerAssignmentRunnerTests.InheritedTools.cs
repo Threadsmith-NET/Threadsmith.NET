@@ -365,7 +365,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             throw new NotSupportedException();
         }
 
-        public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, CancellationToken cancellationToken = default)
+        public Task<ConversationStateSnapshot> GetSnapshotAsync(SessionId sessionId, bool includeBodies = true, ConversationHistoryWindow? historyWindow = null, CancellationToken cancellationToken = default)
         {
             throw new NotSupportedException();
         }

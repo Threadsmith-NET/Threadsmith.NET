@@ -1318,6 +1318,7 @@ public sealed partial class InteractionCoordinator
                     && (commandText.Length == 13 || char.IsWhiteSpace(commandText[13])))
                 {
                     await HandleIntelligenceCommandAsync(
+                        sessionId,
                         activeRepository?.Repository?.RepositoryPath,
                         commandText,
                         lifetime.Token);
@@ -3201,6 +3202,7 @@ public sealed partial class InteractionCoordinator
     }
 
     private async Task HandleIntelligenceCommandAsync(
+        SessionId sessionId,
         string? repositoryPath,
         string commandText,
         CancellationToken cancellationToken)
@@ -3217,9 +3219,22 @@ public sealed partial class InteractionCoordinator
         {
             if (parts.Length == 1 || (parts.Length == 2 && parts[1].Equals("status", StringComparison.OrdinalIgnoreCase)))
             {
-                var snapshot = await _presenter.GetRepositoryIntelligenceControlsAsync(identity, cancellationToken);
+                var receipt = await _presenter.GetRepositoryIntelligenceStatusAsync(
+                    sessionId,
+                    identity,
+                    cancellationToken);
+                if (!receipt.Succeeded || receipt.Status is not { } status)
+                {
+                    await _surface.WriteAsync(
+                        $"Intelligence status failed: {receipt.FailureKind ?? "InvalidOutput"}: {receipt.Error ?? "Status output was unavailable."}\n",
+                        PresentationTextRole.Error,
+                        cancellationToken);
+                    return;
+                }
+
+                var snapshot = status.Controls;
                 await _surface.WriteAsync(
-                    $"Intelligence controls for {repositoryPath} ({identity}): persistence={snapshot.Persistence}, archeology={snapshot.Archeology}, recall={snapshot.Recall}, maintenance={snapshot.Maintenance}; generation={snapshot.Generation}. {snapshot.DisabledReason ?? "Analysis is not yet available."}\n",
+                    $"Intelligence controls for {repositoryPath} ({identity}): persistence={snapshot.Persistence}, archeology={snapshot.Archeology}, recall={snapshot.Recall}, maintenance={snapshot.Maintenance}; generation={snapshot.Generation}. {snapshot.DisabledReason ?? status.Reason}\n",
                     PresentationTextRole.Status,
                     cancellationToken);
                 return;

@@ -15,6 +15,16 @@ public interface IToolInvocationPipeline
         ToolInvocationRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Invokes a bounded child read under the parent tool's actual authority and lifetime.</summary>
+    Task<ToolInvocationResult> InvokeNestedReadAsync(
+        ToolExecutionContext parent,
+        string toolId,
+        string argumentsJson,
+        CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("This tool pipeline does not support nested invocation.");
+    }
+
     /// <summary>Validates a complete sibling set without publishing events, requesting approval, or executing tools.</summary>
     ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests);
 
@@ -215,6 +225,73 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             cancellationToken);
     }
 
+    /// <inheritdoc />
+    public async Task<ToolInvocationResult> InvokeNestedReadAsync(
+        ToolExecutionContext parent,
+        string toolId,
+        string argumentsJson,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(argumentsJson);
+        if (parent.NestedBudget is not { } nestedBudget || parent.Source is not { } parentSource)
+        {
+            throw new InvalidOperationException("Nested tool work requires an active host invocation.");
+        }
+
+        parent.ExecutionToken.ThrowIfCancellationRequested();
+        if (parent.NestedDepth >= 2 || !nestedBudget.TryReserve())
+        {
+            throw new InvalidOperationException("The nested tool expansion limit was reached.");
+        }
+
+        ToolRegistration? registration;
+        try
+        {
+            registration = _registry.GetRegistration(toolId);
+        }
+        catch (KeyNotFoundException)
+        {
+            registration = null;
+        }
+
+        if (registration is not null && registration.Tool.Definition.SideEffect != ToolSideEffect.ReadOnly)
+        {
+            throw new InvalidOperationException("Nested tool invocations are limited to read-only capabilities.");
+        }
+
+        var heldSources = parent.AncestorSources.Append(parentSource).ToArray();
+        if (registration is not null && heldSources.Contains(registration.Source))
+        {
+            throw new InvalidOperationException("A nested tool cannot wait on an ancestor's source permit.");
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            parent.ExecutionToken,
+            cancellationToken);
+        return await InvokeAsync(
+            new ToolInvocationRequest
+            {
+                ExpectedRegistration = registration,
+                ParentToolInvocationId = parent.ToolInvocationId,
+                NestedDepth = parent.NestedDepth + 1,
+                NestedBudget = nestedBudget,
+                AncestorSources = heldSources,
+                SessionId = parent.SessionId,
+                RunId = parent.RunId,
+                Phase = parent.Phase,
+                ToolId = toolId,
+                ArgumentsJson = argumentsJson,
+                Context = parent.Invocation with
+                {
+                    RequestedBy = "host:nested-tool",
+                    ActivityOrigin = $"tool:{parent.ToolInvocationId.Value:D}",
+                },
+            },
+            linked.Token);
+    }
+
     private async Task<IReadOnlyList<ToolBatchResult>> InvokePlannedWavesAsync(
         IReadOnlyList<ToolBatchRequest> requests,
         IReadOnlyList<IReadOnlyList<PlannedToolInvocation>> waves,
@@ -384,10 +461,37 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             Phase = request.Phase,
             InvocationKey = request.InvocationKey,
             MaximumOutputBytes = tool.Definition.MaximumOutputBytes,
+            Source = source,
+            NestedDepth = request.NestedDepth,
+            NestedBudget = request.NestedBudget ?? new NestedInvocationBudget(),
+            AncestorSources = request.AncestorSources,
         };
         var activityDetail = CreateActivityDetail(tool, input);
         var transientActivityDetail = CreateTransientActivityDetail(tool, input, executionContext);
         await PublishStartedAsync(request, invocationId, startedAt, source, activityDetail, transientActivityDetail);
+
+        if (request.ParentToolInvocationId is not null
+            && (tool.Definition.SideEffect != ToolSideEffect.ReadOnly
+                || request.AncestorSources.Contains(source)))
+        {
+            return await CompleteFailureAsync(
+                request,
+                invocationId,
+                ToolErrorClassification.PolicyDenied,
+                "Nested tool work cannot acquire an ancestor's source or execute a non-read-only capability.",
+                startedAt);
+        }
+
+        if (request.Context.IsDelegated && !tool.Definition.SubagentAvailable)
+        {
+            return await CompleteFailureAsync(
+                request,
+                invocationId,
+                ToolErrorClassification.PolicyDenied,
+                "This tool is unavailable to delegated agents.",
+                startedAt,
+                source: source);
+        }
 
         ToolPolicyDecision policyDecision;
         try
@@ -569,6 +673,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
         timeoutCancellation.CancelAfter(tool.Definition.Timeout);
+        executionContext = executionContext with { ExecutionToken = timeoutCancellation.Token };
         var executionStarted = _timeProvider.GetTimestamp();
         IReadOnlyList<string> observedConcepts = [];
         try
@@ -704,7 +809,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     TransientActivityDetail: NormalizeActivityDetail(
                         execution.TransientActivityDetail,
                         _presentationLimits.MaximumTransientActivityDetailCharacters))
-                { RunId = request.RunId },
+                {
+                    RunId = request.RunId,
+                    ParentToolInvocationId = request.ParentToolInvocationId,
+                },
                 CancellationToken.None);
             await InvokeAfterHookAsync(request, invocationId, succeeded, failure?.Classification.ToString(), suppressLifecycleHooks);
             return new ToolInvocationResult
@@ -959,7 +1067,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 source,
                 activityDetail,
                 transientActivityDetail,
-                NormalizeActivityDetail(request.Context.ActivityOrigin, _presentationLimits.MaximumActivityDetailCharacters)),
+                NormalizeActivityDetail(request.Context.ActivityOrigin, _presentationLimits.MaximumActivityDetailCharacters))
+            {
+                ParentToolInvocationId = request.ParentToolInvocationId,
+            },
             CancellationToken.None);
     }
 
@@ -1021,7 +1132,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 Source: source,
                 ElapsedMilliseconds: elapsedMilliseconds,
                 Outcome: outcome)
-            { RunId = request.RunId },
+            {
+                RunId = request.RunId,
+                ParentToolInvocationId = request.ParentToolInvocationId,
+            },
             CancellationToken.None);
         await InvokeAfterHookAsync(
             request,

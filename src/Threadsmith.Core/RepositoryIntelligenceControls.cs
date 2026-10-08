@@ -27,8 +27,26 @@ public sealed record RepositoryIntelligenceControlSnapshot(
     string? DisabledReason);
 
 /// <summary>Requests the current trusted control snapshot.</summary>
-public sealed record GetRepositoryIntelligenceControlsCommand(string RepositoryIdentity)
+public sealed record GetRepositoryIntelligenceControlsCommand(string RepositoryIdentity, SessionId SessionId)
     : ICommand<RepositoryIntelligenceControlSnapshot>;
+
+/// <summary>Read-only feature status returned by the governed tool operation.</summary>
+public sealed record RepositoryIntelligenceStatus(
+    RepositoryIntelligenceControlSnapshot Controls,
+    bool AnalysisAvailable,
+    string Reason);
+
+/// <summary>One host command requesting status through normal tool authority and receipts.</summary>
+public sealed record GetRepositoryIntelligenceStatusCommand(SessionId SessionId, string RepositoryIdentity)
+    : ICommand<RepositoryIntelligenceStatusReceipt>;
+
+/// <summary>Serializable outcome of one governed status invocation.</summary>
+public sealed record RepositoryIntelligenceStatusReceipt(
+    ToolInvocationId InvocationId,
+    bool Succeeded,
+    RepositoryIntelligenceStatus? Status,
+    string? FailureKind,
+    string? Error);
 
 /// <summary>Changes exactly one trusted control through a user command.</summary>
 public sealed record SetRepositoryIntelligenceControlCommand(

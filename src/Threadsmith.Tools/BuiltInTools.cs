@@ -1883,7 +1883,7 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
 }
 
 /// <summary>Creates versioned built-in tool definitions from host-owned input and output types.</summary>
-internal static class ToolDefinitionFactory
+public static class ToolDefinitionFactory
 {
     private static readonly HashSet<string> _essentialToolIds = new(
         ["list_files", "read_file", "search", "find_symbol", "run_process"],

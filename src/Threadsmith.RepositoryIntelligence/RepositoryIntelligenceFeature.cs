@@ -49,8 +49,16 @@ internal sealed class RepositoryIntelligenceFeature : IAsyncDisposable
         {
             EnsureOpen();
             EnsureCurrent(repositoryIdentity);
-            await using var settingsLock = await AcquireSettingsLockAsync(repositoryIdentity, cancellationToken);
-            cancellations = ObserveControls(repositoryIdentity);
+            if (File.Exists(SettingsPath(repositoryIdentity)))
+            {
+                await using var settingsLock = await AcquireSettingsLockAsync(repositoryIdentity, cancellationToken);
+                cancellations = ObserveControls(repositoryIdentity);
+            }
+            else
+            {
+                cancellations = ObserveControls(repositoryIdentity);
+            }
+
             return Snapshot();
         }
         finally

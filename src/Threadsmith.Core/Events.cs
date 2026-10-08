@@ -273,7 +273,11 @@ public sealed record ToolInvocationStarted(
     ToolActivitySource? Source = null,
     string? ActivityDetail = null,
     [property: JsonIgnore] string? TransientActivityDetail = null,
-    string? ActivityOrigin = null) : DomainEvent(SessionId, OccurredAt);
+    string? ActivityOrigin = null) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Owning tool invocation for host-submitted nested work.</summary>
+    public ToolInvocationId? ParentToolInvocationId { get; init; }
+}
 
 /// <summary>A tool invocation completed.</summary>
 public sealed record ToolInvocationCompleted(
@@ -292,6 +296,9 @@ public sealed record ToolInvocationCompleted(
 {
     /// <summary>Gets the exact invocation owner; default supports historical events.</summary>
     public RunId RunId { get; init; }
+
+    /// <summary>Owning tool invocation for host-submitted nested work.</summary>
+    public ToolInvocationId? ParentToolInvocationId { get; init; }
 }
 
 /// <summary>A semantic check started.</summary>

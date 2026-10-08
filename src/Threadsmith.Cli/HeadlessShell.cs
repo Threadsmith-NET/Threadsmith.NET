@@ -665,6 +665,28 @@ public sealed class HeadlessShell
         }
     }
 
+    /// <summary>Writes a governed, read-only intelligence status receipt without a model request.</summary>
+    public async Task<int> WriteRepositoryIntelligenceStatusAsync(
+        string repositoryPath,
+        RepositoryTrustLevel trustLevel,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+        var sessionId = await _dispatcher.DispatchAsync(
+            new CreateSessionCommand("Headless intelligence status"),
+            cancellationToken);
+        var opened = await _dispatcher.DispatchAsync(
+            new OpenRepositoryCommand(sessionId, repositoryPath, trustLevel),
+            cancellationToken);
+        var receipt = await _dispatcher.DispatchAsync(
+            new GetRepositoryIntelligenceStatusCommand(
+                sessionId,
+                RepositoryIdentity.Create(opened.RepositoryPath)),
+            cancellationToken);
+        await _output.WriteLineAsync(JsonSerializer.Serialize(receipt).AsMemory(), cancellationToken);
+        return receipt.Succeeded ? 0 : 1;
+    }
+
     /// <summary>Opens a repository, selects a solution, captures a baseline, and runs one scripted request.</summary>
     public async Task<int> RunRepositoryRequestAsync(
         string sessionName,

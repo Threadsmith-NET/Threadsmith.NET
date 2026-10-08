@@ -700,11 +700,23 @@ public class InteractionPresenter
 
     /// <summary>Reads trusted repository intelligence controls without starting analysis.</summary>
     public Task<RepositoryIntelligenceControlSnapshot> GetRepositoryIntelligenceControlsAsync(
+        SessionId sessionId,
         string repositoryIdentity,
         CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new GetRepositoryIntelligenceControlsCommand(repositoryIdentity),
+            new GetRepositoryIntelligenceControlsCommand(repositoryIdentity, sessionId),
+            cancellationToken);
+    }
+
+    /// <summary>Runs the status operation through the governed tool pipeline.</summary>
+    public Task<RepositoryIntelligenceStatusReceipt> GetRepositoryIntelligenceStatusAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new GetRepositoryIntelligenceStatusCommand(sessionId, repositoryIdentity),
             cancellationToken);
     }
 

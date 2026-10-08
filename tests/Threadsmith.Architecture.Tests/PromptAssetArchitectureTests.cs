@@ -157,6 +157,7 @@ public static partial class PromptAssetArchitectureTests
         "Threadsmith.Mcp",
         "Threadsmith.Models",
         "Threadsmith.Models.OpenAiCodex",
+        "Threadsmith.RepositoryIntelligence",
         "Threadsmith.Skills",
         "Threadsmith.Tools",
     ];

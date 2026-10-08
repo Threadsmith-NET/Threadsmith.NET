@@ -95,9 +95,11 @@ internal static class ShellRunner
             var catalogArguments = request.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             var isCatalogCommand = catalogArguments.Length > 0
                 && string.Equals(catalogArguments[0], "/models", StringComparison.OrdinalIgnoreCase);
+            var isIntelligenceCommand = catalogArguments.Length > 0
+                && string.Equals(catalogArguments[0], "/intelligence", StringComparison.OrdinalIgnoreCase);
             var preflightOnly = isCatalogCommand && catalogArguments.Length == 2
                 && string.Equals(catalogArguments[1], "preflight", StringComparison.OrdinalIgnoreCase);
-            if (preflightOnly || (!isCatalogCommand && EffectiveConfigurationPreflight.IsRequested(context.Configuration)))
+            if (preflightOnly || (!isCatalogCommand && !isIntelligenceCommand && EffectiveConfigurationPreflight.IsRequested(context.Configuration)))
             {
                 var preflightResult = await context.Applications.ConfigurationPreflight.RunAsync(
                     context.Configuration, Console.Out, processCancellation.Token);
@@ -116,6 +118,22 @@ internal static class ShellRunner
                     Console.Out,
                     Console.Error,
                     processCancellation.Token);
+            }
+
+            if (isIntelligenceCommand)
+            {
+                if (catalogArguments.Length == 1
+                    || (catalogArguments.Length == 2
+                        && string.Equals(catalogArguments[1], "status", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return await headlessShell.WriteRepositoryIntelligenceStatusAsync(
+                        context.Paths.RepositoryRoot,
+                        context.CommandLine.RequestedTrust ?? RepositoryTrustLevel.UntrustedInspection,
+                        processCancellation.Token);
+                }
+
+                await Console.Error.WriteLineAsync("Usage: /intelligence [status]");
+                return 2;
             }
 
             var skillArguments = request.Split((char[]?)null, 4, StringSplitOptions.RemoveEmptyEntries);

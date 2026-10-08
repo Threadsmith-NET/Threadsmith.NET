@@ -83,7 +83,11 @@ public sealed record ToolActivityProjection(
     bool IsTruncated,
     string? Error,
     string? ResultPreview = null,
-    string? ActivityOrigin = null);
+    string? ActivityOrigin = null)
+{
+    /// <summary>Owning tool invocation when this activity is nested.</summary>
+    public ToolInvocationId? ParentToolInvocationId { get; init; }
+}
 
 /// <summary>One approval awaiting a user or host policy decision.</summary>
 public sealed record ApprovalProjection(

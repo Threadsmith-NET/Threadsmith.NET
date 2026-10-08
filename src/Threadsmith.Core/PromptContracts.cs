@@ -215,6 +215,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the explicit repository-memory tool description.</summary>
     public const string ToolMemoriesDescription = "Tool-memories-Description.md";
 
+    /// <summary>Gets the bounded repository-intelligence status tool description.</summary>
+    public const string ToolRepositoryIntelligenceDescription = "Tool-repository_intelligence-Description.md";
+
     /// <summary>Gets the stable filename for the write-file description.</summary>
     public const string ToolWriteFileDescription = "Tool-write_file-Description.md";
 
@@ -1012,6 +1015,7 @@ public static class PromptFileNames
         ToolReadActiveTurnEvidenceDescription,
         ToolWriteFileDescription,
         ToolMemoriesDescription,
+        ToolRepositoryIntelligenceDescription,
         ToolSearchDescription,
         ToolGitStatusDescription,
         ToolFindSymbolDescription,
@@ -1425,6 +1429,10 @@ public static class PromptAssetCatalog
             PromptFileNames.AdapterMcpExplicitReadPolicyDescription,
             PromptFileNames.AdapterMcpImportedToolFallbackDescription,
         };
+        var repositoryIntelligenceAssets = new HashSet<string>(StringComparer.Ordinal)
+        {
+            PromptFileNames.ToolRepositoryIntelligenceDescription,
+        };
 
         var definitions = PromptFileNames.All.Select(fileName => new PromptAssetDefinition
         {
@@ -1475,6 +1483,11 @@ public static class PromptAssetCatalog
             if (mcpAssets.Contains(fileName))
             {
                 return "Threadsmith.Mcp";
+            }
+
+            if (repositoryIntelligenceAssets.Contains(fileName))
+            {
+                return "Threadsmith.RepositoryIntelligence";
             }
 
             return "Threadsmith.Tools";

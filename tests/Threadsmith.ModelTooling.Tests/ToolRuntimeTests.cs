@@ -2219,8 +2219,8 @@ public static partial class ToolRuntimeTests
         var implementations = new FindImplementationsTool(resolver, TestPromptLoader.Instance).Definition.Description;
 
         Assert.Contains("known or likely C# declaration", symbol, StringComparison.Ordinal);
-        Assert.Contains("Use read_file for a known file", symbol, StringComparison.Ordinal);
-        Assert.Contains("Use code_explore only", symbol, StringComparison.Ordinal);
+        Assert.Contains("Use read_file for isolated file contents", symbol, StringComparison.Ordinal);
+        Assert.Contains("Use code_explore for broader repository understanding", symbol, StringComparison.Ordinal);
         Assert.Contains("reference or usage relationships", references, StringComparison.Ordinal);
         Assert.Contains("implementation or inheritance relationships", implementations, StringComparison.Ordinal);
         Assert.Contains(

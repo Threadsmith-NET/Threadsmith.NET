@@ -42,11 +42,11 @@ Common editing rules:
 | System prompts | 21 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 22 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
-| Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 199 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **284** | Complete deployed catalog. |
+| **Total** | **285** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -597,6 +597,12 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 | `Tool-read_file-Description.md` | Scoped reads for local edits and undo, whole-file reads when needed, and exact UTF-8 snapshot pages with whole-file digest continuity. | [`DefaultLines`](#placeholder-defaultlines), [`MaximumLines`](#placeholder-maximumlines), [`MaximumContentBytes`](#placeholder-maximumcontentbytes), [`MaximumFileBytes`](#placeholder-maximumfilebytes) |
 | `Tool-read_active_turn_evidence-Description.md` | Bounded main-loop recovery of historical sanitized evidence explicitly referenced by the current request. | `None` |
 | `Tool-write_file-Description.md` | Advertised description for `write_file`. | [`MaximumContentBytes`](#placeholder-maximumcontentbytes) |
+
+#### `repository_intelligence` family
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `Tool-repository_intelligence-Description.md` | Read-only status for the active checkout; analysis and investigation remain unavailable. | `None` |
 
 #### `run_process` family
 

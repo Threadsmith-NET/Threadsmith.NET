@@ -283,6 +283,9 @@ public sealed record ToolDefinition
 /// <summary>Repository and requester state evaluated for every tool invocation.</summary>
 public sealed record ToolInvocationContext
 {
+    /// <summary>True when host delegation has narrowed this context for a child run.</summary>
+    public bool IsDelegated { get; internal init; }
+
     /// <summary>Request-local evidence references authorized for active-turn recovery.</summary>
     [JsonIgnore]
     public IReadOnlyList<ActiveTurnEvidenceReference> ActiveTurnEvidenceReferences { get; init; } = [];
@@ -406,6 +409,18 @@ public sealed record ToolInvocationRequest
 
     /// <summary>Policy context.</summary>
     public required ToolInvocationContext Context { get; init; }
+
+    /// <summary>Owning tool invocation when the host submits a bounded nested read.</summary>
+    internal ToolInvocationId? ParentToolInvocationId { get; init; }
+
+    /// <summary>Host-owned nesting depth; never read from model arguments.</summary>
+    internal int NestedDepth { get; init; }
+
+    /// <summary>Host-owned expansion budget shared by one invocation tree.</summary>
+    internal NestedInvocationBudget? NestedBudget { get; init; }
+
+    /// <summary>Host-owned source permits held by nested ancestors.</summary>
+    internal IReadOnlyList<ToolActivitySource> AncestorSources { get; init; } = [];
 }
 
 /// <summary>One source used to produce a tool result.</summary>
@@ -561,6 +576,21 @@ public sealed record ToolExecutionContext(
 
     /// <summary>Effective serialized output ceiling after configured runtime wrappers are applied.</summary>
     public int? MaximumOutputBytes { get; init; }
+
+    /// <summary>Host-owned active source, used to reject circular nested permit acquisition.</summary>
+    internal ToolActivitySource? Source { get; init; }
+
+    /// <summary>Host-owned nested depth and expansion budget.</summary>
+    internal int NestedDepth { get; init; }
+
+    /// <summary>Host-owned nested expansion budget for the current operation tree.</summary>
+    internal NestedInvocationBudget? NestedBudget { get; init; }
+
+    /// <summary>Host-owned source permits held by nested ancestors.</summary>
+    internal IReadOnlyList<ToolActivitySource> AncestorSources { get; init; } = [];
+
+    /// <summary>Execution lifetime supplied by the host for nested cancellation.</summary>
+    internal CancellationToken ExecutionToken { get; init; }
 
     /// <summary>Whether tool policy requires review of the exact staged diff.</summary>
     internal bool RequireExactDiffReview { get; init; }

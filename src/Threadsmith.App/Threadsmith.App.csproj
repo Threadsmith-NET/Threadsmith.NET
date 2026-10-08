@@ -62,6 +62,7 @@
     <ThreadsmithPromptAsset Include="..\Threadsmith.Context\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.Execution\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.Tools\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.RepositoryIntelligence\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.DotNet\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.Skills\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.Models\Prompts\*.md" />

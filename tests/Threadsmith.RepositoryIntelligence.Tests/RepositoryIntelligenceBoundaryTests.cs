@@ -4,13 +4,13 @@ using System.Reflection;
 using System.Xml.Linq;
 using Xunit;
 
-/// <summary>Verifies the dormant assembly has only its approved dependency and no public feature API.</summary>
+/// <summary>Verifies the optional assembly has only its approved dependencies and no public feature API.</summary>
 public static class RepositoryIntelligenceBoundaryTests
 {
     private static readonly string RepositoryRoot = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 
-    /// <summary>The feature project is compiled into the product solution with only a Core edge.</summary>
+    /// <summary>The feature project uses Core contracts and the shared governed tool runtime.</summary>
     [Fact]
     public static void SolutionAndProjectContainTheApprovedBoundary()
     {
@@ -28,11 +28,11 @@ public static class RepositoryIntelligenceBoundaryTests
             .ToArray();
 
         Assert.Contains("Threadsmith.RepositoryIntelligence\\Threadsmith.RepositoryIntelligence.csproj", solution);
-        Assert.Equal(["Threadsmith.Core"], references);
+        Assert.Equal(["Threadsmith.Core", "Threadsmith.Tools"], references);
         Assert.DoesNotContain(project.Descendants(), element => element.Name.LocalName == "PackageReference");
     }
 
-    /// <summary>Loading the dormant assembly exports no feature operations or foreign SDK types.</summary>
+    /// <summary>Loading the optional assembly exports no feature operations or foreign SDK types.</summary>
     [Fact]
     public static void AssemblyExportsNoFeatureApi()
     {
@@ -41,7 +41,8 @@ public static class RepositoryIntelligenceBoundaryTests
         Assert.Empty(assembly.ExportedTypes);
         Assert.DoesNotContain(assembly.GetReferencedAssemblies(), name =>
             name.Name?.StartsWith("Threadsmith.", StringComparison.Ordinal) == true
-            && name.Name != "Threadsmith.Core");
+            && name.Name != "Threadsmith.Core"
+            && name.Name != "Threadsmith.Tools");
     }
 
     /// <summary>Shared compiler and package policy applies without project-local exemptions.</summary>

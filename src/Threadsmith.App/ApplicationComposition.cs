@@ -499,6 +499,11 @@ internal static class ApplicationComposition
         try
         {
             tools.ToolRegistry.RegisterOrReplace(memoriesTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "memories"));
+            tools.ToolRegistry.RegisterOrReplace(
+                new RepositoryIntelligenceStatusTool(
+                    repositoryBindings.ResolveRepositoryIntelligenceAsync,
+                    host.PromptLoader),
+                new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-intelligence"));
             tools.ToolRegistry.RegisterOrReplace(sourceEditTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "source-edit"));
             repositoryBindings.AttachScratchpad(scratchpad);
             var repositoryLifecycle = new RepositoryLifecycle(
@@ -831,7 +836,20 @@ internal static class ApplicationComposition
                 validationApplication,
                 new CodexAuthenticationApplication(host.Paths),
                 new RepositoryIntelligenceCommandAdapter(
-                    repositoryBindings.ResolveRepositoryIntelligenceAsync),
+                    repositoryBindings.ResolveRepositoryIntelligenceAsync,
+                    async (sessionId, cancellationToken) =>
+                    {
+                        var state = await host.Projections.GetAsync<SessionProjection>(
+                            new ProjectionKey("session", sessionId.Value.ToString("D")),
+                            cancellationToken);
+                        if (state?.RepositoryPath is null)
+                        {
+                            throw new InvalidOperationException("Open a repository before requesting intelligence status.");
+                        }
+
+                        return CreateToolInvocationContext(host, state, scratchpad);
+                    },
+                    tools.ToolPipeline),
                 integration.McpManager,
             };
             if (integration.Models.CatalogMaintenance is { } catalogMaintenance)

@@ -1,0 +1,1 @@
+Report the current repository intelligence controls and readiness for the active checkout. This read-only status action does not start analysis, change activation, or inspect repository contents. Analysis and investigation actions are unavailable until their governed workflows are implemented.

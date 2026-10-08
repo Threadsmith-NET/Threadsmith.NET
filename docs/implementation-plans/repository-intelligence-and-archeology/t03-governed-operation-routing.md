@@ -1,6 +1,6 @@
 # T03 Route feature operations through host governance
 
-**Status:** Proposed; implementation not started or accepted.
+**Status:** Complete; reviewed production implementation accepted and post-acceptance work validated.
 
 **Delivery track:** Proposed Repository Intelligence and Archeology capability; milestone registration follows T01 acceptance.
 
@@ -108,13 +108,17 @@ Keep unused/disabled behavior cheap and unchanged. Do not initialize feature sto
 
 ## 14 Acceptance Criteria
 
-- [ ] Manual, model-driven and internal status calls follow the same authority and receipt path with equivalent results.
-- [ ] Disabled or unauthorized operations perform no feature work; delegated callers are rejected at runtime.
-- [ ] Nested work has correlated visibility, bounded concurrency and exactly-once accounting without deadlock.
-- [ ] Only completed actions are exposed and failure/cancellation produces one ordinary terminal outcome.
-- [ ] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
-- [ ] The user has explicitly accepted that reviewed implementation before any task test or documentation implementation begins.
-- [ ] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+- [x] Manual, model-driven and internal status calls follow the same authority and receipt path with equivalent results.
+- [x] Disabled or unauthorized operations perform no feature work; delegated callers are rejected at runtime.
+- [x] Nested work has correlated visibility, bounded concurrency and exactly-once accounting without deadlock.
+- [x] Only completed actions are exposed and failure/cancellation produces one ordinary terminal outcome.
+- [x] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
+- [x] The user has explicitly accepted that reviewed implementation before task-specific tests and operation documentation were authored.
+- [x] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+
+The accepted implementation registers a feature-owned, read-only `repository_intelligence` status tool in the shared host pipeline. Interactive, headless, model, and session-bound internal requests use its policy, budget, event, and completion path; unfinished analysis actions remain unavailable. A generic nested-read bridge carries parent invocation IDs and cancellation, limits depth and expansion, and rejects ancestor source-permit cycles. The clean-context reviews resolved the direct status-read bypass, nested permit cycle, registration race, prompt-owner mismatch, and explicit-session contract before the user accepted the revised production implementation. The user then authorized the prompt, dependency, and caller test/documentation updates and explicitly accepted the reviewed implementation before the remaining task tests and operation documentation were authored.
+
+Post-acceptance validation: the solution build passed with zero warnings; architecture/integration tests passed (332, with one optional live-provider test skipped); feature tests passed (13); ModelTooling tests passed (984, with 16 documented skips), including four nested runtime cases; CoreRuntime tests passed (661, with two explicit measurement skips); `git diff --check` passed. The status parity test uses a scripted model provider and composed host, plus real headless and interaction submission. Physical terminal and live-provider behavior remain unmeasured. No analysis operation exists yet to benchmark under repository load.
 
 ## 15 Risks
 

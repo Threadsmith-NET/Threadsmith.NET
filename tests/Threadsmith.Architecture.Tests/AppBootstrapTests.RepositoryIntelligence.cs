@@ -1,11 +1,17 @@
 namespace Threadsmith.Architecture.Tests;
 
 using System.Reflection;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.App;
 using Threadsmith.Cli;
 using Threadsmith.Core;
+using Threadsmith.Execution;
+using Threadsmith.Interaction.Coordination;
+using Threadsmith.Models;
+using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Exercises the normal App composition and repository lifecycle with the optional assembly installed.</summary>
@@ -29,7 +35,7 @@ public static partial class AppBootstrapTests
             Assert.Contains(definitions, definition => definition.Id == "read_file");
             Assert.Contains(definitions, definition => definition.Id == "code_explore");
             Assert.Contains(definitions, definition => definition.Id == "memories");
-            Assert.DoesNotContain(definitions, definition => definition.Id == "repository_intelligence");
+            Assert.Contains(definitions, definition => definition.Id == "repository_intelligence");
 
             var shell = new HeadlessShell(
                 applications.Dispatcher,
@@ -65,7 +71,7 @@ public static partial class AppBootstrapTests
 
             Assert.Equal(sessionId, restored.ActiveSession.SessionId);
             Assert.False(IsFeatureCreated(applications));
-            Assert.DoesNotContain(
+            Assert.Contains(
                 foundation.ToolRegistry.AllDefinitions,
                 definition => definition.Id == "repository_intelligence");
             return true;
@@ -95,10 +101,12 @@ public static partial class AppBootstrapTests
 
         await WithComposedHostAsync(
             paths,
-            async (_, applications, token) =>
+            async (foundation, applications, token) =>
             {
+                var sessionId = await CreateOpenedIntelligenceSessionAsync(
+                    foundation, applications, paths, token);
                 var initial = await applications.Dispatcher.DispatchAsync(
-                    new GetRepositoryIntelligenceControlsCommand(identity),
+                    new GetRepositoryIntelligenceControlsCommand(identity, sessionId),
                     token);
                 Assert.False(initial.Persistence);
                 Assert.False(initial.Archeology);
@@ -118,10 +126,12 @@ public static partial class AppBootstrapTests
 
         await WithComposedHostAsync(
             paths,
-            async (_, applications, token) =>
+            async (foundation, applications, token) =>
             {
+                var sessionId = await CreateOpenedIntelligenceSessionAsync(
+                    foundation, applications, paths, token);
                 var restored = await applications.Dispatcher.DispatchAsync(
-                    new GetRepositoryIntelligenceControlsCommand(identity),
+                    new GetRepositoryIntelligenceControlsCommand(identity, sessionId),
                     token);
                 Assert.False(restored.Persistence);
                 Assert.True(restored.Recall);
@@ -170,7 +180,7 @@ public static partial class AppBootstrapTests
                     new SetRepositoryIntelligenceControlCommand(identity, RepositoryIntelligenceControl.Persistence, false),
                     token);
                 var disabled = await applications.Dispatcher.DispatchAsync(
-                    new GetRepositoryIntelligenceControlsCommand(identity),
+                    new GetRepositoryIntelligenceControlsCommand(identity, sessionId),
                     token);
                 Assert.False(disabled.Persistence);
                 var whileDisabled = await applications.Dispatcher.DispatchAsync(
@@ -196,6 +206,242 @@ public static partial class AppBootstrapTests
             cancellationToken);
 
         SqliteConnection.ClearAllPools();
+    }
+
+    /// <summary>Manual, model-shaped, and internal status requests share tool receipts and control results.</summary>
+    [Fact]
+    public static async Task RepositoryIntelligenceStatus_EntryPointsShareGovernedReceiptsAsync()
+    {
+        using var temporary = new TemporaryDirectory("repository-intelligence-status");
+        var paths = CreatePaths(temporary.Root);
+        var token = TestContext.Current.CancellationToken;
+        await File.WriteAllTextAsync(temporary.GetPath("README.md"), "fixture repository", token);
+        var identity = RepositoryIdentity.Create(paths.RepositoryRoot);
+
+        await WithComposedHostAsync(
+            paths,
+            async (foundation, applications, cancellationToken) =>
+        {
+            var sessionId = await CreateOpenedIntelligenceSessionAsync(
+                foundation, applications, paths, cancellationToken);
+            var observed = new List<IDomainEvent>();
+            await using var subscription = foundation.Events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
+
+            var presenter = new InteractionPresenter(applications.Dispatcher, foundation.Projections);
+            var interactive = await presenter.GetRepositoryIntelligenceStatusAsync(
+                sessionId, identity, cancellationToken);
+            using var output = new StringWriter();
+            var headless = new HeadlessShell(
+                applications.Dispatcher,
+                foundation.Projections,
+                output,
+                foundation.WebFetchAuthorization,
+                paths.RepositoryRoot);
+            var exitCode = await headless.WriteRepositoryIntelligenceStatusAsync(
+                paths.RepositoryRoot,
+                RepositoryTrustLevel.UntrustedInspection,
+                cancellationToken);
+            var manual = JsonSerializer.Deserialize<RepositoryIntelligenceStatusReceipt>(output.ToString());
+            Assert.NotNull(manual);
+            Assert.Equal(0, exitCode);
+            var model = new FakeModelProvider(new ScriptedSession
+            {
+                Turns =
+                [
+                    new ScriptedTurn
+                    {
+                        ToolName = "repository_intelligence",
+                        ArgumentsJson = "{}",
+                    },
+                ],
+            });
+            var modelApplication = new SessionApplication(
+                foundation.Events,
+                model,
+                foundation.Budget,
+                foundation.Sanitizer,
+                NullLogger<SessionApplication>.Instance,
+                foundation.ToolPipeline,
+                (_, _) => Task.FromResult(CreateIntelligenceToolRequest(sessionId, paths.RepositoryRoot).Context),
+                toolRegistry: foundation.ToolRegistry,
+                correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
+                prompts: TestPromptLoader.Instance);
+            var modelSessionId = await modelApplication.HandleAsync(
+                new CreateSessionCommand("Model intelligence status"), cancellationToken);
+            var modelRunId = await modelApplication.HandleAsync(
+                new SubmitRequestCommand(modelSessionId, "Report intelligence status"), cancellationToken);
+            Assert.True(await modelApplication.HandleAsync(
+                new WaitForRunCommand(modelRunId), cancellationToken));
+            var internalControls = await applications.Dispatcher.DispatchAsync(
+                new GetRepositoryIntelligenceControlsCommand(identity, sessionId), cancellationToken);
+
+            Assert.True(manual.Succeeded);
+            Assert.Equal(interactive.Status, manual.Status);
+            var modelStart = Assert.Single(
+                observed.OfType<ToolInvocationStarted>(),
+                item => item.ToolName == "repository_intelligence" && item.RequestedBy == "model");
+            var modelCompletion = Assert.Single(
+                observed.OfType<ToolInvocationCompleted>(),
+                item => item.ToolInvocationId == modelStart.ToolInvocationId);
+            Assert.True(modelCompletion.Succeeded, modelCompletion.Error);
+            var modelStatus = JsonSerializer.Deserialize<RepositoryIntelligenceStatus>(modelCompletion.ResultJson!);
+            Assert.NotNull(modelStatus);
+            Assert.Equal(manual.Status, modelStatus);
+            Assert.Equal(manual.Status!.Controls, internalControls);
+            Assert.False(manual.Status.AnalysisAvailable);
+            var started = observed.OfType<ToolInvocationStarted>()
+                .Where(item => item.ToolName == "repository_intelligence").ToArray();
+            var completed = observed.OfType<ToolInvocationCompleted>()
+                .Where(item => started.Any(start => start.ToolInvocationId == item.ToolInvocationId)).ToArray();
+            Assert.Equal(4, started.Length);
+            Assert.Equal(4, completed.Length);
+            Assert.All(completed, item => Assert.True(item.Succeeded));
+            Assert.Contains(started, item => item.ToolInvocationId == manual.InvocationId && item.RequestedBy == "user");
+            Assert.Contains(started, item => item.ToolInvocationId == interactive.InvocationId && item.RequestedBy == "user");
+            Assert.Contains(started, item => item.ToolInvocationId == modelStart.ToolInvocationId && item.RequestedBy == "model");
+            return true;
+            },
+            token);
+        SqliteConnection.ClearAllPools();
+    }
+
+    /// <summary>Policy and child-run denials complete through the pipeline without resolving feature storage.</summary>
+    [Fact]
+    public static async Task RepositoryIntelligenceStatus_DeniedAndDelegatedCallsDoNoFeatureWorkAsync()
+    {
+        using var temporary = new TemporaryDirectory("repository-intelligence-denial");
+        var paths = CreatePaths(temporary.Root);
+        var token = TestContext.Current.CancellationToken;
+        await File.WriteAllTextAsync(temporary.GetPath("README.md"), "fixture repository", token);
+
+        await WithComposedHostAsync(
+            paths,
+            async (foundation, applications, cancellationToken) =>
+        {
+            var sessionId = await CreateOpenedIntelligenceSessionAsync(
+                foundation, applications, paths, cancellationToken);
+            Assert.False(IsFeatureCreated(applications));
+            var observed = new List<IDomainEvent>();
+            await using var subscription = foundation.Events.Subscribe((domainEvent, _) =>
+            {
+                observed.Add(domainEvent);
+                return Task.CompletedTask;
+            });
+            var denied = await foundation.ToolPipeline.InvokeAsync(
+                CreateIntelligenceToolRequest(sessionId, paths.RepositoryRoot) with
+                {
+                    Context = CreateIntelligenceToolRequest(sessionId, paths.RepositoryRoot).Context with
+                    {
+                        DeniedToolIds = ["repository_intelligence"],
+                    },
+                },
+                cancellationToken);
+            var delegated = await foundation.ToolPipeline.InvokeAsync(
+                CreateIntelligenceToolRequest(sessionId, paths.RepositoryRoot) with
+                {
+                    Context = CreateDelegatedIntelligenceContext(sessionId, paths.RepositoryRoot),
+                },
+                cancellationToken);
+
+            Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
+            Assert.Equal(ToolErrorClassification.PolicyDenied, delegated.ErrorClassification);
+            Assert.False(IsFeatureCreated(applications));
+            Assert.Equal(2, observed.OfType<ToolInvocationStarted>()
+                .Count(item => item.ToolName == "repository_intelligence"));
+            Assert.Equal(2, observed.OfType<ToolInvocationCompleted>()
+                .Count(item => item.ToolInvocationId == denied.ToolInvocationId
+                    || item.ToolInvocationId == delegated.ToolInvocationId));
+            return true;
+            },
+            token);
+        SqliteConnection.ClearAllPools();
+    }
+
+    private static ToolInvocationRequest CreateIntelligenceToolRequest(SessionId sessionId, string repositoryPath)
+    {
+        return new ToolInvocationRequest
+        {
+            SessionId = sessionId,
+            RunId = RunId.New(),
+            ToolId = "repository_intelligence",
+            ArgumentsJson = "{}",
+            Context = new ToolInvocationContext
+            {
+                RepositoryPath = repositoryPath,
+                TrustLevel = RepositoryTrustLevel.UntrustedInspection,
+                RequestedBy = "model",
+            },
+        };
+    }
+
+    private static ToolInvocationContext CreateDelegatedIntelligenceContext(SessionId sessionId, string repositoryPath)
+    {
+        var assignment = new AgentAssignment
+        {
+            AssignmentId = AgentAssignmentId.New(),
+            ChildRunId = RunId.New(),
+            Mode = AgentRunMode.ReadOnlyBaseline,
+            Objective = "Inspect repository status",
+            OutputSchema = AgentAssignment.ResponseSchema,
+            StoppingCondition = "Return status",
+            Deadline = DateTimeOffset.UtcNow.AddMinutes(1),
+            Scope = new AgentAssignmentScope { Files = ["README.md"], IsOwnershipProven = true },
+            Policy = new AgentPolicySnapshot
+            {
+                AllowedToolIds = ["repository_intelligence"],
+                ModelSelectionRationale = "test",
+                ContextPolicyVersion = "test/1",
+                ToolPolicyVersion = "test/1",
+            },
+            Budget = new AgentResourceBudget { ToolCalls = 1 },
+        };
+        var plan = new DelegationPlan
+        {
+            DelegationId = DelegationId.New(),
+            Provenance = new DelegationProvenance
+            {
+                SessionId = sessionId,
+                ParentRunId = RunId.New(),
+                RepositoryIdentity = RepositoryIdentity.Create(repositoryPath),
+                BaselineIdentity = "test-baseline",
+                WorkspaceId = WorkspaceId.New(),
+            },
+            Assignments = [assignment],
+            ParentBudget = assignment.Budget,
+            AcceptedAt = DateTimeOffset.UtcNow,
+        };
+        return AgentToolPolicy.Scope(
+            CreateIntelligenceToolRequest(sessionId, repositoryPath).Context,
+            plan,
+            assignment,
+            repositoryPath) with { RequestedBy = "model" };
+    }
+
+    private static async Task<SessionId> CreateOpenedIntelligenceSessionAsync(
+        HostFoundation foundation,
+        ApplicationServices applications,
+        ConfigurationPaths paths,
+        CancellationToken cancellationToken)
+    {
+        var shell = new HeadlessShell(
+            applications.Dispatcher,
+            foundation.Projections,
+            TextWriter.Null,
+            foundation.WebFetchAuthorization,
+            paths.RepositoryRoot);
+        var created = await shell.CreateNewSessionAsync(cancellationToken);
+        var sessionId = created.ActiveSession.SessionId;
+        await applications.Dispatcher.DispatchAsync(
+            new OpenRepositoryCommand(
+                sessionId,
+                paths.RepositoryRoot,
+                RepositoryTrustLevel.UntrustedInspection),
+            cancellationToken);
+        return sessionId;
     }
 
     private static bool IsFeatureCreated(ApplicationServices applications)

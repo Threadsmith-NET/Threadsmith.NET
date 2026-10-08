@@ -1,14 +1,14 @@
 # T02 Add trusted activation and cancellation controls
 
-**Status:** Proposed; implementation not started or accepted.
+**Status:** Complete; reviewed production implementation accepted and post-acceptance work validated.
 
-**Delivery track:** Proposed Repository Intelligence and Archeology capability; milestone registration follows T01 acceptance.
+**Delivery track:** M34 Repository Intelligence and Archeology.
 
 **Prerequisites:** [T01](t01-dormant-assembly-boundary.md) complete, including its post-acceptance tests and documentation.
 
 **Requirements and parent acceptance outcomes:** OPT-01–06, NQ-03–04; AC-15, AC-19.
 
-**Sources:** [Parent requirements](threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
+**Sources:** [Parent requirements](threadsmith-repository-intelligence-and-archeology-requirements.md), [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md), [Scenario BA](../acceptance-scenarios.md#scenario-ba---repository-intelligence-activation-and-revocation), and [MTP-278](../manual-test-plan.md#mtp-278--repository-intelligence-activation-and-revocation).
 
 **Mandatory order:** Implement production code → run a clean-context adversarial review → address applicable, valid and reasonable findings and repeat fresh reviews until clean → ask the user to accept this task's implementation → wait for explicit acceptance → implement unit tests, other required tests and documentation → validate and complete. Plan approval, a clean review and silence are not user acceptance.
 
@@ -108,14 +108,18 @@ Keep unused/disabled behavior cheap and unchanged. Do not initialize feature sto
 
 ## 14 Acceptance Criteria
 
-- [ ] All four controls default off and can be changed independently only through a trusted user action.
-- [ ] Repository content cannot activate the capability; existing data remains dormant until explicit authority is present.
-- [ ] Disablement prevents new affected operations and publication, cancels active affected work and preserves stored data.
-- [ ] Baseline/one-off requests expose scope/provider/limits and do not silently alter other controls.
-- [ ] Repository switches and stale settings snapshots cannot apply consent to a different context.
-- [ ] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
-- [ ] The user has explicitly accepted that reviewed implementation before any task test or documentation implementation begins.
-- [ ] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+- [x] All four controls default off and can be changed independently only through a trusted user action.
+- [x] Repository content cannot activate the capability; existing data remains dormant until explicit authority is present.
+- [x] Disablement prevents new affected operations and publication, cancels active affected work and preserves stored data.
+- [x] Baseline/one-off requests expose scope/provider/limits and do not silently alter other controls.
+- [x] Repository switches and stale settings snapshots cannot apply consent to a different context.
+- [x] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
+- [x] The user has explicitly accepted that reviewed implementation before any task test or documentation implementation begins.
+- [x] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+
+The accepted implementation adds checkout-keyed user-owned controls, a thin App command adapter, a shared `/intelligence` command, bounded operation previews, and admission/revocation fences. A checkout-level settings lock and fresh read preserve independent changes from concurrent app instances; per-control revisions reject disable/re-enable races. Feature initialization remains lazy, and analysis remains explicitly unavailable pending later tasks. Disablement does not delete intelligence or curated memory. The clean-context review loop resolved concurrency and cancellation findings and ended without actionable production findings. The user then explicitly accepted the implementation before tests or product documentation were authored.
+
+Post-acceptance validation: the solution build passed with zero warnings; feature tests passed (13); architecture/integration tests passed (330, with one optional live test skipped); CoreRuntime interaction tests passed (661, with two explicit measurement skips); repository lifecycle tests passed (38); `git diff --check` passed. Concurrent settings coordination and cancellation are exercised through two feature instances in one OS process; separate-process behavior remains source-reviewed. Physical terminal and live-provider behavior remain in MTP-278; no analysis operation exists yet to benchmark or observe under real load.
 
 ## 15 Risks
 

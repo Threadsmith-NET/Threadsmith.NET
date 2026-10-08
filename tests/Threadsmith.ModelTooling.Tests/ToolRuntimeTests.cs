@@ -315,6 +315,19 @@ public static partial class ToolRuntimeTests
         }
     }
 
+    /// <summary>Natural-language concept hints reach semantic tool admission without a corrective turn.</summary>
+    [Fact]
+    public static void CodeExplore_AcceptsSpaceSeparatedConceptHints()
+    {
+        var tool = new CodeExploreTool(new NoopCodeExploreService(), TestPromptLoader.Instance);
+        var input = Assert.IsType<CodeExploreInput>(tool.DeserializeInput(
+            """{"query":"Trace runtime filter execution","concepts":[" runtime filters ","query execution","filter ordering","per-query cost"]}"""));
+
+        Assert.Equal(
+            ["filter-ordering", "per-query-cost", "query-execution", "runtime-filters"],
+            MemoryConcepts.Normalize(input.Concepts));
+    }
+
     /// <summary>Code exploration exposes only the CodeGraph-style query and optional file hint.</summary>
     [Fact]
     public static void CodeExplore_Definition_UsesMinimalModelFacingSchema()

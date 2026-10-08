@@ -1978,19 +1978,19 @@ public static class Milestone4Tests
             .ContainsKey("tamper"));
     }
 
-    /// <summary>Discovery guidance allows direct known-file inspection without a preliminary semantic call.</summary>
+    /// <summary>Discovery guidance prefers semantic exploration while allowing direct local inspection.</summary>
     [Fact]
-    public static void StableSystemPolicy_RequiresNarrowestSufficientToolSelection()
+    public static void StableSystemPolicy_PrefersSemanticRepositoryExploration()
     {
         var policy = TestPromptLoader.Instance.Get(PromptFileNames.SystemSystemPrompt)
             + TestPromptLoader.Instance.Get(PromptFileNames.SystemRepositoryInspection);
 
         Assert.Contains(
-            "Choose the narrowest, least expensive tool",
+            "Prefer compiler-backed semantic tools for C# repository exploration",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(
-            "For a known repository-relative file, read_file",
+            "For an isolated question about a known repository-relative file, read_file",
             policy,
             StringComparison.Ordinal);
         Assert.Contains(

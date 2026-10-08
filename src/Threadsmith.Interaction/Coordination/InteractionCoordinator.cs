@@ -1314,6 +1314,16 @@ public sealed partial class InteractionCoordinator
                     continue;
                 }
 
+                if (commandText.StartsWith("/intelligence", StringComparison.OrdinalIgnoreCase)
+                    && (commandText.Length == 13 || char.IsWhiteSpace(commandText[13])))
+                {
+                    await HandleIntelligenceCommandAsync(
+                        activeRepository?.Repository?.RepositoryPath,
+                        commandText,
+                        lifetime.Token);
+                    continue;
+                }
+
                 if (commandText.StartsWith("/memory", StringComparison.OrdinalIgnoreCase)
                     && (commandText.Length == 7 || char.IsWhiteSpace(commandText[7])))
                 {
@@ -3185,6 +3195,86 @@ public sealed partial class InteractionCoordinator
         {
             await _surface.WriteAsync(
                 $"Lifecycle-hook command failed: {exception.Message}{Environment.NewLine}",
+                PresentationTextRole.Error,
+                cancellationToken);
+        }
+    }
+
+    private async Task HandleIntelligenceCommandAsync(
+        string? repositoryPath,
+        string commandText,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryPath))
+        {
+            await _surface.WriteAsync("Open a repository before changing intelligence controls.\n", PresentationTextRole.Warning, cancellationToken);
+            return;
+        }
+
+        var identity = RepositoryIdentity.Create(repositoryPath);
+        var parts = commandText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        try
+        {
+            if (parts.Length == 1 || (parts.Length == 2 && parts[1].Equals("status", StringComparison.OrdinalIgnoreCase)))
+            {
+                var snapshot = await _presenter.GetRepositoryIntelligenceControlsAsync(identity, cancellationToken);
+                await _surface.WriteAsync(
+                    $"Intelligence controls for {repositoryPath} ({identity}): persistence={snapshot.Persistence}, archeology={snapshot.Archeology}, recall={snapshot.Recall}, maintenance={snapshot.Maintenance}; generation={snapshot.Generation}. {snapshot.DisabledReason ?? "Analysis is not yet available."}\n",
+                    PresentationTextRole.Status,
+                    cancellationToken);
+                return;
+            }
+
+            if (parts.Length == 4 && parts[1].Equals("set", StringComparison.OrdinalIgnoreCase)
+                && Enum.TryParse<RepositoryIntelligenceControl>(parts[2], true, out var control)
+                && Enum.IsDefined(control)
+                && (parts[3].Equals("on", StringComparison.OrdinalIgnoreCase)
+                    || parts[3].Equals("off", StringComparison.OrdinalIgnoreCase)))
+            {
+                var enabled = parts[3].Equals("on", StringComparison.OrdinalIgnoreCase);
+                var snapshot = await _presenter.SetRepositoryIntelligenceControlAsync(identity, control, enabled, cancellationToken);
+                await _surface.WriteAsync(
+                    $"{control} {(enabled ? "enabled" : "disabled")} for this checkout; generation={snapshot.Generation}. Analysis remains unavailable.\n",
+                    PresentationTextRole.Status,
+                    cancellationToken);
+                return;
+            }
+
+            if (parts.Length is 7 or 8 && parts[1].Equals("preview", StringComparison.OrdinalIgnoreCase)
+                && (parts[2].Equals("baseline", StringComparison.OrdinalIgnoreCase)
+                    || parts[2].Equals("investigate", StringComparison.OrdinalIgnoreCase))
+                && int.TryParse(parts[4], out var maximumFiles)
+                && int.TryParse(parts[5], out var maximumCommits)
+                && int.TryParse(parts[6], out var maximumModelCalls)
+                && (parts.Length == 7 || parts[7].Equals("history", StringComparison.OrdinalIgnoreCase)))
+            {
+                var oneOff = parts[2].Equals("investigate", StringComparison.OrdinalIgnoreCase);
+                var selection = new RepositoryIntelligenceOperationSelection(
+                    identity,
+                    parts[3],
+                    parts.Length == 8,
+                    string.Empty,
+                    maximumFiles,
+                    maximumCommits,
+                    maximumModelCalls);
+                var preview = await _presenter.PreviewRepositoryIntelligenceOperationAsync(selection, oneOff, cancellationToken);
+                var effective = preview.Selection;
+                await _surface.WriteAsync(
+                    $"{parts[2]} checkout={repositoryPath}, scope={effective.Scope}, provider={effective.ProviderId}, history={effective.IncludeHistory}, effective files={effective.MaximumFiles}, commits={effective.MaximumCommits}, model calls={effective.MaximumModelCalls}. {preview.Reason}\n",
+                    PresentationTextRole.Warning,
+                    cancellationToken);
+                return;
+            }
+
+            await _surface.WriteAsync(
+                "Usage: /intelligence [status|set <persistence|archeology|recall|maintenance> <on|off>|preview <baseline|investigate> <scope> <files> <commits> <calls> [history]]\n",
+                PresentationTextRole.Warning,
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            await _surface.WriteAsync(
+                $"Repository-intelligence command failed: {exception.Message}{Environment.NewLine}",
                 PresentationTextRole.Error,
                 cancellationToken);
         }

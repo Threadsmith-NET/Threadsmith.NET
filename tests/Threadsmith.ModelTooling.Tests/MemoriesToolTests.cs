@@ -224,7 +224,7 @@ public static class MemoriesToolTests
     [InlineData("{\"action\":\"add\",\"text\":\"x\",\"expectedRevision\":1}")]
     [InlineData("{\"action\":\"list\",\"concepts\":[\"cancellation\"]}")]
     [InlineData("{\"action\":\"add\",\"text\":\"x\",\"kind\":\"authority\"}")]
-    [InlineData("{\"action\":\"add\",\"text\":\"x\",\"concepts\":[\"invalid space\"]}")]
+    [InlineData("{\"action\":\"add\",\"text\":\"x\",\"concepts\":[\"invalid/punctuation\"]}")]
     [InlineData("{\"action\":\"add\",\"text\":\"x\",\"confirmDistinctFrom\":[{\"id\":\"not-an-id\",\"revision\":1}]}")]
     [InlineData("{\"action\":\"add\",\"text\":\"x\",\"confirmDistinctFrom\":[{\"id\":\"11111111-1111-1111-1111-111111111111\",\"revision\":0}]}")]
     public static void InvalidArguments_AreRejected(string json)

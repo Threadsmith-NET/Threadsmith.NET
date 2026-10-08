@@ -46,7 +46,8 @@ public static class MemoryConcepts
         foreach (var concept in concepts)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(concept);
-            var value = concept.Trim().Normalize(NormalizationForm.FormKC).ToLowerInvariant();
+            var value = string.Join('-', concept.Normalize(NormalizationForm.FormKC)
+                .ToLowerInvariant().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
             var runes = value.EnumerateRunes().ToArray();
             if (runes.Length is 0 or > 48 || value.StartsWith('-') || value.EndsWith('-')
                 || value.Contains("--", StringComparison.Ordinal)

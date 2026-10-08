@@ -78,6 +78,126 @@ public static partial class AppBootstrapTests
         SqliteConnection.ClearAllPools();
     }
 
+    /// <summary>Repository-owned configuration and existing content cannot grant intelligence authority.</summary>
+    [Fact]
+    public static async Task RepositoryConfigurationCannotActivateIntelligenceAsync()
+    {
+        using var temporary = new TemporaryDirectory("repository-intelligence-trust");
+        var paths = CreatePaths(temporary.Root);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        Directory.CreateDirectory(paths.RepositoryConfigurationDirectory);
+        await File.WriteAllTextAsync(
+            paths.RepositoryConfiguration,
+            """{"repositoryIntelligence":{"persistence":true,"archeology":true,"recall":true,"maintenance":true}}""",
+            cancellationToken);
+        await File.WriteAllTextAsync(temporary.GetPath("README.md"), "Existing repository content", cancellationToken);
+        var identity = RepositoryIdentity.Create(paths.RepositoryRoot);
+
+        await WithComposedHostAsync(
+            paths,
+            async (_, applications, token) =>
+            {
+                var initial = await applications.Dispatcher.DispatchAsync(
+                    new GetRepositoryIntelligenceControlsCommand(identity),
+                    token);
+                Assert.False(initial.Persistence);
+                Assert.False(initial.Archeology);
+                Assert.False(initial.Recall);
+                Assert.False(initial.Maintenance);
+
+                var changed = await applications.Dispatcher.DispatchAsync(
+                    new SetRepositoryIntelligenceControlCommand(identity, RepositoryIntelligenceControl.Recall, true),
+                    token);
+                Assert.False(changed.Persistence);
+                Assert.False(changed.Archeology);
+                Assert.True(changed.Recall);
+                Assert.False(changed.Maintenance);
+                return true;
+            },
+            cancellationToken);
+
+        await WithComposedHostAsync(
+            paths,
+            async (_, applications, token) =>
+            {
+                var restored = await applications.Dispatcher.DispatchAsync(
+                    new GetRepositoryIntelligenceControlsCommand(identity),
+                    token);
+                Assert.False(restored.Persistence);
+                Assert.True(restored.Recall);
+                return true;
+            },
+            cancellationToken);
+
+        Assert.Contains("\"persistence\":true", await File.ReadAllTextAsync(paths.RepositoryConfiguration, cancellationToken));
+        SqliteConnection.ClearAllPools();
+    }
+
+    /// <summary>Toggling intelligence authority does not delete user memory or launch analysis.</summary>
+    [Fact]
+    public static async Task IntelligenceDisablePreservesCuratedMemoryAsync()
+    {
+        using var temporary = new TemporaryDirectory("repository-intelligence-memory");
+        var paths = CreatePaths(temporary.Root);
+        var identity = RepositoryIdentity.Create(paths.RepositoryRoot);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await File.WriteAllTextAsync(temporary.GetPath("README.md"), "fixture repository", cancellationToken);
+
+        await WithComposedHostAsync(
+            paths,
+            async (foundation, applications, token) =>
+            {
+                var shell = new HeadlessShell(
+                    applications.Dispatcher,
+                    foundation.Projections,
+                    TextWriter.Null,
+                    foundation.WebFetchAuthorization,
+                    paths.RepositoryRoot);
+                var created = await shell.CreateNewSessionAsync(token);
+                var sessionId = created.ActiveSession.SessionId;
+                await applications.Dispatcher.DispatchAsync(
+                    new OpenRepositoryCommand(sessionId, paths.RepositoryRoot, RepositoryTrustLevel.UntrustedInspection),
+                    token);
+                var remembered = await applications.Dispatcher.DispatchAsync(
+                    new RememberRepositoryMemoryCommand(sessionId, identity, "Keep this curated note."),
+                    token);
+                Assert.NotNull(remembered.Id);
+
+                await applications.Dispatcher.DispatchAsync(
+                    new SetRepositoryIntelligenceControlCommand(identity, RepositoryIntelligenceControl.Persistence, true),
+                    token);
+                await applications.Dispatcher.DispatchAsync(
+                    new SetRepositoryIntelligenceControlCommand(identity, RepositoryIntelligenceControl.Persistence, false),
+                    token);
+                var disabled = await applications.Dispatcher.DispatchAsync(
+                    new GetRepositoryIntelligenceControlsCommand(identity),
+                    token);
+                Assert.False(disabled.Persistence);
+                var whileDisabled = await applications.Dispatcher.DispatchAsync(
+                    new ListRepositoryMemoryCommand(sessionId, identity),
+                    token);
+                Assert.Contains(whileDisabled.Entries, entry => entry.Id == remembered.Id);
+
+                await applications.Dispatcher.DispatchAsync(
+                    new SetRepositoryIntelligenceControlCommand(identity, RepositoryIntelligenceControl.Persistence, true),
+                    token);
+                var afterReenable = await applications.Dispatcher.DispatchAsync(
+                    new ListRepositoryMemoryCommand(sessionId, identity),
+                    token);
+                Assert.Contains(afterReenable.Entries, entry => entry.Id == remembered.Id);
+                var preview = await applications.Dispatcher.DispatchAsync(
+                    new PreviewRepositoryIntelligenceOperationCommand(
+                        new RepositoryIntelligenceOperationSelection(identity, "src", false, "caller-value", 10, 2, 1),
+                        OneOffInvestigation: false),
+                    token);
+                Assert.False(preview.Available);
+                return true;
+            },
+            cancellationToken);
+
+        SqliteConnection.ClearAllPools();
+    }
+
     private static bool IsFeatureCreated(ApplicationServices applications)
     {
         var property = typeof(ApplicationServices).GetProperty(

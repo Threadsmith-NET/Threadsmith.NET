@@ -2044,6 +2044,7 @@ public static partial class Milestone1Tests
             "/fetch-authorize <url> [redirect ...]",
             "/help",
             "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]",
+            "/intelligence [status|set <control> {on|off}|preview <baseline|investigate> <scope> <files> <commits> <calls> [history]]",
             "/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]",
             "/memory [remember|list|inspect|update|forget]",
             "/models",

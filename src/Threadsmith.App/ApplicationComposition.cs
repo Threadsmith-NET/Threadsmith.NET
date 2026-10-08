@@ -478,6 +478,21 @@ internal static class ApplicationComposition
             persistence.RepositoryMemoryStore,
             memoryOptions,
             repositoryRoot => ConfigurationBootstrap.Build(host.ConfigurationArguments, ConfigurationBootstrap.ResolvePaths(repositoryRoot)));
+
+        var intelligence = new Lazy<RepositoryIntelligenceFeature>(() =>
+        {
+            var limits = new RepositoryIntelligenceResourceLimits(
+                Math.Clamp(host.TrustedConfiguration.GetValue("repositoryIntelligence:limits:maximumFiles", 200), 1, 100000),
+                Math.Clamp(host.TrustedConfiguration.GetValue("repositoryIntelligence:limits:maximumCommits", 100), 0, 100000),
+                Math.Clamp(host.TrustedConfiguration.GetValue("repositoryIntelligence:limits:maximumModelCalls", 10), 0, 1000));
+            return new RepositoryIntelligenceFeature(
+                Path.GetDirectoryName(host.Paths.UserConfiguration)
+                    ?? throw new InvalidOperationException("User configuration directory is unavailable."),
+                repositoryBindings.CurrentRepositoryRoot,
+                limits);
+        });
+        repositoryBindings.AttachRepositoryIntelligence(intelligence);
+
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
         var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader);
@@ -815,6 +830,8 @@ internal static class ApplicationComposition
                 semantic.SemanticMutations,
                 validationApplication,
                 new CodexAuthenticationApplication(host.Paths),
+                new RepositoryIntelligenceCommandAdapter(
+                    repositoryBindings.ResolveRepositoryIntelligenceAsync),
                 integration.McpManager,
             };
             if (integration.Models.CatalogMaintenance is { } catalogMaintenance)
@@ -865,6 +882,7 @@ internal static class ApplicationComposition
                 startupDisplayWarnings,
                 agentDisplay,
                 scratchpad,
+                intelligence,
                 new EffectiveConfigurationPreflight(
                     integration.Models.ActiveModels, childModelSelection, delegateAgentsOptions.EffectiveChildBudget));
         }
@@ -1123,12 +1141,16 @@ internal sealed class RepositoryScopedBindingCoordinator
     private ClaudeSkillCompatibilityCatalog? _claudeSkills;
     private CompatibleSkillCatalog? _compatibleSkills;
     private string _currentRepositoryRoot;
+    private Lazy<RepositoryIntelligenceFeature>? _repositoryIntelligence;
     private SkillCatalog? _nativeSkills;
     private SessionLifecycleApplication? _sessionLifecycle;
     private ScratchpadLifecycle? _scratchpad;
 
     /// <summary>Gets warnings from the latest successful repository binding.</summary>
     internal IReadOnlyList<string> LastWarnings { get; private set; } = [];
+
+    /// <summary>Gets the committed active checkout without resolving optional feature services.</summary>
+    internal string CurrentRepositoryRoot => Volatile.Read(ref _currentRepositoryRoot);
 
     /// <summary>Initializes a new instance of the <see cref="RepositoryScopedBindingCoordinator"/> class.</summary>
     internal RepositoryScopedBindingCoordinator(
@@ -1189,6 +1211,35 @@ internal sealed class RepositoryScopedBindingCoordinator
     {
         ArgumentNullException.ThrowIfNull(scratchpad);
         _scratchpad = scratchpad;
+    }
+
+    /// <summary>Attaches the optional authority without resolving it during ordinary repository opens.</summary>
+    internal void AttachRepositoryIntelligence(Lazy<RepositoryIntelligenceFeature> feature)
+    {
+        _repositoryIntelligence = feature ?? throw new ArgumentNullException(nameof(feature));
+    }
+
+    /// <summary>Resolves the optional authority only for a command against the committed checkout.</summary>
+    internal async Task<(RepositoryIntelligenceFeature Feature, string? ProviderId)> ResolveRepositoryIntelligenceAsync(
+        string repositoryIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (!string.Equals(RepositoryIdentity.Create(_currentRepositoryRoot), repositoryIdentity, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("Repository intelligence command belongs to another checkout.");
+            }
+
+            var feature = (_repositoryIntelligence
+                ?? throw new InvalidOperationException("Repository intelligence controls are unavailable.")).Value;
+            return (feature, _activeModels?.Current.ProviderId);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     /// <summary>Rebinds every repository-scoped service as one recoverable repository-open boundary.</summary>
@@ -1260,7 +1311,12 @@ internal sealed class RepositoryScopedBindingCoordinator
                     await BindMemoryRepositoryAsync(nextRepositoryRoot, nextConfiguration, cancellationToken);
                 }
 
-                _currentRepositoryRoot = nextRepositoryRoot;
+                if (_repositoryIntelligence is { IsValueCreated: true } intelligence)
+                {
+                    await intelligence.Value.BindRepositoryAsync(nextRepositoryRoot, cancellationToken);
+                }
+
+                Volatile.Write(ref _currentRepositoryRoot, nextRepositoryRoot);
                 LastWarnings = [
                     .. !sameRepository ? _scratchpad?.LastActivationWarnings ?? [] : [],
                     .. configurationWarning is null ? Array.Empty<string>() : [configurationWarning],
@@ -1358,8 +1414,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
     internal EffectiveConfigurationPreflight ConfigurationPreflight { get; }
 
     /// <summary>Gets the dormant feature only after an explicit activation path requests it.</summary>
-    internal Lazy<RepositoryIntelligenceFeature> RepositoryIntelligence { get; } =
-        new(() => new RepositoryIntelligenceFeature());
+    internal Lazy<RepositoryIntelligenceFeature> RepositoryIntelligence { get; }
 
     private readonly AgentRunScheduler _agentScheduler;
     private readonly LocalTextEmbeddingGenerator _embeddings;
@@ -1403,10 +1458,12 @@ internal sealed class ApplicationServices : IAsyncDisposable
         IReadOnlyList<string> startupDisplayWarnings,
         AgentDisplayStream agentDisplay,
         ScratchpadLifecycle scratchpad,
+        Lazy<RepositoryIntelligenceFeature> repositoryIntelligence,
         EffectiveConfigurationPreflight configurationPreflight)
     {
         ArgumentNullException.ThrowIfNull(configurationPreflight);
         ConfigurationPreflight = configurationPreflight;
+        RepositoryIntelligence = repositoryIntelligence ?? throw new ArgumentNullException(nameof(repositoryIntelligence));
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);
         ArgumentNullException.ThrowIfNull(validationStages);
@@ -1488,6 +1545,11 @@ internal sealed class ApplicationServices : IAsyncDisposable
         }
 
         await DisposeStepAsync(async () => await _sessionCheckpointSubscription.DisposeAsync());
+        if (RepositoryIntelligence.IsValueCreated)
+        {
+            await DisposeStepAsync(async () => await RepositoryIntelligence.Value.DisposeAsync());
+        }
+
         await DisposeStepAsync(() =>
         {
             if (_delegateAgentsTool is not null)

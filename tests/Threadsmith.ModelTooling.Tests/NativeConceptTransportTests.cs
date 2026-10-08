@@ -94,12 +94,12 @@ public static class NativeConceptTransportTests
                     SessionId = SessionId.New(),
                     RunId = RunId.New(),
                     ToolId = tool.Definition.Id,
-                    ArgumentsJson = invalid ? "{\"concepts\":[\"not a concept\"]}" : "{\"concepts\":[\" Cancellation \",\"cancellation\"]}",
+                    ArgumentsJson = invalid ? "{\"concepts\":[\"invalid/punctuation\"]}" : "{\"concepts\":[\" Runtime   Filters \",\"runtime-filters\"]}",
                     Context = new ToolInvocationContext { RepositoryPath = root, TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model", DeniedToolIds = denied ? [tool.Definition.Id] : [] },
                 },
                 TestContext.Current.CancellationToken);
             Assert.Equal(!denied && !invalid, result.Succeeded);
-            Assert.Equal(denied || invalid ? [] : new[] { "cancellation" }, result.Concepts);
+            Assert.Equal(denied || invalid ? [] : new[] { "runtime-filters" }, result.Concepts);
             using var serialized = JsonDocument.Parse(JsonSerializer.Serialize(result));
             Assert.False(serialized.RootElement.TryGetProperty("Concepts", out _));
         }

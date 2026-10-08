@@ -12,7 +12,6 @@ public static class MemoryConceptRecallTests
     [Theory]
     [InlineData("")]
     [InlineData(" ")]
-    [InlineData("a b")]
     [InlineData("-prefix")]
     [InlineData("suffix-")]
     [InlineData("double--hyphen")]
@@ -35,6 +34,17 @@ public static class MemoryConceptRecallTests
         new RepositoryMemoryOptions { ConceptFuzzyEnabled = true }.Validate();
         Assert.Throws<ArgumentException>(() => new RepositoryMemoryOptions { ConceptFuzzyEnabled = true, ConceptFuzzyMaximumDistance = 0 }.Validate());
         Assert.Throws<ArgumentException>(() => new RepositoryMemoryOptions { ReconciliationEnabled = true, MaximumListBytes = 1024 }.Validate());
+    }
+
+    /// <summary>Model-authored phrases share the same concept identity as canonical tokens.</summary>
+    [Theory]
+    [InlineData(" runtime filters ")]
+    [InlineData("Runtime   Filters")]
+    [InlineData("\tRuntime\t\r\nFilters\n")]
+    [InlineData("\u3000ＲＵＮＴＩＭＥ\u00a0ＦＩＬＴＥＲＳ\u3000")]
+    public static void Whitespace_concepts_normalize_and_deduplicate(string value)
+    {
+        Assert.Equal(["runtime-filters"], MemoryConcepts.Normalize([value, "runtime-filters"]));
     }
 
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>

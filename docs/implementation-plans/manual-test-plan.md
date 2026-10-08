@@ -2117,3 +2117,15 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 3. Revise/remove a memory and verify append-only current snapshots preserve earlier replay prefixes.
 4. Start another ordinary run and verify concepts/retained inclusions reset.
 5. Verify native deployed prompt assets and bounded memory authority.
+
+### MTP-278 — Repository intelligence activation and revocation
+
+**Prerequisites:** Disposable repository and second worktree, separate user configuration, two Threadsmith instances sharing the first checkout, and a curated `/memory` note. Use only fixture data.
+
+1. Open the repository with no intelligence settings. Run `/intelligence status`; confirm all four controls are off. Put apparent enablement values in `.threadsmith/config.json` and repository text, restart, and confirm they remain off. Check that ordinary tools, memory, and code exploration remain available without feature analysis or storage initialization.
+2. In the first instance run `/intelligence set persistence on`; in the second run `/intelligence set recall on`. Refresh status in both and confirm both choices persist. Repeat for `archeology` and `maintenance`, then turn each off separately. Verify all 16 on/off combinations through the host command surface. Open the second worktree and confirm its controls start off.
+3. Run `/intelligence preview baseline src 500 200 20 history` and `/intelligence preview investigate src 10 2 1`. Confirm each shows the selected checkout, scope, active provider or unavailability, history choice, and effective limits capped by trusted user settings. Confirm both report analysis unavailable, start no scan/model request, and change no control. A one-off request must leave persistent controls unchanged when its operation becomes available.
+4. Start an admitted operation in a controlled integration fixture, disable its governing control in the other instance, and confirm cancellation plus rejection of any late result or publication. Disable then reenable before the first instance checks again; the old admission must still fail. Verify unaffected controls and work retain their own authority. Switch repositories while an admission is active and confirm the old checkout snapshot cannot authorize work in the new checkout.
+5. Disable and reenable persistence after saving a curated `/memory` note. Confirm the note remains available, no baseline starts automatically, and no retained intelligence is deleted. Supply malformed user-owned intelligence settings in a disposable profile; confirm all controls fail closed and the file is not silently overwritten.
+
+**Expected:** Activation is an explicit user action scoped to a checkout, independent across controls and coordinated across app instances. Disablement revokes affected work without deleting data; previews are bounded and read-only. Full analysis and one-off investigation execution remain unavailable until their later tasks.

@@ -807,3 +807,13 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 3. Verify trusted role configuration overrides parent inheritance, while the parent report reflects persisted repository selection rather than a generic reasoning override.
 
 **Verifies:** reproducible startup routing, shared selection authority, and pre-dispatch assertion failure.
+
+## Scenario BA - Repository intelligence activation and revocation
+
+1. Open a checkout without user-owned intelligence settings and with apparent enablement in repository configuration and files. Confirm persistence, Archeology, recall, and maintenance all remain off, ordinary coding and memory work, and no feature analysis starts.
+2. Change one control through the user command surface while another app instance uses the same checkout. Confirm each choice persists independently across both instances and restart. Open a separate worktree and confirm its controls remain off.
+3. Preview baseline and one-off investigation choices. Confirm the selected checkout, scope, history option, active provider, and effective trusted resource limits are visible before work can be admitted. Preview changes no control and reports unavailable analysis while the operation pipeline is absent.
+4. Disable a control during governed work, including a disable and reenable before a second instance observes the setting. Confirm affected work is cancelled and a late result cannot publish; unrelated controls remain unchanged. A repository switch rejects stale settings and admissions.
+5. Confirm disablement preserves existing curated memory and retained intelligence. Reenabling does not launch a baseline, recall, or maintenance by itself. Invalid user-owned settings fail closed without being silently replaced.
+
+**Verifies:** explicit checkout-scoped authority, independent controls across app instances, bounded preview, revocation fences, and disable-versus-delete behavior.

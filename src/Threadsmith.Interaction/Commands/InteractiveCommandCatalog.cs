@@ -31,6 +31,7 @@ public static class InteractiveCommandCatalog
         new("/fetch-authorize", "/fetch-authorize <url> [redirect ...]", "Authorize one exact URL chain for web_fetch"),
         new("/help", "/help", "Show commands"),
         new("/hooks", "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]", "Browse and toggle lifecycle hooks"),
+        new("/intelligence", "/intelligence [status|set <control> {on|off}|preview <baseline|investigate> <scope> <files> <commits> <calls> [history]]", "Manage repository intelligence controls and preview work"),
         new("/mcp", "/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]", "Manage MCP connections and capabilities"),
         new("/memory", "/memory [remember|list|inspect|update|forget]", "Manage local repository memory"),
         new("/models", "/models [status|refresh <provider-id>]", "Select a model or maintain discovery metadata"),

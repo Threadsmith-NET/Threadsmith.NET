@@ -258,6 +258,7 @@ After required startup choices, the TUI paints the startup modal before loading 
 | `/fetch-authorize <url> [redirect ...]` | Authorize an exact URL chain for `web_fetch`. |
 | `/help` | Open a scrollable command/description modal. |
 | `/hooks [list\|inspect\|enable\|disable\|test\|approve\|revoke\|audit]` | Open the hook checkbox dialog or manage a specific handler. |
+| `/intelligence [status\|set <persistence\|archeology\|recall\|maintenance> <on\|off>\|preview <baseline\|investigate> <scope> <files> <commits> <calls> [history]]` | Inspect independent checkout controls, change one trusted control, or preview bounded work. Analysis is not yet available. |
 | `/mcp [action] [profile]` | Open the connection checkbox dialog, authenticate eligible profiles, or manage capabilities and identity. See [MCP commands](operations/mcp-connections.md#lifecycle-commands). |
 | `/memory remember [--type standingPreference\|situational] <text>` | Explicitly save a repository note; the default type is situational. |
 | `/memory list` | List current note IDs, types, origins, and text. |
@@ -281,6 +282,14 @@ After required startup choices, the TUI paints the startup modal before loading 
 | `/tips` | Print all tips as local bullets without adding them to model context. |
 | `/tools` | Browse and toggle non-essential repository tools. |
 | `/trust [inspect\|read\|build\|mutation\|automation]` | Show or change repository trust. |
+
+### Repository intelligence controls
+
+`/intelligence status` shows four controls for the open checkout. All start off. `/intelligence set <control> on|off` changes only the named control: `persistence` permits future durable intelligence work, `archeology` permits future requested investigations, `recall` governs future automatic enrichment, and `maintenance` governs future automatic maintenance. Enabling one does not enable the others or start analysis. Controls are stored in user-owned settings keyed to the local checkout; app instances using the same checkout share them, while a different worktree has separate settings. Repository files and `.threadsmith/config.json` cannot enable them.
+
+Use `/intelligence preview baseline <scope> <files> <commits> <calls> [history]` or `preview investigate ...` to see the checkout, scope, active provider, history choice, and effective limits. Trusted user settings `repositoryIntelligence:limits:maximumFiles`, `maximumCommits`, and `maximumModelCalls` cap the requested values; defaults are 200, 100, and 10. A preview is read-only. Collection, investigation, baseline creation, recall, and maintenance remain unavailable in this increment even when their controls are on. A future one-off investigation will have invocation-only authority and will not change these persistent controls.
+
+Turning a control off revokes its active authority and leaves retained intelligence and separately curated `/memory` notes intact. Turning it back on does not run a baseline or reenable another control. Deletion requires an explicit deletion operation when that capability is delivered.
 
 
 ### Durable session lifecycle

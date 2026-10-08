@@ -698,6 +698,39 @@ public class InteractionPresenter
             cancellationToken);
     }
 
+    /// <summary>Reads trusted repository intelligence controls without starting analysis.</summary>
+    public Task<RepositoryIntelligenceControlSnapshot> GetRepositoryIntelligenceControlsAsync(
+        string repositoryIdentity,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new GetRepositoryIntelligenceControlsCommand(repositoryIdentity),
+            cancellationToken);
+    }
+
+    /// <summary>Changes one independently authorized repository intelligence control.</summary>
+    public Task<RepositoryIntelligenceControlSnapshot> SetRepositoryIntelligenceControlAsync(
+        string repositoryIdentity,
+        RepositoryIntelligenceControl control,
+        bool enabled,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new SetRepositoryIntelligenceControlCommand(repositoryIdentity, control, enabled),
+            cancellationToken);
+    }
+
+    /// <summary>Previews bounded work and reports that analysis is unavailable.</summary>
+    public Task<RepositoryIntelligenceOperationPreview> PreviewRepositoryIntelligenceOperationAsync(
+        RepositoryIntelligenceOperationSelection selection,
+        bool oneOffInvestigation,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new PreviewRepositoryIntelligenceOperationCommand(selection, oneOffInvestigation),
+            cancellationToken);
+    }
+
     /// <summary>Creates an explicit repository-scoped memory item through the host boundary.</summary>
     public Task<RepositoryMemoryOperationResult> RememberRepositoryMemoryAsync(
         SessionId sessionId,

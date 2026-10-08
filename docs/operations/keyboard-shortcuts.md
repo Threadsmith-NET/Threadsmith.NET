@@ -32,6 +32,7 @@ Selectors are centered, padded below their headings, and block background mouse 
 
 - `/agents [<id> [cancel|cancel-child <id>]]`: list, inspect, or cancel delegations; tabs provide live child views.
 - `/hooks [list|inspect|enable|disable|test|approve|revoke|audit]`: open the hook checkbox modal or manage a handler.
+- `/intelligence [status|set <persistence|archeology|recall|maintenance> <on|off>|preview <baseline|investigate> <scope> <files> <commits> <calls> [history]]`: inspect or change checkout controls and preview bounded work; analysis is currently unavailable.
 - `/extensions`: open the loaded-extension checkbox modal; Space loads/unloads and leaves the modal open.
 - `/tools`: open the tool-availability checkbox modal; host-locked entries cannot be toggled.
 

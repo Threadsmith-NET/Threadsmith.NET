@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.App" />
+    <InternalsVisibleTo Include="Threadsmith.RepositoryIntelligence.Tests" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
   </ItemGroup>
 

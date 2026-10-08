@@ -602,7 +602,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-repository_intelligence-Description.md` | Read-only status for the active checkout; analysis and investigation remain unavailable. | `None` |
+| `Tool-repository_intelligence-Description.md` | Read-only checkout status and explicitly requested bounded deterministic profiles, including pinned revisions, optional mutable overlays, and coverage limits; semantic interpretation and onboarding remain unavailable. | `None` |
 
 #### `run_process` family
 

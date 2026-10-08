@@ -502,7 +502,8 @@ internal static class ApplicationComposition
             tools.ToolRegistry.RegisterOrReplace(
                 new RepositoryIntelligenceStatusTool(
                     repositoryBindings.ResolveRepositoryIntelligenceAsync,
-                    host.PromptLoader),
+                    host.PromptLoader,
+                    tools.ToolPipeline),
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-intelligence"));
             tools.ToolRegistry.RegisterOrReplace(sourceEditTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "source-edit"));
             repositoryBindings.AttachScratchpad(scratchpad);

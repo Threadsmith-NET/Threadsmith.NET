@@ -2129,3 +2129,36 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 5. Disable and reenable persistence after saving a curated `/memory` note. Confirm the note remains available, no baseline starts automatically, and no retained intelligence is deleted. Supply malformed user-owned intelligence settings in a disposable profile; confirm all controls fail closed and the file is not silently overwritten.
 
 **Expected:** Activation is an explicit user action scoped to a checkout, independent across controls and coordinated across app instances. Disablement revokes affected work without deleting data; previews are bounded and read-only. Full analysis and one-off investigation execution remain unavailable until their later tasks.
+
+
+### MTP-279 — Pinned structural profiles and mutable coverage
+
+**Prerequisites:** Disposable Git repository with a project file and documentation, a tool-capable model for submitting the requested tool call, `TrustedRead`, permitted `git`, and enabled `repository_intelligence`, `git_show`, `git_diff`, `list_files` and `read_file`. Use fixture data and inspect actual structured tool results, not just the assistant's summary.
+
+1. Run `/intelligence status` with all controls off. Ask the assistant explicitly to invoke `repository_intelligence` with `{"profile":{"paths":["src"],"maximumPaths":20,"maximumFiles":5,"maximumBytes":8192,"includeOverlay":false}}`. Check the captured commit, static declarations and omissions, correlated nested activity, and unchanged controls. Confirm no build, semantic load, intelligence database or analysis model call is triggered by profiling.
+2. Use a controlled integration fixture to advance HEAD after the inventory receipt but before the body read. Confirm every committed fact and nested content request retains the first commit, and the final snapshot reports the later commit with pending changes. A manually raced request is supplementary evidence, not a reliable substitute for the synchronized fixture.
+3. Add/edit/delete/rename fixture files and repeat with `includeOverlay:true`. Inspect change kinds and both move paths, `overlay:` source identities, digest observations and non-atomic/limited-coverage markers. In a synchronized fixture, change a selected file after its first snapshot read; confirm unstable content produces no stable facts.
+4. Repeat on a linked worktree, copy, detached checkout and shallow clone. Compare repository/checkout identity, selected ref, commit and branch fields. In an unborn repository and a non-Git folder, explicitly request an overlay and confirm mutable project declarations are available without a claimed commit.
+5. Reduce `maximumScannedPaths`, `maximumPaths`, `maximumFiles` and `maximumBytes`; include binary metadata and a prohibited descendant. Check omission reasons and admission counters. Attempt an outside scope and a linked path; expect ordinary denial or qualified omission, never outside content. Use a long/escaped-path fixture or a small effective output ceiling to verify a bounded result with `OutputByteLimit`, or normal failure when even the required snapshot cannot fit.
+6. Deny `git_show` and retry; verify a normal nested denial and parent failure. Restore permission, start a profile and cancel it; confirm collection stops and ordinary terminal activity completes. Recheck `/intelligence status` and curated memory to ensure no activation or unrelated memory changes.
+
+**Expected:** Profiles are bounded, explicit and source-attributable; committed content stays pinned and mutable content stays qualified. Reports state their incomplete coverage and never execute project metadata.
+
+**BOM live smoke test:** Use a UTF-8 BOM-prefixed project declaring `TargetFramework` and `PackageReference`, first committed and then with a dirty package-version edit. Confirm both versions retain their respective committed/overlay source identities with no `InvalidOrUnsafeXml`. A separately scoped BOM-prefixed DTD fixture must still be rejected. Inspect actual tool completion events; JSON printed by a model is not evidence of a tool invocation.
+
+The opt-in application-composition check submits these requests through the interactive coordinator with the configured real model:
+
+```powershell
+$env:THREADSMITH_LIVE_REPOSITORY_PROFILE = '1'
+# Optional: select an existing configured model GUID for this disposable fixture only.
+# $env:THREADSMITH_LIVE_REPOSITORY_PROFILE_MODEL = '<profile-guid>'
+# Optional: request a supported reasoning level for that model.
+# $env:THREADSMITH_LIVE_REPOSITORY_PROFILE_REASONING = 'low'
+# Optional: choose a report directory; otherwise the test prints its temporary report location.
+# $env:THREADSMITH_LIVE_REPOSITORY_PROFILE_REPORT_DIRECTORY = '<report-directory>'
+dotnet test --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj -- --filter-method '*RepositoryProfileBomRealModelPreservesCommittedAndOverlayFactsAsync'
+```
+
+This sends synthetic fixture data to the selected provider and requires native tool calls. It records sanitized events, actual profile results and unchanged controls. Provider unavailability, throttling or text-only simulated calls are failures, not successful profile verification. It does not exercise terminal rendering. Ordinary headless repository requests currently require `PartialCompilation`; use the TUI or this coordinator check for profiling at `TrustedRead`.
+
+**Limitations:** Moving-HEAD and concurrent-file cases require synchronization to establish a deterministic race. Filesystem symlink/junction creation may require OS privileges. No wall-clock performance threshold or atomic working-tree snapshot is implied.

@@ -111,6 +111,18 @@ public enum GitObjectKind
 /// <summary>A bounded Git object request.</summary>
 public sealed record GitShowRequest
 {
+    /// <summary>Includes branch/default-ref and status digest observations with working-tree inventory.</summary>
+    public bool IncludeWorkingTreeState { get; init; } = true;
+
+    /// <summary>Optional literal file extensions selected before inventory paging, bounded to sixteen.</summary>
+    public IReadOnlyList<string> InventoryExtensions { get; init; } = [];
+
+    /// <summary>Maximum tree records examined before returning explicitly incomplete inventory.</summary>
+    public int InventoryMaximumScannedEntries { get; init; } = 10000;
+
+    /// <summary>Returns bounded checkout and commit metadata without reading files.</summary>
+    public bool SnapshotMetadata { get; init; }
+
     /// <summary>Zero-based offset into a normalized inventory page.</summary>
     public int InventoryOffset { get; init; }
 
@@ -139,6 +151,9 @@ public sealed record GitShowRequest
 /// <summary>Bounded normalized Git object output.</summary>
 public sealed record GitShowResult(string Revision, GitObjectKind Kind, string Content, bool IsBinary, bool IsTruncated)
 {
+    /// <summary>Checkout metadata when explicitly requested.</summary>
+    public GitSnapshotMetadata? Snapshot { get; init; }
+
     /// <summary>SHA256 of inventory content before pipeline sanitization.</summary>
     public string? ContentDigest { get; init; }
 
@@ -161,6 +176,9 @@ public sealed record GitShowInventory(
     IReadOnlyList<string> WorkingTreePaths,
     IReadOnlyList<GitTreeFile> Files)
 {
+    /// <summary>Enumeration stopped at the requested scan bound before completeness was established.</summary>
+    public bool ScanLimitReached { get; init; }
+
     /// <summary>Next inventory offset, or null when complete.</summary>
     public int? NextOffset { get; init; }
 
@@ -306,3 +324,15 @@ public interface IDotNetInventoryService
     /// <summary>Gets bounded inventory from the authoritative loaded workspace.</summary>
     Task<DotNetInventoryResult> GetInventoryAsync(DotNetInventoryRequest request, CancellationToken cancellationToken = default);
 }
+
+/// <summary>Local identity and immutable revision resolution without repository evaluation.</summary>
+public sealed record GitSnapshotMetadata(
+    string RepositoryIdentity,
+    string CheckoutIdentity,
+    string SelectedRef,
+    string? Commit,
+    string? Head,
+    string? Branch,
+    bool IsGit,
+    bool IsShallow,
+    string? Limitation);

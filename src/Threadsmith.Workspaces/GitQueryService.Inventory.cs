@@ -16,6 +16,15 @@ public sealed partial class GitQueryService
             throw new ArgumentException("Inventory accepts up to 64 literal paths, without Path.");
         }
 
+        if (request.InventoryExtensions.Count > 16 || request.InventoryExtensions.Any(extension =>
+            extension.Length is < 2 or > 16 || extension[0] != '.' || !extension[1..].All(char.IsAsciiLetterOrDigit)))
+        {
+            throw new ArgumentException("Inventory extensions must be bounded literal suffixes.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfLessThan(request.InventoryMaximumScannedEntries, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(request.InventoryMaximumScannedEntries, 10000);
+        var scanLimitReached = false;
         var revision = await ResolveCommitAsync(root, request.Revision, cancellationToken);
         var selectedPaths = request.Paths.Select(path => ValidatePath(root, path) ?? throw new ArgumentException("Inventory paths must be literal non-empty paths.")).ToArray();
 
@@ -47,28 +56,34 @@ public sealed partial class GitQueryService
         var pathCount = 0;
         if (request.IncludeWorkingTree)
         {
-            branch = (await RequiredAsync(["rev-parse", "--abbrev-ref", "HEAD"])).Trim();
-            var refs = await RequiredAsync(["for-each-ref", "--format=%(symref)", "refs/remotes/*/HEAD"]);
-            var defaults = refs.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
-            defaultBranch = defaults.Length == 1 ? defaults[0] : null;
-            var status = await RunAsync(root, ["status", "--porcelain=v2", "--untracked-files=all"], cancellationToken, async (reader, token) =>
+            if (request.IncludeWorkingTreeState)
             {
-                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-                var buffer = new byte[4096];
-                long total = 0;
-                int read;
-                while ((read = await reader.BaseStream.ReadAsync(buffer, token)) > 0)
+                branch = (await RequiredAsync(["rev-parse", "--abbrev-ref", "HEAD"])).Trim();
+                var refs = await RequiredAsync(["for-each-ref", "--format=%(symref)", "refs/remotes/*/HEAD"]);
+                var defaults = refs.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct(StringComparer.Ordinal).ToArray();
+                defaultBranch = defaults.Length == 1 ? defaults[0] : null;
+                var status = await RunAsync(root, ["status", "--porcelain=v2", "--untracked-files=all", "--", .. selectedPaths.Select(LiteralPathspec)], cancellationToken, async (reader, token) =>
                 {
-                    total += read;
-                    if (total <= 16 * 1024 * 1024)
+                    using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                    var buffer = new byte[4096];
+                    long total = 0;
+                    int read;
+                    while ((read = await reader.BaseStream.ReadAsync(buffer, token)) > 0)
                     {
+                        total += read;
+                        if (total > 16 * 1024 * 1024)
+                        {
+                            return new BoundedText(string.Empty, true, StopAfterPage: true);
+                        }
+
                         hash.AppendData(buffer, 0, read);
                     }
-                }
 
-                return new BoundedText(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), total > 16 * 1024 * 1024);
-            });
-            statusDigest = status.IsTruncated ? throw new InvalidDataException("Git status exceeds its metadata bound.") : status.Text;
+                    return new BoundedText(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant(), total > 16 * 1024 * 1024);
+                });
+                statusDigest = status.IsTruncated ? throw new InvalidDataException("Git status exceeds its metadata bound.") : status.Text;
+            }
+
             string[] trackedOptions = request.IncludeTrackedFiles ? ["--cached"] : [];
             var pathPage = await ReadPageAsync(["ls-files", "-z", .. trackedOptions, "--others", "--exclude-standard", "--", .. selectedPaths.Select(LiteralPathspec)]);
             paths = pathPage.Text.Split('\0', StringSplitOptions.RemoveEmptyEntries);
@@ -88,6 +103,7 @@ public sealed partial class GitQueryService
             files)
         {
             NextOffset = next < Math.Max(pathCount, treePage.Count) ? next : null,
+            ScanLimitReached = scanLimitReached,
         };
         var content = JsonSerializer.SerializeToElement(inventory).GetRawText();
         return new GitShowResult(revision, GitObjectKind.Tree, content, false, false) { ContentDigest = HashMetadata(content) };
@@ -95,44 +111,67 @@ public sealed partial class GitQueryService
         async Task<(string Text, int Count)> ReadPageAsync(IReadOnlyList<string> arguments)
         {
             var count = 0;
+            var scanned = 0;
             var output = await RunAsync(root, arguments, cancellationToken, async (reader, token) =>
             {
                 var page = new StringBuilder();
-                var recordLength = 0;
+                var record = new StringBuilder();
                 var buffer = new char[4096];
-                var exceeded = false;
                 int read;
                 while ((read = await reader.ReadAsync(buffer, token)) > 0)
                 {
                     for (var index = 0; index < read; index++)
                     {
                         var character = buffer[index];
-                        recordLength++;
-                        exceeded |= recordLength > 16384 || count >= 10000;
-                        if (!exceeded && count >= request.InventoryOffset && count < (long)request.InventoryOffset + request.InventoryMaximumEntries)
+                        if (character != '\0')
                         {
-                            if (page.Length < _limits.MaximumCapturedCharacters)
+                            if (record.Length >= 16384)
                             {
-                                page.Append(character);
+                                scanLimitReached = true;
+                                return new BoundedText(page.ToString(), false, StopAfterPage: true);
                             }
-                            else
+
+                            record.Append(character);
+                            continue;
+                        }
+
+                        scanned++;
+                        var entry = record.ToString();
+                        record.Clear();
+                        var matches = request.InventoryExtensions.Count == 0
+                            || request.InventoryExtensions.Any(extension => entry.EndsWith(extension, StringComparison.OrdinalIgnoreCase));
+                        if (matches)
+                        {
+                            if (count >= request.InventoryOffset && count < (long)request.InventoryOffset + request.InventoryMaximumEntries)
                             {
-                                exceeded = true;
+                                if (page.Length + entry.Length + 1 > _limits.MaximumCapturedCharacters)
+                                {
+                                    scanLimitReached = true;
+                                    return new BoundedText(page.ToString(), false, StopAfterPage: true);
+                                }
+
+                                page.Append(entry).Append('\0');
+                            }
+
+                            count++;
+                            if (count > (long)request.InventoryOffset + request.InventoryMaximumEntries)
+                            {
+                                return new BoundedText(page.ToString(), false, StopAfterPage: true);
                             }
                         }
 
-                        if (character == '\0')
+                        if (scanned >= request.InventoryMaximumScannedEntries)
                         {
-                            count = Math.Min(10001, count + 1);
-                            recordLength = 0;
+                            scanLimitReached = true;
+                            return new BoundedText(page.ToString(), false, StopAfterPage: true);
                         }
                     }
                 }
 
-                return new BoundedText(page.ToString(), exceeded || recordLength != 0);
+                return new BoundedText(page.ToString(), record.Length != 0);
             });
             return output.IsTruncated
-                ? throw new InvalidDataException("Git inventory exceeds its record or page bound.")
+                ? throw new InvalidDataException("Git inventory ended with an incomplete record.")
                 : (output.Text, count);
         }
 

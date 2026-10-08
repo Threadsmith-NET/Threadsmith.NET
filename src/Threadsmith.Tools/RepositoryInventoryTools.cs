@@ -258,6 +258,18 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
 /// <summary>Model-facing Git object request with one path-filter representation.</summary>
 public sealed record GitShowInput : IConceptToolInput
 {
+    /// <summary>Includes branch/default-ref and status digest observations with working-tree inventory.</summary>
+    public bool IncludeWorkingTreeState { get; init; } = true;
+
+    /// <summary>Optional literal file extensions selected before inventory paging, bounded to sixteen.</summary>
+    public IReadOnlyList<string> InventoryExtensions { get; init; } = [];
+
+    /// <summary>Maximum tree records examined before returning explicitly incomplete inventory.</summary>
+    public int InventoryMaximumScannedEntries { get; init; } = 10000;
+
+    /// <summary>Returns bounded local checkout and resolved commit metadata only.</summary>
+    public bool SnapshotMetadata { get; init; }
+
     /// <inheritdoc />
     public IReadOnlyList<string>? Concepts { get; init; }
 
@@ -373,10 +385,14 @@ public sealed class GitShowTool : Tool<GitShowInput, GitShowResult>
         var scalarPath = !input.Inventory && input.Paths.Count == 1 ? input.Paths[0] : null;
         return new GitShowRequest
         {
+            InventoryExtensions = input.InventoryExtensions,
+            InventoryMaximumScannedEntries = input.InventoryMaximumScannedEntries,
+            SnapshotMetadata = input.SnapshotMetadata,
             InventoryOffset = input.InventoryOffset,
             InventoryMaximumEntries = input.InventoryMaximumEntries,
             Inventory = input.Inventory,
             IncludeWorkingTree = input.IncludeWorkingTree,
+            IncludeWorkingTreeState = input.IncludeWorkingTreeState,
             IncludeTrackedFiles = input.IncludeTrackedFiles,
             Paths = scalarPath is null ? input.Paths : [],
             Revision = input.Revision,
@@ -818,6 +834,11 @@ internal static class RepositoryInventoryToolPolicy
         GitShowRequest request,
         ToolInvocationContext context)
     {
+        if (request.SnapshotMetadata)
+        {
+            return result;
+        }
+
         if (request.Inventory)
         {
             var inventory = JsonSerializer.Deserialize<GitShowInventory>(result.Content)

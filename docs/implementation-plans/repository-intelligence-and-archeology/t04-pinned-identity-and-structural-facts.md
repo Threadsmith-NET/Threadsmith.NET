@@ -1,12 +1,12 @@
 # T04 Capture pinned identity and bounded structural facts
 
-**Status:** Proposed; implementation not started or accepted.
+**Status:** Complete. Reviewed production implementation accepted; post-acceptance tests and documentation validated.
 
 **Delivery track:** Proposed Repository Intelligence and Archeology capability; milestone registration follows T01 acceptance.
 
 **Prerequisites:** [T03](t03-governed-operation-routing.md) complete, including its post-acceptance tests and documentation.
 
-**Requirements and parent acceptance outcomes:** ON-01–04, ON-06, NQ-04, NQ-06; AC-02, AC-08.
+**Requirements and parent acceptance outcomes:** ON-01–04, ON-06, NQ-04, NQ-06; AC-02, AC-08. Product verification: [Scenario BB](../acceptance-scenarios.md#scenario-bb---pinned-deterministic-repository-profiling) and [MTP-279](../manual-test-plan.md#mtp-279--pinned-structural-profiles-and-mutable-coverage).
 
 **Sources:** [Parent requirements](threadsmith-repository-intelligence-and-archeology-requirements.md) and [implementation plan](../threadsmith-repository-intelligence-and-archeology-implementation-plan.md).
 
@@ -109,13 +109,13 @@ Keep unused/disabled behavior cheap and unchanged. Do not initialize feature sto
 
 ## 14 Acceptance Criteria
 
-- [ ] All committed facts belong to the captured target even if HEAD advances; dirty facts are explicitly separate.
-- [ ] Repository copies, branches and worktrees cannot silently share incompatible current context.
-- [ ] Capture is bounded before loading full source, uses existing readers and leaves repository files unchanged.
-- [ ] Structural facts remain useful with unavailable history, inference or semantics and expose their limitations.
-- [ ] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
-- [ ] The user has explicitly accepted that reviewed implementation before any task test or documentation implementation begins.
-- [ ] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+- [x] All committed facts belong to the captured target even if HEAD advances; dirty facts are explicitly separate.
+- [x] Repository copies, branches and worktrees cannot silently share incompatible current context.
+- [x] Capture is bounded before loading full source, uses existing readers and leaves repository files unchanged.
+- [x] Structural facts remain useful with unavailable history, inference or semantics and expose their limitations.
+- [x] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
+- [x] The user has explicitly accepted that reviewed implementation before any task test or documentation implementation begins.
+- [x] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
 
 ## 15 Risks
 
@@ -128,3 +128,58 @@ A profile can appear pinned while one helper silently defaults to HEAD. Working-
 ## 17 Decisions to Resolve During Implementation
 
 Define stable identity/overlay fields using existing contracts; choose bounded initial profile scope without promising whole-repository coverage. Resolve from the active checkout and parent requirements; do not invent missing API behavior or silently relax the requirements.
+
+## 18 Delivery record
+
+The production implementation passed five fresh clean-context adversarial review rounds. Nine substantiated findings were resolved; the final review had no unresolved actionable findings. The user explicitly accepted the reviewed implementation before the tests and documentation were authored. The later BOM parsing correction followed a separate clean review and explicit user acceptance, recorded below.
+
+Actual host touch points outside the feature assembly:
+
+| File | Integration purpose |
+|---|---|
+| `src/Threadsmith.App/ApplicationComposition.cs` | Inject the existing invocation pipeline into the feature tool. |
+| `src/Threadsmith.Core/RepositoryInventoryContracts.cs` | Host-owned snapshot DTO and bounded inventory request/result fields. |
+| `src/Threadsmith.Tools/BuiltInTools.cs` | Bound existing directory scans and mutable snapshot reads before loading content. |
+| `src/Threadsmith.Tools/RepositoryInventoryTools.cs` | Expose validated snapshot and inventory options through ordinary Git tools. |
+| `src/Threadsmith.Tools/ToolContracts.cs` | Expose the existing post-sanitization output-boundary hook to the feature assembly. |
+| `src/Threadsmith.Workspaces/GitQueryService.cs` | Dispatch snapshot requests and bound existing process output reads. |
+| `src/Threadsmith.Workspaces/GitQueryService.Inventory.cs` | Bound filtered inventory scans and avoid unnecessary working-state enumeration. |
+| `src/Threadsmith.Workspaces/GitQueryService.Snapshot.cs` | Capture local repository/checkout identity and immutable revision metadata through the existing Git owner. |
+
+The acceptance handoff explicitly disclosed the App and Tools changes beyond the original H4-only allowance. These narrowly extend composition, existing readers and output enforcement; the collector remains feature-owned and uses normal nested policy, events, cancellation and completion.
+
+Post-acceptance tests use disposable real Git repositories and the ordinary invocation pipeline. Controlled callbacks exercise moving HEAD and unstable mutable files. Coverage includes add/edit/delete/rename overlays, copies/worktrees/detached heads, shallow/unborn/non-Git roots, metadata prioritization, scan/path/file/byte/fact/output bounds, binary and historical symlink entries, literal and prohibited paths, unsafe XML, semantic mismatch, correlated events, cancellation and cheap status. The feature test project adds its own fixture/prompt helpers and references the existing execution, workspace and telemetry projects.
+
+Operations/tool documentation and both prompt references describe the new invocation contract and limitations. Scenario BB and MTP-279 own the product acceptance behavior and manual procedure. No historical milestone or navigation status was rewritten.
+
+Limitations remain explicit: structural XML is unevaluated; immutable semantics and historical analysis are unavailable; discovery and overlays are bounded samples; repeated mutable reads do not create an atomic snapshot. Performance has not been benchmarked. Live-provider, optional performance and OS-dependent link checks remain subject to their existing opt-in/platform requirements. An initial run hit a Windows access-denied error in an existing settings replacement test; it did not recur in subsequent runs.
+
+Validation on the active checkout:
+
+- `dotnet build src/Threadsmith.sln --no-restore`: succeeded, zero warnings/errors.
+- RepositoryIntelligence: 41 passed, including 28 new cases.
+- Architecture: 332 passed, 1 existing skip.
+- NativeTools: 172 passed, 1 existing skip.
+- ModelTooling: 984 passed, 16 existing skips.
+- RepositoryLifecycle: 38 passed.
+- `git diff --check`: passed; planning-governance status searches found no prohibited status prose.
+
+No required test or documentation work remains deferred. Manual procedures are documented; a live model-driven manual rehearsal was not performed. Changes remain unstaged and uncommitted in the requested branch.
+
+## 19 BOM parsing correction
+
+Review feedback reproduced a valid UTF-8 BOM-prefixed project being classified as `InvalidOrUnsafeXml`. The shared structural parser now removes one leading U+FEFF from its parsing input after callers verify the original content digest. Original reader content, committed blob identity and overlay digest remain unchanged; DTD prohibition, external resolver disablement and all bounds remain enforced.
+
+The correction changes only `RepositoryProfileCollector.cs` in production. A fresh clean-context review found no actionable issues, and the user explicitly accepted the correction before regression tests and this documentation were authored. Six added integration cases exercise committed and mutable BOM-prefixed projects with and without an XML declaration, unchanged source content/digests, preservation of an embedded U+FEFF in a declaration, and rejection of BOM-prefixed DTDs.
+
+Post-correction validation: the full solution built with zero warnings/errors, all 47 repository-intelligence tests passed (34 added by T04 including the six BOM cases), and `git diff --check` passed. The first expanded run passed all six BOM cases but hit the previously observed access-denied error in `AllControlCombinationsRemainIndependentAsync` while replacing settings; the full unchanged suite passed on rerun. No further production changes were made after acceptance of this correction.
+
+## 20 Live verification attempt
+
+At the user's request, a disposable BOM fixture was exercised against the normal App and real configured providers. Ordinary headless submission at `TrustedRead` stopped at its existing `PartialCompilation` readiness gate, and this terminal host could not start the TUI because interactive cursor support was unavailable. A new opt-in `AppBootstrapTests.RepositoryProfileLive.cs` check reuses the existing application-composition helper and the TUI's frontend-neutral `InteractionPresenter`, including real provider selection, repository commands, normal model requests, tool activity, status controls and cancellation. MTP-279 owns the rerun procedure. No production code changed for this verification.
+
+The default remote Qwen3.6 endpoint refused connections after its three transport attempts. Configured local Qwen 2.5 Coder 7B completed three conversation turns but emitted tool-shaped JSON as text; no model-submitted profiling invocation occurred, and the live assertions failed. Configured GLM 5.2 cloud returned HTTP 429 after its three attempts. These attempts do **not** establish successful live BOM profiling. A reachable model producing native tool calls is required to finish that check. Sanitized event reports are retained outside the repository; per-run event files also survive provider failures.
+
+The updated architecture suite passed 332 tests with its two existing/opt-in live checks skipped when not enabled. The deterministic 47-test feature result remains the BOM parsing evidence until the live check completes.
+
+The user subsequently selected GPT 6.1 Sol with low reasoning. Threadsmith's authenticated `openai-codex` catalog supplied `gpt-6.1-sol`; the test explicitly selected that profile and `low` through normal interactive model/reasoning commands within the disposable fixture. The live check passed (one test, three model-driven cases, zero skips). Actual native `repository_intelligence` starts/completions and correlated nested reads verified committed BOM declarations, dirty BOM declarations with the original overlay digest, BOM-prefixed DTD rejection, and unchanged disabled controls. The report records provider, model, reasoning, run IDs and sanitized events/results. User defaults remain unchanged. This completes live verification of the BOM tool behavior; terminal rendering and the headless readiness limitation remain outside that result.

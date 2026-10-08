@@ -7,7 +7,7 @@ The built-in tool registry includes:
 | `list_files` | `UntrustedInspection` | None | Bounded repository file inventory. |
 | `read_file` | `TrustedRead` | None | Bounded file range read (default input-file limit 1 MiB). |
 | `memories` | `TrustedRead` | None | Explicit add/update/remove/list for local repository notes; bounded complete-input embeddings and best-effort recall. |
-| `repository_intelligence` | `UntrustedInspection` | None | Read-only status for the active checkout's trusted controls; analysis is unavailable. Parent conversation only. |
+| `repository_intelligence` | `UntrustedInspection` | None | Read-only controls and explicit bounded structural profiles. Source reads retain their own trust/policy requirements. Parent conversation only. |
 | `edit_source` | `TrustedMutation` | Exact mutation policy/review | Ordered source changes with exact anchors, shared transactional writes, durable receipts and advisory compiler feedback. Parent conversation only. |
 | `write_file` | `TrustedRead` | None | Direct UTF-8 report/data output inside `tools.writeFile.allowedFolders` (default `.inbox`); default content limit 1 MiB. |
 | `search` | `TrustedRead` | None | Bounded plain-text or timeout-limited regular-expression search. Installed releases use their RID-matched bundled `tools/rg(.exe)` for whole-repository literal searches; source-development launches may resolve `rg` from `PATH`. The fast path respects repository ignore files and falls back to the confined managed scanner when unavailable or when host pre-read path filtering is required. Generated/Git/reparse-point subtrees, SQLite databases, oversized files, and files that become locked or inaccessible are excluded as applicable. Use semantic tools for declarations, references, and implementations. |
@@ -44,9 +44,41 @@ Secret-consuming tools declare exact logical `secrets:` references to host polic
 
 Tool activity, success/failure, truncation, a 4,096-character sanitized result preview, and pending approvals appear in host projections and the TUI conversation/headless surfaces. Full bounded results are stored in `ToolInvocationCompleted`; raw arguments are not stored in activity events. Failures are normalized as invalid arguments, policy denial, approval denial, timeout, cancellation, execution failure, or output-limit failure.
 
-`/intelligence status` in interactive or headless use, an authorized internal status command, and a model call to `repository_intelligence` enter this same tool pipeline. The only accepted model action has empty arguments (`{}`) and reports the active checkout's four controls plus `analysisAvailable: false`; it does not scan files, query a model, or create intelligence storage for an all-off checkout. The tool must remain enabled and pass the usual trust, allow/deny, approval, budget, cancellation, and output checks. Child agents cannot invoke it even by naming the tool directly. A failed host status command returns an invocation ID, failure kind, and sanitized error; the corresponding ordinary start/completion activity shows whether policy denied it, it failed, timed out, or was cancelled. A checkout mismatch is rejected before tool submission.
+`/intelligence status` in interactive or headless use, an authorized internal status command, and a model call to `repository_intelligence` enter this same tool pipeline. The status action has empty arguments (`{}`) and reports the active checkout's four controls plus `analysisAvailable: false`; it does not scan files, query a model, or create intelligence storage for an all-off checkout. The tool must remain enabled and pass the usual trust, allow/deny, approval, budget, cancellation, and output checks. Child agents cannot invoke it even by naming the tool directly. A failed host status command returns an invocation ID, failure kind, and sanitized error; the corresponding ordinary start/completion activity shows whether policy denied it, it failed, timed out, or was cancelled. A checkout mismatch is rejected before tool submission.
 
-Host-submitted nested reads retain the parent invocation ID on start and completion events. They use distinct invocation IDs and consume one ordinary tool budget charge per admitted operation. The bridge permits at most two nested levels and 16 descendant submissions per root; it rejects a child that would wait on a source permit held by any ancestor. Parent cancellation reaches children. A rejected nested admission is reflected in its parent's ordinary failure, while admitted child work has its own terminal outcome. No repository-intelligence analysis currently uses nested reads.
+
+### Explicit deterministic repository profile
+
+An explicit `repository_intelligence` tool call can include `profile`. This is an invocation-only structural capture; it does not enable any control, create canonical intelligence, call an inference provider, evaluate MSBuild, run tests or execute repository scripts. `analysisAvailable: false` continues to refer to semantic analysis/onboarding, not this deterministic operation. `/intelligence status` and `/intelligence preview` remain status/preview commands; there is no separate `/intelligence profile` command. The source reads require `TrustedRead`, the relevant built-in tools enabled and permitted, and `git` on the executable allowlist.
+
+Example tool arguments:
+
+```json
+{
+  "profile": {
+    "revision": "HEAD",
+    "paths": ["src", "Directory.Build.props"],
+    "maximumPaths": 200,
+    "maximumScannedPaths": 10000,
+    "maximumFiles": 32,
+    "maximumBytes": 65536,
+    "maximumSeconds": 30,
+    "includeOverlay": false
+  }
+}
+```
+
+Empty `paths` selects the repository root. At most eight literal scopes are accepted; glob syntax is not interpreted. The maximum settings are 200 returned discovery paths, 10,000 scanned records per metadata-discovery/listing pass, 32 admitted content files (also capped by trusted `repositoryIntelligence:limits:maximumFiles`), 65,536 admitted content bytes, and 60 seconds. Defaults match the example except that `paths` is empty. Inventory prioritizes project/build metadata before its ordinary path page. Text bodies are admitted from inventory sizes, with a 16 KiB per-file ceiling and at most two committed-file batches. Scan/page/policy limits appear as omissions; these are bounded samples rather than exhaustive repository maps.
+
+`snapshot` separates the hashed local common-Git-directory identity from the checkout identity, selected ref, resolved immutable commit, observed HEAD, branch and shallow-history limitation. Linked worktrees share the common identity but retain distinct checkout identities and controls; copies retain separate identities. Non-Git roots and unborn HEAD expose an absent commit instead of inventing a baseline. Every committed fact retains a `commit:objectId` source identity and path. A final snapshot exposes changed HEAD/branch/identity as `pendingChanges`; an unverified final state is also pending. Selecting a historical ref does not substitute the current semantic workspace for that revision.
+
+`includeOverlay` requests separate mutable observations. Git change metadata includes additions, edits, deletions and rename source/destination paths within the requested scope; union clipping is explicit. At most three mutable files are read twice through `read_file`. Matching complete, unsanitized digests identify the observed bytes, not an atomic checkout-wide overlay. Unstable or unavailable reads remain qualified observations and produce no stable facts. Mutable facts use `overlay:<digest>` identities. Without a commit, the requested overlay uses bounded `list_files` discovery over at most three selected scopes and the same mutable reader. Without `includeOverlay`, mutable content is not substituted for an unavailable committed baseline.
+
+Facts describe static declarations in .NET project/build XML, such as references, target frameworks and package declarations. Imports, conditions and property expressions are not evaluated; other admitted metadata/document files are identified without semantic interpretation. A leading UTF-8 BOM is omitted only from XML parsing input after the original content digest is verified. DTDs are rejected. Historical and immutable semantic analysis remain explicitly unavailable. `discoveredFiles`, `inspectedFiles`, `admittedFiles` and structured `omissions` distinguish discovery from successful interpretation and attempted/admitted work. `admittedBytes` includes conservative reservations for repeated mutable reads; it is not an I/O performance measurement. At most 512 facts and 64 declarations per file are retained. The final profile is also clipped before serialization and after sanitization to the effective tool-output ceiling, with `OutputByteLimit` recorded while retaining snapshot/scope. An output limit too small for that required envelope fails normally.
+
+The result is retained only through ordinary host tool/session retention. There is no feature checkpoint or durable profile store. Cancellation and revocation propagate through the existing admission and nested-tool boundaries. Initial snapshot failures cannot return a pinned profile; a later collection deadline can return completed facts with `DeadlineReached` and an unverified final state. Other required-read/policy failures use normal tool failure receipts. Physical file-change races and performance vary by filesystem; the overlay does not claim to freeze mutable files.
+
+Host-submitted nested reads retain the parent invocation ID on start and completion events. They use distinct invocation IDs and consume one ordinary tool budget charge per admitted operation. The bridge permits at most two nested levels and 16 descendant submissions per root; it rejects a child that would wait on a source permit held by any ancestor. Parent cancellation reaches children. A rejected nested admission is reflected in its parent's ordinary failure, while admitted child work has its own terminal outcome. Explicit structural profiling uses these same nested reads.
 
 Model-authored sibling tool calls are preflighted as one batch before any tool starts. If one sibling is malformed, unavailable, repeated, phase-invalid, or fails argument/schema validation before execution, Threadsmith rejects the entire batch, returns bounded corrective feedback for every correlated call, and asks the model to retry within `execution:maxCorrectiveTurns`. No valid sibling in that rejected batch is executed or retained as evidence.
 

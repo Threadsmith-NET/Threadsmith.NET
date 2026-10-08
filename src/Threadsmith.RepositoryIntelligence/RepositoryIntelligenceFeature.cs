@@ -38,6 +38,9 @@ internal sealed class RepositoryIntelligenceFeature : IAsyncDisposable
         _settingsDirectory = Path.Combine(Path.GetFullPath(userConfigurationDirectory), "repository-intelligence");
     }
 
+    /// <summary>Trusted maximum number of files an explicit operation may inspect.</summary>
+    internal int MaximumFiles => _limits.MaximumFiles;
+
     /// <summary>Captures a repository-fenced immutable authorization snapshot.</summary>
     public async Task<RepositoryIntelligenceControlSnapshot> CaptureAsync(
         string repositoryIdentity,

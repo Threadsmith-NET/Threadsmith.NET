@@ -191,6 +191,10 @@ public sealed partial class GitQueryService : IGitQueryService
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidateRevision(request.Revision, nameof(request.Revision));
+        if (request.SnapshotMetadata)
+        {
+            return await ShowSnapshotMetadataAsync(repositoryPath, request, cancellationToken);
+        }
 
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         if (request.Inventory)
@@ -236,7 +240,7 @@ public sealed partial class GitQueryService : IGitQueryService
                 kind,
                 content[..Math.Min(content.Length, _limits.MaximumShowCharacters)],
                 binary,
-                truncated);
+                truncated) { ContentDigest = binary || truncated ? null : HashMetadata(content) };
         }
 
         string[] objectArguments = kind == GitObjectKind.Commit
@@ -588,7 +592,8 @@ public sealed partial class GitQueryService : IGitQueryService
         string repositoryPath,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken,
-        Func<StreamReader, CancellationToken, Task<BoundedText>>? readOutput = null)
+        Func<StreamReader, CancellationToken, Task<BoundedText>>? readOutput = null,
+        int? allowedExitCode = null)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMilliseconds(_limits.TimeoutMilliseconds));
@@ -604,10 +609,15 @@ public sealed partial class GitQueryService : IGitQueryService
             var outputTask = (readOutput ?? ReadBoundedAsync)(process.StandardOutput, timeout.Token);
             var errorTask = ReadBoundedAsync(process.StandardError, timeout.Token);
             await using var registration = RegisterTermination(process, timeout.Token);
-            await process.WaitForExitAsync(timeout.Token);
             var output = await outputTask;
+            if (output.StopAfterPage && !process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+
+            await process.WaitForExitAsync(timeout.Token);
             var error = await errorTask;
-            if (process.ExitCode != 0)
+            if (process.ExitCode != 0 && process.ExitCode != allowedExitCode && !output.StopAfterPage)
             {
                 throw new InvalidOperationException($"Git query failed with exit code {process.ExitCode}: {error.Text}");
             }
@@ -871,7 +881,7 @@ public sealed partial class GitQueryService : IGitQueryService
         return new RepositoryGitStatus(branch == "(detached)" ? null : branch, branch == "(detached)", staged, modified, untracked, conflicts, truncated);
     }
 
-    private sealed record BoundedText(string Text, bool IsTruncated);
+    private sealed record BoundedText(string Text, bool IsTruncated, bool StopAfterPage = false);
 
     private sealed record BoundedBytes(byte[] Bytes, bool IsTruncated, bool IsBinary);
 }

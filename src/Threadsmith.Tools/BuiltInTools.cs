@@ -14,6 +14,9 @@ using Threadsmith.Core;
 /// <summary>Input for bounded repository file listing.</summary>
 public sealed record ListFilesInput : IConceptToolInput
 {
+    /// <summary>Optional stricter ceiling on examined files, including excluded entries.</summary>
+    public int? MaximumScannedEntries { get; init; }
+
     /// <inheritdoc />
     public IReadOnlyList<string>? Concepts { get; init; }
 
@@ -87,9 +90,16 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
             IgnoreInaccessible = true,
             AttributesToSkip = FileAttributes.ReparsePoint,
         };
+        var scanned = 0;
         foreach (var path in Directory.EnumerateFiles(root, "*", options))
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (input.MaximumScannedEntries is { } scanLimit && scanned++ >= scanLimit)
+            {
+                truncated = true;
+                break;
+            }
+
             if (ToolPathRules.IsWithinScratchpad(path, context.Invocation))
             {
                 continue;
@@ -135,7 +145,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
     protected override void ValidateInput(ListFilesInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Path);
-        if (input.MaximumEntries < 0)
+        if (input.MaximumEntries < 0 || input.MaximumScannedEntries is < 1)
         {
             throw new ToolArgumentValidationException(
                 "maximumEntries must be nonnegative (0 uses the host default; larger values are clamped to the host maximum).");
@@ -161,6 +171,9 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 /// <summary>Input for a bounded file-range read.</summary>
 public sealed record ReadFileInput : IConceptToolInput
 {
+    /// <summary>Optional stricter byte ceiling for an exact snapshot read.</summary>
+    public int? MaximumSnapshotBytes { get; init; }
+
     /// <inheritdoc />
     public IReadOnlyList<string>? Concepts { get; init; }
 
@@ -305,12 +318,28 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 
         if (input.Snapshot)
         {
-            var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
-            if (bytes.Length > _limits.ReadFileMaximumBytes)
+            var snapshotLimit = Math.Min(input.MaximumSnapshotBytes ?? _limits.ReadFileMaximumBytes, _limits.ReadFileMaximumBytes);
+            ArgumentOutOfRangeException.ThrowIfLessThan(snapshotLimit, 1);
+            if (info.Length > snapshotLimit)
             {
-                throw new InvalidDataException("The requested snapshot grew beyond the configured content bound.");
+                throw new InvalidDataException("The requested snapshot exceeds its byte budget.");
             }
 
+            await using var snapshotStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            using var snapshotBuffer = new MemoryStream();
+            var buffer = new byte[4096];
+            int read;
+            while ((read = await snapshotStream.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, snapshotLimit - snapshotBuffer.Length + 1)), cancellationToken)) > 0)
+            {
+                if (snapshotBuffer.Length + read > snapshotLimit)
+                {
+                    throw new InvalidDataException("The requested snapshot grew beyond the configured content bound.");
+                }
+
+                await snapshotBuffer.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            }
+
+            var bytes = snapshotBuffer.ToArray();
             var encoding = new UTF8Encoding(false, true);
             var content = encoding.GetString(bytes);
             if (content.Contains('\0'))

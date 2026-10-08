@@ -817,3 +817,15 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 5. Confirm disablement preserves existing curated memory and retained intelligence. Reenabling does not launch a baseline, recall, or maintenance by itself. Invalid user-owned settings fail closed without being silently replaced.
 
 **Verifies:** explicit checkout-scoped authority, independent controls across app instances, bounded preview, revocation fences, and disable-versus-delete behavior.
+
+
+## Scenario BB - Pinned deterministic repository profiling
+
+1. Explicitly request a bounded structural profile without enabling persistence, recall or maintenance. Confirm all source reads use ordinary governed tool activity and no model interpretation, build evaluation or feature storage occurs.
+2. Advance HEAD after discovery and before content reads. Confirm committed facts still cite the original immutable target, while the final snapshot exposes the newer HEAD as pending work.
+3. Request a scoped overlay containing added, edited, deleted and renamed files. Confirm mutable observations have separate source digests, both move paths are represented or coverage is explicitly incomplete, and changing bytes never become stable commit-backed facts.
+4. Profile a copy, linked worktree, detached checkout, shallow checkout, unborn repository and non-Git root. Confirm identities/context remain distinct where appropriate, missing history is labeled, and explicitly requested mutable facts remain useful without an invented commit.
+5. Apply tight scan, path, file, byte and output limits; include binary/unsafe metadata and prohibited or linked paths. Confirm limits are enforced before content admission where applicable, omissions are inspectable, and no outside content or repository-controlled execution enters the profile.
+6. Supply an unrelated semantic workspace and cancel during a nested read. Confirm historical facts do not inherit that workspace's semantics, cancellation stops further work, and ordinary correlated tool receipts remain available.
+
+**Verifies:** immutable source provenance, separate non-atomic overlays, bounded and policy-confined discovery, context identity, unavailable-history behavior, and shared operation lifecycle.

@@ -1,8 +1,8 @@
 # T05 Build normalized evidence and bounded episode candidates
 
-**Status:** Proposed; implementation not started or accepted.
+**Status:** Complete; reviewed production implementation accepted and post-acceptance tests and documentation validated.
 
-**Delivery track:** Proposed Repository Intelligence and Archeology capability; milestone registration follows T01 acceptance.
+**Delivery track:** M34 Repository Intelligence and Archeology.
 
 **Prerequisites:** [T04](t04-pinned-identity-and-structural-facts.md) complete, including its post-acceptance tests and documentation.
 
@@ -110,14 +110,36 @@ Keep unused/disabled behavior cheap and unchanged. Do not initialize feature sto
 
 ## 14 Acceptance Criteria
 
-- [ ] Question scope limits discovery and content acquisition before model interpretation can begin.
-- [ ] Current-snapshot-only units produce provenance-complete bounded packets without history discovery or required episodes, using the shared packet path and preserving history-off expansion.
-- [ ] Every supplied evidence ID resolves to a validated source descriptor and retains its revision or overlay identity.
-- [ ] Episodes preserve constituent changes without presenting unsupported intent or causality as fact.
-- [ ] Packets and continuations are bounded, deterministic where inputs are fixed, and explicit about gaps/conflicts.
-- [ ] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
-- [ ] The user has explicitly accepted that reviewed implementation before any task test or documentation implementation begins.
-- [ ] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+- [x] Question scope limits discovery and content acquisition before model interpretation can begin.
+- [x] Current-snapshot-only units produce provenance-complete bounded packets without history discovery or required episodes, using the shared packet path and preserving history-off expansion.
+- [x] Every supplied evidence ID resolves to a validated source descriptor and retains its revision or overlay identity.
+- [x] Episodes preserve constituent changes without presenting unsupported intent or causality as fact.
+- [x] Packets and continuations are bounded, deterministic where inputs are fixed, and explicit about gaps/conflicts.
+- [x] The final production diff has passed the clean-context adversarial review loop; all applicable, valid and reasonable findings are resolved and remaining limitations are disclosed.
+- [x] The user explicitly accepted the reviewed implementation before the remaining unit/integration tests and documentation began. The earlier live harness was separately authorized by the user's explicit live-testing request.
+- [x] After acceptance, required unit/integration/architecture tests and documentation are implemented, relevant checks pass, and no required gate is silently deferred.
+
+Completion evidence (2026-10-08): the clean-context production review loop resolved metadata acquisition/accounting, retained profile-source reuse, historical batching, configured prerequisite ceilings, mutable-listing admission, host capture-limit bypass and small-budget ancestry findings. A separate clean-context review of the post-acceptance tests and documentation found an escaping/large-history coverage gap; both cases were added and the re-review was clean. No production code changed after the user's acceptance.
+
+Validation: `dotnet build src/Threadsmith.sln --no-restore` passed with zero warnings/errors. Repository-intelligence tests passed (67), native-tool tests passed (179, with one explicitly excluded test skipped), and architecture tests passed (334, with three opt-in live tests skipped). The separately requested real-provider check passed all three snapshot/history/overlay scenarios using GPT-6.1-Sol at low reasoning without fallback. Its normal host events and packets were independently reviewed: cited IDs and values matched, nested reads were correlated, and the current-snapshot/overlay cases performed no history discovery. Both reported Git regressions also have offline coverage: host capture limits remain effective and a 128-byte ordinary parented commit diff returns changed paths. The live responses' phrase "no other tools were invoked" means no additional direct model calls; nested host Git/file reads did execute.
+
+The dedicated collector suite covers scoped snapshot expansion, introduction/revert/correction constituents, merge parents, rename/deletion locators, shared commit evidence across episodes, overlapping source inspections, prohibited paths and unavailable refs/symbols, admitted escaped text and rejected oversized acquisitions, binary/test source classification, cumulative file/input/output/commit limits, configured batches and per-file limits, history cursors/replay, captured profile-body/fact reuse, governed read denial, cancellation and registry release. Composed-host tests verify trusted configuration reaches the real profile reader, repository configuration cannot enlarge it, and unknown trusted keys fail explicitly.
+
+Actual production touch points outside the feature assembly:
+
+- `src/Threadsmith.App/ApplicationComposition.cs`: lazy trusted evidence-limit binding and forwarding of the existing Git limits.
+- `src/Threadsmith.Core/RepositoryEvidenceResourceLimits.cs`: configurable invocation evidence ceilings.
+- `src/Threadsmith.Core/RepositoryIntelligenceControls.cs`: trusted resource-limit composition.
+- `src/Threadsmith.Core/OperationalLimits.cs`: configurable Git metadata and history-offset ceilings.
+- `src/Threadsmith.Core/RepositoryInventoryContracts.cs`: optional bounded metadata/cursor requests and acquisition receipts on the existing Git contracts.
+- `src/Threadsmith.Tools/BuiltInTools.cs`: metadata admission on the existing mutable file-list reader.
+- `src/Threadsmith.Tools/RepositoryInventoryTools.cs`: forwarding bounded acquisition requests through existing Git tools.
+- `src/Threadsmith.Workspaces/GitQueryService.cs`: bounded history cursors and metadata-only ancestry/diff acquisition in the existing process owner.
+- `src/Threadsmith.Workspaces/GitQueryService.Metadata.cs`: byte capture bounded by request and configured host capture limits.
+- `src/Threadsmith.Workspaces/GitQueryService.Inventory.cs`: bounded inventory acquisition receipts.
+- `src/Threadsmith.Workspaces/GitQueryService.ShowFiles.cs`: bounded batched-source metadata acquisition receipts.
+
+Remaining capability limits: the collector is internal infrastructure, with no new production action, inference loop or canonical intelligence. History is a bounded recent repository frontier and can miss older scoped changes; episodes group selected changes within each page and imply no causality. Immutable symbol resolution and semantic coverage remain unavailable/unassessed, overlays are non-atomic, and test source proves no execution. Large-repository performance beyond the controlled fixtures was not measured. Limits, provenance and coverage semantics are documented in [context policy](../../architecture/context-policy.md#bounded-repository-evidence) and [tool operations](../../operations/tools.md#evidence-collection-limits), including the opt-in live procedure.
 
 ## 15 Risks
 

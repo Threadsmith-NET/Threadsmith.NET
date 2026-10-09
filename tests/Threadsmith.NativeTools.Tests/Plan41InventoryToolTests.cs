@@ -11,7 +11,7 @@ using Threadsmith.Workspaces;
 using Xunit;
 
 /// <summary>Verifies Plan 41 closed Git and .NET inventory behavior.</summary>
-public sealed class Plan41InventoryToolTests
+public sealed partial class Plan41InventoryToolTests
 {
     /// <summary>Verifies history, working-tree, blame, show, and branch comparison normalization.</summary>
     [Fact]

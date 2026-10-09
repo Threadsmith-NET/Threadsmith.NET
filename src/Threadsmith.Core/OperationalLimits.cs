@@ -209,6 +209,12 @@ public sealed record SemanticResourceLimits
 /// <summary>Limits for Git inspection operations.</summary>
 public sealed record GitResourceLimits
 {
+    /// <summary>Maximum requested raw metadata acquisition bytes, including lookahead.</summary>
+    public int MaximumMetadataBytes { get; init; } = 65536;
+
+    /// <summary>Maximum offset accepted for a bounded history frontier.</summary>
+    public int MaximumHistoryOffset { get; init; } = 64;
+
     /// <summary>Maximum elapsed milliseconds per Git query.</summary>
     public int TimeoutMilliseconds { get; init; } = 30_000;
 
@@ -236,6 +242,8 @@ public sealed record GitResourceLimits
     /// <summary>Rejects nonpositive resource limits.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumMetadataBytes);
+        ArgumentOutOfRangeException.ThrowIfNegative(MaximumHistoryOffset);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(TimeoutMilliseconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCapturedCharacters);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumCommits);

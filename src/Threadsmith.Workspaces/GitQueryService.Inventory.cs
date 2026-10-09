@@ -11,6 +11,12 @@ public sealed partial class GitQueryService
 {
     private async Task<GitShowResult> ShowInventoryAsync(string root, GitShowRequest request, CancellationToken cancellationToken)
     {
+        if (request.InventoryMaximumBytes is { } byteLimit && (byteLimit < 1 || byteLimit > _limits.MaximumMetadataBytes || (request.IncludeWorkingTree && request.IncludeWorkingTreeState)))
+        {
+            throw new ArgumentException("Byte-bounded inventory requires a positive allowance within configured limits and excludes working-tree state hashing.", nameof(request));
+        }
+
+        long acquiredBytes = 0;
         if (request.Path is not null || request.Paths.Count > 64)
         {
             throw new ArgumentException("Inventory accepts up to 64 literal paths, without Path.");
@@ -106,19 +112,31 @@ public sealed partial class GitQueryService
             ScanLimitReached = scanLimitReached,
         };
         var content = JsonSerializer.SerializeToElement(inventory).GetRawText();
-        return new GitShowResult(revision, GitObjectKind.Tree, content, false, false) { ContentDigest = HashMetadata(content) };
+        return new GitShowResult(revision, GitObjectKind.Tree, content, false, false) { ContentDigest = HashMetadata(content), AcquiredMetadataBytes = acquiredBytes };
 
         async Task<(string Text, int Count)> ReadPageAsync(IReadOnlyList<string> arguments)
         {
+            if (request.InventoryMaximumBytes is { } totalLimit && acquiredBytes >= totalLimit)
+            {
+                scanLimitReached = true;
+                return (string.Empty, 0);
+            }
+
             var count = 0;
             var scanned = 0;
             var output = await RunAsync(root, arguments, cancellationToken, async (reader, token) =>
             {
+                var captured = request.InventoryMaximumBytes is { } maximumBytes
+                    ? await ReadMetadataAsync(reader, maximumBytes - (int)acquiredBytes - 1, token) : null;
+                acquiredBytes += captured?.AcquiredBytes ?? 0;
+                scanLimitReached |= captured?.IsTruncated ?? false;
+                using var limited = captured is null ? null : new StringReader(captured.Text[..(captured.Text.LastIndexOf('\0') + 1)]);
+                TextReader sourceReader = limited is null ? reader : limited;
                 var page = new StringBuilder();
                 var record = new StringBuilder();
                 var buffer = new char[4096];
                 int read;
-                while ((read = await reader.ReadAsync(buffer, token)) > 0)
+                while ((read = await sourceReader.ReadAsync(buffer, token)) > 0)
                 {
                     for (var index = 0; index < read; index++)
                     {
@@ -168,7 +186,7 @@ public sealed partial class GitQueryService
                     }
                 }
 
-                return new BoundedText(page.ToString(), record.Length != 0);
+                return new BoundedText(page.ToString(), record.Length != 0, StopAfterPage: captured?.IsTruncated ?? false);
             });
             return output.IsTruncated
                 ? throw new InvalidDataException("Git inventory ended with an incomplete record.")

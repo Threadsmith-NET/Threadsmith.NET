@@ -7,6 +7,9 @@ using Threadsmith.Core;
 /// <summary>Model-facing Git diff request with one path-filter representation.</summary>
 public sealed record GitDiffInput : IConceptToolInput
 {
+    /// <summary>Optional total raw byte ceiling for metadata-only acquisition.</summary>
+    public int? MaximumMetadataBytes { get; init; }
+
     /// <inheritdoc />
     public IReadOnlyList<string>? Concepts { get; init; }
 
@@ -157,6 +160,7 @@ public sealed class GitDiffTool : Tool<GitDiffInput, GitDiffResult>
     {
         return new GitDiffRequest
         {
+            MaximumMetadataBytes = input.MaximumMetadataBytes,
             Path = input.Paths.Count == 1 ? input.Paths[0] : null,
             Paths = input.Paths.Count > 1 ? input.Paths : [],
             IncludePatch = input.IncludePatch,
@@ -258,6 +262,9 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
 /// <summary>Model-facing Git object request with one path-filter representation.</summary>
 public sealed record GitShowInput : IConceptToolInput
 {
+    /// <summary>Optional raw tree-metadata acquisition ceiling; excludes mutable inventory.</summary>
+    public int? InventoryMaximumBytes { get; init; }
+
     /// <summary>Includes branch/default-ref and status digest observations with working-tree inventory.</summary>
     public bool IncludeWorkingTreeState { get; init; } = true;
 
@@ -385,6 +392,7 @@ public sealed class GitShowTool : Tool<GitShowInput, GitShowResult>
         var scalarPath = !input.Inventory && input.Paths.Count == 1 ? input.Paths[0] : null;
         return new GitShowRequest
         {
+            InventoryMaximumBytes = input.InventoryMaximumBytes,
             InventoryExtensions = input.InventoryExtensions,
             InventoryMaximumScannedEntries = input.InventoryMaximumScannedEntries,
             SnapshotMetadata = input.SnapshotMetadata,

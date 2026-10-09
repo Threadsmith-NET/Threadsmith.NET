@@ -68,7 +68,7 @@ Example tool arguments:
 }
 ```
 
-Empty `paths` selects the repository root. At most eight literal scopes are accepted; glob syntax is not interpreted. The maximum settings are 200 returned discovery paths, 10,000 scanned records per metadata-discovery/listing pass, 32 admitted content files (also capped by trusted `repositoryIntelligence:limits:maximumFiles`), 65,536 admitted content bytes, and 60 seconds. Defaults match the example except that `paths` is empty. Inventory prioritizes project/build metadata before its ordinary path page. Text bodies are admitted from inventory sizes, with a 16 KiB per-file ceiling and at most two committed-file batches. Scan/page/policy limits appear as omissions; these are bounded samples rather than exhaustive repository maps.
+Empty `paths` selects the repository root. At most eight literal scopes are accepted; glob syntax is not interpreted. The maximum settings are 200 returned discovery paths, 10,000 scanned records per metadata-discovery/listing pass, 32 admitted content files (also capped by trusted `repositoryIntelligence:limits:maximumFiles`), 65,536 admitted content bytes, and 60 seconds. Defaults match the example except that `paths` is empty. Inventory prioritizes project/build metadata before its ordinary path page. Text bodies are admitted from inventory sizes, using configured per-file and batch ceilings (defaults: 16 KiB and eight files). Metadata acquisition has a separate configured allowance; scan/page/policy/byte limits appear as omissions. These are bounded samples rather than exhaustive repository maps.
 
 `snapshot` separates the hashed local common-Git-directory identity from the checkout identity, selected ref, resolved immutable commit, observed HEAD, branch and shallow-history limitation. Linked worktrees share the common identity but retain distinct checkout identities and controls; copies retain separate identities. Non-Git roots and unborn HEAD expose an absent commit instead of inventing a baseline. Every committed fact retains a `commit:objectId` source identity and path. A final snapshot exposes changed HEAD/branch/identity as `pendingChanges`; an unverified final state is also pending. Selecting a historical ref does not substitute the current semantic workspace for that revision.
 
@@ -77,6 +77,50 @@ Empty `paths` selects the repository root. At most eight literal scopes are acce
 Facts describe static declarations in .NET project/build XML, such as references, target frameworks and package declarations. Imports, conditions and property expressions are not evaluated; other admitted metadata/document files are identified without semantic interpretation. A leading UTF-8 BOM is omitted only from XML parsing input after the original content digest is verified. DTDs are rejected. Historical and immutable semantic analysis remain explicitly unavailable. `discoveredFiles`, `inspectedFiles`, `admittedFiles` and structured `omissions` distinguish discovery from successful interpretation and attempted/admitted work. `admittedBytes` includes conservative reservations for repeated mutable reads; it is not an I/O performance measurement. At most 512 facts and 64 declarations per file are retained. The final profile is also clipped before serialization and after sanitization to the effective tool-output ceiling, with `OutputByteLimit` recorded while retaining snapshot/scope. An output limit too small for that required envelope fails normally.
 
 The result is retained only through ordinary host tool/session retention. There is no feature checkpoint or durable profile store. Cancellation and revocation propagate through the existing admission and nested-tool boundaries. Initial snapshot failures cannot return a pinned profile; a later collection deadline can return completed facts with `DeadlineReached` and an unverified final state. Other required-read/policy failures use normal tool failure receipts. Physical file-change races and performance vary by filesystem; the overlay does not claim to freeze mutable files.
+
+### Evidence collection limits
+
+The internal evidence collector builds invocation-only packets from an explicitly captured profile. It has no production tool/action of its own and does not enable analysis, onboarding or automatic enrichment. Its [source, episode and coverage contract](../architecture/context-policy.md#bounded-repository-evidence) distinguishes current-snapshot collection from optional bounded history. Both use the existing nested Git/file tools, policy, sanitization and event correlation.
+
+Trusted machine/user configuration under `repositoryIntelligence:limits:evidence` supplies the following ceilings. Repository configuration cannot enlarge this authority. Requests provide explicit cumulative budgets within these ceilings. Values are positive integers, except `packetReserveBytes`, which can be zero; unknown keys are rejected when the optional feature is resolved. Defaults are declared in `RepositoryEvidenceResourceLimits`.
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `maximumInputBytes` | 262144 | Cumulative source and metadata acquisitions, including the prerequisite profile |
+| `maximumPacketBytes` | 131072 | Serialized UTF-8 bytes in one packet, including JSON escaping and provenance |
+| `maximumOutputBytes` | 1048576 | Cumulative serialized bytes across packets and inspections |
+| `maximumProfileMetadataBytes` | 65536 | Prerequisite discovery metadata allowance, separate from profile bodies |
+| `maximumMetadataReadBytes` | 16384 | Metadata acquisition per governed read |
+| `maximumFileBytes` | 16384 | Source bytes acquired per file, also applied during profiling |
+| `fileBatchSize` | 8 | Files requested per bounded batch |
+| `historyPageSize` | 4 | Commits requested per bounded frontier page |
+| `maximumChangesPerCommit` | 8 | Changed paths selected per commit |
+| `maximumQuestionCharacters` | 2048 | Question characters before normalization |
+| `maximumScopePaths` | 8 | Literal scope paths |
+| `maximumSymbols` | 8 | Requested symbol anchors |
+| `maximumSymbolCharacters` | 256 | Characters per symbol anchor |
+| `maximumLocatorCharacters` | 2048 | Characters per source locator |
+| `maximumInspectionLines` | 201 | Lines in one cached-source inspection |
+| `maximumEvidenceIdentifiers` | 512 | Evidence IDs retained in one live operation |
+| `packetReserveBytes` | 8192 | Space reserved for episode and omission metadata before content acquisition |
+| `maximumDiagnosticLocatorCharacters` | 256 | Characters in an optional omission locator |
+
+Git's existing trusted operational configuration uses `limits:git:maximumMetadataBytes` (default 65536) and `limits:git:maximumHistoryOffset` (default 64). These bound explicit metadata allowances and history cursors; the configured `maximumCapturedCharacters` remains an additional capture ceiling. A request cannot enlarge it. Raw metadata acquisition includes the reserved lookahead byte. A small allowance that cannot hold complete ancestry returns explicit truncation rather than classifying valid ancestry as malformed. Metadata-only diff reads collect changed paths and binary status without patches. Mutable `list_files` discovery can also receive a serialized metadata allowance and stops before acquiring a record that cannot fit.
+
+### Opt-in live evidence verification
+
+From a source checkout, the following test exercises the internal collector through a test-only adapter and the normal composed host. It uses synthetic temporary repositories, existing Threadsmith `openai-codex` authentication/catalog data, and exactly GPT-6.1-Sol at low reasoning; unavailable selection or fallback fails the check. No production evidence action is registered by this test.
+
+```powershell
+dotnet build tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj
+$env:THREADSMITH_LIVE_REPOSITORY_EVIDENCE = '1'
+$env:THREADSMITH_LIVE_REPOSITORY_EVIDENCE_REPORT_DIRECTORY = Join-Path $env:TEMP 'threadsmith-evidence-live-reports'
+dotnet run --no-build --project tests/Threadsmith.Architecture.Tests/Threadsmith.Architecture.Tests.csproj -- --filter-method '*RepositoryEvidenceRealModelConsumesSnapshotHistoryAndOverlayAsync' --progress off
+```
+
+The live case checks snapshot/history/overlay provenance, bounded continuations and inspections, unchanged controls, normal nested tool activity, evidence-ID citation, and both small-budget Git regressions. Reports contain packets, sanitized host events and visible responses. Inspect response claims against the reported evidence; mechanical success does not prove arbitrary model interpretation correct. Nested host reads still run when the model makes only one direct adapter call. Provider usage can be consumed; the normal offline suite skips this test unless explicitly enabled.
+
+### Invocation boundaries
 
 Host-submitted nested reads retain the parent invocation ID on start and completion events. They use distinct invocation IDs and consume one ordinary tool budget charge per admitted operation. The bridge permits at most two nested levels and 16 descendant submissions per root; it rejects a child that would wait on a source permit held by any ancestor. Parent cancellation reaches children. A rejected nested admission is reflected in its parent's ordinary failure, while admitted child work has its own terminal outcome. Explicit structural profiling uses these same nested reads.
 

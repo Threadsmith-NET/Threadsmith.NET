@@ -17,6 +17,7 @@ internal sealed class TestProfileHost : IAsyncDisposable
     private readonly DomainEventStream _events = new();
     private readonly IDomainEventSubscription _subscription;
     private readonly RepositoryIntelligenceFeature _feature;
+    private readonly ToolRegistry _registry;
 
     private TestProfileHost(string temporaryRoot, string repository, int maximumFiles, IOutputSanitizer? sanitizer)
     {
@@ -35,9 +36,11 @@ internal sealed class TestProfileHost : IAsyncDisposable
         [
             new GitShowTool(Git, TestPromptLoader.Instance),
             new GitDiffTool(Git, TestPromptLoader.Instance),
+            new GitLogTool(Git, TestPromptLoader.Instance),
             new ReadFileTool(TestPromptLoader.Instance, sanitizer),
             new ListFilesTool(TestPromptLoader.Instance),
         ]);
+        _registry = registry;
         Pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), _events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance);
         Reads = new ObservingPipeline(Pipeline);
         Tool = new RepositoryIntelligenceStatusTool(
@@ -84,10 +87,10 @@ internal sealed class TestProfileHost : IAsyncDisposable
         await File.WriteAllTextAsync(fullPath, content, TestContext.Current.CancellationToken);
     }
 
-    public async Task<string> CommitAsync()
+    public async Task<string> CommitAsync(string subject = "fixture")
     {
         await RunGitAsync(Repository, "add", "--all");
-        await RunGitAsync(Repository, "-c", "commit.gpgSign=false", "commit", "-m", "fixture");
+        await RunGitAsync(Repository, "-c", "commit.gpgSign=false", "commit", "-m", subject);
         return (await RunGitAsync(Repository, "rev-parse", "HEAD")).Trim();
     }
 
@@ -104,14 +107,14 @@ internal sealed class TestProfileHost : IAsyncDisposable
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, cancellationToken);
         return await Pipeline.InvokeAsync(
             new ToolInvocationRequest
-        {
-            SessionId = SessionId.New(),
-            RunId = RunId.New(),
-            Phase = RunPhase.Intake,
-            ToolId = "repository_intelligence",
-            ArgumentsJson = JsonSerializer.SerializeToElement(new RepositoryIntelligenceStatusInput { Profile = selection }).GetRawText(),
-            Context = context ?? Context,
-        },
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                Phase = RunPhase.Intake,
+                ToolId = "repository_intelligence",
+                ArgumentsJson = JsonSerializer.SerializeToElement(new RepositoryIntelligenceStatusInput { Profile = selection }).GetRawText(),
+                Context = context ?? Context,
+            },
             linked.Token);
     }
 
@@ -129,6 +132,63 @@ internal sealed class TestProfileHost : IAsyncDisposable
     }
 
     public async Task FlushEventsAsync() => await _subscription.DisposeAsync();
+
+    public async Task<T> RunEvidenceAsync<T>(
+        Func<ToolExecutionContext, CancellationToken, Task<T>> action,
+        ToolInvocationContext? context = null)
+        where T : class
+    {
+        T? value = null;
+        var tool = new EvidenceOperationTool(async (execution, token) => value = await action(execution, token));
+        _registry.RegisterOrReplace(tool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, tool.Definition.Id));
+        var result = await Pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(),
+                RunId = RunId.New(),
+                ToolId = tool.Definition.Id,
+                ArgumentsJson = "{}",
+                Context = context ?? Context,
+            },
+            TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.NotNull(value);
+        return value;
+    }
+
+    private sealed record EvidenceOperationInput;
+
+    private sealed class EvidenceOperationTool : Tool<EvidenceOperationInput, string>
+    {
+        private readonly Func<ToolExecutionContext, CancellationToken, Task> _action;
+
+        public EvidenceOperationTool(Func<ToolExecutionContext, CancellationToken, Task> action)
+        {
+            _action = action;
+            Definition = ToolDefinitionFactory.Create<EvidenceOperationInput, string>(
+                "test_evidence_" + Guid.NewGuid().ToString("N"),
+                "Test-only governed evidence operation",
+                ToolCategory.RepositoryInspection,
+                RepositoryTrustLevel.TrustedRead,
+                ApprovalLevel.None,
+                ToolSideEffect.ReadOnly,
+                TimeSpan.FromMinutes(2),
+                1024);
+        }
+
+        public override ToolDefinition Definition { get; }
+
+        public override async Task<ToolExecution<string>> ExecuteAsync(
+            EvidenceOperationInput input,
+            ToolExecutionContext context,
+            CancellationToken cancellationToken = default)
+        {
+            await _action(context, cancellationToken);
+            return new("Complete", [], false);
+        }
+
+        protected override void ValidateInput(EvidenceOperationInput input) => ArgumentNullException.ThrowIfNull(input);
+    }
 
     public static async Task<string> RunGitAsync(string repository, params string[] arguments)
     {

@@ -28,6 +28,10 @@ internal sealed class RepositoryIntelligenceFeature : IAsyncDisposable
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userConfigurationDirectory);
         ArgumentNullException.ThrowIfNull(limits);
+        ArgumentNullException.ThrowIfNull(limits.Evidence);
+        ArgumentNullException.ThrowIfNull(limits.Git);
+        limits.Evidence.Validate();
+        limits.Git.Validate();
         if (limits.MaximumFiles < 1 || limits.MaximumCommits < 0 || limits.MaximumModelCalls < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(limits));
@@ -40,6 +44,12 @@ internal sealed class RepositoryIntelligenceFeature : IAsyncDisposable
 
     /// <summary>Trusted maximum number of files an explicit operation may inspect.</summary>
     internal int MaximumFiles => _limits.MaximumFiles;
+
+    /// <summary>Trusted configured evidence ceilings shared by profile and packet collection.</summary>
+    internal RepositoryEvidenceResourceLimits EvidenceLimits => _limits.Evidence;
+
+    /// <summary>Configured limits of the shared host Git reader.</summary>
+    internal GitResourceLimits GitLimits => _limits.Git;
 
     /// <summary>Captures a repository-fenced immutable authorization snapshot.</summary>
     public async Task<RepositoryIntelligenceControlSnapshot> CaptureAsync(

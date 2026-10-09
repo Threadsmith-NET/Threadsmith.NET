@@ -14,6 +14,9 @@ using Threadsmith.Core;
 /// <summary>Input for bounded repository file listing.</summary>
 public sealed record ListFilesInput : IConceptToolInput
 {
+    /// <summary>Optional stricter serialized metadata allowance admitted before file-stat acquisition.</summary>
+    public int? MaximumMetadataBytes { get; init; }
+
     /// <summary>Optional stricter ceiling on examined files, including excluded entries.</summary>
     public int? MaximumScannedEntries { get; init; }
 
@@ -84,6 +87,14 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
         var maximumEntries = ResolveMaximumEntries(input);
         var files = new List<RepositoryFileEntry>();
         var truncated = false;
+        var metadataBytes = JsonSerializer.SerializeToUtf8Bytes(new ListFilesOutput([], false)).Length;
+        var metadataLimit = input.MaximumMetadataBytes is { } requestedBytes
+            ? Math.Min(requestedBytes, Math.Min(context.MaximumOutputBytes ?? Definition.MaximumOutputBytes, Definition.MaximumOutputBytes)) : (int?)null;
+        if (metadataLimit is { } minimum && metadataBytes > minimum)
+        {
+            throw new ToolArgumentValidationException("The metadata allowance cannot hold an empty listing.");
+        }
+
         var options = new EnumerationOptions
         {
             RecurseSubdirectories = true,
@@ -124,8 +135,19 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
                 break;
             }
 
+            // Reserve the exact escaped locator and widest scalar fields before acquiring file metadata.
+            var entryBytes = metadataLimit is null ? 0
+                : JsonSerializer.SerializeToUtf8Bytes(new RepositoryFileEntry(relative, long.MinValue, DateTimeOffset.MaxValue)).Length;
+            var separatorBytes = files.Count == 0 ? 0 : 1;
+            if (metadataLimit is { } maximum && (long)metadataBytes + entryBytes + separatorBytes > maximum)
+            {
+                truncated = true;
+                break;
+            }
+
             var info = new FileInfo(path);
             files.Add(new RepositoryFileEntry(relative, info.Length, info.LastWriteTimeUtc));
+            metadataBytes += entryBytes + separatorBytes;
         }
 
         var output = new ListFilesOutput(files, truncated);
@@ -145,7 +167,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
     protected override void ValidateInput(ListFilesInput input)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(input.Path);
-        if (input.MaximumEntries < 0 || input.MaximumScannedEntries is < 1)
+        if (input.MaximumEntries < 0 || input.MaximumScannedEntries is < 1 || input.MaximumMetadataBytes is < 1)
         {
             throw new ToolArgumentValidationException(
                 "maximumEntries must be nonnegative (0 uses the host default; larger values are clamped to the host maximum).");

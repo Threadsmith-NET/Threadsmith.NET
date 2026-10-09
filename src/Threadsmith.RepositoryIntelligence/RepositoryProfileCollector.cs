@@ -13,11 +13,21 @@ internal sealed class RepositoryProfileCollector
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
     private readonly IToolInvocationPipeline _pipeline;
+    private readonly RepositoryEvidenceResourceLimits _limits;
+    private readonly GitResourceLimits _gitLimits;
+    private int _readCalls;
+
+    /// <summary>Number of governed reads attempted through this invocation-owned reader.</summary>
+    internal int ReadCalls => _readCalls;
 
     /// <summary>Initializes a new instance of the <see cref="RepositoryProfileCollector"/> class.</summary>
-    internal RepositoryProfileCollector(IToolInvocationPipeline pipeline)
+    internal RepositoryProfileCollector(IToolInvocationPipeline pipeline, RepositoryEvidenceResourceLimits? limits = null, GitResourceLimits? gitLimits = null)
     {
         _pipeline = pipeline;
+        _limits = limits ?? new();
+        _gitLimits = gitLimits ?? new();
+        _limits.Validate();
+        _gitLimits.Validate();
     }
 
     /// <summary>Captures committed facts without evaluating project files or creating feature storage.</summary>
@@ -57,18 +67,20 @@ internal sealed class RepositoryProfileCollector
 
         List<GitTreeFile> discovered = [];
         List<RepositoryStructuralFact> facts = [];
+        List<RepositoryCapturedSource> capturedSources = [];
         List<RepositoryOverlayObservation> overlay = [];
         var overlayCandidates = new Dictionary<string, long?>(StringComparer.Ordinal);
         GitSnapshotMetadata? after = null;
         var inspected = 0;
         var admittedFiles = 0;
         long admittedBytes = 0;
+        long metadataBytes = 0;
+        var metadataExhausted = false;
         try
         {
             if (snapshot.Commit is { } commit)
             {
-                var metadataResult = await ReadAsync<GitShowResult>(
-                    "git_show",
+                var metadataResult = await ReadMetadataShowAsync(
                     new GitShowInput
                     {
                         Revision = commit,
@@ -77,9 +89,7 @@ internal sealed class RepositoryProfileCollector
                         InventoryExtensions = [".csproj", ".fsproj", ".vbproj", ".props", ".targets", ".sln", ".slnx"],
                         InventoryMaximumEntries = Math.Min(selection.MaximumPaths, selection.MaximumFiles),
                         InventoryMaximumScannedEntries = selection.MaximumScannedPaths,
-                    },
-                    context,
-                    token);
+                    });
                 var metadata = ParseInventory(metadataResult);
                 discovered.AddRange(metadata.Files);
                 if (metadata.Revision != commit)
@@ -94,8 +104,7 @@ internal sealed class RepositoryProfileCollector
 
                 if (discovered.Count < selection.MaximumPaths)
                 {
-                    var result = await ReadAsync<GitShowResult>(
-                        "git_show",
+                    var result = await ReadMetadataShowAsync(
                         new GitShowInput
                         {
                             Revision = commit,
@@ -103,9 +112,7 @@ internal sealed class RepositoryProfileCollector
                             Paths = selection.Paths,
                             InventoryMaximumEntries = selection.MaximumPaths - discovered.Count,
                             InventoryMaximumScannedEntries = selection.MaximumPaths,
-                        },
-                        context,
-                        token);
+                        });
                     var inventory = ParseInventory(result);
                     if (inventory.Revision != commit)
                     {
@@ -129,7 +136,7 @@ internal sealed class RepositoryProfileCollector
                     }
 
                     if (selected.Count >= selection.MaximumFiles || file.Mode is not ("100644" or "100755")
-                        || file.Size < 0 || file.Size > 16384 || admittedBytes + file.Size > selection.MaximumBytes)
+                        || file.Size < 0 || file.Size > _limits.MaximumFileBytes || admittedBytes + file.Size > selection.MaximumBytes)
                     {
                         omissions.Add(new(RepositoryProfileOmissionReason.MetadataFileTypeOrByteLimit, file.Path));
                         continue;
@@ -140,18 +147,15 @@ internal sealed class RepositoryProfileCollector
                     admittedBytes += file.Size;
                 }
 
-                // At most two batches; the existing Git tool bounds content and preserves source digests.
-                foreach (var batch in selected.Chunk(16))
+                // The existing Git tool bounds batch content and preserves source digests.
+                foreach (var batch in selected.Chunk(_limits.FileBatchSize))
                 {
-                    var content = await ReadAsync<GitShowResult>(
-                    "git_show",
+                    var content = await ReadMetadataShowAsync(
                     new GitShowInput
                     {
                         Revision = commit,
                         Paths = batch.Select(file => file.Path).ToArray(),
-                    },
-                    context,
-                    token);
+                    });
                     foreach (var file in batch)
                     {
                         var body = content.Files.SingleOrDefault(item => item.Path == file.Path);
@@ -169,12 +173,14 @@ internal sealed class RepositoryProfileCollector
                         }
 
                         inspected++;
+                        capturedSources.Add(new RepositoryCapturedSource(file.Path, commit, file.ObjectId, digest, text));
                         AddFacts(file.Path, commit + ":" + file.ObjectId, text, facts, omissions);
                     }
                 }
 
                 if (selection.IncludeOverlay)
                 {
+                    var metadataLimit = ReserveMetadata();
                     var changes = await ReadAsync<GitDiffResult>(
                         "git_diff",
                         new GitDiffInput
@@ -183,11 +189,12 @@ internal sealed class RepositoryProfileCollector
                             Mode = GitComparisonMode.WorkingTree,
                             Paths = selection.Paths,
                             IncludePatch = false,
+                            MaximumMetadataBytes = metadataLimit,
                         },
                         context,
                         token);
-                    var untrackedResult = await ReadAsync<GitShowResult>(
-                    "git_show",
+                    AccountMetadata(changes.AcquiredMetadataBytes, metadataLimit);
+                    var untrackedResult = await ReadMetadataShowAsync(
                     new GitShowInput
                     {
                         Revision = commit,
@@ -197,9 +204,7 @@ internal sealed class RepositoryProfileCollector
                         IncludeWorkingTreeState = false,
                         Paths = selection.Paths,
                         InventoryMaximumEntries = selection.MaximumPaths,
-                    },
-                    context,
-                    token);
+                    });
                     var untracked = ParseInventory(untrackedResult);
                     var paths = changes.Entries.SelectMany<GitDiffEntry, string>(entry => entry.PreviousPath is { } previous
                         ? [previous, entry.Path] : [entry.Path])
@@ -245,14 +250,24 @@ internal sealed class RepositoryProfileCollector
                             break;
                         }
 
+                        var reserved = ReserveMetadata();
+                        if (reserved < JsonSerializer.SerializeToUtf8Bytes(new ListFilesOutput([], false)).Length)
+                        {
+                            metadataExhausted = true;
+                            throw new RepositoryReadUnavailableException("The metadata allowance cannot hold a bounded listing.");
+                        }
+
                         var arguments = JsonSerializer.SerializeToElement(new ListFilesInput
                         {
                             Path = scope,
                             MaximumEntries = remainingPaths,
                             MaximumScannedEntries = selection.MaximumScannedPaths,
+                            MaximumMetadataBytes = reserved,
                         }).GetRawText();
-                        var listing = await _pipeline.InvokeNestedReadAsync(context, "list_files", arguments, token);
+                        var listing = await InvokeReadAsync(context, "list_files", arguments, token);
                         token.ThrowIfCancellationRequested();
+
+                        // Keep the allowance charged, including failed reads and records withheld by policy.
                         var files = listing.Succeeded && listing.ResultJson is not null
                             ? JsonSerializer.Deserialize<ListFilesOutput>(listing.ResultJson, JsonOptions) : null;
                         if (files is null)
@@ -290,7 +305,7 @@ internal sealed class RepositoryProfileCollector
             {
                 foreach (var candidate in overlayCandidates.OrderBy(item => Priority(item.Key)).ThenBy(item => item.Key, StringComparer.Ordinal).Take(3))
                 {
-                    var remaining = (int)Math.Min(16384, (selection.MaximumBytes - admittedBytes) / 2);
+                    var remaining = (int)Math.Min(_limits.MaximumFileBytes, (selection.MaximumBytes - admittedBytes) / 2);
                     if (remaining < 1 || admittedFiles >= selection.MaximumFiles)
                     {
                         break;
@@ -316,6 +331,7 @@ internal sealed class RepositoryProfileCollector
                     if (stable && first?.Content is { } text && first.ContentDigest is { } digest)
                     {
                         inspected++;
+                        capturedSources.Add(new RepositoryCapturedSource(candidate.Key, null, digest, digest, text));
                         AddFacts(candidate.Key, "overlay:" + digest, text, facts, omissions);
                     }
                 }
@@ -337,29 +353,72 @@ internal sealed class RepositoryProfileCollector
         {
             omissions.Add(new(RepositoryProfileOmissionReason.DeadlineReached));
         }
+        catch (RepositoryReadUnavailableException) when (metadataExhausted)
+        {
+            omissions.Add(new(RepositoryProfileOmissionReason.MetadataAcquisitionLimit));
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         var pending = after is null || after.Head != snapshot.Head || after.Branch != snapshot.Branch
             || after.RepositoryIdentity != snapshot.RepositoryIdentity;
         var orderedFacts = facts.OrderBy(fact => fact.Path, StringComparer.Ordinal)
             .ThenBy(fact => fact.Kind, StringComparer.Ordinal).ThenBy(fact => fact.Name, StringComparer.Ordinal).ToArray();
-        return new RepositoryStructuralProfile(snapshot, after, pending, selection, discovered.OrderBy(file => file.Path, StringComparer.Ordinal).ToArray(), orderedFacts, overlay, inspected, admittedFiles, admittedBytes, omissions);
+        return new RepositoryStructuralProfile(snapshot, after, pending, selection, discovered.OrderBy(file => file.Path, StringComparer.Ordinal).ToArray(), orderedFacts, overlay, inspected, admittedFiles, admittedBytes, omissions)
+        {
+            ReadCalls = _readCalls,
+            AcquiredMetadataBytes = metadataBytes,
+            CapturedSources = capturedSources,
+        };
+
+        int ReserveMetadata()
+        {
+            // T04 has a separate prerequisite metadata ceiling; T05 admits both this work and body bytes.
+            var remaining = (int)Math.Min(Math.Min(_limits.MaximumMetadataReadBytes, _gitLimits.MaximumMetadataBytes), _limits.MaximumProfileMetadataBytes - metadataBytes);
+            if (remaining < 1)
+            {
+                metadataExhausted = true;
+                throw new RepositoryReadUnavailableException("Prerequisite metadata acquisition limit reached.");
+            }
+
+            metadataBytes += remaining;
+            return remaining;
+        }
+
+        void AccountMetadata(long acquired, int reserved)
+        {
+            if (acquired < 0 || acquired > reserved)
+            {
+                throw new InvalidDataException("Git metadata acquisition exceeded its reservation.");
+            }
+
+            metadataBytes -= reserved - acquired;
+        }
+
+        async Task<GitShowResult> ReadMetadataShowAsync(GitShowInput input)
+        {
+            var reserved = ReserveMetadata();
+            var result = await ReadAsync<GitShowResult>("git_show", input with { InventoryMaximumBytes = reserved }, context, token);
+            AccountMetadata(result.AcquiredMetadataBytes, reserved);
+            return result;
+        }
     }
 
-    private async Task<T> ReadAsync<T>(string toolId, object input, ToolExecutionContext context, CancellationToken cancellationToken)
+    /// <summary>Reads structured results through the existing nested host execution path.</summary>
+    internal async Task<T> ReadAsync<T>(string toolId, object input, ToolExecutionContext context, CancellationToken cancellationToken)
     {
-        var result = await _pipeline.InvokeNestedReadAsync(context, toolId, JsonSerializer.SerializeToElement(input).GetRawText(), cancellationToken);
+        var result = await InvokeReadAsync(context, toolId, JsonSerializer.SerializeToElement(input).GetRawText(), cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         if (!result.Succeeded || result.ResultJson is null)
         {
-            throw new InvalidOperationException($"Required governed {toolId} read failed or was truncated ({result.ErrorClassification}).");
+            throw new RepositoryReadUnavailableException($"Required governed {toolId} read failed or was truncated ({result.ErrorClassification}).");
         }
 
         return JsonSerializer.Deserialize<T>(result.ResultJson, JsonOptions)
             ?? throw new InvalidDataException("Governed read returned no structured result.");
     }
 
-    private async Task<ReadFileOutput?> TryReadOverlayAsync(string path, int maximumBytes, ToolExecutionContext context, CancellationToken cancellationToken)
+    /// <summary>Reads a policy-authorized, bounded mutable snapshot.</summary>
+    internal async Task<ReadFileOutput?> TryReadOverlayAsync(string path, int maximumBytes, ToolExecutionContext context, CancellationToken cancellationToken)
     {
         var arguments = JsonSerializer.SerializeToElement(new ReadFileInput
         {
@@ -367,21 +426,14 @@ internal sealed class RepositoryProfileCollector
             Snapshot = true,
             MaximumSnapshotBytes = maximumBytes,
         }).GetRawText();
-        var result = await _pipeline.InvokeNestedReadAsync(context, "read_file", arguments, cancellationToken);
+        var result = await InvokeReadAsync(context, "read_file", arguments, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         return result.Succeeded && !result.IsTruncated && result.ResultJson is not null
             ? JsonSerializer.Deserialize<ReadFileOutput>(result.ResultJson, JsonOptions) : null;
     }
 
-    private static bool IsStableOverlay(ReadFileOutput? first, ReadFileOutput? second)
-    {
-        return first?.ContentDigest is { } hash && second?.ContentDigest == hash
-            && first.Content is { } firstText && Digest(firstText) == hash
-            && second.Content is { } secondText && Digest(secondText) == hash
-            && first.NextSnapshotOffset is null && second.NextSnapshotOffset is null;
-    }
-
-    private static GitShowInventory ParseInventory(GitShowResult result)
+    /// <summary>Validates sanitized inventory identities before interpreting them.</summary>
+    internal static GitShowInventory ParseInventory(GitShowResult result)
     {
         if (result.ContentDigest is null || Digest(result.Content) != result.ContentDigest)
         {
@@ -392,7 +444,30 @@ internal sealed class RepositoryProfileCollector
             ?? throw new InvalidDataException("Inventory is unavailable.");
     }
 
-    private static string Digest(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+    /// <summary>Hashes original UTF-8 source or serialized identity fields.</summary>
+    internal static string Digest(string text) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)));
+
+    private async Task<ToolInvocationResult> InvokeReadAsync(ToolExecutionContext context, string toolId, string arguments, CancellationToken token)
+    {
+        _readCalls++;
+        try
+        {
+            return await _pipeline.InvokeNestedReadAsync(context, toolId, arguments, token);
+        }
+        catch (InvalidOperationException exception)
+        {
+            // The shared host owns nested-call admission; do not copy its quota or continue after rejection.
+            throw new RepositoryReadUnavailableException("The host cannot admit further governed reads.", exception);
+        }
+    }
+
+    private static bool IsStableOverlay(ReadFileOutput? first, ReadFileOutput? second)
+    {
+        return first?.ContentDigest is { } hash && second?.ContentDigest == hash
+            && first.Content is { } firstText && Digest(firstText) == hash
+            && second.Content is { } secondText && Digest(secondText) == hash
+            && first.NextSnapshotOffset is null && second.NextSnapshotOffset is null;
+    }
 
     private static int Priority(string path)
     {
@@ -401,7 +476,7 @@ internal sealed class RepositoryProfileCollector
             ? 0 : extension is ".md" or ".json" or ".yml" or ".yaml" or ".toml" ? 1 : 2;
     }
 
-    private static void AddFacts(string path, string identity, string text, List<RepositoryStructuralFact> facts, List<RepositoryProfileOmission> omissions)
+    private void AddFacts(string path, string identity, string text, List<RepositoryStructuralFact> facts, List<RepositoryProfileOmission> omissions)
     {
         if (facts.Count >= 512)
         {
@@ -423,7 +498,7 @@ internal sealed class RepositoryProfileCollector
             {
                 DtdProcessing = DtdProcessing.Prohibit,
                 XmlResolver = null,
-                MaxCharactersInDocument = 16384,
+                MaxCharactersInDocument = _limits.MaximumFileBytes,
             });
             var document = XDocument.Load(reader);
             var declarations = document.Descendants().Where(element => element.Name.LocalName is
@@ -453,5 +528,26 @@ internal sealed class RepositoryProfileCollector
         {
             omissions.Add(new(RepositoryProfileOmissionReason.InvalidOrUnsafeXml, path));
         }
+    }
+}
+
+/// <summary>Marks a governed-read rejection so bounded collectors can preserve earlier valid evidence.</summary>
+internal sealed class RepositoryReadUnavailableException : InvalidOperationException
+{
+    /// <summary>Initializes a new instance of the <see cref="RepositoryReadUnavailableException"/> class.</summary>
+    public RepositoryReadUnavailableException()
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="RepositoryReadUnavailableException"/> class with a host rejection reason.</summary>
+    public RepositoryReadUnavailableException(string? message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="RepositoryReadUnavailableException"/> class with a host rejection cause.</summary>
+    public RepositoryReadUnavailableException(string? message, Exception? innerException)
+        : base(message, innerException)
+    {
     }
 }

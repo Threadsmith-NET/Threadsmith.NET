@@ -68,7 +68,14 @@ public sealed record RepositoryIntelligenceOperationSelection(
 public sealed record RepositoryIntelligenceResourceLimits(
     int MaximumFiles,
     int MaximumCommits,
-    int MaximumModelCalls);
+    int MaximumModelCalls)
+{
+    /// <summary>Trusted configured evidence collection ceilings.</summary>
+    public RepositoryEvidenceResourceLimits Evidence { get; init; } = new();
+
+    /// <summary>Limits shared with the host-owned Git query service.</summary>
+    public GitResourceLimits Git { get; init; } = new();
+}
 
 /// <summary>A visible operation preview with explicit availability.</summary>
 public sealed record RepositoryIntelligenceOperationPreview(

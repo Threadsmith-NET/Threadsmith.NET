@@ -9,6 +9,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="Threadsmith.App" />
     <InternalsVisibleTo Include="Threadsmith.RepositoryIntelligence.Tests" />
+    <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
     <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
   </ItemGroup>

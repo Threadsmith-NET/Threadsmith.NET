@@ -62,7 +62,7 @@ internal sealed class RepositoryIntelligenceStatusTool : Tool<RepositoryIntellig
                 identity, RepositoryIntelligenceControl.Archeology, oneOff: true, cancellationToken);
             profile = await resolved.Feature.PrepareAsync(
                 admission,
-                token => new RepositoryProfileCollector(_pipeline).CaptureAsync(
+                token => new RepositoryProfileCollector(_pipeline, resolved.Feature.EvidenceLimits, resolved.Feature.GitLimits).CaptureAsync(
                     selection with { MaximumFiles = Math.Min(selection.MaximumFiles, resolved.Feature.MaximumFiles) },
                     context,
                     token),

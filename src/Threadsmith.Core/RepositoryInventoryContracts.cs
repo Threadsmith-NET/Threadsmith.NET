@@ -22,6 +22,9 @@ public enum GitComparisonMode
 /// <summary>A bounded Git diff request.</summary>
 public sealed record GitDiffRequest
 {
+    /// <summary>Optional total raw byte ceiling for metadata-only name and binary-stat acquisition.</summary>
+    public int? MaximumMetadataBytes { get; init; }
+
     /// <summary>Optional batch of up to 64 literal path filters; mutually exclusive with Path.</summary>
     public IReadOnlyList<string> Paths { get; init; } = [];
 
@@ -60,6 +63,9 @@ public sealed record GitDiffResult(
     string Patch,
     bool IsTruncated)
 {
+    /// <summary>Raw metadata bytes acquired when an explicit metadata acquisition bound was supplied.</summary>
+    public long AcquiredMetadataBytes { get; init; }
+
     /// <summary>Paths withheld by current read policy, distinct from output truncation in metadata-only queries.</summary>
     public int OmittedPaths { get; init; }
 
@@ -70,6 +76,15 @@ public sealed record GitDiffResult(
 /// <summary>A bounded local Git history request.</summary>
 public sealed record GitLogRequest
 {
+    /// <summary>Optional raw history-metadata acquisition ceiling, including bounded lookahead.</summary>
+    public int? MaximumMetadataBytes { get; init; }
+
+    /// <summary>Bounded offset into the same immutable history frontier.</summary>
+    public int Offset { get; init; }
+
+    /// <summary>Optional immutable lower endpoint; its ancestors are excluded from the frontier.</summary>
+    public string? ExcludeCommit { get; init; }
+
     /// <summary>Validated starting revision. Defaults to HEAD when omitted or null.</summary>
     public string? Revision { get; init; } = "HEAD";
 
@@ -90,7 +105,11 @@ public sealed record GitCommitSummary(
     string Subject);
 
 /// <summary>Bounded Git history output.</summary>
-public sealed record GitLogResult(IReadOnlyList<GitCommitSummary> Commits, bool IsTruncated);
+public sealed record GitLogResult(IReadOnlyList<GitCommitSummary> Commits, bool IsTruncated)
+{
+    /// <summary>Raw metadata bytes acquired when an explicit acquisition bound was supplied.</summary>
+    public long AcquiredMetadataBytes { get; init; }
+}
 
 /// <summary>Git object kinds exposed by the show tool.</summary>
 public enum GitObjectKind
@@ -111,6 +130,9 @@ public enum GitObjectKind
 /// <summary>A bounded Git object request.</summary>
 public sealed record GitShowRequest
 {
+    /// <summary>Optional raw inventory acquisition ceiling; excludes working-tree state hashing.</summary>
+    public int? InventoryMaximumBytes { get; init; }
+
     /// <summary>Includes branch/default-ref and status digest observations with working-tree inventory.</summary>
     public bool IncludeWorkingTreeState { get; init; } = true;
 
@@ -151,6 +173,9 @@ public sealed record GitShowRequest
 /// <summary>Bounded normalized Git object output.</summary>
 public sealed record GitShowResult(string Revision, GitObjectKind Kind, string Content, bool IsBinary, bool IsTruncated)
 {
+    /// <summary>Raw tree-metadata bytes acquired under an explicit acquisition ceiling.</summary>
+    public long AcquiredMetadataBytes { get; init; }
+
     /// <summary>Checkout metadata when explicitly requested.</summary>
     public GitSnapshotMetadata? Snapshot { get; init; }
 

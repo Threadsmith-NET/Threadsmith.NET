@@ -78,6 +78,11 @@ public sealed partial class GitQueryService : IGitQueryService
         ArgumentNullException.ThrowIfNull(request);
         var mode = request.Mode ?? GitComparisonMode.WorkingTree;
         ValidateDiff(request, mode);
+        if (request.MaximumMetadataBytes is { } metadataLimit && (metadataLimit < 1 || metadataLimit > _limits.MaximumMetadataBytes || request.IncludePatch))
+        {
+            throw new ArgumentException("Metadata capture requires a positive allowance within configured limits and a metadata-only query.", nameof(request));
+        }
+
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         var path = ValidatePath(root, request.Path);
         if (request.Paths.Count > 64 || (request.Path is not null && request.Paths.Count > 0))
@@ -99,14 +104,28 @@ public sealed partial class GitQueryService : IGitQueryService
 
         var comparison = BuildComparison(request, mode);
         var rootCommit = false;
+        long ancestryBytes = 0;
+        var remainingMetadataBytes = request.MaximumMetadataBytes;
         if (mode == GitComparisonMode.Commit)
         {
+            // Resolve ancestry first, reserving one acquisition byte for each following metadata query.
             var ancestry = await RunAsync(
                 root,
                 ["rev-list", "--parents", "--max-count=1", request.BaseRevision ?? string.Empty],
-                cancellationToken);
+                cancellationToken,
+                remainingMetadataBytes is { } parentBytes ? (reader, token) => ReadMetadataAsync(reader, parentBytes - 3, token) : null);
+            ancestryBytes = ancestry.AcquiredBytes;
+            remainingMetadataBytes -= checked((int)ancestryBytes);
             if (ancestry.IsTruncated)
             {
+                if (request.MaximumMetadataBytes is not null)
+                {
+                    return new GitDiffResult(mode, request.BaseRevision, request.TargetRevision, [], new(0, 0, 0, 0), string.Empty, true)
+                    {
+                        AcquiredMetadataBytes = ancestryBytes,
+                    };
+                }
+
                 throw new InvalidDataException("Git returned overlong commit ancestry.");
             }
 
@@ -128,17 +147,20 @@ public sealed partial class GitQueryService : IGitQueryService
         var names = await RunAsync(
             root,
             [.. common, "--name-status", "-z", "-M", .. comparison, .. pathspec],
-            cancellationToken);
+            cancellationToken,
+            remainingMetadataBytes is { } nameBytes ? (reader, token) => ReadMetadataAsync(reader, (nameBytes / 2) - 1, token) : null);
+        remainingMetadataBytes -= checked((int)names.AcquiredBytes);
         var numstat = await RunAsync(
             root,
             [.. common, "--numstat", "-z", "-M", .. comparison, .. pathspec],
-            cancellationToken);
+            cancellationToken,
+            remainingMetadataBytes is { } statBytes ? (reader, token) => ReadMetadataAsync(reader, statBytes - 1, token) : null);
         var patch = request.IncludePatch ? await RunAsync(
             root,
             [.. common, "--unified=" + request.ContextLines.ToString(CultureInfo.InvariantCulture), "--binary", .. comparison, .. pathspec],
             cancellationToken) : new BoundedText(string.Empty, false);
         var binaryPaths = ParseBinaryPaths(numstat.Text);
-        IReadOnlyList<GitDiffEntry> allEntries = ParseNameStatus(names.Text)
+        IReadOnlyList<GitDiffEntry> allEntries = ParseNameStatus(names.IsTruncated ? CompleteChangedPaths(names.Text) : names.Text)
             .Select(entry => entry with { IsBinary = binaryPaths.Contains(entry.Path) })
             .ToArray();
         GitDiffEntry[] entries = [.. allEntries.Take(_limits.MaximumDiffEntries)];
@@ -155,7 +177,7 @@ public sealed partial class GitQueryService : IGitQueryService
             entries,
             SummarizePatch(boundedPatch),
             boundedPatch,
-            truncated);
+            truncated) { AcquiredMetadataBytes = ancestryBytes + names.AcquiredBytes + numstat.AcquiredBytes };
     }
 
     /// <inheritdoc />
@@ -169,18 +191,33 @@ public sealed partial class GitQueryService : IGitQueryService
         var maximumCommits = Math.Clamp(request.MaximumCommits ?? 50, 1, _limits.MaximumCommits);
         ValidateRevision(revision, nameof(request.Revision));
 
+        if (request.MaximumMetadataBytes is { } metadataLimit && (metadataLimit < 1 || metadataLimit > _limits.MaximumMetadataBytes))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "History metadata capture requires a positive allowance within configured limits.");
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegative(request.Offset);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(request.Offset, _limits.MaximumHistoryOffset);
+        if (request.ExcludeCommit is { } excluded && (excluded.Length is not (40 or 64) || !excluded.All(Uri.IsHexDigit)))
+        {
+            throw new ArgumentException("History lower endpoint must be an immutable commit.", nameof(request));
+        }
+
         var root = await ValidateRepositoryAsync(repositoryPath, cancellationToken);
         var path = ValidatePath(root, request.Path);
+        string[] bounds = request.ExcludeCommit is { } lower ? ["^" + lower] : [];
         var output = await RunAsync(
             root,
-            ["log", $"--max-count={maximumCommits + 1}", "--date=iso-strict", "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", revision, .. Pathspec(path)],
-            cancellationToken);
-        string[] records = [.. output.Text.Split('\x1e', StringSplitOptions.RemoveEmptyEntries)
+            ["log", $"--skip={request.Offset}", $"--max-count={maximumCommits + 1}", "--date=iso-strict", "--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", revision, .. bounds, .. Pathspec(path)],
+            cancellationToken,
+            request.MaximumMetadataBytes is { } historyBytes ? (reader, token) => ReadMetadataAsync(reader, historyBytes - 1, token) : null);
+        var completeText = output.IsTruncated ? output.Text[..(output.Text.LastIndexOf('\x1e') + 1)] : output.Text;
+        string[] records = [.. completeText.Split('\x1e', StringSplitOptions.RemoveEmptyEntries)
             .Where(record => !string.IsNullOrWhiteSpace(record))];
         GitCommitSummary[] commits = [.. records
             .Select(ParseCommit)
             .Take(maximumCommits)];
-        return new GitLogResult(commits, output.IsTruncated || records.Length > commits.Length);
+        return new GitLogResult(commits, output.IsTruncated || records.Length > commits.Length) { AcquiredMetadataBytes = output.AcquiredBytes };
     }
 
     /// <inheritdoc />
@@ -881,7 +918,10 @@ public sealed partial class GitQueryService : IGitQueryService
         return new RepositoryGitStatus(branch == "(detached)" ? null : branch, branch == "(detached)", staged, modified, untracked, conflicts, truncated);
     }
 
-    private sealed record BoundedText(string Text, bool IsTruncated, bool StopAfterPage = false);
+    private sealed record BoundedText(string Text, bool IsTruncated, bool StopAfterPage = false)
+    {
+        public long AcquiredBytes { get; init; }
+    }
 
     private sealed record BoundedBytes(byte[] Bytes, bool IsTruncated, bool IsBinary);
 }

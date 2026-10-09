@@ -10,6 +10,11 @@ public sealed partial class GitQueryService
 {
     private async Task<GitShowResult> ShowFilesAsync(string root, GitShowRequest request, CancellationToken cancellationToken)
     {
+        if (request.InventoryMaximumBytes is { } byteLimit && (byteLimit < 1 || byteLimit > _limits.MaximumMetadataBytes))
+        {
+            throw new ArgumentOutOfRangeException(nameof(request), "Batch tree metadata capture requires a positive allowance within configured limits.");
+        }
+
         if (request.Path is not null || request.Paths.Count > 64 || request.Paths.Distinct(StringComparer.Ordinal).Count() != request.Paths.Count)
         {
             throw new ArgumentException("Git show accepts one path or up to 64 distinct batch paths.");
@@ -17,7 +22,11 @@ public sealed partial class GitQueryService
 
         var paths = request.Paths.Select(path => ValidatePath(root, path)
             ?? throw new ArgumentException("Git batch paths must name files.")).ToArray();
-        var inventory = await RunAsync(root, ["ls-tree", "-r", "-l", "-z", request.Revision, "--", .. paths.Select(LiteralPathspec)], cancellationToken);
+        var inventory = await RunAsync(
+            root,
+            ["ls-tree", "-r", "-l", "-z", request.Revision, "--", .. paths.Select(LiteralPathspec)],
+            cancellationToken,
+            request.InventoryMaximumBytes is { } maximumBytes ? (reader, token) => ReadMetadataAsync(reader, maximumBytes - 1, token) : null);
         if (inventory.IsTruncated)
         {
             throw new InvalidDataException("Git batch inventory exceeded its capture bound.");
@@ -109,6 +118,7 @@ public sealed partial class GitQueryService
 
         return new GitShowResult(request.Revision, GitObjectKind.Blob, string.Empty, false, false)
         {
+            AcquiredMetadataBytes = inventory.AcquiredBytes,
             Files = paths.Select(path => files.TryGetValue(path, out var file)
                 ? file : new GitShowFile(path, entries[path].ObjectId, null, null, false, true)).ToArray(),
         };

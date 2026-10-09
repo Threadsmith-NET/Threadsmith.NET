@@ -484,7 +484,12 @@ internal static class ApplicationComposition
             var limits = new RepositoryIntelligenceResourceLimits(
                 Math.Clamp(host.TrustedConfiguration.GetValue("repositoryIntelligence:limits:maximumFiles", 200), 1, 100000),
                 Math.Clamp(host.TrustedConfiguration.GetValue("repositoryIntelligence:limits:maximumCommits", 100), 0, 100000),
-                Math.Clamp(host.TrustedConfiguration.GetValue("repositoryIntelligence:limits:maximumModelCalls", 10), 0, 1000));
+                Math.Clamp(host.TrustedConfiguration.GetValue("repositoryIntelligence:limits:maximumModelCalls", 10), 0, 1000))
+            {
+                Evidence = host.TrustedConfiguration.GetSection("repositoryIntelligence:limits:evidence")
+                    .Get<RepositoryEvidenceResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new(),
+                Git = host.OperationalLimits.Git,
+            };
             return new RepositoryIntelligenceFeature(
                 Path.GetDirectoryName(host.Paths.UserConfiguration)
                     ?? throw new InvalidOperationException("User configuration directory is unavailable."),

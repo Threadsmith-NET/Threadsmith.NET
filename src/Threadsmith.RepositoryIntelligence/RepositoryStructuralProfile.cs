@@ -36,6 +36,9 @@ internal sealed record RepositoryStructuralFact(string Path, string SourceIdenti
 /// <summary>One mutable source observation, never attributed to a commit.</summary>
 internal sealed record RepositoryOverlayObservation(string Path, string? Digest, string State, string? Change = null, string? PreviousPath = null);
 
+/// <summary>Already validated and charged source content retained only for the live operation.</summary>
+internal sealed record RepositoryCapturedSource(string Path, string? Revision, string SourceIdentity, string Digest, string Text);
+
 /// <summary>Invocation-only structural facts and explicit coverage limitations.</summary>
 internal sealed record RepositoryStructuralProfile(
     GitSnapshotMetadata Snapshot,
@@ -48,7 +51,18 @@ internal sealed record RepositoryStructuralProfile(
     int InspectedFiles,
     int AdmittedFiles,
     long AdmittedBytes,
-    IReadOnlyList<RepositoryProfileOmission> Omissions);
+    IReadOnlyList<RepositoryProfileOmission> Omissions)
+{
+    /// <summary>Governed nested reads already consumed by this capture.</summary>
+    public int ReadCalls { get; init; }
+
+    /// <summary>Charged discovery bytes: Git acquisition receipts or reserved mutable-listing allowances.</summary>
+    public long AcquiredMetadataBytes { get; init; }
+
+    /// <summary>Live capture handoff; ordinary profile projections do not retain source bodies.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<RepositoryCapturedSource> CapturedSources { get; init; } = [];
+}
 
 /// <summary>Status-compatible output with an optional explicit structural capture.</summary>
 internal sealed record RepositoryIntelligenceOutput(
@@ -76,6 +90,7 @@ internal enum RepositoryProfileOmissionReason
     DeclarationLimit,
     InvalidOrUnsafeXml,
     OutputByteLimit,
+    MetadataAcquisitionLimit,
 }
 
 /// <summary>Coverage reason and optional affected repository-relative path.</summary>

@@ -720,6 +720,17 @@ public class InteractionPresenter
             cancellationToken);
     }
 
+    /// <summary>Submits a manual repository operation through ordinary tool governance.</summary>
+    public Task<RepositoryIntelligenceOperationReceipt> InvokeRepositoryIntelligenceOperationAsync(
+        SessionId sessionId,
+        string repositoryIdentity,
+        string argumentsJson,
+        CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(
+            new InvokeRepositoryIntelligenceOperationCommand(sessionId, repositoryIdentity, argumentsJson), cancellationToken);
+    }
+
     /// <summary>Changes one independently authorized repository intelligence control.</summary>
     public Task<RepositoryIntelligenceControlSnapshot> SetRepositoryIntelligenceControlAsync(
         string repositoryIdentity,

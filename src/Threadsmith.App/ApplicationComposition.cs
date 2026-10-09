@@ -461,7 +461,9 @@ internal static class ApplicationComposition
             semanticRefreshCoordinator: semantic.SemanticRefreshCoordinator,
             repositoryMemories: memoryService,
             repositoryMemoryOptions: memoryOptions,
-            sourceEdits: sourceEdits);
+            sourceEdits: sourceEdits,
+            inferenceCatalog: integration.Models.Catalog,
+            inferenceInstructions: providerInstructionResolver);
 
         // The foundation-owned coordinator may prepare work before session composition, but publication
         // delegates to this sole run-lifetime authority once it exists.
@@ -504,12 +506,15 @@ internal static class ApplicationComposition
         try
         {
             tools.ToolRegistry.RegisterOrReplace(memoriesTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "memories"));
-            tools.ToolRegistry.RegisterOrReplace(
-                new RepositoryIntelligenceStatusTool(
+            var intelligenceTool = new RepositoryIntelligenceStatusTool(
                     repositoryBindings.ResolveRepositoryIntelligenceAsync,
                     host.PromptLoader,
-                    tools.ToolPipeline),
+                    tools.ToolPipeline,
+                    sessionApplication);
+            tools.ToolRegistry.RegisterOrReplace(
+                intelligenceTool,
                 new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-intelligence"));
+            tools.ToolRegistry.RegisterHostReadDependencies(intelligenceTool, ["git_show", "git_log", "git_diff"]);
             tools.ToolRegistry.RegisterOrReplace(sourceEditTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "source-edit"));
             repositoryBindings.AttachScratchpad(scratchpad);
             var repositoryLifecycle = new RepositoryLifecycle(
@@ -908,7 +913,8 @@ internal static class ApplicationComposition
                 scratchpad,
                 intelligence,
                 new EffectiveConfigurationPreflight(
-                    integration.Models.ActiveModels, childModelSelection, delegateAgentsOptions.EffectiveChildBudget));
+                    integration.Models.ActiveModels, childModelSelection, delegateAgentsOptions.EffectiveChildBudget),
+                sessionApplication);
         }
         catch
         {
@@ -1437,6 +1443,9 @@ internal sealed class ApplicationServices : IAsyncDisposable
     /// <summary>Gets the preflight sharing the live parent and child routing authorities.</summary>
     internal EffectiveConfigurationPreflight ConfigurationPreflight { get; }
 
+    /// <summary>Gets the shared invocation-bound model execution owner.</summary>
+    internal IBoundedModelInference BoundedInference { get; }
+
     /// <summary>Gets the dormant feature only after an explicit activation path requests it.</summary>
     internal Lazy<RepositoryIntelligenceFeature> RepositoryIntelligence { get; }
 
@@ -1483,10 +1492,12 @@ internal sealed class ApplicationServices : IAsyncDisposable
         AgentDisplayStream agentDisplay,
         ScratchpadLifecycle scratchpad,
         Lazy<RepositoryIntelligenceFeature> repositoryIntelligence,
-        EffectiveConfigurationPreflight configurationPreflight)
+        EffectiveConfigurationPreflight configurationPreflight,
+        IBoundedModelInference boundedInference)
     {
         ArgumentNullException.ThrowIfNull(configurationPreflight);
         ConfigurationPreflight = configurationPreflight;
+        BoundedInference = boundedInference ?? throw new ArgumentNullException(nameof(boundedInference));
         RepositoryIntelligence = repositoryIntelligence ?? throw new ArgumentNullException(nameof(repositoryIntelligence));
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);

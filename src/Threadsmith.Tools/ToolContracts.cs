@@ -413,6 +413,9 @@ public sealed record ToolInvocationRequest
     /// <summary>Owning tool invocation when the host submits a bounded nested read.</summary>
     internal ToolInvocationId? ParentToolInvocationId { get; init; }
 
+    /// <summary>Actual host parent registration authorizing a compiled nested dependency.</summary>
+    internal ToolRegistration? HostReadParent { get; init; }
+
     /// <summary>Host-owned nesting depth; never read from model arguments.</summary>
     internal int NestedDepth { get; init; }
 
@@ -579,6 +582,9 @@ public sealed record ToolExecutionContext(
 
     /// <summary>Host-owned active source, used to reject circular nested permit acquisition.</summary>
     internal ToolActivitySource? Source { get; init; }
+
+    /// <summary>Actual resolved host registration, never supplied by tool arguments.</summary>
+    internal ToolRegistration? Registration { get; init; }
 
     /// <summary>Host-owned nested depth and expansion budget.</summary>
     internal int NestedDepth { get; init; }

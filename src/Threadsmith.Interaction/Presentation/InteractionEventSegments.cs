@@ -49,6 +49,9 @@ internal static class InteractionEventSegments
                         showOperationDurations),
                     compactionRole);
                 break;
+            case DiagnosticObserved { ToolInvocationId: not null, RunId: not null, ActivityProgress: not null } activity
+                when activity.StructuredDiagnostic?.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning):
+                break;
             case DiagnosticObserved diagnostic:
                 var diagnosticRole = diagnostic.StructuredDiagnostic?.Severity switch
                 {

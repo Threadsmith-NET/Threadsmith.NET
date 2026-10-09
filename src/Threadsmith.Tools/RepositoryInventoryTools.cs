@@ -86,8 +86,14 @@ public sealed class GitDiffTool : Tool<GitDiffInput, GitDiffResult>
     /// <inheritdoc />
     protected override string DescribeActivity(GitDiffInput input)
     {
-        var comparison = input.BaseRevision is null ? (input.Mode ?? GitComparisonMode.WorkingTree).ToString()
-            : input.TargetRevision is null ? input.BaseRevision + " -> working tree" : input.BaseRevision + " -> " + input.TargetRevision;
+        var comparison = (input.Mode ?? GitComparisonMode.WorkingTree) switch
+        {
+            GitComparisonMode.Commit => "commit " + input.BaseRevision + " vs first parent",
+            GitComparisonMode.Range => input.BaseRevision + " -> " + input.TargetRevision,
+            GitComparisonMode.MergeBase => "merge base of " + input.BaseRevision + " and " + input.TargetRevision + " -> " + input.TargetRevision,
+            GitComparisonMode.Staged => "HEAD -> index",
+            _ => (input.BaseRevision ?? "index") + " -> working tree",
+        };
         return comparison + (input.Paths.Count > 0 ? " · " + input.Paths.Count + " path filter(s)" : " · all paths");
     }
 

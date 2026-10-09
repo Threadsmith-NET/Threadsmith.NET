@@ -6,7 +6,7 @@ using Threadsmith.Core;
 using Threadsmith.Interaction.Markdown;
 
 /// <summary>Formats host-owned terminal presentation fragments without changing durable event authority.</summary>
-internal static class InteractionPresentationFormatter
+internal static partial class InteractionPresentationFormatter
 {
     private const int MaximumToolDetailLength = 240;
     private const int MaximumToolInspectionCharacters = 96 * 1024;
@@ -118,6 +118,20 @@ internal static class InteractionPresentationFormatter
                 PreserveText: true));
         }
 
+        var manualIntelligenceOutput = completed.Succeeded
+            && started.RequestedBy == "user"
+            && started.ToolName == "repository_intelligence"
+            && source is { Kind: ToolActivitySourceKind.BuiltIn }
+            && !string.IsNullOrWhiteSpace(completed.ResultJson);
+        if (manualIntelligenceOutput)
+        {
+            lines.Add(new TuiBlockLine(
+                TuiBlockLineKind.Body,
+                GetRepositoryIntelligenceOutput(completed.ResultJson, maximumInspectionCharacters),
+                PresentationTextRole.Muted,
+                PreserveText: true));
+        }
+
         if (ShouldInspectCodeExploreOutput(started, completed, inspectCodeExploreOutput))
         {
             lines.Add(new TuiBlockLine(TuiBlockLineKind.Body, "Output:", PresentationTextRole.Muted));
@@ -126,7 +140,8 @@ internal static class InteractionPresentationFormatter
                 PrepareInspectionOutput(
                     completed.ModelResultContent ?? completed.ResultJson ?? string.Empty,
                     completed.ModelResultContent is null,
-                    maximumInspectionCharacters),
+                    maximumInspectionCharacters,
+                    "code_explore"),
                 PresentationTextRole.Muted,
                 PreserveText: true));
         }
@@ -680,12 +695,12 @@ internal static class InteractionPresentationFormatter
                 || !string.IsNullOrWhiteSpace(completed.ResultJson));
     }
 
-    private static string PrepareInspectionOutput(string output, bool isJson, int maximumInspectionCharacters)
+    private static string PrepareInspectionOutput(string output, bool isJson, int maximumInspectionCharacters, string toolName)
     {
         return PrepareBoundedOutput(
             isJson ? FormatJsonForInspection(output) : output,
             maximumInspectionCharacters,
-            "\n[code_explore inspection truncated by TUI display bound]");
+            $"\n[{toolName} inspection truncated by TUI display bound]");
     }
 
     private static string NormalizeInspectionLineEndings(string output)

@@ -218,6 +218,9 @@ public static class PromptFileNames
     /// <summary>Gets the bounded repository-intelligence status tool description.</summary>
     public const string ToolRepositoryIntelligenceDescription = "Tool-repository_intelligence-Description.md";
 
+    /// <summary>Gets the bounded repository interpretation instructions.</summary>
+    public const string RepositoryIntelligenceInterpretation = "RepositoryIntelligence-Interpretation.md";
+
     /// <summary>Gets the stable filename for the write-file description.</summary>
     public const string ToolWriteFileDescription = "Tool-write_file-Description.md";
 
@@ -1016,6 +1019,7 @@ public static class PromptFileNames
         ToolWriteFileDescription,
         ToolMemoriesDescription,
         ToolRepositoryIntelligenceDescription,
+        RepositoryIntelligenceInterpretation,
         ToolSearchDescription,
         ToolGitStatusDescription,
         ToolFindSymbolDescription,
@@ -1432,6 +1436,7 @@ public static class PromptAssetCatalog
         var repositoryIntelligenceAssets = new HashSet<string>(StringComparer.Ordinal)
         {
             PromptFileNames.ToolRepositoryIntelligenceDescription,
+            PromptFileNames.RepositoryIntelligenceInterpretation,
         };
 
         var definitions = PromptFileNames.All.Select(fileName => new PromptAssetDefinition

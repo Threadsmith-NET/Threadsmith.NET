@@ -9,6 +9,7 @@ using Threadsmith.Tools;
 internal sealed class RepositoryIntelligenceCommandAdapter :
     ICommandHandler<GetRepositoryIntelligenceControlsCommand, RepositoryIntelligenceControlSnapshot>,
     ICommandHandler<GetRepositoryIntelligenceStatusCommand, RepositoryIntelligenceStatusReceipt>,
+    ICommandHandler<InvokeRepositoryIntelligenceOperationCommand, RepositoryIntelligenceOperationReceipt>,
     ICommandHandler<SetRepositoryIntelligenceControlCommand, RepositoryIntelligenceControlSnapshot>,
     ICommandHandler<PreviewRepositoryIntelligenceOperationCommand, RepositoryIntelligenceOperationPreview>
 {
@@ -45,26 +46,7 @@ internal sealed class RepositoryIntelligenceCommandAdapter :
         GetRepositoryIntelligenceStatusCommand command,
         CancellationToken cancellationToken = default)
     {
-        var context = await _context(command.SessionId, cancellationToken);
-        if (!string.Equals(
-            RepositoryIdentity.Create(context.RepositoryPath),
-            command.RepositoryIdentity,
-            StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Repository intelligence status belongs to another checkout.");
-        }
-
-        var result = await _pipeline.InvokeAsync(
-            new ToolInvocationRequest
-            {
-                SessionId = command.SessionId,
-                RunId = RunId.New(),
-                Phase = RunPhase.Intake,
-                ToolId = RepositoryIntelligenceStatusTool.ToolId,
-                ArgumentsJson = "{}",
-                Context = context with { RequestedBy = "user" },
-            },
-            cancellationToken);
+        var result = await InvokeAsync(command.SessionId, command.RepositoryIdentity, "{}", cancellationToken);
         var status = result.Succeeded && result.ResultJson is { } json
             ? JsonSerializer.Deserialize<RepositoryIntelligenceStatus>(json)
             : null;
@@ -72,6 +54,20 @@ internal sealed class RepositoryIntelligenceCommandAdapter :
             result.ToolInvocationId,
             result.Succeeded,
             status,
+            result.Succeeded ? null : result.ErrorClassification.ToString(),
+            result.Error);
+    }
+
+    /// <inheritdoc />
+    public async Task<RepositoryIntelligenceOperationReceipt> HandleAsync(
+        InvokeRepositoryIntelligenceOperationCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await InvokeAsync(command.SessionId, command.RepositoryIdentity, command.ArgumentsJson, cancellationToken);
+        return new RepositoryIntelligenceOperationReceipt(
+            result.ToolInvocationId,
+            result.Succeeded,
+            result.ResultJson,
             result.Succeeded ? null : result.ErrorClassification.ToString(),
             result.Error);
     }
@@ -95,6 +91,28 @@ internal sealed class RepositoryIntelligenceCommandAdapter :
             command.Selection,
             command.OneOffInvestigation,
             resolved.ProviderId,
+            cancellationToken);
+    }
+
+    private async Task<ToolInvocationResult> InvokeAsync(
+        SessionId sessionId, string repositoryIdentity, string argumentsJson, CancellationToken cancellationToken)
+    {
+        var context = await _context(sessionId, cancellationToken);
+        if (!string.Equals(RepositoryIdentity.Create(context.RepositoryPath), repositoryIdentity, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Repository intelligence operation belongs to another checkout.");
+        }
+
+        return await _pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = sessionId,
+                RunId = RunId.New(),
+                Phase = RunPhase.Intake,
+                ToolId = RepositoryIntelligenceStatusTool.ToolId,
+                ArgumentsJson = argumentsJson,
+                Context = context with { RequestedBy = "user" },
+            },
             cancellationToken);
     }
 }

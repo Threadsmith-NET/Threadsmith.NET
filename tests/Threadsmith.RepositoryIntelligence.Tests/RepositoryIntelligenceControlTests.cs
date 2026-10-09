@@ -276,15 +276,57 @@ public sealed class RepositoryIntelligenceControlTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var feature = new RepositoryIntelligenceFeature(fixture.UserDirectory, repository, Limits);
         var selection = new RepositoryIntelligenceOperationSelection(identity, "src", true, "caller-value", 200, 100, 50);
+        var before = await feature.CaptureAsync(identity, cancellationToken);
 
         var preview = await feature.PreviewAsync(selection, oneOffInvestigation: true, "active-provider", cancellationToken);
 
-        Assert.False(preview.Available);
+        Assert.True(preview.Available);
         Assert.Equal("active-provider", preview.Selection.ProviderId);
         Assert.Equal(20, preview.Selection.MaximumFiles);
         Assert.Equal(10, preview.Selection.MaximumCommits);
         Assert.Equal(3, preview.Selection.MaximumModelCalls);
         Assert.False((await feature.CaptureAsync(identity, cancellationToken)).Archeology);
+        Assert.Equal(before, await feature.CaptureAsync(identity, cancellationToken));
+        Assert.False(File.Exists(fixture.ControlPath(identity)));
+    }
+
+    /// <summary>Unavailable configurations remain unavailable without changing trusted controls.</summary>
+    [Theory]
+    [InlineData(null, 3, 1, true)]
+    [InlineData("active-provider", 0, 1, true)]
+    [InlineData("active-provider", 3, 0, true)]
+    [InlineData("active-provider", 3, 1, false)]
+    public async Task PreviewUnavailableConfigurationsDoNotActivateControlsAsync(
+        string? activeProviderId,
+        int configuredModelCalls,
+        int requestedModelCalls,
+        bool oneOffInvestigation)
+    {
+        using var fixture = new TemporarySettings();
+        var repository = fixture.RepositoryPath("repo");
+        var identity = RepositoryIdentity.Create(repository);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var feature = new RepositoryIntelligenceFeature(
+            fixture.UserDirectory,
+            repository,
+            Limits with { MaximumModelCalls = configuredModelCalls });
+        var selection = new RepositoryIntelligenceOperationSelection(
+            identity,
+            "src",
+            true,
+            "caller-value",
+            20,
+            10,
+            requestedModelCalls);
+        var before = await feature.CaptureAsync(identity, cancellationToken);
+
+        var preview = await feature.PreviewAsync(selection, oneOffInvestigation, activeProviderId, cancellationToken);
+
+        Assert.False(preview.Available);
+        Assert.Equal(Math.Min(configuredModelCalls, requestedModelCalls), preview.Selection.MaximumModelCalls);
+        Assert.Equal(activeProviderId ?? "(unavailable)", preview.Selection.ProviderId);
+        Assert.Equal(before, await feature.CaptureAsync(identity, cancellationToken));
+        Assert.False(File.Exists(fixture.ControlPath(identity)));
     }
 
     private sealed class TemporarySettings : IDisposable

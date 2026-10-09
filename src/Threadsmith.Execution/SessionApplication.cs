@@ -52,6 +52,8 @@ public sealed partial class SessionApplication :
     private readonly ILogger<SessionApplication> _logger;
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
+    private readonly ConfiguredModelCatalog? _inferenceCatalog;
+    private readonly IModelProviderInstructionResolver? _inferenceInstructions;
 
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
     private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
@@ -156,7 +158,9 @@ public sealed partial class SessionApplication :
         ISemanticRefreshCoordinator? semanticRefreshCoordinator = null,
         IManagedRepositoryMemoryService? repositoryMemories = null,
         IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null,
-        SourceEditApplication? sourceEdits = null)
+        SourceEditApplication? sourceEdits = null,
+        ConfiguredModelCatalog? inferenceCatalog = null,
+        IModelProviderInstructionResolver? inferenceInstructions = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -174,6 +178,8 @@ public sealed partial class SessionApplication :
 
         _events = events;
         _model = model;
+        _inferenceCatalog = inferenceCatalog;
+        _inferenceInstructions = inferenceInstructions;
         _budgetFactory = budgetFactory ?? budget switch
         {
             ExecutionBudget executionBudget => executionBudget.CreateScope,

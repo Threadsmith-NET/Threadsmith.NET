@@ -132,7 +132,18 @@ internal static class ShellRunner
                         processCancellation.Token);
                 }
 
-                await Console.Error.WriteLineAsync("Usage: /intelligence [status]");
+                var intelligenceArguments = request.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+                if (intelligenceArguments.Length == 3 && intelligenceArguments[1].Equals("investigate", StringComparison.OrdinalIgnoreCase))
+                {
+                    var selection = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(intelligenceArguments[2]);
+                    return await headlessShell.WriteRepositoryIntelligenceOperationAsync(
+                        context.Paths.RepositoryRoot,
+                        context.CommandLine.RequestedTrust ?? RepositoryTrustLevel.UntrustedInspection,
+                        System.Text.Json.JsonSerializer.Serialize(new { investigate = selection }),
+                        processCancellation.Token);
+                }
+
+                await Console.Error.WriteLineAsync("Usage: /intelligence [status|investigate <JSON question and paths>]");
                 return 2;
             }
 

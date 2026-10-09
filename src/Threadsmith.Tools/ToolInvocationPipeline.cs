@@ -249,7 +249,9 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ToolRegistration? registration;
         try
         {
-            registration = _registry.GetRegistration(toolId);
+            registration = parent.Registration is { } parentRegistration
+                ? ResolveNestedReadRegistration(parentRegistration, toolId)
+                : _registry.GetRegistration(toolId);
         }
         catch (KeyNotFoundException)
         {
@@ -274,6 +276,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             new ToolInvocationRequest
             {
                 ExpectedRegistration = registration,
+                HostReadParent = parent.Registration,
                 ParentToolInvocationId = parent.ToolInvocationId,
                 NestedDepth = parent.NestedDepth + 1,
                 NestedBudget = nestedBudget,
@@ -290,6 +293,13 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 },
             },
             linked.Token);
+    }
+
+    private ToolRegistration ResolveNestedReadRegistration(ToolRegistration parent, string toolId)
+    {
+        return _registry is ToolRegistry hostRegistry
+            ? hostRegistry.GetNestedReadRegistration(parent, toolId)
+            : _registry.GetRegistration(toolId);
     }
 
     private async Task<IReadOnlyList<ToolBatchResult>> InvokePlannedWavesAsync(
@@ -398,7 +408,9 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         {
             try
             {
-                registration = _registry.GetRegistration(request.ToolId);
+                registration = request.HostReadParent is { } parentRegistration
+                    ? ResolveNestedReadRegistration(parentRegistration, request.ToolId)
+                    : _registry.GetRegistration(request.ToolId);
             }
             catch (KeyNotFoundException)
             {
@@ -439,7 +451,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             }
 
             tool = registration?.Tool
-                ?? request.ExpectedRegistration?.Tool
+                ?? (request.HostReadParent is null ? request.ExpectedRegistration?.Tool : null)
                 ?? _registry.Get(request.ToolId);
             input = tool.DeserializeInput(request.ArgumentsJson);
         }
@@ -462,6 +474,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             InvocationKey = request.InvocationKey,
             MaximumOutputBytes = tool.Definition.MaximumOutputBytes,
             Source = source,
+            Registration = registration,
             NestedDepth = request.NestedDepth,
             NestedBudget = request.NestedBudget ?? new NestedInvocationBudget(),
             AncestorSources = request.AncestorSources,

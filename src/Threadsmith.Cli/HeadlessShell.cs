@@ -671,18 +671,26 @@ public sealed class HeadlessShell
         RepositoryTrustLevel trustLevel,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
-        var sessionId = await _dispatcher.DispatchAsync(
-            new CreateSessionCommand("Headless intelligence status"),
-            cancellationToken);
-        var opened = await _dispatcher.DispatchAsync(
-            new OpenRepositoryCommand(sessionId, repositoryPath, trustLevel),
-            cancellationToken);
+        var (sessionId, identity) = await OpenIntelligenceSessionAsync(repositoryPath, trustLevel, cancellationToken);
         var receipt = await _dispatcher.DispatchAsync(
             new GetRepositoryIntelligenceStatusCommand(
                 sessionId,
-                RepositoryIdentity.Create(opened.RepositoryPath)),
+                identity),
             cancellationToken);
+        await _output.WriteLineAsync(JsonSerializer.Serialize(receipt).AsMemory(), cancellationToken);
+        return receipt.Succeeded ? 0 : 1;
+    }
+
+    /// <summary>Submits an explicit operation without an outer model request.</summary>
+    public async Task<int> WriteRepositoryIntelligenceOperationAsync(
+        string repositoryPath,
+        RepositoryTrustLevel trustLevel,
+        string argumentsJson,
+        CancellationToken cancellationToken = default)
+    {
+        var (sessionId, identity) = await OpenIntelligenceSessionAsync(repositoryPath, trustLevel, cancellationToken);
+        var receipt = await _dispatcher.DispatchAsync(
+            new InvokeRepositoryIntelligenceOperationCommand(sessionId, identity, argumentsJson), cancellationToken);
         await _output.WriteLineAsync(JsonSerializer.Serialize(receipt).AsMemory(), cancellationToken);
         return receipt.Succeeded ? 0 : 1;
     }
@@ -836,6 +844,15 @@ public sealed class HeadlessShell
                 cancellationToken);
             return 1;
         }
+    }
+
+    private async Task<(SessionId SessionId, string Identity)> OpenIntelligenceSessionAsync(
+        string repositoryPath, RepositoryTrustLevel trustLevel, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
+        var sessionId = await _dispatcher.DispatchAsync(new CreateSessionCommand("Headless repository intelligence"), cancellationToken);
+        var opened = await _dispatcher.DispatchAsync(new OpenRepositoryCommand(sessionId, repositoryPath, trustLevel), cancellationToken);
+        return (sessionId, RepositoryIdentity.Create(opened.RepositoryPath));
     }
 
     private async Task<int> WaitAndWriteRunAsync(

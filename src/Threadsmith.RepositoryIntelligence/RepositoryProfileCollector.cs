@@ -410,7 +410,7 @@ internal sealed class RepositoryProfileCollector
         cancellationToken.ThrowIfCancellationRequested();
         if (!result.Succeeded || result.ResultJson is null)
         {
-            throw new RepositoryReadUnavailableException($"Required governed {toolId} read failed or was truncated ({result.ErrorClassification}).");
+            throw new RepositoryReadUnavailableException($"Required governed {toolId} read failed ({result.ErrorClassification}): {result.Error ?? "Structured read output is unavailable."}");
         }
 
         return JsonSerializer.Deserialize<T>(result.ResultJson, JsonOptions)

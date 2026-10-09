@@ -46,7 +46,8 @@ Common editing rules:
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **285** | Complete deployed catalog. |
+| Repository intelligence prompts | 1 | Evidence interpretation instructions for explicitly requested bounded investigations. |
+| **Total** | **286** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -602,7 +603,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-repository_intelligence-Description.md` | Read-only checkout status and explicitly requested bounded deterministic profiles, including pinned revisions, optional mutable overlays, and coverage limits; semantic interpretation and onboarding remain unavailable. | `None` |
+| `Tool-repository_intelligence-Description.md` | Read-only checkout status, bounded deterministic profiles, and explicitly requested invocation-only investigations with pinned revisions, optional mutable overlays, citations, and coverage limits; persistent analysis and onboarding remain unavailable. | `None` |
 
 #### `run_process` family
 
@@ -736,6 +737,14 @@ Host policy and fallback prose used around dynamically imported MCP capabilities
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
 | `Adapter-McpImportedTool-FallbackDescription.md` | Host-owned MCP adapter prose for `McpImportedTool-FallbackDescription`. | [`ServerName`](#placeholder-servername) |
+
+### Repository intelligence prompts
+
+`RepositoryIntelligence-Interpretation.md` is loaded as exact text without placeholders. It guides answers, candidate findings, uncertainty, historical/current applicability, documented causal quotes, and bounded evidence expansion. The host owns the JSON schema, evidence-ID validation, scope, revisions, resource ceilings, model selection, cancellation, and retention. Editing this asset cannot grant tools, expand collection authority, or enable persistent intelligence.
+
+| File | What Threadsmith uses it for | Placeholders |
+|---|---|---|
+| `RepositoryIntelligence-Interpretation.md` | Bounded semantic interpretation of untrusted repository evidence, cited answers and candidates with independent applicability/confidence assessments, exact documented causal rationale, and host-validated Inspect/NextPacket expansion requests. | `None` |
 
 ## Placeholder glossary
 

@@ -57,6 +57,7 @@ public sealed class ToolRegistry : IToolRegistry
     private readonly IProgressiveToolActivationPolicy? _activationPolicy;
     private readonly Dictionary<string, ToolActivitySource> _sources = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ITool> _tools = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (ToolRegistration Parent, IReadOnlyDictionary<string, ToolRegistration> Reads)> _hostReads = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Initializes a new instance of the <see cref="ToolRegistry"/> class.</summary>
     public ToolRegistry(
@@ -183,6 +184,38 @@ public sealed class ToolRegistry : IToolRegistry
         }
     }
 
+    /// <summary>Declares offline built-in read dependencies without enabling their model-facing tools.</summary>
+    /// <param name="parent">The exact built-in parent registered by host composition.</param>
+    /// <param name="toolIds">Compiled read dependency identifiers.</param>
+    public void RegisterHostReadDependencies(ITool parent, IReadOnlyList<string> toolIds)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentNullException.ThrowIfNull(toolIds);
+        lock (_gate)
+        {
+            if (!_tools.TryGetValue(parent.Definition.Id, out var registered)
+                || !ReferenceEquals(ConfiguredTool.Unwrap(registered), ConfiguredTool.Unwrap(parent))
+                || GetSourceUnsafe(parent.Definition.Id).Kind != ToolActivitySourceKind.BuiltIn)
+            {
+                throw new ArgumentException("Host dependencies require the registered built-in parent.", nameof(parent));
+            }
+
+            var reads = new Dictionary<string, ToolRegistration>(StringComparer.OrdinalIgnoreCase);
+            foreach (var toolId in toolIds)
+            {
+                if (!_builtInToolIds.Contains(toolId) || !_tools.TryGetValue(toolId, out var read)
+                    || read.Definition.SideEffect != ToolSideEffect.ReadOnly || read.Definition.RequiresOutboundConsent)
+                {
+                    throw new ArgumentException("Host dependencies must be offline built-in read capabilities.", nameof(toolIds));
+                }
+
+                reads.Add(toolId, new ToolRegistration(read, GetSourceUnsafe(toolId)));
+            }
+
+            _hostReads[parent.Definition.Id] = (new ToolRegistration(registered, GetSourceUnsafe(parent.Definition.Id)), reads);
+        }
+    }
+
     /// <summary>Adds or atomically replaces an explicitly identified dynamically loaded tool.</summary>
     /// <param name="tool">The dynamic tool to publish.</param>
     /// <param name="source">Explicit host-owned source metadata.</param>
@@ -269,6 +302,7 @@ public sealed class ToolRegistry : IToolRegistry
             {
                 _tools[tool.Definition.Id] = _runtimePolicy.Apply(tool);
                 _sources[tool.Definition.Id] = source;
+                _hostReads.Remove(tool.Definition.Id);
                 _stateManager?.Register(tool.Definition);
             }
         }
@@ -290,8 +324,31 @@ public sealed class ToolRegistry : IToolRegistry
 
             _tools.Remove(toolId);
             _sources.Remove(toolId);
+            _hostReads.Remove(toolId);
             _stateManager?.Unregister(toolId);
             return true;
+        }
+    }
+
+    /// <summary>Resolves compiled dependencies only for the host's nested invocation path.</summary>
+    internal ToolRegistration GetNestedReadRegistration(ToolRegistration parent, string toolId)
+    {
+        ArgumentNullException.ThrowIfNull(parent);
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolId);
+        lock (_gate)
+        {
+            if (_hostReads.TryGetValue(parent.Tool.Definition.Id, out var binding)
+                && ToolRegistrationIdentity.Matches(binding.Parent, parent)
+                && _tools.TryGetValue(parent.Tool.Definition.Id, out var currentParent)
+                && ToolRegistrationIdentity.Matches(new ToolRegistration(currentParent, GetSourceUnsafe(parent.Tool.Definition.Id)), parent)
+                && binding.Reads.TryGetValue(toolId, out var dependency)
+                && _tools.TryGetValue(toolId, out var currentRead)
+                && ToolRegistrationIdentity.Matches(new ToolRegistration(currentRead, GetSourceUnsafe(toolId)), dependency))
+            {
+                return dependency;
+            }
+
+            return new ToolRegistration(GetEnabledTool(toolId), GetSourceUnsafe(toolId));
         }
     }
 

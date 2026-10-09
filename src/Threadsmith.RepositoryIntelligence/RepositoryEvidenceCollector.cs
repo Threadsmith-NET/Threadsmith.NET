@@ -30,6 +30,7 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
     private long _inputBytes;
     private long _outputBytes;
     private bool _historyComplete;
+    private bool _currentBatchPending = true;
     private bool _started;
     private bool _disposed;
     private string? _continuation;
@@ -133,10 +134,10 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
         Enter();
         try
         {
-            ValidateExpansion(selection, continuation);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(_operationToken, cancellationToken);
             var token = linked.Token;
             token.ThrowIfCancellationRequested();
+            ValidateExpansion(selection, continuation);
             _started = true;
             _continuation = null;
             List<RepositoryEvidenceExcerpt> evidence = [];
@@ -156,13 +157,31 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
                     StopDiscovery();
                     omissions.Add(new("LiveEvidenceIdentifierLimit"));
                 }
-                else if (_capturedSources.Count > 0)
+                else if (_capturedSources.Count > 0 || _facts.Count > 0)
                 {
-                    CollectCaptured(evidence, omissions);
+                    CollectCaptured(evidence, omissions, token);
+                    if (_capturedSources.Count == 0)
+                    {
+                        CollectFacts(evidence, omissions);
+                        if (_facts.Count == 0 && _profile.Snapshot.Commit is { } currentTarget && _files.Count > 0)
+                        {
+                            // Retain one bounded current batch before history; do not drain its discovery queue.
+                            _currentBatchPending = !await CollectFilesAsync(currentTarget, evidence, omissions, token);
+                        }
+                    }
                 }
-                else if (_facts.Count > 0)
+                else if (_currentBatchPending && _profile.Snapshot.Commit is { } firstTarget && _files.Count > 0)
                 {
-                    CollectFacts(evidence, omissions);
+                    _currentBatchPending = !await CollectFilesAsync(firstTarget, evidence, omissions, token);
+                }
+                else if (_profile.Snapshot.Commit is not null && _historicalSources.Count > 0)
+                {
+                    await CollectHistoricalFilesAsync(evidence, omissions, token);
+                }
+                else if (_profile.Snapshot.Commit is { } historyTarget && !_historyComplete)
+                {
+                    // Explicit history must not wait for every current file in a broad scope.
+                    await CollectHistoryAsync(historyTarget, evidence, episodes, omissions, token);
                 }
                 else if (_profile.Snapshot.Commit is { } commit && _files.Count > 0)
                 {
@@ -171,14 +190,6 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
                 else if (_overlays.Count > 0)
                 {
                     await CollectOverlayAsync(evidence, omissions, token);
-                }
-                else if (_profile.Snapshot.Commit is not null && _historicalSources.Count > 0)
-                {
-                    await CollectHistoricalFilesAsync(evidence, omissions, token);
-                }
-                else if (_profile.Snapshot.Commit is { } historyTarget && !_historyComplete)
-                {
-                    await CollectHistoryAsync(historyTarget, evidence, episodes, omissions, token);
                 }
                 else if (_profile.Snapshot.Commit is null)
                 {
@@ -256,7 +267,7 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
         }
     }
 
-    private async Task CollectFilesAsync(string revision, List<RepositoryEvidenceExcerpt> evidence, List<RepositoryEvidenceOmission> omissions, CancellationToken token, Queue<GitTreeFile>? candidates = null)
+    private async Task<bool> CollectFilesAsync(string revision, List<RepositoryEvidenceExcerpt> evidence, List<RepositoryEvidenceOmission> omissions, CancellationToken token, Queue<GitTreeFile>? candidates = null)
     {
         candidates ??= _files;
         var selected = new List<GitTreeFile>();
@@ -315,7 +326,7 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
 
         if (selected.Count == 0)
         {
-            return;
+            return candidates.Count == 0;
         }
 
         _fileCount += selected.Count;
@@ -325,11 +336,11 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
         var content = await _reads.ReadAsync<GitShowResult>(
             "git_show",
             new GitShowInput
-        {
-            Revision = revision,
-            Paths = selected.Select(file => file.Path).ToArray(),
-            InventoryMaximumBytes = metadataBudget > 0 ? metadataBudget : null,
-        },
+            {
+                Revision = revision,
+                Paths = selected.Select(file => file.Path).ToArray(),
+                InventoryMaximumBytes = metadataBudget > 0 ? metadataBudget : null,
+            },
             _context,
             token);
         _inputBytes -= metadataBudget;
@@ -356,6 +367,8 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
             var source = Source(Kind(file.Path), revision, file.Path, file.ObjectId);
             TryAdd(source, state, text, evidence, omissions);
         }
+
+        return true;
     }
 
     private async Task CollectHistoricalFilesAsync(List<RepositoryEvidenceExcerpt> evidence, List<RepositoryEvidenceOmission> omissions, CancellationToken token)
@@ -369,7 +382,8 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
 
         var pending = _historicalSources.First();
         var revision = pending.Key;
-        var paths = pending.Value.Take(_limits.FileBatchSize).ToArray();
+        var paths = pending.Value.OrderByDescending(Relevance).ThenBy(Priority).ThenBy(path => path, StringComparer.Ordinal)
+            .Take(_limits.FileBatchSize).ToArray();
         pending.Value.ExceptWith(paths);
         if (pending.Value.Count == 0)
         {
@@ -381,14 +395,14 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
         var result = await _reads.ReadAsync<GitShowResult>(
             "git_show",
             new GitShowInput
-        {
-            Revision = revision,
-            Inventory = true,
-            Paths = paths.Distinct(StringComparer.Ordinal).ToArray(),
-            InventoryMaximumEntries = paths.Length,
-            InventoryMaximumScannedEntries = paths.Length,
-            InventoryMaximumBytes = inventoryBudget,
-        },
+            {
+                Revision = revision,
+                Inventory = true,
+                Paths = paths.Distinct(StringComparer.Ordinal).ToArray(),
+                InventoryMaximumEntries = paths.Length,
+                InventoryMaximumScannedEntries = paths.Length,
+                InventoryMaximumBytes = inventoryBudget,
+            },
             _context,
             token);
         _inputBytes -= inventoryBudget;
@@ -472,13 +486,13 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
         var history = await _reads.ReadAsync<GitLogResult>(
             "git_log",
             new GitLogRequest
-        {
-            Revision = commit,
-            ExcludeCommit = _selection.ExcludeCommit,
-            Offset = _commitCount,
-            MaximumCommits = Math.Min(_limits.HistoryPageSize, remaining),
-            MaximumMetadataBytes = historyBudget,
-        },
+            {
+                Revision = commit,
+                ExcludeCommit = _selection.ExcludeCommit,
+                Offset = _commitCount,
+                MaximumCommits = Math.Min(_limits.HistoryPageSize, remaining),
+                MaximumMetadataBytes = historyBudget,
+            },
             _context,
             token);
         _inputBytes -= historyBudget;
@@ -512,13 +526,13 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
             var diff = await _reads.ReadAsync<GitDiffResult>(
                 "git_diff",
                 new GitDiffInput
-            {
-                Mode = GitComparisonMode.Commit,
-                BaseRevision = change.Commit,
-                Paths = _selection.Paths,
-                IncludePatch = false,
-                MaximumMetadataBytes = diffBudget,
-            },
+                {
+                    Mode = GitComparisonMode.Commit,
+                    BaseRevision = change.Commit,
+                    Paths = _selection.Paths,
+                    IncludePatch = false,
+                    MaximumMetadataBytes = diffBudget,
+                },
                 _context,
                 token);
             _inputBytes -= diffBudget;
@@ -696,35 +710,55 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
         }
     }
 
-    private void CollectCaptured(List<RepositoryEvidenceExcerpt> evidence, List<RepositoryEvidenceOmission> omissions)
+    private void CollectCaptured(List<RepositoryEvidenceExcerpt> evidence, List<RepositoryEvidenceOmission> omissions, CancellationToken token)
     {
-        var captured = _capturedSources.Dequeue();
-        var valid = captured.Revision is { } revision
-            ? revision == _profile.Snapshot.Commit && _profile.DiscoveredFiles.Any(file => file.Path == captured.Path && file.ObjectId == captured.SourceIdentity)
-            : _profile.Overlay.Any(item => item.Path == captured.Path && item.Digest == captured.SourceIdentity);
-        if (!valid || RepositoryProfileCollector.Digest(captured.Text) != captured.Digest)
+        while (_capturedSources.TryPeek(out var captured))
         {
-            throw new InvalidDataException("Captured content no longer matches its validated source.");
-        }
-
-        var source = Source(captured.Revision is null ? "WorkingTreeOverlay" : Kind(captured.Path), captured.Revision, captured.Path, captured.SourceIdentity);
-        var text = captured.Text;
-        var state = "Complete";
-        while (!Fits([Excerpt(source, state, text, 1, text.Count(character => character == '\n') + 1)], [], omissions) && text.Length > 0)
-        {
-            text = text[..(text.Length / 2)];
-            if (text.Length > 0 && char.IsHighSurrogate(text[^1]))
+            token.ThrowIfCancellationRequested();
+            if (_evidence.Count >= _limits.MaximumEvidenceIdentifiers)
             {
-                text = text[..^1];
+                StopDiscovery();
+                omissions.Add(new("LiveEvidenceIdentifierLimit"));
+                break;
             }
 
-            state = "TruncatedExcerpt";
+            var valid = captured.Revision is { } revision
+                ? revision == _profile.Snapshot.Commit && _profile.DiscoveredFiles.Any(file => file.Path == captured.Path && file.ObjectId == captured.SourceIdentity)
+                : _profile.Overlay.Any(item => item.Path == captured.Path && item.Digest == captured.SourceIdentity);
+            if (!valid || RepositoryProfileCollector.Digest(captured.Text) != captured.Digest)
+            {
+                throw new InvalidDataException("Captured content no longer matches its validated source.");
+            }
+
+            var source = Source(captured.Revision is null ? "WorkingTreeOverlay" : Kind(captured.Path), captured.Revision, captured.Path, captured.SourceIdentity);
+            var text = captured.Text;
+            var state = "Complete";
+            if (!Fits([.. evidence, Excerpt(source, state, text, 1, text.Count(character => character == '\n') + 1)], [], omissions)
+                && evidence.Count > 0)
+            {
+                // Defer intact captured data rather than truncate it into a partially filled packet.
+                break;
+            }
+
+            while (!Fits([Excerpt(source, state, text, 1, text.Count(character => character == '\n') + 1)], [], omissions) && text.Length > 0)
+            {
+                token.ThrowIfCancellationRequested();
+                text = text[..(text.Length / 2)];
+                if (text.Length > 0 && char.IsHighSurrogate(text[^1]))
+                {
+                    text = text[..^1];
+                }
+
+                state = "TruncatedExcerpt";
+            }
+
+            _capturedSources.Dequeue();
+            if (TryAdd(source, state, text, evidence, omissions) is not null)
+            {
+                // Already acquired under T04's budget; inspection can narrow the original captured body.
+                _bodies[source.Id] = captured.Text;
+            }
         }
-
-        TryAdd(source, state, text, evidence, omissions);
-
-        // Already acquired under T04's budget; inspection can narrow the original captured body.
-        _bodies[source.Id] = captured.Text;
     }
 
     private void ChargeMetadata(long bytes)
@@ -739,7 +773,8 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
 
     private void QueueHistoricalSource(string revision, string path)
     {
-        if (!_observedSources.Add((revision, path)))
+        if (_evidence.Values.Any(item => item.Source.Revision == revision && item.Source.Path == path && _bodies.ContainsKey(item.Source.Id))
+            || !_observedSources.Add((revision, path)))
         {
             return;
         }
@@ -761,6 +796,7 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
         _facts.Clear();
         _capturedSources.Clear();
         _historyComplete = true;
+        _currentBatchPending = false;
         _continuation = null;
     }
 

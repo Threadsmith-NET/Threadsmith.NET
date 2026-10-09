@@ -48,6 +48,18 @@ public sealed record RepositoryIntelligenceStatusReceipt(
     string? FailureKind,
     string? Error);
 
+/// <summary>Submits an explicit operation through the existing repository tool boundary.</summary>
+public sealed record InvokeRepositoryIntelligenceOperationCommand(SessionId SessionId, string RepositoryIdentity, string ArgumentsJson)
+    : ICommand<RepositoryIntelligenceOperationReceipt>;
+
+/// <summary>Ordinary sanitized tool outcome for a manually submitted operation.</summary>
+public sealed record RepositoryIntelligenceOperationReceipt(
+    ToolInvocationId InvocationId,
+    bool Succeeded,
+    string? ResultJson,
+    string? FailureKind,
+    string? Error);
+
 /// <summary>Changes exactly one trusted control through a user command.</summary>
 public sealed record SetRepositoryIntelligenceControlCommand(
     string RepositoryIdentity,

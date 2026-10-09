@@ -448,7 +448,17 @@ public sealed record DiagnosticObserved(
     DateTimeOffset OccurredAt,
     string Code,
     string Message,
-    Diagnostic? StructuredDiagnostic = null) : DomainEvent(SessionId, OccurredAt);
+    Diagnostic? StructuredDiagnostic = null) : DomainEvent(SessionId, OccurredAt)
+{
+    /// <summary>Owning run when a diagnostic also updates an existing operation's activity.</summary>
+    public RunId? RunId { get; init; }
+
+    /// <summary>Owning tool for correlated host progress, without creating another operation.</summary>
+    public ToolInvocationId? ToolInvocationId { get; init; }
+
+    /// <summary>Human-readable activity update; diagnostic detail remains in the event record.</summary>
+    public string? ActivityProgress { get; init; }
+}
 
 /// <summary>A test run completed.</summary>
 public sealed record TestRunCompleted(

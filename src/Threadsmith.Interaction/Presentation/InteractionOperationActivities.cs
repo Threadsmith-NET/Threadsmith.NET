@@ -31,6 +31,7 @@ internal sealed class InteractionOperationActivities
         var key = domainEvent switch
         {
             ToolInvocationStarted started => started.ToolInvocationId,
+            DiagnosticObserved { ToolInvocationId: { } tool } => tool,
             SkillWorkflowCheckpointWritten skill => Owner(skill),
             SkillInvocationProgressObserved progress when _skills.TryGetValue(progress.InvocationId, out var skill) => Owner(skill),
             SemanticRefreshStarted started => started.RefreshId,
@@ -102,6 +103,13 @@ internal sealed class InteractionOperationActivities
                 return true;
             case ToolInvocationCompleted completed:
                 return _entries.Remove(completed.ToolInvocationId);
+            case DiagnosticObserved { ToolInvocationId: { } tool, RunId: { } run, ActivityProgress: { } progress }
+                when _entries.TryGetValue(tool, out var entry) && entry.RunId == run:
+                var encoded = TerminalControlEncoder.Encode(progress.ReplaceLineEndings(" "));
+                var limit = encoded.Length > 240 && char.IsHighSurrogate(encoded[238]) ? 238 : 239;
+                entry.HostProgress = [new PresentationTextSegment(encoded.Length > 240 ? encoded[..limit] + "…" : encoded, PresentationTextRole.Muted)];
+                entry.Refresh();
+                return true;
             case RunCompleted completed:
                 var keys = _entries.Where(pair => pair.Value.RunId == completed.RunId).Select(pair => pair.Key).ToArray();
                 foreach (var key in keys)

@@ -614,183 +614,141 @@ public sealed partial class SessionApplication
     {
         loopState.BeginCurrentGroup();
         var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters);
-        var modelHookBoundary = new ModelRequestHookBoundary(
-            round.Registration.SessionId,
-            round.RunId,
-            round.InvocationContext?.RepositoryPath,
-            round.UsageRequestId.InvocationId,
-            round.ModelRound - 1,
-            "conversation",
-            round.ModelRequest.WorkloadClass,
-            round.ModelRequest.ContainsSensitiveData,
-            round.ModelRequest.Tools.Count);
-        ModelRequestBudgetUsage.CheckAdmission(round.Registration.Budget, round.ModelRequest);
-        await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
-        BudgetStatus? modelWallClockBudget = null;
         IReadOnlyList<RunSteeringMessage> preToolSteering = [];
 
         try
         {
-            var requestStopwatch = Stopwatch.StartNew();
-            try
+            loopState.TransientState.ValidateHistory(round.ModelRequest);
+            await using var output = new ModelOutputCoalescer(
+                _events, round.Registration.SessionId, _limits, TimeProvider.System, cancellationToken);
+            await foreach (var chunk in StreamHostModelRequestAsync(
+                round.Registration.SessionId,
+                round.RunId,
+                round.InvocationContext?.RepositoryPath,
+                round.UsageRequestId,
+                "conversation",
+                round.Registration.Budget,
+                round.ModelRequest,
+                elapsed => round.Registration.ModelRequestWallClockAccrued += elapsed,
+                output.Token))
             {
-                try
-                {
-                    loopState.TransientState.ValidateHistory(round.ModelRequest);
-                    streamState.BudgetUsage.Start(round.Registration.Budget, round.ModelRequest);
-                    await using var output = new ModelOutputCoalescer(
-                        _events, round.Registration.SessionId, _limits, TimeProvider.System, cancellationToken);
-                    await foreach (var chunk in RepositoryMemoryDispatch.StreamAsync(_model, round.ModelRequest, _repositoryMemories, _contextAssembler, _logger, output.Token))
-                    {
-                        await ProcessModelChunkAsync(
-                            chunk,
-                            round,
-                            loopState,
-                            streamState,
-                            maximumModelRounds,
-                            correctiveTurns,
-                            output,
-                            output.Token);
-                    }
-                }
-                catch (MalformedInvocationException exception)
-                {
-                    if (!TryAppendDeveloperCorrection(
-                        round,
-                        loopState,
-                        streamState,
-                        correctiveTurns,
-                        maximumModelRounds,
-                        exception.Diagnostic,
-                        out var attemptNumber))
-                    {
-                        throw;
-                    }
-
-                    await PublishModelCorrectionAttemptedAsync(
-                        round,
-                        ModelCorrectionCategory.ProviderInvocation,
-                        attemptNumber,
-                        correctiveTurns.MaximumTurns,
-                        exception.Diagnostic.SafeMessage,
-                        cancellationToken);
-                }
-            }
-            finally
-            {
-                requestStopwatch.Stop();
-                var requestElapsed = requestStopwatch.Elapsed;
-                modelWallClockBudget = round.Registration.Budget.Accrue(new BudgetDimensions(
-                    0,
-                    0,
-                    requestElapsed));
-                round.Registration.ModelRequestWallClockAccrued += requestElapsed;
-            }
-
-            if (modelWallClockBudget?.IsExhausted == true)
-            {
-                throw new BudgetExceededException(
-                    modelWallClockBudget.Reason ?? "Execution budget exhausted.");
-            }
-
-            if (streamState.HasResponseEnvelope && !streamState.CorrectiveTurnRequested)
-            {
-                await ValidateReplayToolBatchAsync(
+                await ProcessModelChunkAsync(
+                    chunk,
                     round,
                     loopState,
                     streamState,
                     maximumModelRounds,
                     correctiveTurns,
-                    cancellationToken);
+                    output,
+                    output.Token);
+            }
+        }
+        catch (MalformedInvocationException exception)
+        {
+            if (!TryAppendDeveloperCorrection(
+                round,
+                loopState,
+                streamState,
+                correctiveTurns,
+                maximumModelRounds,
+                exception.Diagnostic,
+                out var attemptNumber))
+            {
+                throw;
             }
 
-            if (!streamState.CorrectiveTurnRequested && streamState.PendingToolCalls.Count > 0)
-            {
-                preToolSteering = await _steering.PauseParentAtBoundaryAsync(
-                    round.Registration.SessionId,
-                    round.RunId,
-                    cancellationToken);
-            }
+            await PublishModelCorrectionAttemptedAsync(
+                round,
+                ModelCorrectionCategory.ProviderInvocation,
+                attemptNumber,
+                correctiveTurns.MaximumTurns,
+                exception.Diagnostic.SafeMessage,
+                cancellationToken);
+        }
 
-            if (preToolSteering.Count == 0
-                && !streamState.CorrectiveTurnRequested
-                && await InvokePendingToolBatchAsync(
-                    round,
-                    loopState,
-                    streamState,
-                    maximumModelRounds,
-                    correctiveTurns,
-                    cancellationToken))
-            {
-                streamState.ToolInvoked = streamState.ToolInvoked || _contextAssembler is not null;
-            }
-            else if (preToolSteering.Count > 0)
-            {
-                if (streamState.HasResponseEnvelope)
-                {
-                    foreach (var call in streamState.PendingToolCalls.OrderBy(item => item.Ordinal))
-                    {
-                        loopState.AddCurrentToolResult(CreateToolResultMessage(
-                            call.ToolCallId,
-                            call.ToolName,
-                            JsonSerializer.Serialize(new { error = "cancelledByUserSteering" }),
-                            isJson: true,
-                            structuredContent: null,
-                            modelRound: round.ModelRequest.ToolContinuationRound,
-                            isError: true));
-                    }
-                }
-                else
-                {
-                    loopState.AbortCurrentGroup();
-                }
-            }
+        if (streamState.HasResponseEnvelope && !streamState.CorrectiveTurnRequested)
+        {
+            await ValidateReplayToolBatchAsync(
+                round,
+                loopState,
+                streamState,
+                maximumModelRounds,
+                correctiveTurns,
+                cancellationToken);
+        }
 
-            if (!streamState.CorrectiveTurnRequested
-                && !streamState.HasAcceptedOutput)
-            {
-                await AppendEmptyResponseCorrectionOrThrowAsync(
-                    round,
-                    loopState,
-                    streamState,
-                    correctiveTurns,
-                    maximumModelRounds,
-                    cancellationToken);
-            }
+        if (!streamState.CorrectiveTurnRequested && streamState.PendingToolCalls.Count > 0)
+        {
+            preToolSteering = await _steering.PauseParentAtBoundaryAsync(
+                round.Registration.SessionId,
+                round.RunId,
+                cancellationToken);
+        }
 
+        if (preToolSteering.Count == 0
+            && !streamState.CorrectiveTurnRequested
+            && await InvokePendingToolBatchAsync(
+                round,
+                loopState,
+                streamState,
+                maximumModelRounds,
+                correctiveTurns,
+                cancellationToken))
+        {
+            streamState.ToolInvoked = streamState.ToolInvoked || _contextAssembler is not null;
+        }
+        else if (preToolSteering.Count > 0)
+        {
             if (streamState.HasResponseEnvelope)
             {
-                loopState.SealCurrentReplayRound(round.ModelRequest.ToolContinuationRound);
+                foreach (var call in streamState.PendingToolCalls.OrderBy(item => item.Ordinal))
+                {
+                    loopState.AddCurrentToolResult(CreateToolResultMessage(
+                        call.ToolCallId,
+                        call.ToolName,
+                        JsonSerializer.Serialize(new { error = "cancelledByUserSteering" }),
+                        isJson: true,
+                        structuredContent: null,
+                        modelRound: round.ModelRequest.ToolContinuationRound,
+                        isError: true));
+                }
             }
-
-            loopState.MarkGroupsDelivered(round.DeliveredThroughGroupSequence);
-            loopState.CommitCurrentGroup(
-                round.ModelRound,
-                streamState.CurrentGroupPurgeAfterCorrection && !loopState.TransientState.HasResponses);
-            if (!streamState.CurrentGroupPurgeAfterCorrection && !loopState.TransientState.HasResponses)
+            else
             {
-                loopState.PurgeCorrectionGroups();
+                loopState.AbortCurrentGroup();
             }
-
-            if (!streamState.CorrectiveTurnRequested
-                && streamState.PendingToolCalls.Count > 0)
-            {
-                correctiveTurns.Reset();
-            }
-
-            streamState.ModelSucceeded = true;
         }
-        finally
-        {
-            await InvokeAfterModelRequestHookAsync(
-                modelHookBoundary,
-                streamState.ModelSucceeded,
-                streamState.ReportedUsage is not null);
 
-            if (streamState.BudgetUsage.HasStarted && streamState.ReportedUsage is null)
-            {
-                _sessionUsage?.ObserveMissing(round.Registration.SessionId, round.UsageRequestId);
-            }
+        if (!streamState.CorrectiveTurnRequested
+            && !streamState.HasAcceptedOutput)
+        {
+            await AppendEmptyResponseCorrectionOrThrowAsync(
+                round,
+                loopState,
+                streamState,
+                correctiveTurns,
+                maximumModelRounds,
+                cancellationToken);
+        }
+
+        if (streamState.HasResponseEnvelope)
+        {
+            loopState.SealCurrentReplayRound(round.ModelRequest.ToolContinuationRound);
+        }
+
+        loopState.MarkGroupsDelivered(round.DeliveredThroughGroupSequence);
+        loopState.CommitCurrentGroup(
+            round.ModelRound,
+            streamState.CurrentGroupPurgeAfterCorrection && !loopState.TransientState.HasResponses);
+        if (!streamState.CurrentGroupPurgeAfterCorrection && !loopState.TransientState.HasResponses)
+        {
+            loopState.PurgeCorrectionGroups();
+        }
+
+        if (!streamState.CorrectiveTurnRequested
+            && streamState.PendingToolCalls.Count > 0)
+        {
+            correctiveTurns.Reset();
         }
 
         return new ConversationRoundOutcome(
@@ -815,7 +773,7 @@ public sealed partial class SessionApplication
             await output.FlushAsync(cancellationToken);
         }
 
-        ProcessUsageChunk(chunk, round, streamState);
+        ProcessUsageChunk(chunk, streamState);
         if (chunk.ResponseEnvelope is { } envelope)
         {
             loopState.TransientState.Accept(round.ModelRequest, envelope);
@@ -863,26 +821,13 @@ public sealed partial class SessionApplication
         }
     }
 
-    private void ProcessUsageChunk(
+    private static void ProcessUsageChunk(
         ModelChunk chunk,
-        ConversationRound round,
         ModelRoundStreamState streamState)
     {
-        if (chunk.Usage is null)
+        if (chunk.Usage is not null)
         {
-            return;
-        }
-
-        streamState.ReportedUsage = chunk.Usage;
-        _sessionUsage?.Observe(
-            round.Registration.SessionId,
-            round.UsageRequestId,
-            chunk.Usage);
-        var usage = streamState.BudgetUsage.Accrue(round.Registration.Budget, chunk.Usage);
-        if (usage.IsExhausted)
-        {
-            throw new BudgetExceededException(
-                usage.Reason ?? "Execution budget exhausted.");
+            streamState.ReportedUsage = chunk.Usage;
         }
     }
 
@@ -3490,15 +3435,11 @@ public sealed partial class SessionApplication
 
         public bool CurrentGroupPurgeAfterCorrection { get; private set; }
 
-        public bool ModelSucceeded { get; set; }
-
         public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || PendingToolCalls.Count > 0;
 
         public List<PendingModelToolCall> PendingToolCalls { get; } = [];
 
         public ModelUsage? ReportedUsage { get; set; }
-
-        public ModelRequestBudgetUsage BudgetUsage { get; } = new();
 
         public StringBuilder TextOutput { get; }
 

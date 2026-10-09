@@ -45,6 +45,9 @@ internal sealed class RepositoryIntelligenceFeature : IAsyncDisposable
     /// <summary>Trusted maximum number of files an explicit operation may inspect.</summary>
     internal int MaximumFiles => _limits.MaximumFiles;
 
+    /// <summary>Trusted immutable limits captured by an admitted operation.</summary>
+    internal RepositoryIntelligenceResourceLimits ResourceLimits => _limits;
+
     /// <summary>Trusted configured evidence ceilings shared by profile and packet collection.</summary>
     internal RepositoryEvidenceResourceLimits EvidenceLimits => _limits.Evidence;
 
@@ -399,8 +402,14 @@ internal sealed class RepositoryIntelligenceFeature : IAsyncDisposable
                 ? "No configured active inference provider is available."
                 : !oneOffInvestigation && !_controls.Persistence
                     ? "Persistent intelligence is disabled for this checkout."
-                    : "Analysis is unavailable until the governed operation and evidence pipeline is implemented.";
-            return new RepositoryIntelligenceOperationPreview(effective, _generation, false, reason);
+                    : oneOffInvestigation
+                        ? "Invocation-only investigation is available; evidence expires at completion and ordinary host retention applies."
+                        : "Persistent analysis and onboarding remain unavailable.";
+            return new RepositoryIntelligenceOperationPreview(
+                effective,
+                _generation,
+                oneOffInvestigation && activeProviderId is not null && effective.MaximumModelCalls > 0,
+                reason);
         }
         finally
         {

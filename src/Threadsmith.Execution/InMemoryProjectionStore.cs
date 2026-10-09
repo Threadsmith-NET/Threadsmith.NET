@@ -236,7 +236,10 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                 },
                 DiagnosticObserved diagnostic when existing is not null => existing with
                 {
-                    Error = $"{diagnostic.Code}: {diagnostic.Message}",
+                    Error = diagnostic is { ToolInvocationId: not null, RunId: not null, ActivityProgress: not null }
+                        && diagnostic.StructuredDiagnostic?.Severity is not (DiagnosticSeverity.Error or DiagnosticSeverity.Warning)
+                            ? existing.Error
+                            : $"{diagnostic.Code}: {diagnostic.Message}",
                     Diagnostics = diagnostic.StructuredDiagnostic is null
                         ? existing.Diagnostics
                         : [.. diagnostics.TakeLast(99), diagnostic.StructuredDiagnostic],

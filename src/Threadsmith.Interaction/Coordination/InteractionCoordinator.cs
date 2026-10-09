@@ -3,6 +3,7 @@ namespace Threadsmith.Interaction.Coordination;
 using System.ComponentModel;
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using Threadsmith.Core;
 using Threadsmith.Execution;
@@ -492,7 +493,8 @@ public sealed partial class InteractionCoordinator
                         latestRunDiagnostic = null;
                     }
 
-                    if (domainEvent is DiagnosticObserved diagnostic)
+                    if (domainEvent is DiagnosticObserved diagnostic
+                        && (diagnostic.ActivityProgress is null || diagnostic.StructuredDiagnostic?.Severity is DiagnosticSeverity.Error or DiagnosticSeverity.Warning))
                     {
                         latestRunDiagnostic = diagnostic.Message;
                     }
@@ -3217,25 +3219,27 @@ public sealed partial class InteractionCoordinator
         var parts = commandText.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         try
         {
-            if (parts.Length == 1 || (parts.Length == 2 && parts[1].Equals("status", StringComparison.OrdinalIgnoreCase)))
+            var operationParts = commandText.Split((char[]?)null, 3, StringSplitOptions.RemoveEmptyEntries);
+            if (operationParts.Length == 3 && operationParts[1].Equals("investigate", StringComparison.OrdinalIgnoreCase))
             {
-                var receipt = await _presenter.GetRepositoryIntelligenceStatusAsync(
-                    sessionId,
-                    identity,
+                var selection = JsonSerializer.Deserialize<JsonElement>(operationParts[2]);
+                var receipt = await RunCancellableForegroundOperationAsync(
+                    "Investigation cancelled.\n",
+                    token => _presenter.InvokeRepositoryIntelligenceOperationAsync(sessionId, identity, JsonSerializer.Serialize(new { investigate = selection }), token),
                     cancellationToken);
-                if (!receipt.Succeeded || receipt.Status is not { } status)
+                if (receipt is null)
                 {
-                    await _surface.WriteAsync(
-                        $"Intelligence status failed: {receipt.FailureKind ?? "InvalidOutput"}: {receipt.Error ?? "Status output was unavailable."}\n",
-                        PresentationTextRole.Error,
-                        cancellationToken);
                     return;
                 }
 
-                var snapshot = status.Controls;
-                await _surface.WriteAsync(
-                    $"Intelligence controls for {repositoryPath} ({identity}): persistence={snapshot.Persistence}, archeology={snapshot.Archeology}, recall={snapshot.Recall}, maintenance={snapshot.Maintenance}; generation={snapshot.Generation}. {snapshot.DisabledReason ?? status.Reason}\n",
-                    PresentationTextRole.Status,
+                return;
+            }
+
+            if (parts.Length == 1 || (parts.Length == 2 && parts[1].Equals("status", StringComparison.OrdinalIgnoreCase)))
+            {
+                await _presenter.GetRepositoryIntelligenceStatusAsync(
+                    sessionId,
+                    identity,
                     cancellationToken);
                 return;
             }
@@ -3249,7 +3253,7 @@ public sealed partial class InteractionCoordinator
                 var enabled = parts[3].Equals("on", StringComparison.OrdinalIgnoreCase);
                 var snapshot = await _presenter.SetRepositoryIntelligenceControlAsync(identity, control, enabled, cancellationToken);
                 await _surface.WriteAsync(
-                    $"{control} {(enabled ? "enabled" : "disabled")} for this checkout; generation={snapshot.Generation}. Analysis remains unavailable.\n",
+                    $"{control} {(enabled ? "enabled" : "disabled")} for this checkout; generation={snapshot.Generation}.\n",
                     PresentationTextRole.Status,
                     cancellationToken);
                 return;
@@ -3282,7 +3286,7 @@ public sealed partial class InteractionCoordinator
             }
 
             await _surface.WriteAsync(
-                "Usage: /intelligence [status|set <persistence|archeology|recall|maintenance> <on|off>|preview <baseline|investigate> <scope> <files> <commits> <calls> [history]]\n",
+                "Usage: /intelligence [status|investigate <JSON question and paths>|set <persistence|archeology|recall|maintenance> <on|off>|preview <baseline|investigate> <scope> <files> <commits> <calls> [history]]\n",
                 PresentationTextRole.Warning,
                 cancellationToken);
         }
@@ -3742,7 +3746,8 @@ public sealed partial class InteractionCoordinator
                 case "use":
                     (var selector, var input) = ParseSkillUse(remainder);
                     var invocationId = SkillInvocationId.New();
-                    var invoked = await RunCancellableSkillOperationAsync(
+                    var invoked = await RunCancellableForegroundOperationAsync(
+                        "Skill command cancelled.\n",
                         token => controller.InvokeSkillAsync(
                             new SkillInvocationRequest
                             {
@@ -3774,7 +3779,8 @@ public sealed partial class InteractionCoordinator
 
                 case "continue":
                     (var continueId, var hostResult) = ParseSkillContinuation(remainder);
-                    var continued = await RunCancellableSkillOperationAsync(
+                    var continued = await RunCancellableForegroundOperationAsync(
+                        "Skill command cancelled.\n",
                         token => controller.ContinueSkillAsync(continueId, hostResult, token),
                         cancellationToken);
                     if (continued is null)
@@ -3794,7 +3800,8 @@ public sealed partial class InteractionCoordinator
                         throw new ArgumentException("Skill resume requires an invocation GUID.");
                     }
 
-                    var resumed = await RunCancellableSkillOperationAsync(
+                    var resumed = await RunCancellableForegroundOperationAsync(
+                        "Skill command cancelled.\n",
                         token => controller.ResumeSkillAsync(new SkillInvocationId(resumeId), token),
                         cancellationToken);
                     if (resumed is null)

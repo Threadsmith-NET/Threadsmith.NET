@@ -69,7 +69,8 @@ internal sealed record RepositoryIntelligenceOutput(
     RepositoryIntelligenceControlSnapshot Controls,
     bool AnalysisAvailable,
     string Reason,
-    RepositoryStructuralProfile? Profile = null);
+    RepositoryStructuralProfile? Profile = null,
+    RepositoryInvestigationResult? Investigation = null);
 
 /// <summary>Machine-readable coverage state owned by the collector, not inferred by a model.</summary>
 [System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<RepositoryProfileOmissionReason>))]

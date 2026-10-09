@@ -9,7 +9,8 @@ using Threadsmith.Interaction.Runs;
 /// <summary>Manages skill verification and availability through existing shared command authority.</summary>
 public sealed partial class InteractionCoordinator
 {
-    private async Task<T?> RunCancellableSkillOperationAsync<T>(
+    private async Task<T?> RunCancellableForegroundOperationAsync<T>(
+        string cancellationMessage,
         Func<CancellationToken, Task<T>> execute,
         CancellationToken cancellationToken)
         where T : class
@@ -54,7 +55,7 @@ public sealed partial class InteractionCoordinator
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
                 await _surface.WriteAsync(
-                    "Skill command cancelled.\n",
+                    cancellationMessage,
                     PresentationTextRole.Status,
                     CancellationToken.None);
                 return null;

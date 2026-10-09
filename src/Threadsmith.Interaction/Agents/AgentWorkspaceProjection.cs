@@ -176,6 +176,18 @@ internal sealed class AgentWorkspaceProjection : IAsyncDisposable
                 return true;
             }
 
+            if (item is DiagnosticObserved { RunId: { } progressRun, ToolInvocationId: not null, ActivityProgress: not null }
+                && _children.TryGetValue(progressRun, out var progressChild))
+            {
+                if (progressChild.Operations.Observe(item))
+                {
+                    progressChild.Snapshot = progressChild.Snapshot with { ToolActivities = progressChild.Operations.Activities };
+                    await _workspace.PresentAgentAsync(progressChild.Snapshot, cancellationToken);
+                }
+
+                return true;
+            }
+
             var skillRun = item switch
             {
                 SkillWorkflowCheckpointWritten skillCheckpoint => skillCheckpoint.RunId,

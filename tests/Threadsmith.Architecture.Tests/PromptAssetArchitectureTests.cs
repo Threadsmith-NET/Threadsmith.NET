@@ -286,6 +286,7 @@ public static partial class PromptAssetArchitectureTests
             ["Skill prompts"] = "Skill-",
             ["Provider prompts"] = "Provider-",
             ["Adapter prompts"] = "Adapter-",
+            ["Repository intelligence prompts"] = "RepositoryIntelligence-",
         };
         var categoriesByFile = new Dictionary<string, string>(StringComparer.Ordinal);
         string? currentCategory = null;

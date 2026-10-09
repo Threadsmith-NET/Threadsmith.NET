@@ -145,6 +145,8 @@ public sealed partial class SessionApplication : IBoundedModelInference
 
         public BoundedModelSelection Selection { get; }
 
+        public int MaximumOutputTokens => _profile.MaximumOutputTokens;
+
         public void Dispose() => _disposed = true;
 
         public async Task<string> ExecuteAsync(BoundedModelRequest request, CancellationToken cancellationToken = default)

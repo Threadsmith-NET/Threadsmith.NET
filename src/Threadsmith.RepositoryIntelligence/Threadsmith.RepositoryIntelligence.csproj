@@ -12,6 +12,8 @@
     <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
     <ProjectReference Include="..\Threadsmith.Tools\Threadsmith.Tools.csproj" />
+    <ProjectReference Include="..\Threadsmith.Persistence\Threadsmith.Persistence.csproj" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
 
 </Project>

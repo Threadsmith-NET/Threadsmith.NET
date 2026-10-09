@@ -35,15 +35,25 @@ public sealed class MigrationRunner
 {
     private readonly string _connectionString;
     private readonly IReadOnlyList<IDatabaseMigration> _migrations;
+    private readonly bool _managedMemoryPolicy;
+    private readonly Func<SqliteTransaction, CancellationToken, Task>? _commitAsync;
 
     /// <summary>Initializes a new instance of the <see cref="MigrationRunner"/> class.</summary>
     /// <param name="connectionString">The SQLite connection string.</param>
     /// <param name="migrations">The ordered migrations to apply. Version 0 (initial schema) is included.</param>
-    public MigrationRunner(string connectionString, IEnumerable<IDatabaseMigration> migrations)
+    /// <param name="managedMemoryPolicy">Preserves the host version-10 backup/batch policy; independent schemas disable it.</param>
+    /// <param name="commitAsync">Optional owning-host authority fence for the final transaction commit.</param>
+    public MigrationRunner(
+        string connectionString,
+        IEnumerable<IDatabaseMigration> migrations,
+        bool managedMemoryPolicy = true,
+        Func<SqliteTransaction, CancellationToken, Task>? commitAsync = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentNullException.ThrowIfNull(migrations);
         _connectionString = connectionString;
+        _managedMemoryPolicy = managedMemoryPolicy;
+        _commitAsync = commitAsync;
         _migrations = migrations.OrderBy(m => m.Version).ToArray();
         for (var i = 0; i < _migrations.Count; i++)
         {
@@ -77,14 +87,14 @@ public sealed class MigrationRunner
         {
             var migration = pending[index];
             cancellationToken.ThrowIfCancellationRequested();
-            if (migration.Version == 10 && originalVersion > 0)
+            if (_managedMemoryPolicy && migration.Version == 10 && originalVersion > 0)
             {
                 LastBackupPath = await CreateVerifiedMemoryBackupAsync(connection, cancellationToken);
             }
 
-            IReadOnlyList<IDatabaseMigration> batch = migration.Version == 10 ? pending[index..] : [migration];
+            IReadOnlyList<IDatabaseMigration> batch = _managedMemoryPolicy && migration.Version == 10 ? pending[index..] : [migration];
             current = await ApplyBatchAsync(connection, batch, cancellationToken);
-            if (migration.Version == 10)
+            if (_managedMemoryPolicy && migration.Version == 10)
             {
                 break;
             }
@@ -115,7 +125,7 @@ public sealed class MigrationRunner
             foreach (var migration in migrations)
             {
                 await migration.ApplyAsync(connection, cancellationToken);
-                if (migration.Version == 10 && LastBackupPath is { } backupPath)
+                if (_managedMemoryPolicy && migration.Version == 10 && LastBackupPath is { } backupPath)
                 {
                     await using var backupRecord = connection.CreateCommand();
                     backupRecord.Transaction = transaction;
@@ -127,7 +137,15 @@ public sealed class MigrationRunner
                 await WriteVersionAsync(connection, transaction, migration.Version, cancellationToken);
             }
 
-            await transaction.CommitAsync(cancellationToken);
+            if (_commitAsync is null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+            }
+            else
+            {
+                await _commitAsync(transaction, cancellationToken);
+            }
+
             return migrations[^1].Version;
         }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)

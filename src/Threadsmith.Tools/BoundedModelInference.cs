@@ -15,6 +15,9 @@ public interface IBoundedModelOperation : IDisposable
     /// <summary>Immutable selected provider/profile/reasoning provenance.</summary>
     BoundedModelSelection Selection { get; }
 
+    /// <summary>Maximum response tokens admitted by the frozen selected profile.</summary>
+    int MaximumOutputTokens { get; }
+
     /// <summary>Executes a bounded structured request through the host model lifecycle.</summary>
     Task<string> ExecuteAsync(BoundedModelRequest request, CancellationToken cancellationToken = default);
 }

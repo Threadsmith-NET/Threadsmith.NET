@@ -336,9 +336,12 @@ public static class RetentionTests
         }
     }
 
-    /// <summary>Enabled retention removes both aged artifact metadata and its content file.</summary>
-    [Fact]
-    public static async Task Retention_deletes_aged_artifact_body_and_metadata()
+    /// <summary>Enabled retention removes aged metadata even when the artifact body or its directory is already absent.</summary>
+    [Theory]
+    [InlineData("present")]
+    [InlineData("missing-file")]
+    [InlineData("missing-directory")]
+    public static async Task Retention_deletes_aged_artifact_body_and_metadata(string bodyState)
     {
         var fixture = await DatabaseFixture.CreateAsync();
         var dir = DirectoryFixture.Create();
@@ -358,6 +361,17 @@ public static class RetentionTests
                 "processOutput",
                 sessionId: null,
                 CancellationToken.None);
+            var artifactPath = Path.Combine(dir.Path, artifact.RelativePath);
+            if (bodyState != "present")
+            {
+                File.Delete(artifactPath);
+                if (bodyState == "missing-directory")
+                {
+                    Directory.Delete(Path.GetDirectoryName(artifactPath)
+                        ?? throw new InvalidOperationException("The artifact path has no parent directory."));
+                }
+            }
+
             var retention = new RetentionService(
                 store,
                 artifactStore,
@@ -372,8 +386,10 @@ public static class RetentionTests
             var outcome = await retention.RunAsync();
 
             Assert.Equal(1, outcome.RemovedArtifacts);
+            Assert.False(File.Exists(artifactPath));
             Assert.Null(await artifactStore.ReadAsync(artifact.ContentHash, CancellationToken.None));
             Assert.Empty(await artifactStore.ListAsync(sessionId: null, CancellationToken.None));
+            Assert.Equal(0, (await retention.RunAsync()).RemovedArtifacts);
         }
         finally
         {

@@ -177,7 +177,15 @@ public sealed class ArtifactStore : IArtifactStore
         delete.Parameters.AddWithValue("$hash", contentHash.ToLowerInvariant());
         await delete.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        File.Delete(Path.Combine(_artifactDirectory, relativePath));
+        try
+        {
+            File.Delete(Path.Combine(_artifactDirectory, relativePath));
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // A missing parent directory means the body has already been removed.
+        }
+
         return true;
     }
 

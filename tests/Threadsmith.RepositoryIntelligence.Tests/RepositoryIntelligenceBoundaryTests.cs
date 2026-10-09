@@ -10,7 +10,7 @@ public static class RepositoryIntelligenceBoundaryTests
     private static readonly string RepositoryRoot = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
 
-    /// <summary>The feature project uses Core contracts and the shared governed tool runtime.</summary>
+    /// <summary>The feature uses shared contracts, governed tools and persistence with centrally pinned SQLite.</summary>
     [Fact]
     public static void SolutionAndProjectContainTheApprovedBoundary()
     {
@@ -27,9 +27,15 @@ public static class RepositoryIntelligenceBoundaryTests
             .OfType<string>()
             .ToArray();
 
+        var packages = project.Descendants()
+            .Where(element => element.Name.LocalName == "PackageReference")
+            .Select(element => element.Attribute("Include")?.Value)
+            .OfType<string>()
+            .ToArray();
+
         Assert.Contains("Threadsmith.RepositoryIntelligence\\Threadsmith.RepositoryIntelligence.csproj", solution);
-        Assert.Equal(["Threadsmith.Core", "Threadsmith.Tools"], references);
-        Assert.DoesNotContain(project.Descendants(), element => element.Name.LocalName == "PackageReference");
+        Assert.Equal(["Threadsmith.Core", "Threadsmith.Tools", "Threadsmith.Persistence"], references);
+        Assert.Equal(["Microsoft.Data.Sqlite"], packages);
     }
 
     /// <summary>Loading the optional assembly exports no feature operations or foreign SDK types.</summary>
@@ -42,7 +48,8 @@ public static class RepositoryIntelligenceBoundaryTests
         Assert.DoesNotContain(assembly.GetReferencedAssemblies(), name =>
             name.Name?.StartsWith("Threadsmith.", StringComparison.Ordinal) == true
             && name.Name != "Threadsmith.Core"
-            && name.Name != "Threadsmith.Tools");
+            && name.Name != "Threadsmith.Tools"
+            && name.Name != "Threadsmith.Persistence");
     }
 
     /// <summary>Shared compiler and package policy applies without project-local exemptions.</summary>

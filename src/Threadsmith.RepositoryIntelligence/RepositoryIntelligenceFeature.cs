@@ -418,6 +418,22 @@ internal sealed class RepositoryIntelligenceFeature : IAsyncDisposable
         }
     }
 
+    /// <summary>Prepares persistent work outside the control gate; durable commits must use <see cref="CommitAsync{T}"/>.</summary>
+    internal Task<T> PersistAsync<T>(
+        RepositoryIntelligenceAdmission admission,
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(admission);
+        ArgumentNullException.ThrowIfNull(operation);
+        if (admission.OneOff || admission.Control != RepositoryIntelligenceControl.Persistence)
+        {
+            throw new InvalidOperationException("Canonical storage requires persistent intelligence admission.");
+        }
+
+        return PrepareAsync(admission, operation, cancellationToken);
+    }
+
     /// <summary>Releases an operation after its owner has stopped using its cancellation token.</summary>
     internal async ValueTask ReleaseAsync(RepositoryIntelligenceAdmission admission)
     {

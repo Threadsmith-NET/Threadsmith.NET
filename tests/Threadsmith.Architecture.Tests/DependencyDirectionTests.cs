@@ -345,7 +345,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.Embeddings.Local"] = ["Threadsmith.Core"],
             ["Threadsmith.Reranking.Local"] = ["Threadsmith.Core"],
             ["Threadsmith.Persistence"] = ["Threadsmith.Core", "Threadsmith.Telemetry"],
-            ["Threadsmith.RepositoryIntelligence"] = ["Threadsmith.Core", "Threadsmith.Tools"],
+            ["Threadsmith.RepositoryIntelligence"] = ["Threadsmith.Core", "Threadsmith.Tools", "Threadsmith.Persistence"],
             ["Threadsmith.Models"] = ["Threadsmith.Core"],
             ["Threadsmith.Models.OpenAiCompatible"] = ["Threadsmith.Core", "Threadsmith.Models"],
             ["Threadsmith.Models.OpenAiCodex"] = ["Threadsmith.Core", "Threadsmith.Models"],

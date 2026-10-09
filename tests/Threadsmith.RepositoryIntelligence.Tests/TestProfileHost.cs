@@ -135,7 +135,8 @@ internal sealed class TestProfileHost : IAsyncDisposable
 
     public async Task<T> RunEvidenceAsync<T>(
         Func<ToolExecutionContext, CancellationToken, Task<T>> action,
-        ToolInvocationContext? context = null)
+        ToolInvocationContext? context = null,
+        SessionId? sessionId = null)
         where T : class
     {
         T? value = null;
@@ -144,7 +145,7 @@ internal sealed class TestProfileHost : IAsyncDisposable
         var result = await Pipeline.InvokeAsync(
             new ToolInvocationRequest
             {
-                SessionId = SessionId.New(),
+                SessionId = sessionId ?? SessionId.New(),
                 RunId = RunId.New(),
                 ToolId = tool.Definition.Id,
                 ArgumentsJson = "{}",

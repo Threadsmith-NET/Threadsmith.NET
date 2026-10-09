@@ -601,7 +601,14 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
                 // Exact before/after locators preserve renames, deletions and conflicting revisions.
                 if (!entry.Status.StartsWith('D'))
                 {
-                    QueueHistoricalSource(change.Commit, entry.Path);
+                    if (Within(entry.Path, _selection.Paths))
+                    {
+                        QueueHistoricalSource(change.Commit, entry.Path);
+                    }
+                    else
+                    {
+                        omissions.Add(new("RenameDestinationOutsideScope", change.Commit + ":" + entry.Path));
+                    }
                 }
 
                 if (parent is not null && !entry.Status.StartsWith('A'))
@@ -876,13 +883,13 @@ internal sealed class RepositoryEvidenceCollector : IDisposable
 
     private RepositoryEvidenceSource Source(string kind, string? revision, string path, string identity, string? previousRevision = null, string? previousPath = null)
     {
-        var fields = new { kind, _profile.Snapshot.RepositoryIdentity, _profile.Snapshot.CheckoutIdentity, revision, path, identity, previousRevision, previousPath };
-        return new(RepositoryProfileCollector.Digest(JsonSerializer.Serialize(fields)), kind, _profile.Snapshot.RepositoryIdentity, _profile.Snapshot.CheckoutIdentity, revision, path, identity, previousRevision, previousPath);
+        var source = new RepositoryEvidenceSource(string.Empty, kind, _profile.Snapshot.RepositoryIdentity, _profile.Snapshot.CheckoutIdentity, revision, path, identity, previousRevision, previousPath);
+        return source with { Id = RepositoryEvidenceIdentity.SourceId(source) };
     }
 
     private static RepositoryEvidenceExcerpt Excerpt(RepositoryEvidenceSource source, string state, string? text, int? start, int? end)
     {
-        var id = RepositoryProfileCollector.Digest(JsonSerializer.Serialize(new { source.Id, start, end, state, Digest = text is null ? null : RepositoryProfileCollector.Digest(text) }));
+        var id = RepositoryEvidenceIdentity.ExcerptId(source, state, text, start, end);
         return new(id, source, start, end, state, text);
     }
 

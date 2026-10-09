@@ -176,6 +176,8 @@ public static partial class AppBootstrapTests
 
         public BoundedModelSelection Selection => _inner.Selection;
 
+        public int MaximumOutputTokens => _inner.MaximumOutputTokens;
+
         public void Dispose() => _inner.Dispose();
 
         public async Task<string> ExecuteAsync(BoundedModelRequest request, CancellationToken cancellationToken = default)

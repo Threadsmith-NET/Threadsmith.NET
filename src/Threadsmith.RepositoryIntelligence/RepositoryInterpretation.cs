@@ -80,7 +80,8 @@ internal sealed record RepositoryInterpretationResult(
     long ModelOutputBytes,
     IReadOnlyList<RepositoryEvidenceExcerpt> Evidence,
     IReadOnlyList<RepositoryEvidenceOmission> Omissions,
-    RepositoryEvidencePacket LastPacket);
+    RepositoryEvidencePacket LastPacket,
+    IReadOnlyList<RepositoryEpisodeCandidate>? Episodes = null);
 
 /// <summary>Invocation-only interpretation, validation and bounded evidence continuation.</summary>
 internal sealed class RepositoryInterpreter
@@ -165,7 +166,7 @@ internal sealed class RepositoryInterpreter
 
                 inputBytes += bytes;
                 calls++;
-                var json = await operation.ExecuteAsync(new BoundedModelRequest(instructions, data, "repository-interpretation-v1", ResponseSchema, 4096), cancellationToken);
+                var json = await operation.ExecuteAsync(new BoundedModelRequest(instructions, data, "repository-interpretation-v1", ResponseSchema, Math.Min(4096, operation.MaximumOutputTokens)), cancellationToken);
                 outputBytes += Encoding.UTF8.GetByteCount(json);
                 if (outputBytes > maximumInferenceBytes)
                 {
@@ -227,10 +228,21 @@ internal sealed class RepositoryInterpreter
         }
 
         RepositoryInterpretationResult Limited(string outcome, string reason) => Result(new(operationId, outcome, null, null, [], [], [reason], [], [], null));
-        RepositoryInterpretationResult Result(RepositoryInterpretationResponse response) => new(operationId, kind, response, operation?.Selection, calls, inputBytes, outputBytes, evidence.Values.ToArray(), packets.Prepend(initial).SelectMany(item => item.Omissions).Distinct().ToArray(), packet);
+        RepositoryInterpretationResult Result(RepositoryInterpretationResponse response)
+        {
+            var collected = packets.Prepend(initial).ToArray();
+            var episodes = collected.SelectMany(item => item.Episodes).GroupBy(item => item.Id, StringComparer.Ordinal)
+                .Select(group => group.First() with
+                {
+                    EvidenceIds = group.SelectMany(item => item.EvidenceIds).Distinct(StringComparer.Ordinal).ToArray(),
+                    Signals = group.SelectMany(item => item.Signals).Distinct(StringComparer.Ordinal).ToArray(),
+                }).ToArray();
+            return new(operationId, kind, response, operation?.Selection, calls, inputBytes, outputBytes, evidence.Values.ToArray(), collected.SelectMany(item => item.Omissions).Distinct().ToArray(), packet, episodes);
+        }
     }
 
-    private static void Validate(RepositoryInterpretationResponse response, string operationId, IReadOnlyDictionary<string, RepositoryEvidenceExcerpt> evidence, string? targetCommit)
+    /// <summary>Reuses interpretation admission checks before any retained candidate is reconciled.</summary>
+    internal static void Validate(RepositoryInterpretationResponse response, string operationId, IReadOnlyDictionary<string, RepositoryEvidenceExcerpt> evidence, string? targetCommit)
     {
         if (response.OperationId != operationId || !Outcomes.Contains(response.Outcome, StringComparer.Ordinal)
             || response.SupportingEvidenceIds is null || response.ConflictingEvidenceIds is null || response.Limitations is null
@@ -283,11 +295,11 @@ internal sealed class RepositoryInterpreter
             }
 
             References(relation.EvidenceIds);
-            if (relation.Kind == "Motivation" && (relation.RationaleQuote is not { Length: >= 12 and <= 1024 } quote
-                || !relation.EvidenceIds.Select(id => evidence[id]).Any(item => item.Source.Kind is "Document" or "CommitMetadata"
+            if ((relation.Kind == "Motivation" && relation.RationaleQuote is not { Length: >= 12 and <= 1024 })
+                || (relation.RationaleQuote is { } quote && !relation.EvidenceIds.Select(id => evidence[id]).Any(item => item.Source.Kind is "Document" or "CommitMetadata"
                     && item.Text?.Contains(quote, StringComparison.Ordinal) == true)))
             {
-                throw new InvalidDataException("Motivation requires an exact documented rationale, not temporal adjacency.");
+                throw new InvalidDataException("Supplied relationship quotations require exact documented support; motivation cannot rely on temporal adjacency.");
             }
         }
 

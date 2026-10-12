@@ -586,6 +586,42 @@ internal static class InteractionPresentationFormatter
 
             var output = new StringBuilder();
             output.Append("Outcome: ").AppendLine(outcome.GetString());
+            if (root.TryGetProperty("Action", out var action)
+                && action.ValueKind == JsonValueKind.String
+                && action.GetString() is "coverage" or "updateCoverage")
+            {
+                if (root.TryGetProperty("Coverage", out var coverage)
+                    && coverage.ValueKind == JsonValueKind.Object
+                    && coverage.TryGetProperty("Items", out var items)
+                    && items.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in items.EnumerateArray())
+                    {
+                        if (item.ValueKind != JsonValueKind.Object
+                            || !item.TryGetProperty("Area", out var area) || area.ValueKind != JsonValueKind.String
+                            || !item.TryGetProperty("Status", out var status) || status.ValueKind != JsonValueKind.String)
+                        {
+                            return null;
+                        }
+
+                        output.Append("Investigation: ").Append(area.GetString()).Append(" — ").AppendLine(status.GetString());
+                    }
+
+                    if (items.GetArrayLength() == 0 && action.GetString() == "coverage")
+                    {
+                        output.AppendLine("No investigation checklist items on this page.");
+                    }
+
+                    if (coverage.TryGetProperty("NextAfterKey", out var cursor)
+                        && cursor.ValueKind == JsonValueKind.String && !string.IsNullOrEmpty(cursor.GetString()))
+                    {
+                        output.AppendLine("More investigation checklist items available.");
+                    }
+                }
+
+                return PrepareMemoryOutput(output.ToString().TrimEnd(), maximumInspectionCharacters);
+            }
+
             foreach (var entry in entries.EnumerateArray())
             {
                 if (entry.ValueKind != JsonValueKind.Object

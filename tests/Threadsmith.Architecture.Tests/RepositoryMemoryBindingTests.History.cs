@@ -76,7 +76,8 @@ public static partial class RepositoryMemoryBindingTests
                     context = context with { DeniedToolIds = ["git_log"] };
                 }
             },
-            "api_key=onboarding-secret-value");
+            "api_key=onboarding-secret-value",
+            finishCoverage: true);
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
         var application = new SessionApplication(
             intelligence.Events,
@@ -106,19 +107,32 @@ public static partial class RepositoryMemoryBindingTests
             Assert.DoesNotContain("onboarding-secret-value", checkpoint.WorkingContext, StringComparison.Ordinal);
             context = context with { DeniedToolIds = [] };
             var resumed = await application.HandleAsync(new SubmitRequestCommand(session, "Continue onboarding") { IntelligenceOperation = RepositoryIntelligenceOperation.Onboard }, ct);
-            Assert.True(await application.HandleAsync(new WaitForRunCommand(resumed), ct));
-            Assert.Equal(2, model.Requests);
-            Assert.Equal(3, events.Count); // One bounded replay invocation and one new page.
+            if (roundLimit)
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(() => application.HandleAsync(new WaitForRunCommand(resumed), ct));
+                var coverageCheckpoint = await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct);
+                Assert.True(coverageCheckpoint!.HistoryComplete);
+                Assert.True(coverageCheckpoint.CoverageReviewStarted);
+                Assert.Equal(2, model.Requests);
+                Assert.Equal(3, events.Count);
+            }
+            else
+            {
+                Assert.True(await application.HandleAsync(new WaitForRunCommand(resumed), ct));
+                Assert.Equal(4, model.Requests);
+                Assert.Equal(5, events.Count);
+                Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
+            }
+
             var resumedHistory = Assert.Single(model.CapturedRequests[^1].Messages, message => message.SectionId.StartsWith("repository-intelligence-history-", StringComparison.Ordinal)).GetModelVisibleContent();
             Assert.Contains("design step 16", resumedHistory, StringComparison.Ordinal);
             Assert.DoesNotContain("design step 00", resumedHistory, StringComparison.Ordinal);
-            Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
         }
         else
         {
             Assert.True(await application.HandleAsync(new WaitForRunCommand(run), ct));
-            Assert.Equal(2, model.Requests);
-            Assert.Equal(2, events.Count);
+            Assert.Equal(4, model.Requests);
+            Assert.Equal(4, events.Count);
             var first = Assert.Single(model.CapturedRequests[0].Messages, message => message.SectionId.StartsWith("repository-intelligence-history-", StringComparison.Ordinal)).GetModelVisibleContent();
             Assert.Contains("design step 00", first, StringComparison.Ordinal);
             Assert.DoesNotContain("design step 16", first, StringComparison.Ordinal);

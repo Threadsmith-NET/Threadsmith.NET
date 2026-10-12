@@ -341,6 +341,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         private readonly ConcurrentDictionary<string, RepositoryMemorySupport> _sources = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         private RepositoryIntelligenceCheckpoint? _resume;
         private string? _historyRevision;
+        private int _lastHistoryPage;
+        private bool _historyAccepted;
         private string? _historyNotice;
         private bool _completed;
         private int _disposed;
@@ -372,6 +374,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
         public string Instructions { get; private set; }
 
+        public bool IsCoverageReviewActive { get; private set; }
+
         public int? HistoryDepth { get; }
 
         public string? ResumeHistoryRevision => _resume?.HistoryRevision;
@@ -391,7 +395,13 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                 if (result.HistoryRevision == resume.HistoryRevision && result.CollectionPage == page)
                 {
                     var collection = Collection ?? throw new InvalidOperationException("No collection owns the checkpoint.");
+                    if (resume.HistoryComplete && result.NextCollectionPage is not null)
+                    {
+                        throw new InvalidOperationException("Saved final coverage does not match the history boundary.");
+                    }
+
                     collection.Restore(resume);
+                    IsCoverageReviewActive = resume.CoverageReviewStarted;
                     foreach (var support in collection.Snapshot().SelectMany(entry => entry.Supports))
                     {
                         _sources[support.Path] = support;
@@ -404,6 +414,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                         PreparedAssertions = collection.Snapshot(forPublication: true).Count,
                         resume.WorkingContext,
                         resume.WorkingContextTruncated,
+                        resume.HistoryComplete,
+                        resume.CoverageReviewStarted,
                     });
                     _historyNotice = $"Resuming repository onboarding after {page} completed history batches.";
                 }
@@ -424,6 +436,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             }
 
             _historyRevision = result.HistoryRevision;
+            _lastHistoryPage = result.CollectionPage;
+            _historyAccepted = true;
 
             var instructions = _owner._prompts.Render(
                 PromptFileNames.ContextRepositoryIntelligenceHistory,
@@ -447,7 +461,7 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         public async Task SaveCheckpointAsync(string workingContext, CancellationToken cancellationToken = default)
         {
             if (Operation != RepositoryIntelligenceOperation.Onboard || Collection is not { } collection
-                || PendingHistoryPage is not > 0 || _historyRevision is null)
+                || (PendingHistoryPage is not > 0 && !IsCoverageReviewActive) || !_historyAccepted)
             {
                 return;
             }
@@ -467,11 +481,14 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                         RepositoryIdentity = _identity,
                         HistoryRevision = _historyRevision,
                         HistoryDepth = HistoryDepth,
-                        NextHistoryPage = PendingHistoryPage.Value,
+                        NextHistoryPage = PendingHistoryPage ?? _lastHistoryPage,
+                        HistoryComplete = PendingHistoryPage is null,
+                        CoverageReviewStarted = IsCoverageReviewActive,
                         BaselineIntelligence = collection.Baseline.Entries.Where(entry => entry.Ownership == RepositoryMemoryOwnership.Intelligence)
                             .Select(entry => new RepositoryMemoryInclusion(entry.Id, entry.Revision)).ToArray(),
                         Entries = collection.Snapshot(),
                         AcceptedIds = collection.AcceptedIds,
+                        Coverage = collection.Coverage,
                         WorkingContext = workingContext[..length],
                         WorkingContextTruncated = length < workingContext.Length,
                     },
@@ -482,7 +499,37 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                 collection.Operations.Release();
             }
 
-            await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.checkpoint", $"Saved onboarding progress through {PendingHistoryPage} history batches."), cancellationToken);
+            if (PendingHistoryPage is not null)
+            {
+                await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.checkpoint", $"Saved onboarding progress through {PendingHistoryPage} history batches."), cancellationToken);
+            }
+        }
+
+        public async Task<string?> ContinueCoverageAsync(string workingContext, CancellationToken cancellationToken = default)
+        {
+            if (Operation != RepositoryIntelligenceOperation.Onboard || PendingHistoryPage is not null || Collection is not { } collection)
+            {
+                return null;
+            }
+
+            var firstReview = !IsCoverageReviewActive;
+            IsCoverageReviewActive = true;
+            await SaveCheckpointAsync(workingContext, cancellationToken);
+            if (!firstReview && !collection.HasOpenCoverage)
+            {
+                return null;
+            }
+
+            var coverage = collection.Coverage;
+            var summary = JsonSerializer.Serialize(new
+            {
+                FirstReview = firstReview,
+                TotalItems = coverage.Count,
+                OpenItems = coverage.Count(item => item.Status is "uninvestigated" or "investigating"),
+                BlockedItems = coverage.Count(item => item.Status == "blocked"),
+            });
+            await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.coverage", "History processing is complete. Continuing the final investigation coverage pass; preparation is checkpointed."), cancellationToken);
+            return _owner._prompts.Render(PromptFileNames.ContextRepositoryIntelligenceCoverage, new Dictionary<string, string>(StringComparer.Ordinal) { ["CoverageJson"] = summary });
         }
 
         public async Task<long> CaptureSourceCheckpointAsync(string relativePath, CancellationToken cancellationToken = default)
@@ -562,6 +609,11 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                 throw new InvalidOperationException("Onboarding history is incomplete. The prior collection was preserved.");
             }
 
+            if (Operation == RepositoryIntelligenceOperation.Onboard && (!IsCoverageReviewActive || Collection.HasOpenCoverage))
+            {
+                throw new InvalidOperationException("Onboarding investigation coverage is incomplete. The prior collection was preserved.");
+            }
+
             var options = _owner._options.Capture(_identity);
             if (_owner._monitor.Capture(_identity).Fault is not null)
             {
@@ -581,6 +633,11 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             }
 
             _completed = true;
+            foreach (var item in Collection.Coverage.Where(item => item.Status == "blocked"))
+            {
+                await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.blocked", $"Investigation blocked: {item.Area}: {item.Gaps}"), CancellationToken.None);
+            }
+
             _owner._automation.Complete(_identity, _commitGeneration);
             await _owner._events.PublishAsync(
                 new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.collection.completed",                 $"Repository intelligence {Operation.ToString().ToLowerInvariant()} committed {Collection.Snapshot(forPublication: true).Count} assertions."),

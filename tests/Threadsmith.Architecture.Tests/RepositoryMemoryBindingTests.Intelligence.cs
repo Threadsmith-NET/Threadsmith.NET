@@ -32,6 +32,7 @@ public static partial class RepositoryMemoryBindingTests
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await BindingFixture.CreateAsync(false);
         await using var intelligence = await IntelligenceFixture.CreateAsync(fixture, ct);
+        await File.WriteAllTextAsync(Path.Combine(fixture.InitialRoot, "feature.txt"), "Fixture implementation.", ct);
         var before = await intelligence.Store.GetSnapshotAsync(intelligence.Identity, [], ct);
         var enabledWrites = 0;
         var context = new ToolInvocationContext
@@ -59,13 +60,15 @@ public static partial class RepositoryMemoryBindingTests
             restriction == "missing-reader" ? tools.Take(1) : tools,
             toolState,
             runtimeOptions: new ToolRuntimeOptions { Defaults = new ToolRuntimeOverride { MaximumOutputBytes = 32768 } });
-        var model = new CallbackModel(() =>
+        var model = new CallbackModel(
+            () =>
         {
             if (restriction == "revoked")
             {
                 context = context with { DeniedToolIds = ["memories"] };
             }
-        });
+        },
+            finishCoverage: true);
         await using var operations = new RepositoryIntelligenceOperations(
             intelligence.Store,
             intelligence.Options,
@@ -100,7 +103,7 @@ public static partial class RepositoryMemoryBindingTests
         if (restriction == "available")
         {
             Assert.True(await application.HandleAsync(new WaitForRunCommand(run), ct));
-            Assert.Equal(1, model.Requests);
+            Assert.Equal(3, model.Requests);
             Assert.Equal(1, enabledWrites);
         }
         else
@@ -273,11 +276,14 @@ public static partial class RepositoryMemoryBindingTests
     {
         private readonly Action _callback;
         private readonly string _text;
+        private readonly bool _finishCoverage;
+        private int _coverageRound;
 
-        public CallbackModel(Action callback, string text = "Collection finished.")
+        public CallbackModel(Action callback, string text = "Collection finished.", bool finishCoverage = false)
         {
             _callback = callback;
             _text = text;
+            _finishCoverage = finishCoverage;
         }
 
         public int Requests { get; private set; }
@@ -289,7 +295,18 @@ public static partial class RepositoryMemoryBindingTests
             Requests++;
             CapturedRequests.Add(request);
             _callback();
-            return new FakeModelProvider(new ScriptedSession { Turns = [new ScriptedTurn { Text = _text }] }).StreamAsync(request with { ToolContinuationRound = 0 }, cancellationToken);
+            var turn = new ScriptedTurn { Text = _text };
+            if (_finishCoverage && request.Messages.Any(message => message.SectionId == "repository-intelligence-coverage"))
+            {
+                turn = _coverageRound++ switch
+                {
+                    0 => new ScriptedTurn { ToolName = "read_file", ArgumentsJson = "{\"path\":\"feature.txt\"}" },
+                    1 => new ScriptedTurn { ToolName = "memories", ArgumentsJson = "{\"action\":\"updateCoverage\",\"coverage\":{\"key\":\"feature\",\"area\":\"Fixture feature\",\"question\":\"What is implemented?\",\"status\":\"investigated\",\"conclusion\":\"Fixture content inspected; no reusable recipe warranted.\",\"supportingPaths\":[\"feature.txt\"]}}" },
+                    _ => turn,
+                };
+            }
+
+            return new FakeModelProvider(new ScriptedSession { Turns = [turn] }).StreamAsync(request with { ToolContinuationRound = 0 }, cancellationToken);
         }
     }
 

@@ -64,6 +64,12 @@ public interface IRepositoryIntelligenceRun : IAsyncDisposable
     /// <summary>Pinned revision required to reuse a saved chronological cursor.</summary>
     string? ResumeHistoryRevision => null;
 
+    /// <summary>Final coverage preparation is checkpointed between ordinary model rounds.</summary>
+    bool IsCoverageReviewActive => false;
+
+    /// <summary>Starts or continues the final coverage pass; null permits normal completion.</summary>
+    Task<string?> ContinueCoverageAsync(string workingContext, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
+
     /// <summary>Saves completed batch preparation independently of final publication.</summary>
     Task SaveCheckpointAsync(string workingContext, CancellationToken cancellationToken = default) => Task.CompletedTask;
 

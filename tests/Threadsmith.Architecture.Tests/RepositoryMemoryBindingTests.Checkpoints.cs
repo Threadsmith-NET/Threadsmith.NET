@@ -39,6 +39,11 @@ public static partial class RepositoryMemoryBindingTests
                 ct);
             prepared = result.Entry!;
             run.Collection!.Accept(new RepositoryMemoryOperationResult("added", prepared.Id, prepared, [], []));
+            run.Collection.UpdateCoverage(new RepositoryIntelligenceCoverage
+            {
+                Key = "output", Area = "Presentation", Question = "How should features format output?", Status = "investigated",
+                Conclusion = "Use the shared formatter.", MemoryIds = [prepared.Id], Supports = prepared.Supports,
+            });
             await run.SaveCheckpointAsync("Completed formatter investigation.", ct);
         }
 
@@ -47,6 +52,7 @@ public static partial class RepositoryMemoryBindingTests
         Assert.NotNull(checkpoint);
         Assert.Equal(1f, checkpoint.Entries.Single(entry => entry.Id == prepared.Id).Embedding.Span[0]);
         Assert.Contains(prepared.Id, checkpoint.AcceptedIds);
+        Assert.Equal("investigated", Assert.Single(checkpoint.Coverage).Status);
         if (change == "baseline")
         {
             await intelligence.Store.AddAsync(intelligence.Identity, new RepositoryMemoryWrite { Text = "New published guidance", Origin = RepositoryMemoryOrigin.Model, Ownership = RepositoryMemoryOwnership.Intelligence }, model, embedding, intelligence.Options.CaptureCurrent(), ct);
@@ -73,7 +79,15 @@ public static partial class RepositoryMemoryBindingTests
             Assert.Equal(prepared.Revision, restored.Revision);
             Assert.Equal(1f, restored.Embedding.Span[0]);
             Assert.True(Assert.Single(restored.Supports).IsUnknown);
+            var coverage = Assert.Single(resumed.Collection.Coverage);
+            Assert.Equal("investigating", coverage.Status);
+            Assert.True(Assert.Single(coverage.Supports).IsUnknown);
+            Assert.Equal(prepared.Id, Assert.Single(coverage.MemoryIds));
             Assert.Contains("Completed formatter investigation.", resumed.Instructions, StringComparison.Ordinal);
+            Assert.NotNull(await resumed.ContinueCoverageAsync("Final pass", ct));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => resumed.CompleteAsync(ct));
+            resumed.Collection.UpdateCoverage(coverage with { Status = "investigated", Supports = prepared.Supports });
+            Assert.Null(await resumed.ContinueCoverageAsync("Final pass complete", ct));
             await resumed.CompleteAsync(ct);
             Assert.Equal(prepared.Id, Assert.Single((await intelligence.Store.GetSnapshotAsync(intelligence.Identity, [], ct)).Entries).Id);
             Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
@@ -81,6 +95,7 @@ public static partial class RepositoryMemoryBindingTests
         else
         {
             Assert.Empty(resumed.Collection!.Snapshot(forPublication: true));
+            Assert.Empty(resumed.Collection.Coverage);
             Assert.DoesNotContain("Completed formatter investigation.", resumed.Instructions, StringComparison.Ordinal);
         }
     }

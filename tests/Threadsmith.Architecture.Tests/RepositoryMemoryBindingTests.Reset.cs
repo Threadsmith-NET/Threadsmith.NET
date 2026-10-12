@@ -100,6 +100,11 @@ public static partial class RepositoryMemoryBindingTests
         await using var onboard = await operations.BeginAsync(session, RunId.New(), fixture.InitialRoot, RepositoryIntelligenceOperation.Onboard, ct);
         await Assert.ThrowsAsync<InvalidOperationException>(() => onboard.CompleteAsync(ct));
         await onboard.AcceptHistoryPageAsync(0, new GitLogResult([], false) { IsCollectionPage = true }, "{}", ct);
+        Assert.NotNull(await onboard.ContinueCoverageAsync("Final pass", ct));
+        onboard.Collection!.UpdateCoverage(new RepositoryIntelligenceCoverage
+        {
+            Key = "fixture", Area = "Fixture", Question = "What guidance exists?", Status = "blocked", Gaps = "Fixture provides no source to inspect.",
+        });
         await onboard.CompleteAsync(ct);
         Assert.True((await store.GetIntelligenceStateAsync(intelligence.Identity, ct)).Onboarded);
     }

@@ -40,13 +40,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 25 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 26 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **288** | Complete deployed catalog. |
+| **Total** | **289** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -129,8 +129,9 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
 | `Context-RepositoryArcheology.md` | Read-only investigation using repository intelligence, current source, and relevant Git history. | `None` |
-| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare evidence-supported memories and covered changes. | `None` |
-| `Context-RepositoryIntelligenceHistory.md` | Depth-scoped chronological onboarding batches, resumable completion checkpoints, and final current-source verification; Git metadata remains untrusted evidence. | [`HistoryJson`](#placeholder-historyjson) |
+| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare evidence-supported memories and covered changes; maintain a checkpointed onboarding coverage checklist and perform a host-required final gap pass with open-item publication fencing. | `None` |
+| `Context-RepositoryIntelligenceHistory.md` | Depth-scoped chronological onboarding batches, resumable completion checkpoints with investigation coverage, and final current-source verification and gap investigation; Git metadata remains untrusted evidence. | [`HistoryJson`](#placeholder-historyjson) |
+| `Context-RepositoryIntelligenceCoverage.md` | Mandatory final coverage investigation; separate unfinished questions from scope limitations, resolve open follow-ups before publication, and resume checkpointed preparation. | [`CoverageJson`](#placeholder-coveragejson) |
 | `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
@@ -591,7 +592,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, and revision-aware collision resolution. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
+| `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
 | `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
 
 #### `read_file` family
@@ -907,6 +908,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-version"></a>`Version` | Schema, wrapper, package, or protocol version identified by the surrounding prompt. |
 | <a id="placeholder-workspacefilename"></a>`WorkspaceFileName` | Display name of the current workspace or repository file. |
 
+| <a id="placeholder-coveragejson"></a>`CoverageJson` | Host-owned checklist item/open/blocked counts and first-review indicator; detailed investigation notes remain available through the memories tool. |
 | <a id="placeholder-historyjson"></a>`HistoryJson` | Sanitized bounded Git commit messages and changed paths, pinned history revision, requested depth, and chronological page/continuation cursor supplied by the host. |
 | <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with status, generation, coverage, diagnostics and omissions; pending, obsolete, or unmeasured error counts are omitted. |
 

@@ -21,7 +21,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
 
         var payload = JsonSerializer.Deserialize<CheckpointPayload>(json) ?? throw new InvalidDataException("Onboarding checkpoint is empty.");
         var checkpoint = payload.Checkpoint;
-        if (checkpoint.Version != 1 || checkpoint.RepositoryIdentity != repositoryIdentity)
+        if (checkpoint.Version is not (1 or 2) || checkpoint.RepositoryIdentity != repositoryIdentity)
         {
             throw new InvalidDataException("Onboarding checkpoint format or repository identity is incompatible.");
         }
@@ -39,7 +39,9 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
     public async Task SaveOnboardingCheckpointAsync(RepositoryIntelligenceCheckpoint checkpoint, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
-        if (_collection is not null || checkpoint.Version != 1 || checkpoint.NextHistoryPage <= 0
+        if (_collection is not null || checkpoint.Version is not (1 or 2) || checkpoint.NextHistoryPage < 0
+            || (checkpoint.NextHistoryPage == 0 && !checkpoint.HistoryComplete)
+            || (checkpoint.HistoryComplete && (checkpoint.Version < 2 || !checkpoint.CoverageReviewStarted))
             || checkpoint.Entries.Any(entry => entry.RepositoryIdentity != checkpoint.RepositoryIdentity || entry.Ownership != RepositoryMemoryOwnership.Intelligence))
         {
             throw new InvalidOperationException("Invalid onboarding checkpoint ownership or progress.");

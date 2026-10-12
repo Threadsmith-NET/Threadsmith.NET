@@ -155,6 +155,9 @@ public static class PromptFileNames
     /// <summary>Chronological onboarding batch guidance surrounding untrusted Git metadata.</summary>
     public const string ContextRepositoryIntelligenceHistory = "Context-RepositoryIntelligenceHistory.md";
 
+    /// <summary>Host-requested final investigation pass after chronological history completes.</summary>
+    public const string ContextRepositoryIntelligenceCoverage = "Context-RepositoryIntelligenceCoverage.md";
+
     /// <summary>On-demand source and history investigation without mutation authority.</summary>
     public const string ContextRepositoryArcheology = "Context-RepositoryArcheology.md";
 
@@ -1002,6 +1005,7 @@ public static class PromptFileNames
         SystemRepositoryIntelligenceGuidance,
         ContextRepositoryIntelligenceCollection,
         ContextRepositoryIntelligenceHistory,
+        ContextRepositoryIntelligenceCoverage,
         ContextRepositoryArcheology,
         SystemStandingPreferenceGuidance,
         SystemGovernedRequestState,
@@ -1459,7 +1463,7 @@ public static class PromptAssetCatalog
 
         string ResolveOwner(string fileName)
         {
-            if (fileName is PromptFileNames.ContextRepositoryIntelligenceCollection or PromptFileNames.ContextRepositoryIntelligenceHistory or PromptFileNames.ContextRepositoryArcheology)
+            if (fileName is PromptFileNames.ContextRepositoryIntelligenceCollection or PromptFileNames.ContextRepositoryIntelligenceHistory or PromptFileNames.ContextRepositoryIntelligenceCoverage or PromptFileNames.ContextRepositoryArcheology)
             {
                 return "Threadsmith.RepositoryIntelligence";
             }
@@ -1616,6 +1620,7 @@ public static class PromptAssetCatalog
                     [PromptFileNames.CorrectionGitDiffMissingRevision] = Set("FieldName", "ModeDescription"),
                     [PromptFileNames.CorrectionGitLogInvalidRevision] = Set("FieldName"),
                     [PromptFileNames.ContextRepositoryIntelligenceHistory] = Set("HistoryJson"),
+                    [PromptFileNames.ContextRepositoryIntelligenceCoverage] = Set("CoverageJson"),
                     [PromptFileNames.CorrectionGitBlameInvalidRevision] = Set("FieldName"),
                     [PromptFileNames.CorrectionSearchBounds] = Set("MaximumMatches", "MaximumQueryCharacters"),
                     [PromptFileNames.ToolSearchDescription] = Set("MaximumQueryCharacters"),

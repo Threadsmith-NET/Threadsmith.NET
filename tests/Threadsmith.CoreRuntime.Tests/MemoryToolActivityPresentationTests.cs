@@ -116,6 +116,33 @@ public static class MemoryToolActivityPresentationTests
         Assert.DoesNotContain(new string('x', 100), transcript.Text, StringComparison.Ordinal);
     }
 
+    /// <summary>Checklist operations report investigation progress with the shared terminal encoding.</summary>
+    [Theory]
+    [InlineData("updateCoverage", false)]
+    [InlineData("coverage", false)]
+    [InlineData("coverage", true)]
+    public static void Transcript_ShowsChecklistProgressInsteadOfEmptyMemories(string action, bool empty)
+    {
+        var result = JsonSerializer.Serialize(new
+        {
+            Action = action,
+            Outcome = "prepared",
+            Entries = Array.Empty<object>(),
+            Coverage = new
+            {
+                Items = empty ? [] : new[] { new { Area = "Shared output\u009b31m", Status = "investigated" } },
+                NextAfterKey = empty ? null : "output",
+            },
+        });
+        var transcript = Render(true, result, activityDetail: action);
+
+        Assert.DoesNotContain("No memories returned.", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains("Outcome: prepared", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains(empty ? "No investigation checklist items on this page." : "Investigation: Shared output\\u009B31m — investigated", transcript.Text, StringComparison.Ordinal);
+        Assert.Equal(!empty, transcript.Text.Contains("More investigation checklist items available.", StringComparison.Ordinal));
+        Assert.DoesNotContain('\u009b', transcript.Text);
+    }
+
     private static ConversationTranscript Render(
         bool succeeded,
         string? resultJson,

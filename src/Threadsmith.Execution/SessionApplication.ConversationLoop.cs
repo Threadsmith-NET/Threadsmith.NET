@@ -106,6 +106,19 @@ public sealed partial class SessionApplication
             ConversationRoundOutcome outcome;
             try
             {
+                if (registration.IntelligenceRun is { IsCoverageReviewActive: true } && invocationContext is not null)
+                {
+                    var currentContext = await CreateToolInvocationContextAsync(registration, cancellationToken)
+                        ?? throw new InvalidOperationException("Repository intelligence execution is unavailable.");
+                    if (RepositoryIdentity.Create(currentContext.RepositoryPath) != RepositoryIdentity.Create(invocationContext.RepositoryPath))
+                    {
+                        throw new InvalidOperationException("The repository changed during coverage collection.");
+                    }
+
+                    ValidateIntelligenceCollectionTools(registration.IntelligenceOperation, ConversationToolAvailability.CreateSnapshot(
+                        _toolPipeline, _toolRegistry, registration.SessionId, runId, currentContext with { IntelligenceRun = registration.IntelligenceRun }, toolsWithheld: false));
+                }
+
                 outcome = await ExecuteConversationRoundAsync(
                     round,
                     loopState,
@@ -119,6 +132,11 @@ public sealed partial class SessionApplication
                 {
                     _conversationToolSnapshots?.Release(snapshotId);
                 }
+            }
+
+            if (registration.IntelligenceRun is { IsCoverageReviewActive: true } coverageRun)
+            {
+                await coverageRun.SaveCheckpointAsync(_sanitizer.Sanitize(string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content)), cancellationToken);
             }
 
             var submittedSteering = outcome.PreToolSteering.Count > 0
@@ -178,6 +196,33 @@ public sealed partial class SessionApplication
                     }
 
                     await SupplyIntelligenceHistoryAsync(runId, registration, phase, invocationContext, loopState, modelRound, cancellationToken);
+                    loopState.ReleaseCompletedReplay();
+                    continue;
+                }
+
+                if (registration.IntelligenceRun is { } coverage
+                    && await coverage.ContinueCoverageAsync(_sanitizer.Sanitize(string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content)), cancellationToken) is { } coverageInstructions)
+                {
+                    if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
+                    {
+                        loopState.CommitStandaloneMessage(modelRound, CreateVisibleAssistantMessage(outcome.TextOutput), purgeAfterCorrection: false);
+                        await ArchiveVisibleMessageAsync(registration.SessionId, runId, ConversationRole.Assistant, outcome.TextOutput, cancellationToken);
+                    }
+
+                    loopState.CommitStandaloneMessage(
+                        modelRound,
+                        new ModelMessage
+                    {
+                        Role = ModelMessageRole.HostContext,
+                        SectionId = "repository-intelligence-coverage",
+                        Content = [new ModelContentPart { Content = coverageInstructions }],
+                    },
+                        purgeAfterCorrection: false);
+                    if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
+                    {
+                        throw new InvalidOperationException("The model round limit was reached before onboarding coverage completed. Preparation was checkpointed; the prior collection was preserved.");
+                    }
+
                     loopState.ReleaseCompletedReplay();
                     continue;
                 }

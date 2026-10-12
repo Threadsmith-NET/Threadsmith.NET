@@ -12,6 +12,7 @@
     <PackageReference Include="xunit.analyzers" />
     <PackageReference Include="Microsoft.Testing.Platform.MSBuild" />
     <ProjectReference Include="..\..\src\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\..\src\Threadsmith.RepositoryIntelligence\Threadsmith.RepositoryIntelligence.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Cli\Threadsmith.Cli.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.DotNet\Threadsmith.DotNet.csproj" />
     <ProjectReference Include="..\..\src\Threadsmith.Execution\Threadsmith.Execution.csproj" />

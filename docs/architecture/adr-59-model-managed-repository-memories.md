@@ -59,3 +59,17 @@ Memory search configuration has exactly two scenario blocks: `Recall` and `Recon
 ## Direct-editing amendment (2026-10-05)
 
 Active-run memory selections persist across ordinary tool/model continuations. Plan tranches are no longer an execution boundary; new-run, repository and child-run isolation remain unchanged. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.
+
+## Repository intelligence amendment (2026-10-11)
+
+Extend the shared store, memory writer, search and context assembly with immutable Ordinary and Intelligence ownership. This amendment supersedes the original single-partition capacity/duplicate rules and text-only model framing for intelligence. Migration 14 preserves existing rows as Ordinary, retains vectors, usage, IDs, concepts and existing schema extensions, partitions exact-text uniqueness by ownership, and adds primary-source provenance, pending paths and observation state. Storage eviction and collection replacement operate only within the relevant ownership partition.
+
+`Threadsmith.RepositoryIntelligence` owns collection policy, monitoring coordination and commit-refresh scheduling and references only Core plus logging abstractions. Persistence owns SQLite, Context owns search and recall, Workspaces owns validated commit observation, and DotNet's shared file observer serves semantic and intelligence consumers. App composes those owners. No separate model loop, renderer, database or retrieval engine is introduced.
+
+Explicit user onboarding prepares assertions through the existing model/tool execution and memory reconciliation path; successful completion publishes them atomically. Cancellation/failure preserves the prior collection. Intelligence defaults off and cannot be automatically onboarded. Recall and reconciliation have separate intelligence settings and inclusion/storage limits; cross-partition reconciliation is informational and cannot grant ordinary-memory mutation authority to collection.
+
+Background source observation advances repository memory-set revisions for provenance/dirty-state changes while retaining compatible vectors for unchanged assertion text. Model-facing intelligence includes primary support paths and advisory dirty/unknown warnings. Recall does no source validation or synchronous observation catch-up. Effective enablement/fault and metadata changes are rechecked at final dispatch and flow through existing context reconstruction and provider-continuation invalidation. Ordinary-only continuation retains its existing snapshot behavior.
+
+Commit refresh defaults off and observes validated standard reflog creation records without native Git. Custom/suppressed reflogs may be missed; manual refresh remains available. A successful collection acknowledges only the generation captured before its source-change checkpoint. Later commits and uncovered changes remain pending. Monitoring failure visibly disables effective intelligence; explicit recovery accounts for the observation gap before restoring eligibility.
+
+Manual inspection retains preserved intelligence while disabled; ordinary model listing hides it. Shared actual-inclusion events and rendering expose all included memory categories, independently of the default-on display toggle. See [repository intelligence operations](../operations/conversation-context.md#repository-intelligence) for commands and configuration.

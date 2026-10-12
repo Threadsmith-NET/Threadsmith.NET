@@ -73,6 +73,7 @@ public sealed class RepositoryLifecycle :
 
     private readonly Func<string, CancellationToken, Task>? _repositoryOpened;
     private readonly Func<IReadOnlyList<string>>? _repositoryOpenWarnings;
+    private readonly Func<SessionId, string, CancellationToken, Task>? _repositoryReady;
 
     private readonly Lock _sessionGate = new();
 
@@ -91,7 +92,8 @@ public sealed class RepositoryLifecycle :
         Func<string, CancellationToken, Task>? repositoryOpened = null,
         WorkspaceResourceLimits? resourceLimits = null,
         int maximumConfigurationBytes = 1024 * 1024,
-        Func<IReadOnlyList<string>>? repositoryOpenWarnings = null)
+        Func<IReadOnlyList<string>>? repositoryOpenWarnings = null,
+        Func<SessionId, string, CancellationToken, Task>? repositoryReady = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(factsStore);
@@ -108,6 +110,7 @@ public sealed class RepositoryLifecycle :
         _mutationApprovalPolicy = mutationApprovalPolicy;
         _repositoryOpened = repositoryOpened;
         _repositoryOpenWarnings = repositoryOpenWarnings;
+        _repositoryReady = repositoryReady;
     }
 
     /// <inheritdoc />
@@ -314,6 +317,11 @@ public sealed class RepositoryLifecycle :
         if (_repositoryOpened is not null)
         {
             await _repositoryOpened(repositoryPath, cancellationToken);
+        }
+
+        if (_repositoryReady is not null)
+        {
+            await _repositoryReady(command.SessionId, repositoryPath, cancellationToken);
         }
 
         return new RepositoryOpenResult(

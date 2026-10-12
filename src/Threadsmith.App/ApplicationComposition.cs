@@ -11,6 +11,7 @@ using Threadsmith.Hooks;
 using Threadsmith.Mcp;
 using Threadsmith.Models;
 using Threadsmith.Persistence;
+using Threadsmith.RepositoryIntelligence;
 using Threadsmith.Reranking.Local;
 using Threadsmith.Skills;
 using Threadsmith.Telemetry;
@@ -255,6 +256,16 @@ internal static class ApplicationComposition
             Conversation = conversationPolicy,
         };
         var memoryOptions = new RepositoryMemoryConfiguration(host.Configuration, host.TrustedConfiguration, host.Paths.RepositoryRoot);
+        var intelligence = new RepositoryIntelligenceMonitor(
+            persistence.RepositoryMemoryStore,
+            semantic.RepositoryFileObserver,
+            host.Events,
+            host.LoggerFactory.CreateLogger<RepositoryIntelligenceMonitor>(),
+            host.Sanitizer);
+        var intelligenceAutomation = new RepositoryIntelligenceAutomation(
+            new RepositoryCommitObserver(semantic.RepositoryFileObserver), intelligence, memoryOptions, host.Events, host.LoggerFactory.CreateLogger<RepositoryIntelligenceAutomation>());
+        var intelligenceOperations = new RepositoryIntelligenceOperations(
+            persistence.RepositoryMemoryStore, memoryOptions, intelligence, host.PromptLoader, host.Events, memoryOptions.SetIntelligenceEnabledAsync, intelligenceAutomation);
         var memoryService = new RepositoryMemoryService(persistence.RepositoryMemoryStore, embeddings, host.Sanitizer, host.LoggerFactory.CreateLogger<RepositoryMemoryService>(), memoryRetriever);
         var initialRepositoryIdentity = RepositoryIdentity.Create(host.Paths.RepositoryRoot);
         var initialMemoryOptions = memoryOptions.Capture(initialRepositoryIdentity);
@@ -460,7 +471,9 @@ internal static class ApplicationComposition
             semanticRefreshCoordinator: semantic.SemanticRefreshCoordinator,
             repositoryMemories: memoryService,
             repositoryMemoryOptions: memoryOptions,
-            sourceEdits: sourceEdits);
+            sourceEdits: sourceEdits,
+            repositoryIntelligence: intelligence,
+            intelligenceOperations: intelligenceOperations);
 
         // The foundation-owned coordinator may prepare work before session composition, but publication
         // delegates to this sole run-lifetime authority once it exists.
@@ -476,10 +489,12 @@ internal static class ApplicationComposition
             integration.McpManager,
             persistence.RepositoryMemoryStore,
             memoryOptions,
-            repositoryRoot => ConfigurationBootstrap.Build(host.ConfigurationArguments, ConfigurationBootstrap.ResolvePaths(repositoryRoot)));
+            repositoryRoot => ConfigurationBootstrap.Build(host.ConfigurationArguments, ConfigurationBootstrap.ResolvePaths(repositoryRoot)),
+            intelligence,
+            intelligenceOperations);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
-        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader);
+        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader, intelligence);
         try
         {
             tools.ToolRegistry.RegisterOrReplace(memoriesTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "memories"));
@@ -495,7 +510,8 @@ internal static class ApplicationComposition
                 repositoryOpened: repositoryBindings.BindRepositoryAsync,
                 resourceLimits: host.OperationalLimits.Workspace,
                 maximumConfigurationBytes: host.TrustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
-                repositoryOpenWarnings: () => repositoryBindings.LastWarnings);
+                repositoryOpenWarnings: () => repositoryBindings.LastWarnings,
+                repositoryReady: intelligenceOperations.BindAsync);
 
             var delegateAgentsOptions = host.TrustedConfiguration
                 .GetSection("agents:delegation")
@@ -785,7 +801,8 @@ internal static class ApplicationComposition
                 integration.Models.ActiveModels,
                 modelExchangeLog: integration.Models.RawModelLog,
                 prepareNewSession: scratchpad.BeginNewSessionAsync,
-                executionCheckpoints: persistence.ExecutionCheckpoints);
+                executionCheckpoints: persistence.ExecutionCheckpoints,
+                sessionActivated: entry => intelligenceOperations.ActivateSession(entry.SessionId, entry.RepositoryIdentity));
             repositoryBindings.AttachSessionLifecycle(sessionLifecycle);
             sessionCheckpointSubscription = host.Events.Subscribe(
                 async (domainEvent, _) =>
@@ -800,6 +817,8 @@ internal static class ApplicationComposition
                 });
             var handlers = new List<object>
             {
+                intelligenceOperations,
+                intelligenceAutomation,
                 sessionApplication,
                 semantic.SemanticRefreshCoordinator,
                 sessionLifecycle,
@@ -864,11 +883,15 @@ internal static class ApplicationComposition
                 startupDisplayWarnings,
                 agentDisplay,
                 scratchpad,
+                intelligence,
+                intelligenceOperations,
                 new EffectiveConfigurationPreflight(
                     integration.Models.ActiveModels, childModelSelection, delegateAgentsOptions.EffectiveChildBudget));
         }
         catch
         {
+            await intelligence.DisposeAsync();
+            await intelligenceOperations.DisposeAsync();
             if (sessionCheckpointSubscription is not null)
             {
                 await sessionCheckpointSubscription.DisposeAsync();
@@ -1084,6 +1107,9 @@ internal sealed record ToolPolicyCompositionInputs
 /// <summary>Repository semantic-engine registry and semantic mutation operations.</summary>
 internal sealed record SemanticCompositionInputs
 {
+    /// <summary>Shared raw file observation owned by the host foundation.</summary>
+    internal required IRepositoryFileObserver RepositoryFileObserver { get; init; }
+
     /// <summary>Gets the repository semantic-engine registry.</summary>
     internal required SemanticEngineRegistry SemanticEngines { get; init; }
 
@@ -1119,6 +1145,8 @@ internal sealed class RepositoryScopedBindingCoordinator
     private readonly RepositoryBoundMemoryStore? _memoryStore;
     private readonly RepositoryMemoryConfiguration? _memoryOptions;
     private readonly Func<string, IConfigurationRoot>? _memoryConfigurationLoader;
+    private readonly RepositoryIntelligenceMonitor? _intelligence;
+    private readonly RepositoryIntelligenceOperations? _intelligenceOperations;
     private ClaudeSkillCompatibilityCatalog? _claudeSkills;
     private CompatibleSkillCatalog? _compatibleSkills;
     private string _currentRepositoryRoot;
@@ -1139,7 +1167,9 @@ internal sealed class RepositoryScopedBindingCoordinator
         IMcpManager mcpManager,
         RepositoryBoundMemoryStore? memoryStore = null,
         RepositoryMemoryConfiguration? memoryOptions = null,
-        Func<string, IConfigurationRoot>? memoryConfigurationLoader = null)
+        Func<string, IConfigurationRoot>? memoryConfigurationLoader = null,
+        RepositoryIntelligenceMonitor? intelligence = null,
+        RepositoryIntelligenceOperations? intelligenceOperations = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(initialRepositoryRoot);
         ArgumentNullException.ThrowIfNull(toolState);
@@ -1155,6 +1185,8 @@ internal sealed class RepositoryScopedBindingCoordinator
         _memoryStore = memoryStore;
         _memoryOptions = memoryOptions;
         _memoryConfigurationLoader = memoryConfigurationLoader;
+        _intelligence = intelligence;
+        _intelligenceOperations = intelligenceOperations;
     }
 
     /// <summary>Attaches the catalogs constructed later in the composition sequence.</summary>
@@ -1293,7 +1325,17 @@ internal sealed class RepositoryScopedBindingCoordinator
         }
 
         var options = _memoryOptions.ReadRepositoryOptions(configuration);
-        await _memoryStore.BindRepositoryAsync(repositoryRoot, options.MaxNumberOfRepoMemories, cancellationToken);
+        if (_intelligenceOperations is not null)
+        {
+            await _intelligenceOperations.SuspendAsync(cancellationToken);
+        }
+
+        if (_intelligence is not null)
+        {
+            await _intelligence.SuspendAsync(cancellationToken);
+        }
+
+        await _memoryStore.BindRepositoryAsync(repositoryRoot, options, cancellationToken);
         _memoryOptions.BindRepository(repositoryRoot, options);
     }
 
@@ -1341,6 +1383,11 @@ internal sealed class RepositoryScopedBindingCoordinator
             await RestoreAsync(() => _activeModels.BindRepositoryAsync(repositoryRoot));
         }
 
+        if (_intelligenceOperations is not null)
+        {
+            await RestoreAsync(() => _intelligenceOperations.RestoreBindingAsync(CancellationToken.None));
+        }
+
         return failures.Count switch
         {
             0 => null,
@@ -1370,6 +1417,8 @@ internal sealed class ApplicationServices : IAsyncDisposable
     private readonly ToolRegistry _toolRegistry;
     private readonly IDomainEventSubscription _sessionCheckpointSubscription;
     private readonly ScratchpadLifecycle _scratchpad;
+    private readonly RepositoryIntelligenceMonitor _intelligence;
+    private readonly RepositoryIntelligenceOperations _intelligenceOperations;
 
     /// <summary>Initializes a new instance of the <see cref="ApplicationServices"/> class.</summary>
     internal ApplicationServices(
@@ -1398,6 +1447,8 @@ internal sealed class ApplicationServices : IAsyncDisposable
         IReadOnlyList<string> startupDisplayWarnings,
         AgentDisplayStream agentDisplay,
         ScratchpadLifecycle scratchpad,
+        RepositoryIntelligenceMonitor intelligence,
+        RepositoryIntelligenceOperations intelligenceOperations,
         EffectiveConfigurationPreflight configurationPreflight)
     {
         ArgumentNullException.ThrowIfNull(configurationPreflight);
@@ -1431,6 +1482,8 @@ internal sealed class ApplicationServices : IAsyncDisposable
         MemoryOptions = memoryOptions;
         StartupDisplayWarnings = startupDisplayWarnings;
         _scratchpad = scratchpad;
+        _intelligence = intelligence;
+        _intelligenceOperations = intelligenceOperations;
     }
 
     /// <summary>Gets the dispatcher exposed to terminal command surfaces.</summary>
@@ -1483,6 +1536,8 @@ internal sealed class ApplicationServices : IAsyncDisposable
         }
 
         await DisposeStepAsync(async () => await _sessionCheckpointSubscription.DisposeAsync());
+        await DisposeStepAsync(async () => await _intelligenceOperations.DisposeAsync());
+        await DisposeStepAsync(async () => await _intelligence.DisposeAsync());
         await DisposeStepAsync(() =>
         {
             if (_delegateAgentsTool is not null)

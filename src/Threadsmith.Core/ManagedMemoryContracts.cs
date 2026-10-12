@@ -5,6 +5,12 @@ using System.Text.Json.Serialization;
 /// <summary>Effective repository memory bounds and retrieval policy, frozen for each operation or user turn.</summary>
 public sealed record RepositoryMemoryOptions
 {
+    /// <summary>Independent ownership, retrieval and collection settings for intelligence.</summary>
+    public RepositoryIntelligenceOptions Intelligence { get; init; } = new();
+
+    /// <summary>Displays actually submitted memory content through the shared output projection.</summary>
+    public bool ShowMemoryOutput { get; init; } = true;
+
     /// <summary>Calibrated default for the bundled local embedding model's semantic branch.</summary>
     public const double DefaultSemanticMinimum = 0.47;
 
@@ -93,6 +99,8 @@ public sealed record RepositoryMemoryOptions
     /// <summary>Rejects invalid configuration before it affects storage or retrieval.</summary>
     public void Validate()
     {
+        ArgumentNullException.ThrowIfNull(Intelligence);
+        Intelligence.Validate();
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReconciliationCandidateLimit);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConceptCandidateLimit);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReconciliationConceptCandidateLimit);
@@ -168,6 +176,18 @@ public enum RepositoryMemoryType
 /// <summary>Detached repository memory content, usage and compatible embedding metadata.</summary>
 public sealed record RepositoryMemoryEntry
 {
+    /// <summary>Immutable owner of capacity, duplicate detection and collection lifecycle.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; }
+
+    /// <summary>Primary observed evidence; bookkeeping never changes embedded assertion text.</summary>
+    public IReadOnlyList<RepositoryMemorySupport> Supports { get; init; } = [];
+
+    /// <summary>At least one primary source has changed since collection.</summary>
+    public bool IsDirty => Supports.Any(support => support.IsDirty);
+
+    /// <summary>At least one primary source has incomplete observation coverage.</summary>
+    public bool IsUnknown => Supports.Any(support => support.IsUnknown);
+
     /// <summary>Stable memory identity.</summary>
     public required RepositoryMemoryId Id { get; init; }
 
@@ -239,6 +259,12 @@ public sealed record RepositoryMemoryEntry
 /// <summary>Sanitized explicit write prepared before embedding generation and database locking.</summary>
 public sealed record RepositoryMemoryWrite
 {
+    /// <summary>Host-authorized immutable ownership partition.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; }
+
+    /// <summary>Complete primary-source replacement prepared by the collection owner.</summary>
+    public IReadOnlyList<RepositoryMemorySupport> Supports { get; init; } = [];
+
     /// <summary>Complete sanitized text, with normalized newlines and outer whitespace trimmed.</summary>
     public required string Text { get; init; }
 
@@ -330,6 +356,73 @@ public sealed record RepositoryMemoryInclusion(RepositoryMemoryId Id, long Revis
 /// <summary>Transactional repository-local persistence independent of inference and provider types.</summary>
 public interface IManagedRepositoryMemoryStore
 {
+    /// <summary>Reads one bounded ordered page of pending paths through a collection checkpoint.</summary>
+    Task<RepositoryIntelligenceChangePage> ReadIntelligenceChangesAsync(string repositoryIdentity, long checkpoint, string? afterPath, int maximumBytes, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support intelligence tracking.");
+    }
+
+    /// <summary>Reads only the scalar observation checkpoint before a collection source read.</summary>
+    async Task<long> GetIntelligenceCheckpointAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return (await GetIntelligenceStateAsync(repositoryIdentity, cancellationToken)).ChangeSequence;
+    }
+
+    /// <summary>Clears a persisted fault only after explicit recovery established healthy observation.</summary>
+    Task ClearIntelligenceFaultAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support intelligence recovery.");
+    }
+
+    /// <summary>Uses the same store implementation with short rolled-back preparation transactions.</summary>
+    IManagedRepositoryMemoryStore ForCollection(RepositoryMemoryCollection collection)
+    {
+        throw new NotSupportedException("The memory store does not support collection preparation.");
+    }
+
+    /// <summary>Atomically publishes prepared intelligence while retaining concurrent source changes.</summary>
+    Task CommitCollectionAsync(RepositoryMemoryCollection collection, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support collection publication.");
+    }
+
+    /// <summary>Resolves background support observations only while their captured change checkpoint is current.</summary>
+    Task ReconcileIntelligenceObservationAsync(string repositoryIdentity, long checkpoint, IReadOnlyList<RepositoryMemorySupport> observations, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support intelligence tracking.");
+    }
+
+    /// <summary>Reads collection state without scanning sources or invoking inference.</summary>
+    Task<RepositoryIntelligenceState> GetIntelligenceStateAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support intelligence tracking.");
+    }
+
+    /// <summary>Atomically records observed paths or a coverage gap and advances candidate metadata revision.</summary>
+    Task RecordIntelligenceChangesAsync(string repositoryIdentity, IReadOnlyList<string> paths, bool observationGap, string? fault = null, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support intelligence tracking.");
+    }
+
+    /// <summary>Filters ownership before lexical expansion and semantic qualification.</summary>
+    async Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
+        string repositoryIdentity,
+        IReadOnlyList<string> lexicalTerms,
+        RepositoryMemoryLexicalOptions lexicalOptions,
+        RepositoryMemoryOwnership? ownership,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = await GetSnapshotAsync(repositoryIdentity, lexicalTerms, lexicalOptions, cancellationToken);
+        if (ownership is null)
+        {
+            return snapshot;
+        }
+
+        var entries = snapshot.Entries.Where(entry => entry.Ownership == ownership).ToArray();
+        var ids = entries.Select(entry => entry.Id).ToHashSet();
+        return snapshot with { Entries = entries, LexicalMatches = snapshot.LexicalMatches.Where(match => ids.Contains(match.Id)).ToArray() };
+    }
+
     /// <summary>Reads entries and qualified, safely quoted lexical matches in one database snapshot.</summary>
     Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
         string repositoryIdentity,

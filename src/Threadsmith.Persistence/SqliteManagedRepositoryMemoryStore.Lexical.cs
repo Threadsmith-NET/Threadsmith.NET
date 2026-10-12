@@ -12,6 +12,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         RepositoryMemoryReadSnapshot snapshot,
         IReadOnlyList<string> terms,
         RepositoryMemoryLexicalOptions options,
+        RepositoryMemoryOwnership? ownership,
         CancellationToken cancellationToken)
     {
         if (terms.Count == 0 || snapshot.Entries.Count == 0)
@@ -28,9 +29,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             vocabularyCommand.CommandText = """
                 SELECT DISTINCT v.term FROM temp.memory_text_terms v
                 JOIN managed_memories m ON m.rowid = v.doc
-                WHERE m.repository_identity = $repo ORDER BY v.term;
+                WHERE m.repository_identity = $repo AND ($ownership IS NULL OR m.ownership = $ownership) ORDER BY v.term;
                 """;
             vocabularyCommand.Parameters.AddWithValue("$repo", snapshot.RepositoryIdentity);
+            vocabularyCommand.Parameters.AddWithValue("$ownership", ownership is { } owner ? (int)owner : DBNull.Value);
             var vocabulary = new List<string>();
             await using (var reader = await vocabularyCommand.ExecuteReaderAsync(cancellationToken))
             {

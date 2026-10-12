@@ -36,25 +36,47 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
     }
 
     /// <inheritdoc />
-    public Task<RepositoryMemoryRetrievalResult> RetrieveAsync(
+    public async Task<RepositoryMemoryRetrievalResult> RetrieveAsync(
         RepositoryMemoryRetrievalRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         request.Options.Validate();
         var query = BuildQuery(request, out var bounded);
-        return SearchAsync(
-            new RepositoryMemorySearchRequest
+        var search = new RepositoryMemorySearchRequest
             {
                 RepositoryIdentity = request.RepositoryIdentity,
                 Query = query,
                 QueryBounded = bounded,
                 Options = RepositoryMemorySearchOptions.ForRecall(request.Options),
+                Ownership = RepositoryMemoryOwnership.Ordinary,
                 UserTurnId = request.UserTurnId,
                 Concepts = request.Concepts,
                 RetainedMemories = request.RetainedMemories,
+            };
+        var ordinary = await SearchAsync(search, cancellationToken);
+        if (!request.IntelligenceEnabled || !request.Options.Intelligence.Enabled)
+        {
+            return ordinary;
+        }
+
+        var intelligence = await SearchAsync(
+            search with
+            {
+                Ownership = RepositoryMemoryOwnership.Intelligence,
+                Options = request.Options.Intelligence.Recall,
             },
             cancellationToken);
+        return ordinary with
+        {
+            Selected = [.. ordinary.Selected, .. intelligence.Selected],
+            Diagnostics = [.. ordinary.Diagnostics, .. intelligence.Diagnostics],
+            IntelligenceSearchDetails = intelligence.SearchDetails,
+            IsComplete = ordinary.IsComplete && intelligence.IsComplete,
+            ConceptResolutionPending = ordinary.ConceptResolutionPending || intelligence.ConceptResolutionPending,
+            QueryEmbeddingCacheHit = ordinary.QueryEmbeddingCacheHit && intelligence.QueryEmbeddingCacheHit,
+            RankingCacheHit = ordinary.RankingCacheHit && intelligence.RankingCacheHit,
+        };
     }
 
     /// <inheritdoc />
@@ -66,6 +88,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         ArgumentException.ThrowIfNullOrWhiteSpace(request.RepositoryIdentity);
         request.Options.Validate();
         cancellationToken.ThrowIfCancellationRequested();
+        var store = request.Collection is null ? _store : _store.ForCollection(request.Collection);
         var concepts = request.Options.ConceptRecallEnabled ? request.Concepts.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(MemoryConcepts.MaximumPerTurn).ToArray() : [];
         var semanticMinimum = request.Options.SemanticMinimum;
         var query = request.Query;
@@ -77,7 +100,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         try
         {
             var terms = Tokenize(query).Where(term => !StopWords.Contains(term)).Take(request.Options.MaximumQueryTerms).ToArray();
-            var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, cancellationToken);
+            var snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, request.Ownership, cancellationToken);
             memorySetRevision = snapshot.Revision;
             standingPreferences = SelectStandingPreferences(snapshot);
             snapshot = request.IncludeStandingPreferences ? snapshot : SelectSituationalSnapshot(snapshot);
@@ -113,7 +136,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             var rerankerKey = request.Options.RerankerEnabled
                 ? string.Join(':', crossEncoderModel?.ModelId ?? "unavailable", crossEncoderModel?.MaxInputTokens, crossEncoderModel?.MaxBatchSize, request.Options.RerankerCandidateLimit)
                 : "disabled";
-            var rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
+            var rankKey = string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, snapshot.Revision, request.Ownership, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
             var degradedKey = request.UserTurnId is { } turn ? rankKey + ":degraded:" + turn.Value.ToString("D") : null;
             if (_rankingCache.TryGetValue(rankKey, out var cached)
                 || (degradedKey is not null && _rankingCache.TryGetValue(degradedKey, out cached)))
@@ -161,15 +184,15 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
 
             if (embedding is not null)
             {
-                var rebuilt = await RebuildEmbeddingsAsync(snapshot, model, diagnostics, cancellationToken);
+                var rebuilt = await RebuildEmbeddingsAsync(snapshot, model, diagnostics, store, cancellationToken);
                 if (rebuilt)
                 {
                     // Both rankings must observe precisely the same content and vector generation after rebuild.
-                    snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, cancellationToken);
+                    snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, request.Ownership, cancellationToken);
                     memorySetRevision = snapshot.Revision;
                     standingPreferences = SelectStandingPreferences(snapshot);
                     snapshot = request.IncludeStandingPreferences ? snapshot : SelectSituationalSnapshot(snapshot);
-                    rankKey = string.Join(':', request.RepositoryIdentity, snapshot.Revision, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
+                    rankKey = string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, snapshot.Revision, request.Ownership, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
                 }
             }
 
@@ -186,7 +209,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             var resolvedConcepts = new HashSet<string>(StringComparer.Ordinal);
             var vocabulary = snapshot.Entries.SelectMany(entry => entry.Concepts).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
             var pending = new List<string>();
-            string ConceptKey(string concept) => string.Join(':', request.RepositoryIdentity, snapshot.Revision, request.IncludeStandingPreferences, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, concept);
+            string ConceptKey(string concept) => string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, snapshot.Revision, request.Ownership, request.IncludeStandingPreferences, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, concept);
             foreach (var concept in concepts)
             {
                 if (_conceptCache.TryGetValue(ConceptKey(concept), out var resolved))
@@ -344,7 +367,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 try
                 {
                     // A failed lexical index must not suppress readable standing preferences.
-                    var snapshot = await _store.GetSnapshotAsync(request.RepositoryIdentity, [], cancellationToken);
+                    var snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, [], cancellationToken);
                     standingPreferences = SelectStandingPreferences(snapshot);
                     memorySetRevision = snapshot.Revision;
                 }
@@ -504,6 +527,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         RepositoryMemoryReadSnapshot snapshot,
         TextEmbeddingModelDescriptor model,
         List<string> diagnostics,
+        IManagedRepositoryMemoryStore store,
         CancellationToken cancellationToken)
     {
         var rebuilt = false;
@@ -521,7 +545,8 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     continue;
                 }
 
-                var attached = await _store.AttachEmbeddingAsync(snapshot.RepositoryIdentity, entry.Id, entry.Revision, entry.ContentHash, model, embedding, cancellationToken);
+                var embeddingStore = entry.Ownership == RepositoryMemoryOwnership.Ordinary ? _store : store;
+                var attached = await embeddingStore.AttachEmbeddingAsync(snapshot.RepositoryIdentity, entry.Id, entry.Revision, entry.ContentHash, model, embedding, cancellationToken);
                 rebuilt |= attached;
                 AddRebuildDiagnostic(diagnostics, $"Memory {entry.Id.Value:D}: embedding rebuild {(attached ? "completed" : "discarded because content changed")}.");
             }

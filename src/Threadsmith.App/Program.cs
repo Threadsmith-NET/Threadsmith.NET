@@ -248,6 +248,7 @@ public static class Program
                     SemanticEngines = foundation.SemanticEngines,
                     SemanticMutations = foundation.SemanticMutations,
                     SemanticRefreshCoordinator = foundation.SemanticRefreshCoordinator,
+                    RepositoryFileObserver = foundation.RepositoryFileObserver,
                     SemanticRefreshPublicationGate = foundation.SemanticRefreshPublicationGate,
                 },
                 Integration = new IntegrationCompositionInputs

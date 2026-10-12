@@ -110,6 +110,9 @@ public enum PresentationTextRole
 
     /// <summary>Workspace composer background pane role.</summary>
     ComposerBackgroundPaneRole,
+
+    /// <summary>Memory content actually included in submitted context.</summary>
+    Memory,
 }
 
 /// <summary>Represents one terminal-neutral text fragment and its semantic rendering role.</summary>

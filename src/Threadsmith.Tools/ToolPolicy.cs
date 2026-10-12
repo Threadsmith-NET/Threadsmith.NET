@@ -30,6 +30,13 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
+        if (!RepositoryIntelligenceToolPolicy.IsAllowed(tool.Definition, context)
+            || (context.IntelligenceRun?.Operation == RepositoryIntelligenceOperation.Archeology
+                && input is MemoriesInput { Action: not "list" }))
+        {
+            return new ToolPolicyDecision(false, ApprovalLevel.None, "Intelligence work permits repository/history reads and host-authorized intelligence memory operations only.");
+        }
+
         var requiredApproval = tool.Definition.RequiredApproval == ApprovalLevel.User
             || context.RequireApprovalToolIds.Contains(
                 tool.Definition.Id,

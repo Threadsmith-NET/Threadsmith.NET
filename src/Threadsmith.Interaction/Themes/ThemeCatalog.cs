@@ -170,6 +170,7 @@ internal static class BuiltInThemes
             new(PresentationTextRole.ComposerPrompt, new TuiTextStyle(TuiColor.Parse("brightcyan"), Decorations: TuiTextDecoration.Bold)),
             new(PresentationTextRole.ThinkingIndicator, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.Italic)),
             new(PresentationTextRole.Reasoning, new TuiTextStyle(TuiColor.Parse("grey"), Decorations: TuiTextDecoration.Italic)),
+            new(PresentationTextRole.Memory, new TuiTextStyle(TuiColor.Parse("cyan"))),
             new(PresentationTextRole.DiffAdded, new TuiTextStyle(TuiColor.Parse("brightgreen"))),
             new(PresentationTextRole.DiffRemoved, new TuiTextStyle(TuiColor.Parse("brightred"))),
             new(PresentationTextRole.MarkdownHeading, new TuiTextStyle(TuiColor.Parse("brightcyan"), Decorations: TuiTextDecoration.Bold)),

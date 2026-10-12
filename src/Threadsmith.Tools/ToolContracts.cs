@@ -283,6 +283,10 @@ public sealed record ToolDefinition
 /// <summary>Repository and requester state evaluated for every tool invocation.</summary>
 public sealed record ToolInvocationContext
 {
+    /// <summary>Host-scoped collection or read-only archeology authority.</summary>
+    [JsonIgnore]
+    public IRepositoryIntelligenceRun? IntelligenceRun { get; init; }
+
     /// <summary>Request-local evidence references authorized for active-turn recovery.</summary>
     [JsonIgnore]
     public IReadOnlyList<ActiveTurnEvidenceReference> ActiveTurnEvidenceReferences { get; init; } = [];

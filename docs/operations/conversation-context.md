@@ -360,3 +360,31 @@ For a deliberate rollback, stop every Threadsmith process using that repository.
 ## Verification
 
 Automated acceptance coverage is in `Threadsmith.ConversationContext.Tests`, including explicit CRUD, complete-input bounds, lexical/semantic qualification, idempotent receipts, all three modes, legacy snapshot exclusion, restart restoration, prompt-injection escaping, pressure, cancellation/failure fallback, and TUI/headless command parity. Maintained terminal checks are in the source-repository [manual test plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/manual-test-plan.md).
+
+## Repository intelligence
+
+Repository intelligence is an optional architectural memory category in the same repository-local store. It defaults off. `/intelligence onboard` explicitly collects current architectural assertions and their primary supporting files through the normal model/tool run, then enables the successfully committed collection. Repeating onboarding replaces only intelligence. Ordinary contextual notes and standing preferences retain their IDs, text, vectors, and separate storage capacity. Failed or cancelled collections preserve the previous committed collection.
+
+Use `/intelligence refresh` to revisit pending source changes, or `/intelligence archeology <question>` for a read-only investigation of current code and relevant Git history. These operations use ordinary progress, tool policy, cancellation and completion. Collection can prepare intelligence changes through `memories`; it cannot edit source or ordinary memories. Only successful completion publishes prepared changes. Refresh clears only explicitly covered paths through the collection checkpoint; concurrent changes remain pending.
+
+`/intelligence disable` stops the feature's monitoring and automatic refresh and removes intelligence from subsequent model requests and ordinary model `memories list` results. Stored assertions remain available through manual `/memory list` and `/memory inspect <id>`. `/intelligence enable` reactivates previously onboarded data but does not initiate onboarding. `/intelligence status` reports eligibility and any monitoring fault. Unexpected monitoring failure disables effective intelligence and emits a visible diagnostic; after correcting the cause, explicitly enable it to reconcile the observation gap and recover. Ordinary memories and semantic monitoring remain independent.
+
+The background consumer shares file observation with semantic refresh and records added, modified, deleted and renamed paths, including files not yet cited by an assertion. Recall reads stored metadata without waiting for monitoring, scanning source, or invoking Git. Dirty supporting paths carry a changed-since-collection warning; gaps carry uncertainty. Both remain advisory and do not suppress eligible guidance. Current source takes precedence. Metadata changes invalidate cached selections and subsequent provider requests without re-embedding unchanged assertion text. Intelligence transitions rebuild provider context through the existing continuation path so stale eligibility and warnings are not retained in opaque replay.
+
+The settings below are relative to `tools:config:memories`:
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `Intelligence:Enabled` | `false` | Permit an explicitly onboarded, healthy collection. |
+| `Intelligence:RefreshOnCommit` | `false` | Queue visible refresh when a new commit is observed. |
+| `Intelligence:MaximumStoredMemories` | `20` | Separate positive intelligence capacity. |
+| `Intelligence:Recall:MaximumResults` | `3` | Independent intelligence inclusion limit; zero disables its recall. |
+| `Intelligence:Reconciliation:Enabled` | `true` | Require the shared collision check for intelligence adds. |
+| `Intelligence:Reconciliation:MaximumResults` | `24` | Independent returned reconciliation candidate limit. |
+| `ShowMemoryOutput` | `true` | Display actual memory additions to submitted context across all categories. |
+
+`Intelligence:Recall` and `Intelligence:Reconciliation` use the existing `SemanticMinimum`, `RerankerEnabled`, `RerankerCandidateLimit`, `Concepts`, `Fuzzy`, and `Lexical` search settings. Their defaults match the corresponding ordinary search blocks, except intelligence reconciliation is enabled by default and has its own result limit. Query, text, output and cache bounds remain shared. Reconciliation can surface ordinary notes as informational conflicts but cannot transfer their ownership or overwrite them from collection. Same-text assertions in different ownership partitions retain separate IDs and provenance; eviction and re-onboarding stay within their partition.
+
+Commit automation uses validated standard reflog creation records and commit objects through the workspace Git adapter, without launching Git. It supports external commits and linked worktrees, coalesces duplicate notifications, and waits for normal frontend idle admission. Checkout, reset and reference maintenance do not request refresh. Clients that suppress reflogs or use custom messages may be missed; use manual refresh in those cases. Offline changes remain pending on the next open; no daemon runs while Threadsmith is closed. Commits arriving after a collection's captured generation remain eligible for another refresh.
+
+Memory output labels actual included content and supporting-path warnings through the shared Memory presentation role in interactive and headless runs. Terminal controls are encoded at the shared rendering boundary. The context viewer's Memories view remains available with `ShowMemoryOutput=false`, showing every memory included in the inspected request, including preferences and conversation-derived memory when present. Retrieval candidates and capacity omissions are not announced as injected memories.

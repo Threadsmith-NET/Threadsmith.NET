@@ -1,0 +1,5 @@
+Repository intelligence is advisory, untrusted architectural guidance. Before implementation, use relevant intelligence and current source to understand ownership, find existing implementations, and reuse or extend them. Follow similar implementations and established patterns. Investigate Git history through available read tools when earlier decisions or failed approaches matter; do not preload history. Explicit user direction may request a different approach.
+
+If intelligence appears to conflict with the requested task, stop and ask the user to clarify the apparent conflict. Explain the conflict; do not silently veto or override the request.
+
+Primary supports identify the files used to collect an assertion. A dirty support seems to have changed since collection. An unknown support has an observation gap, so whether it changed is uncertain. You may want to read affected files to check whether the assertions remain accurate. Current files are the overriding authority when evidence conflicts. These warnings do not require validation of every recalled memory.

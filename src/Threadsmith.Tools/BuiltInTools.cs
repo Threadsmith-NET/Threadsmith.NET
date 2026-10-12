@@ -305,6 +305,8 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 
         if (input.Snapshot)
         {
+            var observationCheckpoint = context.Invocation.IntelligenceRun is { } intelligence && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
+                ? await intelligence.CaptureSourceCheckpointAsync(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), cancellationToken) : 0;
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
             if (bytes.Length > _limits.ReadFileMaximumBytes)
             {
@@ -337,6 +339,11 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 
             content = encoding.GetString(bytes, input.SnapshotOffset, end - input.SnapshotOffset);
             var relativePath = GetDisplayPath(path, context.Invocation);
+            if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation))
+            {
+                context.Invocation.IntelligenceRun?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), digest, observationCheckpoint);
+            }
+
             var snapshot = new ReadFileOutput(relativePath, 1, null, 0, [], false, null, null)
             {
                 Content = content,
@@ -346,6 +353,8 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", ToolPathRules.IsWithinScratchpad(path, context.Invocation) ? path : relativePath)]);
         }
 
+        var sourceCheckpoint = context.Invocation.IntelligenceRun is { } intelligenceRun && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
+            ? await intelligenceRun.CaptureSourceCheckpointAsync(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), cancellationToken) : 0;
         var sourceBytes = await File.ReadAllBytesAsync(path, cancellationToken);
         using var sourceStream = new MemoryStream(sourceBytes, writable: false);
         using var sourceReader = new StreamReader(
@@ -382,6 +391,12 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             : null;
         int? nextStartLine = truncated ? input.StartLine + selected.Count : null;
         var relative = GetDisplayPath(path, context.Invocation);
+        var sourceHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(sourceBytes));
+        if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation))
+        {
+            context.Invocation.IntelligenceRun?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), sourceHash, sourceCheckpoint);
+        }
+
         var sourceLocation = endLine is null
             ? $"L{input.StartLine}"
             : $"L{input.StartLine}-L{endLine.Value}";
@@ -397,8 +412,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
                 nextStartLine,
                 truncationReason)
             {
-                FileSha256 = Convert.ToHexStringLower(
-                    System.Security.Cryptography.SHA256.HashData(sourceBytes)),
+                FileSha256 = sourceHash,
                 VisibleRangeSha256 = selected.Count == 0
                     ? null
                     : Convert.ToHexStringLower(

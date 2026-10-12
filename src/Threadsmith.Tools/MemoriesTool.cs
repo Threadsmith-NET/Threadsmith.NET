@@ -6,7 +6,8 @@ using Threadsmith.Core;
 /// <summary>Explicit repository memory action with action-specific optional arguments.</summary>
 public sealed record MemoriesInput(string Action, string? Id = null, string? Text = null, string? MemoryType = null,
     string? Kind = null, IReadOnlyList<string>? Concepts = null,
-    IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null, long? ExpectedRevision = null) : IConceptToolInput;
+    IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null, long? ExpectedRevision = null,
+    IReadOnlyList<string>? SupportingPaths = null, string? AfterPath = null, IReadOnlyList<string>? CoveredPaths = null) : IConceptToolInput;
 
 /// <summary>A stored revision explicitly acknowledged as distinct.</summary>
 public sealed record MemoryDistinctnessConfirmation(string Id, long Revision);
@@ -25,11 +26,27 @@ public sealed record MemoryInfo(
     long Revision = 1,
     string Kind = "unspecified",
     IReadOnlyList<string>? Concepts = null,
-    bool TextTruncated = false);
+    bool TextTruncated = false)
+{
+    /// <summary>Immutable ownership; collection may only mutate intelligence IDs.</summary>
+    public string Ownership { get; init; } = "ordinary";
+
+    /// <summary>Observed primary support paths and advisory change state.</summary>
+    public IReadOnlyList<RepositoryMemorySupport> Supports { get; init; } = [];
+}
 
 /// <summary>A bounded operation outcome with explicit list omissions.</summary>
 public sealed record MemoriesOutput(string Action, string Outcome, string? Id, bool? Removed, IReadOnlyList<MemoryInfo> Entries, int OmittedEntries, string? StandingPreferenceWarning = null)
 {
+    /// <summary>One bounded page of collection work; use its cursor for the next page.</summary>
+    public RepositoryIntelligenceChangePage? Changes { get; init; }
+
+    /// <summary>Changes remain provisional until the owning collection succeeds.</summary>
+    public bool Prepared { get; init; }
+
+    /// <summary>Entries omitted by partition capacity, including provisional collection evictions.</summary>
+    public IReadOnlyList<string> EvictedIds { get; init; } = [];
+
     /// <summary>True only when this operation inserted an entry.</summary>
     public bool Added => Outcome == "added";
 
@@ -46,12 +63,17 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     private readonly IManagedRepositoryMemoryService _memories;
     private readonly IRepositoryMemoryOptionsProvider _options;
     private readonly IPromptLoader _prompts;
+    private readonly IRepositoryIntelligenceStatusProvider? _intelligence;
     private readonly Lock _definitionGate = new();
     private ToolDefinition _definition;
     private int _descriptionMaximumCharacters;
 
     /// <summary>Initializes a new instance of the <see cref="MemoriesTool"/> class.</summary>
-    public MemoriesTool(IManagedRepositoryMemoryService memories, IRepositoryMemoryOptionsProvider options, IPromptLoader prompts)
+    public MemoriesTool(
+        IManagedRepositoryMemoryService memories,
+        IRepositoryMemoryOptionsProvider options,
+        IPromptLoader prompts,
+        IRepositoryIntelligenceStatusProvider? intelligence = null)
     {
         ArgumentNullException.ThrowIfNull(memories);
         ArgumentNullException.ThrowIfNull(options);
@@ -59,6 +81,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         _memories = memories;
         _options = options;
         _prompts = prompts;
+        _intelligence = intelligence;
         _descriptionMaximumCharacters = options.CaptureCurrent().MaximumTextCharacters;
         var definition = ToolDefinitionFactory.Create<MemoriesInput, MemoriesOutput>(
             "memories",
@@ -78,7 +101,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             InputSchema = definition.InputSchema with
             {
                 JsonSchema = """
-                    {"type":"object","properties":{"action":{"type":"string","enum":["add","update","remove","list"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]},"kind":{"type":["string","null"],"enum":["unspecified","constraint","decision","convention","requirement","finding",null]},"concepts":{"type":["array","null"],"items":{"type":"string","maxLength":96},"maxItems":8},"confirmDistinctFrom":{"type":["array","null"],"items":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id","revision"],"additionalProperties":false}},"expectedRevision":{"type":["integer","null"],"minimum":1}},"required":["action"],"additionalProperties":false}
+                    {"type":"object","properties":{"action":{"type":"string","enum":["add","update","remove","list","changes","coverChanges"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]},"kind":{"type":["string","null"],"enum":["unspecified","constraint","decision","convention","requirement","finding",null]},"concepts":{"type":["array","null"],"items":{"type":"string","maxLength":96},"maxItems":8},"confirmDistinctFrom":{"type":["array","null"],"items":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id","revision"],"additionalProperties":false}},"supportingPaths":{"type":["array","null"],"items":{"type":"string"}},"afterPath":{"type":["string","null"]},"coveredPaths":{"type":["array","null"],"items":{"type":"string"}},"expectedRevision":{"type":["integer","null"],"minimum":1}},"required":["action"],"additionalProperties":false}
                     """,
             },
             Scheduling = new ToolSchedulingDescriptor
@@ -112,12 +135,63 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     public override async Task<ToolExecution<MemoriesOutput>> ExecuteAsync(MemoriesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
     {
         ValidateInput(input);
+        if (context.Invocation.IntelligenceRun?.Operation == RepositoryIntelligenceOperation.Archeology && input.Action != "list")
+        {
+            throw new UnauthorizedAccessException("Archeology may read memories but cannot change them.");
+        }
+
+        if (input.Action is "changes" or "coverChanges")
+        {
+            var run = context.Invocation.IntelligenceRun;
+            if (run?.Collection is null)
+            {
+                throw new UnauthorizedAccessException("Pending changes require a host-authorized collection.");
+            }
+
+            RepositoryIntelligenceChangePage? changes = null;
+            if (input.Action == "changes")
+            {
+                changes = await run.ReadChangesAsync(input.AfterPath, cancellationToken);
+            }
+            else
+            {
+                run.CoverChanges(input.CoveredPaths ?? []);
+            }
+
+            return new ToolExecution<MemoriesOutput>(
+                new MemoriesOutput(input.Action, "prepared", null, null, [], 0)
+                {
+                    Prepared = true,
+                    Changes = changes,
+                },
+                [],
+                false);
+        }
+
         var repositoryIdentity = RepositoryIdentity.Create(context.Invocation.RepositoryPath);
         var options = _options.Capture(repositoryIdentity);
+        var collection = context.Invocation.IntelligenceRun?.Collection;
+        if (collection is not null && input.Action is "add" or "update" && input.SupportingPaths is not { Count: > 0 })
+        {
+            throw new ToolArgumentValidationException("Collection assertions require supportingPaths read through read_file during this run.");
+        }
+
+        if (input.SupportingPaths is not null && collection is null)
+        {
+            throw new ToolArgumentValidationException("Supporting paths require a host-authorized intelligence collection.");
+        }
+
+        var supports = input.SupportingPaths is null ? null : context.Invocation.IntelligenceRun?.ResolveSupports(
+            input.SupportingPaths.Select(path => Path.GetRelativePath(
+                context.Invocation.RepositoryPath,
+                ToolPathRules.NormalizeAndValidateForTool(path, context.Invocation, Definition.Id)).Replace('\\', '/')).ToArray());
         var result = await _memories.ExecuteAsync(
             new RepositoryMemoryOperationRequest
             {
                 RepositoryIdentity = repositoryIdentity,
+                Collection = collection,
+                Ownership = collection is null ? RepositoryMemoryOwnership.Ordinary : RepositoryMemoryOwnership.Intelligence,
+                Supports = supports,
                 Action = input.Action,
                 Id = input.Id is null ? null : new RepositoryMemoryId(Guid.Parse(input.Id)),
                 Text = input.Text,
@@ -136,9 +210,16 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         var entries = new List<MemoryInfo>();
         var bytes = 0;
         var source = result.Entry is { } entry ? (IReadOnlyList<RepositoryMemoryEntry>)[entry] : result.Entries;
+        if (input.Action == "list" && collection is null
+            && (!_options.Capture(repositoryIdentity).Intelligence.Enabled || _intelligence?.Capture(repositoryIdentity).IsEffective != true))
+        {
+            source = source.Where(item => item.Ownership == RepositoryMemoryOwnership.Ordinary).ToArray();
+        }
+
         foreach (var item in source)
         {
             var info = new MemoryInfo(item.Id.Value.ToString("D"), result.Outcome == "reconciliationRequired" && item.Text.Length > 2000 ? item.Text[..2000] : item.Text, item.Origin.ToString().ToLowerInvariant(), FormatMemoryType(item.MemoryType), item.CreatedAt, item.UpdatedAt, item.InclusionCount, item.LastIncludedAt, item.EmbeddingSpaceId, item.Revision, item.Kind.ToString().ToLowerInvariant(), item.Concepts, result.Outcome == "reconciliationRequired" && item.Text.Length > 2000);
+            info = info with { Ownership = item.Ownership.ToString().ToLowerInvariant(), Supports = item.Supports };
             bytes += JsonSerializer.SerializeToUtf8Bytes(info).Length;
             if (bytes > Math.Min(options.MaximumListBytes, 48 * 1024))
             {
@@ -160,6 +241,8 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             source.Count - entries.Count,
             preferenceWarning)
         {
+            Prepared = collection is not null,
+            EvictedIds = result.EvictedIds.Select(id => id.Value.ToString("D")).ToArray(),
             SearchDetails = result.SearchDetails,
             Resolution = result.Outcome == "reconciliationRequired"
                 ? "Not added. Update an existing ID with its expectedRevision, or retry add with confirmDistinctFrom entries containing the displayed IDs and revisions to confirm that the proposed memory is distinct."
@@ -181,6 +264,11 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         ArgumentNullException.ThrowIfNull(input);
         _ = MemoryConcepts.Normalize(input.Concepts);
         _ = ParseKind(input.Kind);
+        if (input.SupportingPaths is not null && input.Action is not ("add" or "update"))
+        {
+            throw new ToolArgumentValidationException("Supporting paths apply only to add or update.");
+        }
+
         if (input.ExpectedRevision is <= 0 || (input.ExpectedRevision is not null && input.Action != "update")
             || (input.ConfirmDistinctFrom is not null && input.Action != "add")
             || input.ConfirmDistinctFrom?.Any(item => item is null || !IsId(item.Id) || item.Revision <= 0) == true)
@@ -188,12 +276,17 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             throw new ToolArgumentValidationException("Confirm distinct memory IDs/revisions only on add; expectedRevision requires update.");
         }
 
+        if ((input.AfterPath is not null && input.Action != "changes") || (input.CoveredPaths is not null && input.Action != "coverChanges"))
+        {
+            throw new ToolArgumentValidationException("afterPath applies to changes; coveredPaths applies to coverChanges.");
+        }
+
         var valid = input.Action switch
         {
             "add" => input.Id is null && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "update" => IsId(input.Id) && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "remove" => IsId(input.Id) && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
-            "list" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
+            "list" or "changes" or "coverChanges" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
             _ => false,
         };
         if (!valid)

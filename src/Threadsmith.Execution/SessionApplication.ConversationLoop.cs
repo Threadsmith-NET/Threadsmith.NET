@@ -22,6 +22,22 @@ public sealed partial class SessionApplication
         var maximumModelRounds = _limits.MaxModelRounds;
         var correctiveTurns = new CorrectiveTurnState(Math.Max(0, _limits.MaxCorrectiveTurns));
         var invocationContext = await CreateToolInvocationContextAsync(registration, cancellationToken);
+        if (registration.IntelligenceOperation != RepositoryIntelligenceOperation.None)
+        {
+            if (_intelligenceOperations is null || invocationContext is null)
+            {
+                throw new InvalidOperationException("Repository intelligence execution is unavailable.");
+            }
+
+            ValidateIntelligenceCollectionTools(registration.IntelligenceOperation, ConversationToolAvailability.CreateSnapshot(
+                _toolPipeline, _toolRegistry, registration.SessionId, runId, invocationContext, toolsWithheld: false));
+            registration.IntelligenceRun = await _intelligenceOperations.BeginAsync(
+                registration.SessionId, runId, invocationContext.RepositoryPath, registration.IntelligenceOperation, cancellationToken);
+            invocationContext = invocationContext with { IntelligenceRun = registration.IntelligenceRun };
+            cancellationToken = registration.IntelligenceRun.CancellationToken;
+            registration.CurrentTurnHostContext = [.. registration.CurrentTurnHostContext, registration.IntelligenceRun.Instructions];
+        }
+
         await using var operationScope = new ToolOperationScope(cancellationToken);
         invocationContext = invocationContext is null ? null : invocationContext with { OperationScope = operationScope };
         var workspaceAvailable = invocationContext?.WorkspaceId is not null;
@@ -291,7 +307,16 @@ public sealed partial class SessionApplication
                 loopState.InvalidateFrozenContext();
             }
 
-            registration.MemoryOptions ??= _repositoryMemoryOptions?.Capture(identity) ?? new RepositoryMemoryOptions();
+            var options = _repositoryMemoryOptions?.Capture(identity) ?? new RepositoryMemoryOptions();
+            var intelligenceEnabled = enabled && options.Intelligence.Enabled
+                && _repositoryIntelligence?.Capture(identity).IsEffective == true;
+            if (registration.MemoryOptions != options || registration.IntelligenceEnabled != intelligenceEnabled)
+            {
+                registration.MemoryOptions = options;
+                registration.IntelligenceEnabled = intelligenceEnabled;
+                loopState.InvalidateFrozenContext();
+            }
+
             if (enabled)
             {
                 try
@@ -318,6 +343,16 @@ public sealed partial class SessionApplication
         }
     }
 
+    private static void ValidateIntelligenceCollectionTools(RepositoryIntelligenceOperation operation, ConversationToolSnapshot tools)
+    {
+        if (operation is RepositoryIntelligenceOperation.Onboard or RepositoryIntelligenceOperation.Refresh
+            && (!tools.Registrations.Any(item => item.Implementation is MemoriesTool)
+                || !tools.Registrations.Any(item => item.Implementation is ReadFileTool)))
+        {
+            throw new InvalidOperationException("Repository intelligence collection requires the enabled built-in memories and read_file tools under the current trust and tool policy. The prior collection was preserved.");
+        }
+    }
+
     private async Task<ConversationRound> PrepareConversationRoundAsync(
         RunId runId,
         RunRegistration registration,
@@ -336,6 +371,7 @@ public sealed partial class SessionApplication
             invocationContext,
             toolsWithheld: false);
         var conversationDefinitions = conversationTools.Definitions;
+        ValidateIntelligenceCollectionTools(registration.IntelligenceOperation, conversationTools);
         var memoriesEnabled = conversationDefinitions.Any(definition => definition.Id == "memories");
         await RefreshMemoryContextAsync(registration, invocationContext, memoriesEnabled, loopState, cancellationToken);
 
@@ -360,6 +396,7 @@ public sealed partial class SessionApplication
                 _defaultModelProfileId) with
             {
                 RepositoryMemoriesEnabled = memoriesEnabled,
+                IntelligenceEnabled = registration.IntelligenceEnabled,
                 RepositoryMemoryOptions = registration.MemoryOptions,
                 RepositoryMemoryCurrentInstruction = registration.MemoryCurrentInstruction,
                 RepositoryMemoryConcepts = registration.MemoryConcepts.ToArray(),
@@ -614,7 +651,17 @@ public sealed partial class SessionApplication
     {
         loopState.BeginCurrentGroup();
         var streamState = new ModelRoundStreamState(loopState.MaximumOutputCharacters);
-        var modelHookBoundary = new ModelRequestHookBoundary(
+        ModelRequestHookBoundary? modelHookBoundary = null;
+        var originalToolSnapshot = round.InvocationContext?.ModelVisibleToolSnapshotId;
+        BudgetStatus? modelWallClockBudget = null;
+        IReadOnlyList<RunSteeringMessage> preToolSteering = [];
+
+        try
+        {
+            // Hooks and admission must describe the request that actually reaches the provider.
+            while (true)
+            {
+                modelHookBoundary = new ModelRequestHookBoundary(
             round.Registration.SessionId,
             round.RunId,
             round.InvocationContext?.RepositoryPath,
@@ -624,13 +671,33 @@ public sealed partial class SessionApplication
             round.ModelRequest.WorkloadClass,
             round.ModelRequest.ContainsSensitiveData,
             round.ModelRequest.Tools.Count);
-        ModelRequestBudgetUsage.CheckAdmission(round.Registration.Budget, round.ModelRequest);
-        await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
-        BudgetStatus? modelWallClockBudget = null;
-        IReadOnlyList<RunSteeringMessage> preToolSteering = [];
+                ModelRequestBudgetUsage.CheckAdmission(round.Registration.Budget, round.ModelRequest);
+                await InvokeBeforeModelRequestHookAsync(modelHookBoundary, cancellationToken);
+                var previousContext = loopState.FrozenContext;
+                await RefreshMemoryContextAsync(round.Registration, round.InvocationContext, round.Registration.MemoriesEnabled, loopState, cancellationToken);
+                if (ReferenceEquals(previousContext, loopState.FrozenContext))
+                {
+                    break;
+                }
 
-        try
-        {
+                await InvokeAfterModelRequestHookAsync(modelHookBoundary, false, false);
+                modelHookBoundary = null;
+                if (round.InvocationContext?.ModelVisibleToolSnapshotId is { } superseded && superseded != originalToolSnapshot)
+                {
+                    _conversationToolSnapshots?.Release(superseded);
+                }
+
+                round = await PrepareConversationRoundAsync(
+                    round.RunId,
+                    round.Registration,
+                    round.Phase,
+                    round.InvocationContext,
+                    round.InvocationContext?.WorkspaceId is not null,
+                    round.ModelRound,
+                    loopState,
+                    cancellationToken);
+            }
+
             var requestStopwatch = Stopwatch.StartNew();
             try
             {
@@ -782,10 +849,18 @@ public sealed partial class SessionApplication
         }
         finally
         {
-            await InvokeAfterModelRequestHookAsync(
-                modelHookBoundary,
-                streamState.ModelSucceeded,
-                streamState.ReportedUsage is not null);
+            if (round.InvocationContext?.ModelVisibleToolSnapshotId is { } refreshed && refreshed != originalToolSnapshot)
+            {
+                _conversationToolSnapshots?.Release(refreshed);
+            }
+
+            if (modelHookBoundary is not null)
+            {
+                await InvokeAfterModelRequestHookAsync(
+                    modelHookBoundary,
+                    streamState.ModelSucceeded,
+                    streamState.ReportedUsage is not null);
+            }
 
             if (streamState.BudgetUsage.HasStarted && streamState.ReportedUsage is null)
             {
@@ -2533,6 +2608,10 @@ public sealed partial class SessionApplication
             CacheAffinityId = registration.SessionId.Value,
             MemorySubmission = context?.RepositoryMemoryInclusions is { Count: > 0 } inclusions && registration.RepositoryIdentity is { } repositoryPath
                 ? new RepositoryMemorySubmission(registration.SessionId, RepositoryIdentity.Create(repositoryPath), inclusions)
+                {
+                    Items = context.Inspection.RepositoryMemoryItems.Where(item => item.Included
+                        && inclusions.Contains(new(item.Id, item.Revision))).ToArray(),
+                }
                 : null,
             Input = RenderLegacyContinuation(
                 context?.ModelInput ?? registration.Task.Intent,
@@ -2909,12 +2988,11 @@ public sealed partial class SessionApplication
                 return refreshed;
             }
 
-            // Retained responses bind the complete delivered prefix. Only append fresh context after
-            // completed tool groups; actual history rewrites retain their separate generation fences.
-            var oldInstructions = previous.Messages?.Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
-                .Select(message => (message.Role, message.SectionId, message.GetModelVisibleContent())) ?? [];
-            var newInstructions = refreshed.Messages?.Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
-                .Select(message => (message.Role, message.SectionId, message.GetModelVisibleContent())) ?? [];
+            // Only the host-owned intelligence suffix can change instruction eligibility mid-turn.
+            // Repository/provider authority changes still require a new turn.
+            var intelligenceSuffix = Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryIntelligenceGuidance);
+            var oldInstructions = Instructions(previous);
+            var newInstructions = Instructions(refreshed);
             if (!oldInstructions.SequenceEqual(newInstructions)
                 || previous.InstructionBundleDigest != refreshed.InstructionBundleDigest
                 || previous.ProviderInstructions != refreshed.ProviderInstructions
@@ -2923,37 +3001,75 @@ public sealed partial class SessionApplication
                 throw new ModelProviderException("Context refresh changed active continuation authority; start a fresh turn.");
             }
 
-            if (!string.Equals(_memoryContextText, memoryText, StringComparison.Ordinal))
+            var intelligenceAffected = (previous.Messages ?? []).Concat(refreshed.Messages ?? [])
+                .Any(message => message.SectionId == "host-policy" && message.GetModelVisibleContent().EndsWith(intelligenceSuffix, StringComparison.Ordinal));
+            if (!intelligenceAffected)
             {
-                var message = new ModelMessage
+                if (!string.Equals(_memoryContextText, memoryText, StringComparison.Ordinal))
                 {
-                    Role = ModelMessageRole.HostContext,
-                    SectionId = "repository-memory",
-                    Content =
-                    [
-                        new ModelContentPart
-                        {
-                            Content = _prompts.Render(
-                                PromptFileNames.ContextRepositoryMemoryRefresh,
-                                new Dictionary<string, string>(StringComparer.Ordinal) { ["Text"] = memoryText }),
-                        },
-                    ],
-                    Sources = [.. memoryMessages.SelectMany(item => item.Sources)],
+                    var message = new ModelMessage
+                    {
+                        Role = ModelMessageRole.HostContext,
+                        SectionId = "repository-memory",
+                        Content =
+                        [
+                            new ModelContentPart
+                            {
+                                Content = _prompts.Render(
+                                    PromptFileNames.ContextRepositoryMemoryRefresh,
+                                    new Dictionary<string, string>(StringComparer.Ordinal) { ["Text"] = memoryText }),
+                            },
+                        ],
+                        Sources = [.. memoryMessages.SelectMany(item => item.Sources)],
+                    };
+                    CommitStandaloneMessage(modelRound, message, purgeAfterCorrection: false);
+                    _memoryContextText = memoryText;
+                }
+
+                return previous with
+                {
+                    RepositoryMemoryInclusions = refreshed.RepositoryMemoryInclusions,
+                    MemoryConceptResolutionPending = refreshed.MemoryConceptResolutionPending,
+                    Inspection = refreshed.Inspection,
+                    ModelConstraints = previous.ModelConstraints with
+                    {
+                        ContainsSensitiveData = previous.ModelConstraints.ContainsSensitiveData || refreshed.ModelConstraints.ContainsSensitiveData,
+                    },
                 };
-                CommitStandaloneMessage(modelRound, message, purgeAfterCorrection: false);
-                _memoryContextText = memoryText;
             }
 
-            return previous with
+            _memoryContextText = memoryText;
+
+            // Completed exchanges become ordinary historical messages for every provider mapper.
+            // Replay-only round markers must not survive revocation of private provider responses.
+            for (var index = 0; index < _groups.Count; index++)
             {
-                RepositoryMemoryInclusions = refreshed.RepositoryMemoryInclusions,
-                MemoryConceptResolutionPending = refreshed.MemoryConceptResolutionPending,
-                Inspection = refreshed.Inspection,
-                ModelConstraints = previous.ModelConstraints with
+                _groups[index] = _groups[index] with
                 {
-                    ContainsSensitiveData = previous.ModelConstraints.ContainsSensitiveData || refreshed.ModelConstraints.ContainsSensitiveData,
-                },
-            };
+                    Messages = _groups[index].Messages.Select(message => message with { ModelRound = null }).ToArray(),
+                };
+            }
+
+            _sourceProjection = null;
+
+            // Reuse the history-rewrite fence so provider continuation cannot retain revoked memories
+            // or enabled-only guidance in an earlier delivered prefix. Completed tool groups survive.
+            TransientState.Clear();
+            HistoryRewriteGeneration++;
+            return refreshed;
+
+            IEnumerable<(ModelMessageRole Role, string SectionId, string Content)> Instructions(ContextAssemblyResult context) =>
+                (context.Messages ?? []).Where(message => message.Role is ModelMessageRole.System or ModelMessageRole.Developer)
+                    .Select(message =>
+                    {
+                        var content = message.GetModelVisibleContent();
+                        if (message.SectionId == "host-policy" && content.EndsWith(intelligenceSuffix, StringComparison.Ordinal))
+                        {
+                            content = content[..^intelligenceSuffix.Length];
+                        }
+
+                        return (message.Role, message.SectionId, content);
+                    });
         }
 
         public IReadOnlyList<ActiveTurnContinuationGroup> Groups => _groups;

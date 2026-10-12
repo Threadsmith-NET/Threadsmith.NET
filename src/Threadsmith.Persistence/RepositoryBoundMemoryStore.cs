@@ -39,10 +39,17 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
     }
 
     /// <summary>Uses the repository effective capacity during any pending manual-memory migration.</summary>
-    public async Task BindRepositoryAsync(string repositoryRoot, int maximumMemoryCount, CancellationToken cancellationToken = default)
+    public Task BindRepositoryAsync(string repositoryRoot, int maximumMemoryCount, CancellationToken cancellationToken = default)
+    {
+        return BindRepositoryAsync(repositoryRoot, new RepositoryMemoryOptions { MaxNumberOfRepoMemories = maximumMemoryCount }, cancellationToken);
+    }
+
+    /// <summary>Applies both ownership capacities before publishing a repository binding.</summary>
+    public async Task BindRepositoryAsync(string repositoryRoot, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumMemoryCount);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
         var identity = RepositoryIdentity.Create(repositoryRoot);
         await _bindGate.WaitAsync(cancellationToken);
         try
@@ -51,7 +58,7 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
             var existing = current.RepositoryIdentity == identity ? current : _initialBinding.RepositoryIdentity == identity ? _initialBinding : null;
             if (existing is not null)
             {
-                await existing.Store.EnforceCapacityAsync(identity, new RepositoryMemoryOptions { MaxNumberOfRepoMemories = maximumMemoryCount }, cancellationToken);
+                await existing.Store.EnforceCapacityAsync(identity, options, cancellationToken);
                 Volatile.Write(ref _binding, existing);
                 return;
             }
@@ -67,13 +74,13 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
             Directory.CreateDirectory(directory);
             var connectionString = new SqliteConnectionStringBuilder { DataSource = path }.ToString();
             await new SqliteEventStore(connectionString).InitializeAsync(cancellationToken);
-            var migrations = new MigrationRunner(connectionString, DefaultMigrations.ForRepositoryMemoryCapacity(maximumMemoryCount));
+            var migrations = new MigrationRunner(connectionString, DefaultMigrations.ForRepositoryMemoryCapacity(options.MaxNumberOfRepoMemories));
             var previousVersion = await migrations.ReadCurrentVersionAsync(cancellationToken);
             var store = new SqliteManagedRepositoryMemoryStore(connectionString, _timeProvider, _initialBinding.Store);
             await migrations.RunAsync(cancellationToken);
             if (previousVersion >= 10)
             {
-                await store.EnforceCapacityAsync(identity, new RepositoryMemoryOptions { MaxNumberOfRepoMemories = maximumMemoryCount }, cancellationToken);
+                await store.EnforceCapacityAsync(identity, options, cancellationToken);
             }
 
             // Version 10 and every pending successor commit as one migration transaction; a
@@ -102,6 +109,62 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
         string repositoryIdentity, IReadOnlyList<string> lexicalTerms, RepositoryMemoryLexicalOptions lexicalOptions, CancellationToken cancellationToken = default)
     {
         return GetStore(repositoryIdentity).GetSnapshotAsync(repositoryIdentity, lexicalTerms, lexicalOptions, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
+        string repositoryIdentity, IReadOnlyList<string> lexicalTerms, RepositoryMemoryLexicalOptions lexicalOptions, RepositoryMemoryOwnership? ownership, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).GetSnapshotAsync(repositoryIdentity, lexicalTerms, lexicalOptions, ownership, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RepositoryIntelligenceState> GetIntelligenceStateAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).GetIntelligenceStateAsync(repositoryIdentity, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task RecordIntelligenceChangesAsync(string repositoryIdentity, IReadOnlyList<string> paths, bool observationGap, string? fault = null, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).RecordIntelligenceChangesAsync(repositoryIdentity, paths, observationGap, fault, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RepositoryIntelligenceChangePage> ReadIntelligenceChangesAsync(string repositoryIdentity, long checkpoint, string? afterPath, int maximumBytes, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).ReadIntelligenceChangesAsync(repositoryIdentity, checkpoint, afterPath, maximumBytes, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<long> GetIntelligenceCheckpointAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).GetIntelligenceCheckpointAsync(repositoryIdentity, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task ClearIntelligenceFaultAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).ClearIntelligenceFaultAsync(repositoryIdentity, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public IManagedRepositoryMemoryStore ForCollection(RepositoryMemoryCollection collection)
+    {
+        return GetStore(collection.Baseline.RepositoryIdentity).ForCollection(collection);
+    }
+
+    /// <inheritdoc />
+    public Task CommitCollectionAsync(RepositoryMemoryCollection collection, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
+    {
+        return GetStore(collection.Baseline.RepositoryIdentity).CommitCollectionAsync(collection, options, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task ReconcileIntelligenceObservationAsync(
+        string repositoryIdentity, long checkpoint, IReadOnlyList<RepositoryMemorySupport> observations, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).ReconcileIntelligenceObservationAsync(repositoryIdentity, checkpoint, observations, cancellationToken);
     }
 
     /// <inheritdoc />

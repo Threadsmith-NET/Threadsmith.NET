@@ -117,6 +117,7 @@ public sealed class ContextAssembler : IContextAssembler
     private readonly IDomainEventStream _events;
     private readonly Lock _gate = new();
     private readonly Dictionary<RunId, ContextInspectionProjection> _inspections = [];
+    private readonly Dictionary<RunId, HashSet<string>> _displayedMemories = [];
     private readonly Dictionary<RunId, LinkedListNode<RunId>> _inspectionNodes = [];
     private readonly LinkedList<RunId> _inspectionOrder = [];
     private readonly IRepositoryInstructionResolver? _instructionResolver;
@@ -198,6 +199,11 @@ public sealed class ContextAssembler : IContextAssembler
             ? _stableSystemPolicy
             : _stableSystemPolicy + Environment.NewLine + scratchpadPrompt;
         ArgumentNullException.ThrowIfNull(request);
+        if (request.IntelligenceEnabled && request.RepositoryMemoriesEnabled)
+        {
+            systemPolicy += Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryIntelligenceGuidance);
+        }
+
         ArgumentNullException.ThrowIfNull(request.Task);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Task.Intent);
         using var activity = _activitySource.StartActivity("context.assemble");
@@ -700,6 +706,7 @@ public sealed class ContextAssembler : IContextAssembler
             CompactedThroughMessageSequence = null,
             ConversationItems = conversation.CreateProjections(),
             RepositoryMemoryItems = repositoryMemory.CreateProjections(),
+            ShowMemoryOutput = request.RepositoryMemoryOptions?.ShowMemoryOutput ?? true,
             RepositoryMemorySearch = repositoryMemory.SearchDetails,
             ContextPressurePercent = contextPressurePercent,
             CompactionRecommended = compactionRecommended,
@@ -736,6 +743,7 @@ public sealed class ContextAssembler : IContextAssembler
                 _inspectionOrder.RemoveFirst();
                 _inspectionNodes.Remove(oldest.Value);
                 _inspections.Remove(oldest.Value);
+                _displayedMemories.Remove(oldest.Value);
             }
         }
 
@@ -843,18 +851,39 @@ public sealed class ContextAssembler : IContextAssembler
     }
 
     /// <inheritdoc />
-    public Task UpdateRepositoryMemoryDispatchInspectionAsync(
+    public async Task UpdateRepositoryMemoryDispatchInspectionAsync(
         SessionId sessionId,
         RunId runId,
         RepositoryMemoryDispatchInspection dispatch,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(dispatch);
-        return UpdateInspectionAsync(
+        await UpdateInspectionAsync(
             sessionId,
             runId,
             inspection => inspection with { RepositoryMemoryDispatch = dispatch with { Inclusions = dispatch.Inclusions.ToArray() } },
             cancellationToken);
+        RepositoryMemoryContextItemProjection[] additions = [];
+        lock (_gate)
+        {
+            if (_inspections.TryGetValue(runId, out var inspection) && inspection.ShowMemoryOutput)
+            {
+                if (!_displayedMemories.TryGetValue(runId, out var displayed))
+                {
+                    displayed = [];
+                    _displayedMemories.Add(runId, displayed);
+                }
+
+                var submitted = dispatch.Inclusions.ToHashSet();
+                additions = [.. inspection.RepositoryMemoryItems.Where(item => item.Included
+                    && submitted.Contains(new(item.Id, item.Revision)) && displayed.Add(JsonSerializer.Serialize(new { item.Id, item.Revision, item.Text, item.Ownership, item.Supports })))];
+            }
+        }
+
+        if (additions.Length > 0)
+        {
+            await _events.PublishAsync(new MemoriesIncluded(sessionId, DateTimeOffset.UtcNow, runId, additions), cancellationToken);
+        }
     }
 
     /// <inheritdoc />
@@ -863,6 +892,7 @@ public sealed class ContextAssembler : IContextAssembler
         lock (_gate)
         {
             _inspections.Clear();
+            _displayedMemories.Clear();
             _inspectionOrder.Clear();
             _inspectionNodes.Clear();
         }
@@ -990,6 +1020,7 @@ public sealed class ContextAssembler : IContextAssembler
             new RepositoryMemoryRetrievalRequest
             {
                 RepositoryIdentity = repositoryIdentity,
+                IntelligenceEnabled = request.IntelligenceEnabled,
                 UserTurnId = request.RunId,
                 CurrentInstruction = _sanitizer.Sanitize(request.RepositoryMemoryCurrentInstruction ?? conversation.CurrentTurnContent),
                 TaskIntent = task.Intent,
@@ -1494,7 +1525,7 @@ public sealed class ContextAssembler : IContextAssembler
             return ContextAssembler.CreateSources(
             content,
             _standingPreferences.Concat(_included).Select(item => ("Memories", $"{item.Candidate.Entry.MemoryType}: {item.Candidate.Entry.Id.Value:D}",
-                $"<memory id=\"{item.Candidate.Entry.Id.Value:D}\">{Escape(item.Candidate.Entry.Text)}</memory>")));
+                RenderEntry(item.Candidate.Entry))));
         }
 
         public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections()
@@ -1539,8 +1570,7 @@ public sealed class ContextAssembler : IContextAssembler
         private string Render(IEnumerable<RepositoryMemoryRetrievalCandidate> candidates)
         {
             return _guidance + "\n<repository_memory untrusted=\"true\">\n"
-            + string.Join('\n', candidates.Select(candidate =>
-                $"<memory id=\"{candidate.Entry.Id.Value:D}\">{Escape(candidate.Entry.Text)}</memory>"))
+            + string.Join('\n', candidates.Select(candidate => RenderEntry(candidate.Entry)))
             + "\n</repository_memory>";
         }
 
@@ -1552,12 +1582,28 @@ public sealed class ContextAssembler : IContextAssembler
             + "\n</standing_preferences>";
         }
 
+        private static string RenderEntry(RepositoryMemoryEntry entry)
+        {
+            var content = $"<memory id=\"{entry.Id.Value:D}\">{Escape(entry.Text)}";
+            if (entry.Ownership == RepositoryMemoryOwnership.Intelligence)
+            {
+                content += "\n<primary_supports>\n" + string.Join('\n', entry.Supports.Select(support =>
+                    $"<support path=\"{Escape(support.Path)}\" dirty=\"{support.IsDirty.ToString().ToLowerInvariant()}\" unknown=\"{support.IsUnknown.ToString().ToLowerInvariant()}\" />"))
+                    + "\n</primary_supports>";
+            }
+
+            return content + "</memory>";
+        }
+
         private static RepositoryMemoryContextItemProjection CreateProjection(
             RepositoryMemoryRetrievalCandidate candidate, bool included, string reason, int tokens)
         {
             return new()
             {
                 Id = candidate.Entry.Id,
+                Text = candidate.Entry.Text,
+                Ownership = candidate.Entry.Ownership,
+                Supports = candidate.Entry.Supports,
                 Origin = candidate.Entry.Origin,
                 MemoryType = candidate.Entry.MemoryType,
                 Revision = candidate.Entry.Revision,

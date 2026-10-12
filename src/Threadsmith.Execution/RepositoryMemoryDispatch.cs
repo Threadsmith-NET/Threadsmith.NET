@@ -21,6 +21,7 @@ internal static class RepositoryMemoryDispatch
     {
         cancellationToken.ThrowIfCancellationRequested();
         var submitted = 0;
+        var submissionGate = new Lock();
         var receipt = Task.CompletedTask;
         var observedRequest = request with { SubmissionObserver = RecordSubmission };
         try
@@ -29,6 +30,7 @@ internal static class RepositoryMemoryDispatch
             {
                 // A first response also proves submission for injected providers without transport hooks.
                 RecordSubmission();
+                await receipt;
                 yield return chunk;
             }
         }
@@ -39,10 +41,14 @@ internal static class RepositoryMemoryDispatch
 
         void RecordSubmission()
         {
-            if (Interlocked.Exchange(ref submitted, 1) == 0)
+            lock (submissionGate)
             {
-                request.SubmissionObserver?.Invoke();
-                receipt = RecordAsync();
+                if (submitted == 0)
+                {
+                    submitted = 1;
+                    request.SubmissionObserver?.Invoke();
+                    receipt = RecordAsync();
+                }
             }
         }
 

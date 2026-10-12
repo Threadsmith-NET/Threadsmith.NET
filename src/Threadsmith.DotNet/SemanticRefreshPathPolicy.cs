@@ -87,18 +87,7 @@ internal static class SemanticRefreshPathPolicy
     /// <summary>Returns whether a directory segment represents generated or tool-local churn.</summary>
     public static bool IsIgnoredDirectorySegment(string segment)
     {
-        return segment.Equals(".codegraph", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".git", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".idea", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".inbox", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".threadsmith", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".vs", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals(".vscode", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("artifacts", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("bin", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("node_modules", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("obj", StringComparison.OrdinalIgnoreCase)
-            || segment.Equals("TestResults", StringComparison.OrdinalIgnoreCase);
+        return Threadsmith.Core.RepositoryObservationPaths.IsIgnoredDirectorySegment(segment);
     }
 
     /// <summary>Returns whether a known source document is generated build-output churn.</summary>

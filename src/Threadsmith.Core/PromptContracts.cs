@@ -146,6 +146,15 @@ public static class PromptFileNames
     /// <summary>Gets the relevance caveat preceding optional repository memory references.</summary>
     public const string SystemRepositoryMemoryGuidance = "System-RepositoryMemoryGuidance.md";
 
+    /// <summary>Enabled-only advisory exploration and supporting-source guidance.</summary>
+    public const string SystemRepositoryIntelligenceGuidance = "System-RepositoryIntelligenceGuidance.md";
+
+    /// <summary>Restricted architectural collection through the shared memory workflow.</summary>
+    public const string ContextRepositoryIntelligenceCollection = "Context-RepositoryIntelligenceCollection.md";
+
+    /// <summary>On-demand source and history investigation without mutation authority.</summary>
+    public const string ContextRepositoryArcheology = "Context-RepositoryArcheology.md";
+
     /// <summary>Gets the guidance for standing preferences included independently of query relevance.</summary>
     public const string SystemStandingPreferenceGuidance = "System-StandingPreferenceGuidance.md";
 
@@ -987,6 +996,9 @@ public static class PromptFileNames
         SystemConversationOutput,
         SystemRepositoryInstructionsNone,
         SystemRepositoryMemoryGuidance,
+        SystemRepositoryIntelligenceGuidance,
+        ContextRepositoryIntelligenceCollection,
+        ContextRepositoryArcheology,
         SystemStandingPreferenceGuidance,
         SystemGovernedRequestState,
         SystemLegacyRequestEnvelope,
@@ -1299,6 +1311,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemConversationOutput,
             PromptFileNames.SystemRepositoryInstructionsNone,
             PromptFileNames.SystemRepositoryMemoryGuidance,
+            PromptFileNames.SystemRepositoryIntelligenceGuidance,
             PromptFileNames.SystemStandingPreferenceGuidance,
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
@@ -1442,6 +1455,11 @@ public static class PromptAssetCatalog
 
         string ResolveOwner(string fileName)
         {
+            if (fileName is PromptFileNames.ContextRepositoryIntelligenceCollection or PromptFileNames.ContextRepositoryArcheology)
+            {
+                return "Threadsmith.RepositoryIntelligence";
+            }
+
             if (contextAssets.Contains(fileName))
             {
                 return "Threadsmith.Context";

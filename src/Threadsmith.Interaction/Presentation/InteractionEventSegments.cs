@@ -183,6 +183,9 @@ internal static class InteractionEventSegments
             case ModelOutputObserved:
                 Add(segments, text, PresentationTextRole.Default);
                 return;
+            case MemoriesIncluded:
+                Add(segments, text, PresentationTextRole.Memory);
+                return;
             case ToolInvocationStarted:
                 Add(segments, text, PresentationTextRole.Reasoning);
                 return;

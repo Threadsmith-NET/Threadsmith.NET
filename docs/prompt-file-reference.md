@@ -39,14 +39,14 @@ Common editing rules:
 
 | Category | Files | Role |
 |---|---:|---|
-| System prompts | 21 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 22 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
+| Context prompts | 24 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **284** | Complete deployed catalog. |
+| **Total** | **287** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -94,6 +94,7 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
 | `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
+| `System-RepositoryIntelligenceGuidance.md` | Enabled-only advisory architecture guidance, current-source authority, reuse, history investigation, and clarification of task conflicts. | `None` |
 | `System-StandingPreferenceGuidance.md` | Caption for always-included standing-preference memory blocks. | `None` |
 
 #### `RequiredOutput` family
@@ -127,6 +128,8 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 |---|---|---|
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
+| `Context-RepositoryArcheology.md` | Read-only investigation using repository intelligence, current source, and relevant Git history. | `None` |
+| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh guidance for provisional intelligence writes, source support, reconciliation, and covered changes. | `None` |
 | `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
@@ -835,7 +838,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-relationshipplural"></a>`RelationshipPlural` | Grammar word or suffix selected from the relationship count. |
 | <a id="placeholder-relativepath"></a>`RelativePath` | Repository-relative path after confinement and normalization. |
 | <a id="placeholder-repositoryinstructions"></a>`RepositoryInstructions` | Repository instruction bundle supplied below host policy. |
-| <a id="placeholder-repositorymemory"></a>`RepositoryMemory` | Bounded explicit repository-memory reference blocks containing only stable IDs and escaped text; usage, scores, timestamps, and provenance remain in diagnostics. |
+| <a id="placeholder-repositorymemory"></a>`RepositoryMemory` | Bounded untrusted repository-memory blocks containing stable IDs and escaped text, plus primary supports and advisory dirty/unknown warnings for intelligence; usage, scores and timestamps remain diagnostics. |
 | <a id="placeholder-requiredoutput"></a>`RequiredOutput` | Stable ordinary conversation output guidance supplied to the model. |
 | <a id="placeholder-retrievedmemory"></a>`RetrievedMemory` | Empty compatibility field; retired automatic conversation-memory retrieval is not used. |
 | <a id="placeholder-returnedcallers"></a>`ReturnedCallers` | Number of caller entries actually returned after bounds. |

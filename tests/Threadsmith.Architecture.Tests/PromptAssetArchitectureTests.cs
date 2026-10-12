@@ -152,6 +152,7 @@ public static partial class PromptAssetArchitectureTests
     private static readonly string[] PromptOwners =
     [
         "Threadsmith.Context",
+        "Threadsmith.RepositoryIntelligence",
         "Threadsmith.DotNet",
         "Threadsmith.Execution",
         "Threadsmith.Mcp",

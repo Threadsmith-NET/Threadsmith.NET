@@ -2117,3 +2117,18 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 3. Revise/remove a memory and verify append-only current snapshots preserve earlier replay prefixes.
 4. Start another ordinary run and verify concepts/retained inclusions reset.
 5. Verify native deployed prompt assets and bounded memory authority.
+
+### MTP-278 — Repository intelligence lifecycle and context
+
+**Prerequisites:** Disposable repository with ordinary notes/preferences, deployed embedding/reranker assets, a tool-capable provider, and a second Git worktree for commit checks. Record provider/profile and reasoning; use GPT 6.1 Sol at medium for the provider-backed checks when available. Keep raw logs in a disposable location.
+
+1. Confirm `/intelligence status` starts disabled. Enable without onboarding and verify no model request or memories. Onboard through the command; inspect ordinary and intelligence IDs/text/vectors separately. Re-onboard successfully and cancel a replacement after prepared writes; only successful completion may replace intelligence.
+2. Set each ownership capacity and recall limit independently, including zero intelligence recall. Exercise same-text entries across partitions and cross-partition reconciliation. Verify ordinary IDs/text/vectors survive intelligence capacity eviction and replacement, and the reverse for ordinary eviction.
+3. Edit, add, delete and rename cited and uncited files externally. Confirm subsequent actual requests and the context viewer display dirty/unknown support warnings without re-embedding unchanged text or reading source during recall. Disable between rounds and confirm the next request omits intelligence and enabled-only guidance. Manual list/inspect retains preserved entries; ordinary model list hides them.
+4. Refresh pending work and edit/commit while collection runs. Inspect pending paths afterward: only acknowledged paths through the checkpoint clear. A commit observed after that checkpoint remains eligible for another refresh. With commit refresh enabled, exercise external commits, amended commits and linked worktrees; checkout/reset/reference maintenance must not queue work. Verify idle admission preserves active requests and typed drafts.
+5. Stop/restart while files change, then confirm uncertain provenance and background gap recovery. Using a controlled watcher/persistence-failure fixture, verify a visible fault disables intelligence without disabling ordinary memories or semantic observation. Correct the cause and explicitly enable. Cancel active collection on disable, repository switch and shutdown; confirm workers and inference stop.
+6. Toggle `ShowMemoryOutput` and inspect the same actual request. All included categories and warnings remain in the Memories view; omitted candidates are not presented as injected. Include terminal-control canaries in a disposable note and confirm literal escaped display in headless and interactive output. Archeology should use relevant current source/history without source or memory writes.
+
+**Expected:** One shared storage/search/model/tool/presentation path, independent ownership capacities, transactional publication, advisory warnings, current continuation state and no late automatic-refresh suppression.
+
+**Limitations:** Automatic detection recognizes validated standard reflog creation records. Clients suppressing reflogs or using custom messages may be missed; manually refresh those cases. Filesystem observation is eventual and gaps remain visible. Full interactive draft/modal timing, platform-specific worktree behavior, and controlled fault/persistence failures require their corresponding environments; record unassessed cases explicitly.

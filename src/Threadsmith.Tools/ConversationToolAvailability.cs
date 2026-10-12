@@ -39,6 +39,11 @@ internal static class ConversationToolAvailability
             return true;
         }
 
+        if (!RepositoryIntelligenceToolPolicy.IsAllowed(definition, context))
+        {
+            return false;
+        }
+
         var scratchpadEligible = context.Scratchpad.IsActive
             && definition.Id is "search" or "read_file" or "write_file"
             && definition.Source.Equals("Built-in", StringComparison.OrdinalIgnoreCase);

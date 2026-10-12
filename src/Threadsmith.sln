@@ -109,6 +109,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.AnthropicProvid
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.SemanticFixtures.Roslyn59", "..\tests\Threadsmith.SemanticFixtures.Roslyn59\Threadsmith.SemanticFixtures.Roslyn59.csproj", "{A1170000-0000-4000-8000-000000000117}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Threadsmith.RepositoryIntelligence", "Threadsmith.RepositoryIntelligence\Threadsmith.RepositoryIntelligence.csproj", "{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -743,6 +745,18 @@ Global
 		{A1170000-0000-4000-8000-000000000117}.Release|x64.Build.0 = Release|Any CPU
 		{A1170000-0000-4000-8000-000000000117}.Release|x86.ActiveCfg = Release|Any CPU
 		{A1170000-0000-4000-8000-000000000117}.Release|x86.Build.0 = Release|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Debug|x64.Build.0 = Debug|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Debug|x86.Build.0 = Debug|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Release|x64.ActiveCfg = Release|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Release|x64.Build.0 = Release|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Release|x86.ActiveCfg = Release|Any CPU
+		{0D5E93D9-BB9F-477B-B5FA-E3BA9736B075}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

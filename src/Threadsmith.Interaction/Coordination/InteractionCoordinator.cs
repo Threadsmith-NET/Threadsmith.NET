@@ -658,6 +658,7 @@ public sealed partial class InteractionCoordinator
                             output.Add(new PresentationTextItem(eventSegments)
                             {
                                 Notification = InteractionEventSegments.CreateNotification(domainEvent),
+                                WakeIdleInput = domainEvent is DiagnosticObserved { Code: "intelligence.refresh.pending" },
                             });
                         }
                     }
@@ -917,7 +918,13 @@ public sealed partial class InteractionCoordinator
 
                 if (input.Kind == InteractionInputKind.IdleOutputYield)
                 {
-                    continue;
+                    var intelligencePath = activeRepository?.Repository?.RepositoryPath ?? snapshot.RepositoryPath;
+                    if (intelligencePath is null || !await _presenter.TakeIntelligenceRefreshAsync(sessionId, intelligencePath, lifetime.Token))
+                    {
+                        continue;
+                    }
+
+                    input = new InteractionInput(true, "/intelligence refresh", lifetime.Token);
                 }
 
                 if (input.Kind == InteractionInputKind.ContextMap)
@@ -1549,7 +1556,45 @@ public sealed partial class InteractionCoordinator
                     continue;
                 }
 
-                if (commandText.StartsWith('/'))
+                var intelligenceOperation = RepositoryIntelligenceOperation.None;
+                if (commandText.Equals("/intelligence", StringComparison.OrdinalIgnoreCase)
+                    || commandText.StartsWith("/intelligence ", StringComparison.OrdinalIgnoreCase))
+                {
+                    var argument = commandText.Length == 13 ? "status" : commandText[13..].Trim();
+                    var parts = argument.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+                    var action = parts[0].ToLowerInvariant();
+                    if (action is "enable" or "disable" or "status")
+                    {
+                        try
+                        {
+                            var path = activeRepository?.Repository?.RepositoryPath ?? throw new InvalidOperationException("Open a repository first.");
+                            var status = await _presenter.ManageIntelligenceAsync(new ManageRepositoryIntelligenceCommand(sessionId, path, action), lifetime.Token);
+                            var description = status.Fault ?? (!status.Onboarded ? "Onboarding required; use /intelligence onboard."
+                                : status.IsEffective ? "Ready." : "Disabled or monitoring is starting.");
+                            await _surface.WriteAsync("Repository intelligence: " + description + "\n", PresentationTextRole.Status, lifetime.Token);
+                        }
+                        catch (Exception exception) when (exception is not OperationCanceledException)
+                        {
+                            await _surface.WriteAsync(FormatStatusError(exception) + "\n", PresentationTextRole.Error, lifetime.Token);
+                        }
+
+                        continue;
+                    }
+
+                    intelligenceOperation = action switch
+                    {
+                        "onboard" => RepositoryIntelligenceOperation.Onboard,
+                        "refresh" => RepositoryIntelligenceOperation.Refresh,
+                        "archeology" when parts.Length == 2 => RepositoryIntelligenceOperation.Archeology,
+                        _ => RepositoryIntelligenceOperation.None,
+                    };
+                    if (intelligenceOperation != RepositoryIntelligenceOperation.None)
+                    {
+                        submittedText = action == "archeology" ? parts[1] : $"{action} repository intelligence.";
+                    }
+                }
+
+                if (commandText.StartsWith('/') && intelligenceOperation == RepositoryIntelligenceOperation.None)
                 {
                     await _surface.WriteAsync(
                         $"Unknown command: {commandText}. Enter /help for commands.\n",
@@ -1568,7 +1613,7 @@ public sealed partial class InteractionCoordinator
                     renderedRunCompletion = new TaskCompletionSource<string?>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
                     runCompletionQueued = false;
-                    _ = await controller.SubmitAsync(submittedText, operation.Token);
+                    _ = await controller.SubmitAsync(submittedText, intelligenceOperation, operation.Token);
                     waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
                     var activeInput = _surface.BeginActiveRunInput(_timeProvider);
@@ -3468,8 +3513,7 @@ public sealed partial class InteractionCoordinator
                     : string.Empty)
                 + string.Concat(inspection.ConversationItems.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} {item.Kind} {item.Id}: {item.Rationale}\n"))
-                + string.Concat(inspection.RepositoryMemoryItems.Select(item =>
-                        $"  {(item.Included ? "included" : "omitted")} repository-memory {item.Origin} {item.Id.Value:D}: {item.Rationale}\n"))
+                + string.Concat(inspection.RepositoryMemoryItems.Select(ContextUsageFormatter.FormatMemoryContext))
                 + string.Concat(inspection.Reductions.Select(reduction => $"  reduced: {reduction}\n"));
             await _surface.WriteAsync(output, PresentationTextRole.Status, cancellationToken);
             return;

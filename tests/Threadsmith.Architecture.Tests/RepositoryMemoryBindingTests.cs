@@ -12,7 +12,7 @@ using Threadsmith.Workspaces;
 using Xunit;
 
 /// <summary>Failed repository opens preserve target memory content and defer destructive migrations.</summary>
-public static class RepositoryMemoryBindingTests
+public static partial class RepositoryMemoryBindingTests
 {
     /// <summary>A late rebind failure preserves both current and legacy target notes; a successful retry applies the cap.</summary>
     [Theory]
@@ -50,7 +50,7 @@ public static class RepositoryMemoryBindingTests
             () => coordinator.BindRepositoryAsync(fixture.TargetRoot, TestContext.Current.CancellationToken));
 
         Assert.Equal("Injected late repository binding failure.", failure.Message);
-        Assert.Equal(legacy ? 9L : 13L, await fixture.ScalarAsync("SELECT max(version) FROM schema_version;"));
+        Assert.Equal(legacy ? 9L : 14L, await fixture.ScalarAsync("SELECT max(version) FROM schema_version;"));
         Assert.Equal(2L, await fixture.ScalarAsync(legacy
             ? "SELECT count(*) FROM repository_memory;"
             : "SELECT count(*) FROM managed_memories;"));
@@ -64,7 +64,7 @@ public static class RepositoryMemoryBindingTests
         var targetIdentity = RepositoryIdentity.Create(fixture.TargetRoot);
         Assert.Single((await router.GetSnapshotAsync(targetIdentity, [], TestContext.Current.CancellationToken)).Entries);
         Assert.Equal(1, options.Capture(targetIdentity).MaxNumberOfRepoMemories);
-        Assert.Equal(13L, await fixture.ScalarAsync("SELECT max(version) FROM schema_version;"));
+        Assert.Equal(14L, await fixture.ScalarAsync("SELECT max(version) FROM schema_version;"));
         if (legacy)
         {
             Assert.Single(Directory.EnumerateFiles(fixture.TargetRoot, "*.backup", SearchOption.AllDirectories));
@@ -73,7 +73,12 @@ public static class RepositoryMemoryBindingTests
 
     private sealed class FailingRebindManager : IMcpManager
     {
-        private bool _failNext = true;
+        private bool _failNext;
+
+        internal FailingRebindManager(bool failNext = true)
+        {
+            _failNext = failNext;
+        }
 
         public Task AutoConnectAsync(CancellationToken cancellationToken = default)
         {

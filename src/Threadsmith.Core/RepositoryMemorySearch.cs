@@ -12,6 +12,12 @@ public interface IRepositoryMemorySearch
 /// <summary>Host-owned direct search inputs, independent of conversational query construction.</summary>
 public sealed record RepositoryMemorySearchRequest
 {
+    /// <summary>Host-owned collection whose provisional contents use the shared search implementation.</summary>
+    public RepositoryMemoryCollection? Collection { get; init; }
+
+    /// <summary>Ownership filter applied before qualification and ranking; null searches both for reconciliation.</summary>
+    public RepositoryMemoryOwnership? Ownership { get; init; }
+
     /// <summary>Canonical repository identity.</summary>
     public required string RepositoryIdentity { get; init; }
 

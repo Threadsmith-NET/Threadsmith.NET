@@ -820,10 +820,17 @@ public sealed class HeadlessShell
     private async Task<int> RunRepositoryInputAsync(SessionId sessionId, string repositoryPath, string request, CancellationToken cancellationToken)
     {
         var operation = RepositoryIntelligenceOperation.None;
+        int? historyDepth = null;
         var parts = request.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length > 0 && parts[0].Equals("/intelligence", StringComparison.OrdinalIgnoreCase))
         {
             var action = parts.Length > 1 ? parts[1].ToLowerInvariant() : "status";
+
+            if (action == "reset")
+            {
+                throw new InvalidOperationException("Run /intelligence reset in the interactive terminal (--tui) and confirm Yes to reset repository intelligence.");
+            }
+
             if (action is "status" or "enable" or "disable")
             {
                 var status = await _dispatcher.DispatchAsync(new ManageRepositoryIntelligenceCommand(sessionId, repositoryPath, action), cancellationToken);
@@ -839,11 +846,15 @@ public sealed class HeadlessShell
                 _ => throw new ArgumentException("Use /intelligence onboard, refresh, archeology <question>, enable, disable, or status."),
             };
             request = operation == RepositoryIntelligenceOperation.Archeology ? parts[2] : action + " repository intelligence.";
+            if (operation == RepositoryIntelligenceOperation.Onboard)
+            {
+                historyDepth = RepositoryIntelligenceDepth.Parse(parts.Length == 3 ? parts[2] : null);
+            }
         }
 
         while (true)
         {
-            var runId = await _dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, request) { IntelligenceOperation = operation }, cancellationToken);
+            var runId = await _dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, request) { IntelligenceOperation = operation, IntelligenceHistoryDepth = historyDepth }, cancellationToken);
             var result = await WaitAndWriteRunAsync(sessionId, runId, cancellationToken);
             if (result != 0 || !await _dispatcher.DispatchAsync(new TakeRepositoryIntelligenceRefreshCommand(sessionId, repositoryPath), cancellationToken))
             {
@@ -852,6 +863,7 @@ public sealed class HeadlessShell
 
             request = "Refresh repository intelligence after an observed commit.";
             operation = RepositoryIntelligenceOperation.Refresh;
+            historyDepth = null;
         }
     }
 

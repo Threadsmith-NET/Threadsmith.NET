@@ -152,6 +152,80 @@ public sealed class AnthropicTransportTests
         Assert.Null(error.InnerException);
     }
 
+    /// <summary>Native metadata does not commit output, and a mixed failure sequence has one attempt limit.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task StreamAsync_InterruptedBody_RetriesOnlyBeforeDeliveredOutput(bool exhaustRetries, bool partialOutput)
+    {
+        var attempts = 0;
+        var submissions = 0;
+        var handler = new TestAnthropicHandler((_, _) =>
+        {
+            if (++attempts == 1)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            }
+
+            if (attempts == 2 || exhaustRetries)
+            {
+                var prefix = TestAnthropic.Start();
+                if (partialOutput)
+                {
+                    prefix += TestAnthropic.Block(0, new { type = "text", text = string.Empty })
+                        + TestAnthropic.Delta(0, new { type = "text_delta", text = "partial" });
+                }
+
+                return Task.FromResult(Response(new InterruptedStream(Encoding.UTF8.GetBytes(prefix))));
+            }
+
+            return Task.FromResult(Response(new MemoryStream(Encoding.UTF8.GetBytes(TestAnthropic.TextStream()))));
+        });
+        using var client = new HttpClient(handler);
+        var provider = new AnthropicModelProvider(client, TestAnthropic.Profile(), "key", TestAnthropic.Compatibility());
+        var request = TestAnthropic.Request() with { SubmissionObserver = () => submissions++ };
+        var chunks = new List<ModelChunk>();
+        async Task CollectAsync()
+        {
+            await foreach (var chunk in provider.StreamAsync(request, TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        }
+
+        if (exhaustRetries || partialOutput)
+        {
+            var error = await Assert.ThrowsAsync<TransientModelException>(CollectAsync);
+            Assert.Contains("ResponseEnded", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("private detail", error.Message, StringComparison.Ordinal);
+            Assert.Equal(partialOutput ? "partial" : string.Empty, string.Concat(chunks.Select(chunk => chunk.Text)));
+        }
+        else
+        {
+            await CollectAsync();
+            Assert.Equal("hello", string.Concat(chunks.Select(chunk => chunk.Text)));
+            Assert.Single(chunks, chunk => chunk.FinishReason is not null);
+        }
+
+        Assert.Equal(partialOutput ? 2 : 3, attempts);
+        Assert.Equal(attempts, submissions);
+    }
+
+    private sealed class InterruptedStream(byte[] prefix) : MemoryStream(prefix)
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Position == Length)
+            {
+                throw new HttpIOException(HttpRequestError.ResponseEnded, "private detail");
+            }
+
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
     private static HttpResponseMessage Response(Stream stream)
     {
         var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) };

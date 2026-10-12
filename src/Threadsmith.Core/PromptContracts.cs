@@ -152,6 +152,9 @@ public static class PromptFileNames
     /// <summary>Restricted architectural collection through the shared memory workflow.</summary>
     public const string ContextRepositoryIntelligenceCollection = "Context-RepositoryIntelligenceCollection.md";
 
+    /// <summary>Chronological onboarding batch guidance surrounding untrusted Git metadata.</summary>
+    public const string ContextRepositoryIntelligenceHistory = "Context-RepositoryIntelligenceHistory.md";
+
     /// <summary>On-demand source and history investigation without mutation authority.</summary>
     public const string ContextRepositoryArcheology = "Context-RepositoryArcheology.md";
 
@@ -998,6 +1001,7 @@ public static class PromptFileNames
         SystemRepositoryMemoryGuidance,
         SystemRepositoryIntelligenceGuidance,
         ContextRepositoryIntelligenceCollection,
+        ContextRepositoryIntelligenceHistory,
         ContextRepositoryArcheology,
         SystemStandingPreferenceGuidance,
         SystemGovernedRequestState,
@@ -1455,7 +1459,7 @@ public static class PromptAssetCatalog
 
         string ResolveOwner(string fileName)
         {
-            if (fileName is PromptFileNames.ContextRepositoryIntelligenceCollection or PromptFileNames.ContextRepositoryArcheology)
+            if (fileName is PromptFileNames.ContextRepositoryIntelligenceCollection or PromptFileNames.ContextRepositoryIntelligenceHistory or PromptFileNames.ContextRepositoryArcheology)
             {
                 return "Threadsmith.RepositoryIntelligence";
             }
@@ -1611,6 +1615,7 @@ public static class PromptAssetCatalog
                         "RejectedQuery"),
                     [PromptFileNames.CorrectionGitDiffMissingRevision] = Set("FieldName", "ModeDescription"),
                     [PromptFileNames.CorrectionGitLogInvalidRevision] = Set("FieldName"),
+                    [PromptFileNames.ContextRepositoryIntelligenceHistory] = Set("HistoryJson"),
                     [PromptFileNames.CorrectionGitBlameInvalidRevision] = Set("FieldName"),
                     [PromptFileNames.CorrectionSearchBounds] = Set("MaximumMatches", "MaximumQueryCharacters"),
                     [PromptFileNames.ToolSearchDescription] = Set("MaximumQueryCharacters"),

@@ -1557,18 +1557,30 @@ public sealed partial class InteractionCoordinator
                 }
 
                 var intelligenceOperation = RepositoryIntelligenceOperation.None;
+                int? intelligenceDepth = null;
                 if (commandText.Equals("/intelligence", StringComparison.OrdinalIgnoreCase)
                     || commandText.StartsWith("/intelligence ", StringComparison.OrdinalIgnoreCase))
                 {
                     var argument = commandText.Length == 13 ? "status" : commandText[13..].Trim();
                     var parts = argument.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
                     var action = parts[0].ToLowerInvariant();
-                    if (action is "enable" or "disable" or "status")
+                    if (action is "enable" or "disable" or "status" or "reset")
                     {
                         try
                         {
                             var path = activeRepository?.Repository?.RepositoryPath ?? throw new InvalidOperationException("Open a repository first.");
-                            var status = await _presenter.ManageIntelligenceAsync(new ManageRepositoryIntelligenceCommand(sessionId, path, action), lifetime.Token);
+                            if (action == "reset")
+                            {
+                                var confirmation = await _surface.SelectAsync("Are you sure?", ["No", "Yes"], lifetime.Token);
+                                if (confirmation != 1)
+                                {
+                                    await _surface.WriteAsync("Repository intelligence reset cancelled.\n", PresentationTextRole.Status, lifetime.Token);
+                                    continue;
+                                }
+                            }
+
+                            var status = await _presenter.ManageIntelligenceAsync(
+                                new ManageRepositoryIntelligenceCommand(sessionId, path, action) { ResetConfirmed = action == "reset" }, lifetime.Token);
                             var description = status.Fault ?? (!status.Onboarded ? "Onboarding required; use /intelligence onboard."
                                 : status.IsEffective ? "Ready." : "Disabled or monitoring is starting.");
                             await _surface.WriteAsync("Repository intelligence: " + description + "\n", PresentationTextRole.Status, lifetime.Token);
@@ -1590,6 +1602,19 @@ public sealed partial class InteractionCoordinator
                     };
                     if (intelligenceOperation != RepositoryIntelligenceOperation.None)
                     {
+                        if (intelligenceOperation == RepositoryIntelligenceOperation.Onboard)
+                        {
+                            try
+                            {
+                                intelligenceDepth = RepositoryIntelligenceDepth.Parse(parts.Length == 2 ? parts[1] : null);
+                            }
+                            catch (ArgumentException exception)
+                            {
+                                await _surface.WriteAsync(FormatStatusError(exception) + "\n", PresentationTextRole.Error, lifetime.Token);
+                                continue;
+                            }
+                        }
+
                         submittedText = action == "archeology" ? parts[1] : $"{action} repository intelligence.";
                     }
                 }
@@ -1613,7 +1638,7 @@ public sealed partial class InteractionCoordinator
                     renderedRunCompletion = new TaskCompletionSource<string?>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
                     runCompletionQueued = false;
-                    _ = await controller.SubmitAsync(submittedText, intelligenceOperation, operation.Token);
+                    _ = await controller.SubmitAsync(submittedText, intelligenceOperation, intelligenceDepth, operation.Token);
                     waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
                     var activeInput = _surface.BeginActiveRunInput(_timeProvider);

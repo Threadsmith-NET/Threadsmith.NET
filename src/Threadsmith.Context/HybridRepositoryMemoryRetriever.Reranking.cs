@@ -81,10 +81,16 @@ public sealed partial class HybridRepositoryMemoryRetriever
                 return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, false);
             }
 
-            if (scores.Any(score => score.WasTruncated || score.InputTokenCount > model.MaxInputTokens))
+            if (scores.Any(score => score.InputTokenCount > model.MaxInputTokens && !score.WasTruncated))
             {
-                diagnostics.Add("Memory reranking could not score every complete query-memory pair within its token limit; using qualified hybrid ranking.");
-                return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, true);
+                diagnostics.Add("Memory reranking returned an overlength pair without truncation accounting; using qualified hybrid ranking.");
+                return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, false);
+            }
+
+            var pairTruncated = scores.Any(score => score.WasTruncated);
+            if (pairTruncated)
+            {
+                diagnostics.Add($"Memory reranking used the first {model.MaxInputTokens} tokens of oversized query-memory pairs; full memory text remains available for reconciliation.");
             }
 
             var qualified = candidates.Select((candidate, index) => candidate with { CrossEncoderScore = scores[index].Score })
@@ -92,7 +98,7 @@ public sealed partial class HybridRepositoryMemoryRetriever
                 .ThenByDescending(candidate => candidate.Score)
                 .ThenBy(candidate => candidate.Entry.Id.Value).ToArray();
             diagnostics.Add($"Memory reranking used {model.ModelId}; candidates={candidates.Length}, selected={Math.Min(qualified.Length, options.MaximumResults)}, elapsed={timer.Elapsed.TotalMilliseconds:F1}ms.");
-            return (qualified, RepositoryMemorySearchBranchStatus.Completed, false);
+            return (qualified, RepositoryMemorySearchBranchStatus.Completed, pairTruncated);
         }
         catch (OperationCanceledException)
         {

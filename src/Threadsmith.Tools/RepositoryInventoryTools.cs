@@ -169,7 +169,7 @@ public sealed class GitDiffTool : Tool<GitDiffInput, GitDiffResult>
 }
 
 /// <summary>Gets bounded local Git history.</summary>
-public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
+public sealed partial class GitLogTool : Tool<GitLogRequest, GitLogResult>
 {
     private readonly IPromptLoader _prompts;
     private readonly IGitQueryService _service;
@@ -198,10 +198,9 @@ public sealed class GitLogTool : Tool<GitLogRequest, GitLogResult>
     {
         RepositoryInventoryToolPolicy.EnsureResourcePaths(this, input, context.Invocation);
         var revision = NormalizeRevisionOrDefault(input.Revision);
-        var result = await _service.LogAsync(
-            context.Invocation.RepositoryPath,
-            input,
-            cancellationToken);
+        var result = context.Invocation.RequestedBy == GitLogRequest.CollectionRequestor
+            ? await ReadCollectionPageAsync(input, context.Invocation, cancellationToken)
+            : await _service.LogAsync(context.Invocation.RepositoryPath, input, cancellationToken);
         return new(
             result,
             [new ToolProvenanceSource("git", revision, "log")],
@@ -323,6 +322,21 @@ public sealed class GitShowTool : Tool<GitShowInput, GitShowResult>
         {
             var largest = result.Files.Where(file => file.Content is not null).MaxBy(file => file.Content?.Length ?? 0) ?? throw new InvalidDataException("Git batch has no content to bound.");
             result = result with { Files = result.Files.Select(file => ReferenceEquals(file, largest) ? file with { Content = null, IsTruncated = true } : file).ToArray() };
+        }
+
+        if (context.Invocation.IntelligenceRun is { } intelligence
+            && result.Revision.Length is 40 or 64 && result.Revision.All(Uri.IsHexDigit))
+        {
+            if (request.Path is { } path && result.Kind == GitObjectKind.Blob && !result.IsBinary && !result.IsTruncated)
+            {
+                var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(result.Content))).ToLowerInvariant();
+                intelligence.ObserveHistoricalSource(path, digest, result.Revision);
+            }
+
+            foreach (var file in result.Files.Where(file => file.Content is not null && !file.IsBinary && !file.IsTruncated && file.ContentDigest is not null))
+            {
+                intelligence.ObserveHistoricalSource(file.Path, file.ContentDigest ?? throw new InvalidDataException("Missing historical source digest."), result.Revision);
+            }
         }
 
         return new(
@@ -713,6 +727,32 @@ internal static class GitModelProjection
     /// <summary>Projects commit history without author email addresses.</summary>
     internal static string Create(GitLogResult result)
     {
+        if (result.IsCollectionPage)
+        {
+            return JsonSerializer.Serialize(
+                new
+                {
+                    result.HistoryRevision,
+                    result.HistoryDepth,
+                    result.CollectionPage,
+                    result.NextCollectionPage,
+                    result.IsGitRepository,
+                    commits = result.Commits.Select(commit => new
+                    {
+                        commit.Commit,
+                        commit.Parents,
+                        commit.AuthoredAt,
+                        commit.Message,
+                        commit.MessageContinues,
+                        commit.ChangedPaths,
+                        commit.PathsContinue,
+                        commit.IsContinuation,
+                        commit.OmittedPaths,
+                    }),
+                },
+                ModelJsonOptions);
+        }
+
         return JsonSerializer.Serialize(
             new
             {

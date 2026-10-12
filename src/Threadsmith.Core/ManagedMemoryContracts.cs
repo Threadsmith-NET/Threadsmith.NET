@@ -356,6 +356,24 @@ public sealed record RepositoryMemoryInclusion(RepositoryMemoryId Id, long Revis
 /// <summary>Transactional repository-local persistence independent of inference and provider types.</summary>
 public interface IManagedRepositoryMemoryStore
 {
+    /// <summary>Loads unfinished onboarding independently of published memory retrieval.</summary>
+    Task<RepositoryIntelligenceCheckpoint?> ReadOnboardingCheckpointAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult<RepositoryIntelligenceCheckpoint?>(null);
+    }
+
+    /// <summary>Atomically replaces the last completed onboarding batch without publishing its memories.</summary>
+    Task SaveOnboardingCheckpointAsync(RepositoryIntelligenceCheckpoint checkpoint, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support resumable onboarding.");
+    }
+
+    /// <summary>Atomically removes this repository's intelligence and tracking state while preserving ordinary memories.</summary>
+    Task ResetIntelligenceAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("The memory store does not support intelligence reset.");
+    }
+
     /// <summary>Reads one bounded ordered page of pending paths through a collection checkpoint.</summary>
     Task<RepositoryIntelligenceChangePage> ReadIntelligenceChangesAsync(string repositoryIdentity, long checkpoint, string? afterPath, int maximumBytes, CancellationToken cancellationToken = default)
     {

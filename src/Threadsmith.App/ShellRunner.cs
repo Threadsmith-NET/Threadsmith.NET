@@ -236,7 +236,7 @@ internal static class ShellRunner
 
             if (domainEvent is DiagnosticObserved diagnostic && diagnostic.Code.StartsWith("intelligence.", StringComparison.Ordinal))
             {
-                await output.WriteLineAsync(TerminalControlEncoder.Encode($"[{diagnostic.Code}] {diagnostic.Message}").AsMemory(), cancellationToken);
+                await output.WriteLineAsync((Environment.NewLine + TerminalControlEncoder.Encode($"[{diagnostic.Code}] {diagnostic.Message}")).AsMemory(), cancellationToken);
                 return;
             }
 

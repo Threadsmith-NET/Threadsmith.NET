@@ -321,7 +321,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         {
             try
             {
-                registration = _registry.GetRegistration(request.ToolId);
+                registration = _registry.GetRegistration(request.ToolId, request.Context);
             }
             catch (KeyNotFoundException)
             {

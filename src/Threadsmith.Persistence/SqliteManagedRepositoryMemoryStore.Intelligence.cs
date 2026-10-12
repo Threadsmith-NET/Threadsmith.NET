@@ -8,6 +8,30 @@ using Threadsmith.Core;
 public sealed partial class SqliteManagedRepositoryMemoryStore
 {
     /// <inheritdoc />
+    public async Task ResetIntelligenceAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
+        if (_collection is not null)
+        {
+            throw new InvalidOperationException("A collection cannot reset repository intelligence.");
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await OpenConnectionAsync(connection, cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: false);
+        const string reset = """
+            DELETE FROM managed_memories WHERE repository_identity = $repo AND ownership = 1;
+            DELETE FROM repository_intelligence_changes WHERE repository_identity = $repo;
+            DELETE FROM repository_intelligence_state WHERE repository_identity = $repo;
+            DELETE FROM repository_intelligence_checkpoints WHERE repository_identity = $repo;
+            """;
+        await using var command = CreateCommand(connection, transaction, reset, repositoryIdentity);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<RepositoryIntelligenceChangePage> ReadIntelligenceChangesAsync(
         string repositoryIdentity, long checkpoint, string? afterPath, int maximumBytes, CancellationToken cancellationToken = default)
     {

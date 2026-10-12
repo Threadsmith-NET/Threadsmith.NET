@@ -70,6 +70,8 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             }
 
             await AdvanceRevisionAsync(connection, transaction, identity, cancellationToken);
+            command.CommandText = "DELETE FROM repository_intelligence_checkpoints WHERE repository_identity = $repo;";
+            await command.ExecuteNonQueryAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }
         finally

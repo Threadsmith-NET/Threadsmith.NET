@@ -38,11 +38,12 @@ public static partial class RepositoryMemoryBindingTests
         {
             RepositoryPath = fixture.InitialRoot,
             RequestedBy = "test",
+            AllowedExecutables = ["git"],
             TrustLevel = restriction == "untrusted" ? RepositoryTrustLevel.UntrustedInspection : RepositoryTrustLevel.TrustedRead,
             DeniedToolIds = restriction == "denied" ? ["memories"] : [],
             AllowedToolIds = restriction == "allowlist" ? ["read_file"] : [],
         };
-        ITool[] tools = [new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer())];
+        ITool[] tools = [new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance), new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()), new GitLogTool(new GitQueryService(), TestPromptLoader.Instance)];
         var toolState = new ToolStateManager(
             tools.Select(tool => tool.Definition),
             new ConfigurationBuilder().Build(),
@@ -83,7 +84,7 @@ public static partial class RepositoryMemoryBindingTests
             new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
-            toolPipeline: new UnusedPipeline(),
+            toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance),
             toolContextFactory: (_, _) => Task.FromResult(context),
             toolRegistry: registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
@@ -271,19 +272,24 @@ public static partial class RepositoryMemoryBindingTests
     private sealed class CallbackModel : IModelProvider
     {
         private readonly Action _callback;
+        private readonly string _text;
 
-        public CallbackModel(Action callback)
+        public CallbackModel(Action callback, string text = "Collection finished.")
         {
             _callback = callback;
+            _text = text;
         }
 
         public int Requests { get; private set; }
 
+        public List<ModelStreamRequest> CapturedRequests { get; } = [];
+
         public IAsyncEnumerable<ModelChunk> StreamAsync(ModelStreamRequest request, CancellationToken cancellationToken = default)
         {
             Requests++;
+            CapturedRequests.Add(request);
             _callback();
-            return new FakeModelProvider(new ScriptedSession { Turns = [new ScriptedTurn { Text = "Collection finished." }] }).StreamAsync(request, cancellationToken);
+            return new FakeModelProvider(new ScriptedSession { Turns = [new ScriptedTurn { Text = _text }] }).StreamAsync(request with { ToolContinuationRound = 0 }, cancellationToken);
         }
     }
 

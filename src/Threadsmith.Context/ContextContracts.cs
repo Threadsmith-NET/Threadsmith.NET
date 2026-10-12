@@ -254,6 +254,9 @@ public sealed record ContextAssemblyRequest
     /// <summary>Request-local host-owned model messages appended to the assembled request.</summary>
     public IReadOnlyList<ModelMessage> AdditionalMessages { get; init; } = [];
 
+    /// <summary>Evidence already represented by this turn's continuation groups or successfully compacted summaries.</summary>
+    public IReadOnlyList<EvidenceId> ActiveTurnEvidenceIds { get; init; } = [];
+
     /// <summary>Authoritative archived current user message.</summary>
     public ConversationMessageId? CurrentMessageId { get; init; }
 

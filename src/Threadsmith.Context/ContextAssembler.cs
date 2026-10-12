@@ -345,6 +345,7 @@ public sealed class ContextAssembler : IContextAssembler
         var selectedTokens = 0;
         var contentHashes = new HashSet<string>(StringComparer.Ordinal);
         var instructionEvidence = new InstructionEvidenceMatcher(instructionBundle);
+        var activeTurnEvidence = request.ActiveTurnEvidenceIds.ToHashSet();
         var instructionEvidenceIsSensitive = false;
         foreach (var item in candidates)
         {
@@ -360,6 +361,10 @@ public sealed class ContextAssembler : IContextAssembler
             else if (!allowedKinds.Contains(item.Kind))
             {
                 omissionReason = $"{item.Kind} is excluded by context policy.";
+            }
+            else if (activeTurnEvidence.Contains(item.EvidenceId))
+            {
+                omissionReason = "Evidence is already represented by active-turn continuation or its compacted summary.";
             }
             else if (instructionEvidence.IsAlreadyIncluded(item))
             {

@@ -104,11 +104,11 @@ public static class MemorySearchContractTests
         Assert.Equal(selected.ConceptMatches, retainedCandidate.ConceptMatches);
     }
 
-    /// <summary>Unavailable scoring and incomplete pairs preserve ordinary recall without claiming a complete check.</summary>
+    /// <summary>Unavailable scoring degrades recall; bounded prefix scoring succeeds with visible truncation accounting.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public static async Task Scoring_outcomes_are_structured_and_degraded_results_do_not_become_complete(bool truncated)
+    public static async Task Scoring_outcomes_distinguish_bounded_prefixes_from_unavailable_inference(bool truncated)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await ConversationFixture.CreateAsync();
@@ -126,10 +126,11 @@ public static class MemorySearchContractTests
                 Options = new RepositoryMemorySearchOptions { SemanticMinimum = 1, RerankerEnabled = true },
             },
             ct);
-        Assert.False(result.IsComplete);
-        Assert.Single(result.Selected);
+        Assert.Equal(truncated, result.IsComplete);
+        var selected = Assert.Single(result.Selected);
+        Assert.Equal(truncated ? 2d : (double?)null, selected.CrossEncoderScore);
         var details = Assert.IsType<RepositoryMemorySearchDetails>(result.SearchDetails);
-        Assert.Equal(truncated ? RepositoryMemorySearchBranchStatus.Incomplete : RepositoryMemorySearchBranchStatus.Unavailable, details.Reranker);
+        Assert.Equal(truncated ? RepositoryMemorySearchBranchStatus.Completed : RepositoryMemorySearchBranchStatus.Unavailable, details.Reranker);
         Assert.Equal(truncated, details.PairTruncated);
     }
 }

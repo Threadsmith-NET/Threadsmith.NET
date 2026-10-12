@@ -143,6 +143,12 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
     }
 
     /// <inheritdoc />
+    public Task ResetIntelligenceAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).ResetIntelligenceAsync(repositoryIdentity, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task ClearIntelligenceFaultAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
     {
         return GetStore(repositoryIdentity).ClearIntelligenceFaultAsync(repositoryIdentity, cancellationToken);
@@ -158,6 +164,18 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
     public Task CommitCollectionAsync(RepositoryMemoryCollection collection, RepositoryMemoryOptions options, CancellationToken cancellationToken = default)
     {
         return GetStore(collection.Baseline.RepositoryIdentity).CommitCollectionAsync(collection, options, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<RepositoryIntelligenceCheckpoint?> ReadOnboardingCheckpointAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).ReadOnboardingCheckpointAsync(repositoryIdentity, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task SaveOnboardingCheckpointAsync(RepositoryIntelligenceCheckpoint checkpoint, CancellationToken cancellationToken = default)
+    {
+        return GetStore(checkpoint.RepositoryIdentity).SaveOnboardingCheckpointAsync(checkpoint, cancellationToken);
     }
 
     /// <inheritdoc />

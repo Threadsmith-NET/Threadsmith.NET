@@ -40,13 +40,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 24 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 25 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **287** | Complete deployed catalog. |
+| **Total** | **288** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -94,7 +94,7 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
 | `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
-| `System-RepositoryIntelligenceGuidance.md` | Enabled-only advisory architecture guidance, current-source authority, reuse, history investigation, and clarification of task conflicts. | `None` |
+| `System-RepositoryIntelligenceGuidance.md` | Enabled-only advisory architecture guidance, current-source authority, reuse, history investigation, clarification of ambiguous task conflicts, and respect for explicit user-directed departures. | `None` |
 | `System-StandingPreferenceGuidance.md` | Caption for always-included standing-preference memory blocks. | `None` |
 
 #### `RequiredOutput` family
@@ -129,7 +129,8 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
 | `Context-RepositoryArcheology.md` | Read-only investigation using repository intelligence, current source, and relevant Git history. | `None` |
-| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh guidance for provisional intelligence writes, source support, reconciliation, and covered changes. | `None` |
+| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare evidence-supported memories and covered changes. | `None` |
+| `Context-RepositoryIntelligenceHistory.md` | Depth-scoped chronological onboarding batches, resumable completion checkpoints, and final current-source verification; Git metadata remains untrusted evidence. | [`HistoryJson`](#placeholder-historyjson) |
 | `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
@@ -906,6 +907,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-version"></a>`Version` | Schema, wrapper, package, or protocol version identified by the surrounding prompt. |
 | <a id="placeholder-workspacefilename"></a>`WorkspaceFileName` | Display name of the current workspace or repository file. |
 
+| <a id="placeholder-historyjson"></a>`HistoryJson` | Sanitized bounded Git commit messages and changed paths, pinned history revision, requested depth, and chronological page/continuation cursor supplied by the host. |
 | <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with status, generation, coverage, diagnostics and omissions; pending, obsolete, or unmeasured error counts are omitted. |
 
 ## Related references

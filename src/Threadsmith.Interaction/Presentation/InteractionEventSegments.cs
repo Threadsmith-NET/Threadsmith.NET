@@ -57,6 +57,11 @@ internal static class InteractionEventSegments
                     null => PresentationTextRole.Warning,
                     _ => PresentationTextRole.Status,
                 };
+                if (diagnostic.Code.StartsWith("intelligence.", StringComparison.Ordinal))
+                {
+                    Add(segments, Environment.NewLine, diagnosticRole);
+                }
+
                 Add(segments, $"[{diagnostic.Code}] {diagnostic.Message}{Environment.NewLine}", diagnosticRole);
                 break;
             case TestRunCompleted tests:

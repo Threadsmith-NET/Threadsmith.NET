@@ -57,7 +57,7 @@ public static class MigrationSafetyTests
             var v1 = await runner.RunAsync();
             var v2 = await runner.RunAsync();
             Assert.Equal(v1, v2);
-            Assert.Equal(14, v2);
+            Assert.Equal(15, v2);
         }
         finally
         {

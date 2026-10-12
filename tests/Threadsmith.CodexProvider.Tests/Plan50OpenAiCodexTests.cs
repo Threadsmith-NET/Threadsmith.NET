@@ -548,6 +548,27 @@ public sealed class Plan50OpenAiCodexTests
         Assert.DoesNotContain("secret repository text", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Streaming failures retain the same safe identifiers as HTTP rejections.</summary>
+    [Theory]
+    [InlineData("response.failed", true)]
+    [InlineData("error", false)]
+    public async Task Provider_StreamFailure_PreservesOnlySafeIdentifiers(string type, bool nested)
+    {
+        const string error = "{\"code\":\"invalid_request\",\"param\":\"input\",\"message\":\"secret repository text\"}";
+        var body = nested ? "{\"response\":{\"error\":" + error + "},\"type\":\"" + type + "\"}" : "{\"error\":" + error + ",\"type\":\"" + type + "\"}";
+        var stream = "data: " + body + "\n\n";
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(stream, Encoding.UTF8, "text/event-stream"),
+        });
+        var provider = await CreateProviderAsync(handler, "token");
+        var exception = await Assert.ThrowsAsync<ModelProviderException>(async () =>
+            await provider.StreamAsync(CreateStreamRequest(), TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Contains("Code: invalid_request.", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Parameter: input.", exception.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret repository text", exception.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>A configured byte limit rejects oversized output independently of the model token ceiling.</summary>
     [Fact]
     public async Task Provider_RequestOutputCeiling_RejectsOversizedStream()
@@ -942,6 +963,59 @@ public sealed class Plan50OpenAiCodexTests
         }
 
         Assert.Equal(2, handler.RequestCount);
+    }
+
+    /// <summary>Headers and metadata do not disable safe recovery; all failure phases share one budget.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Provider_InterruptedBeforeOutput_UsesBoundedRetry(bool exhaustRetries, bool cleanEof)
+    {
+        var attempts = 0;
+        var submissions = 0;
+        var handler = new RecordingHandler(_ =>
+        {
+            if (++attempts == 1)
+            {
+                throw new HttpRequestException(HttpRequestError.ConnectionError, "private detail");
+            }
+
+            if (attempts == 2 || exhaustRetries)
+            {
+                const string prefix = "data: {\"type\":\"response.created\"}\n\n";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = cleanEof ? new StringContent(prefix)
+                        : new StreamContent(new InterruptedResponseStream(Encoding.UTF8.GetBytes(prefix))),
+                };
+            }
+
+            return StreamingResponse();
+        });
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with
+        {
+            RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.Zero },
+        });
+        var request = CreateStreamRequest() with { SubmissionObserver = () => submissions++ };
+        if (exhaustRetries)
+        {
+            var error = await Assert.ThrowsAsync<TransientModelException>(async () =>
+                await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken));
+            if (!cleanEof)
+            {
+                Assert.Contains("ResponseEnded", error.Message, StringComparison.Ordinal);
+            }
+        }
+        else
+        {
+            var chunks = await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ModelFinishReason.Stop, Assert.Single(chunks).FinishReason);
+        }
+
+        Assert.Equal(3, attempts);
+        Assert.Equal(attempts, submissions);
     }
 
     /// <summary>A partial response cannot be accepted or replayed into the same consumer.</summary>

@@ -92,6 +92,26 @@ public sealed class RepositoryIntelligenceMonitor : IRepositoryIntelligenceStatu
         }
     }
 
+    /// <summary>Forgets stopped observation and transient faults after a committed repository reset.</summary>
+    public async Task ResetAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        await _lifecycle.WaitAsync(cancellationToken);
+        try
+        {
+            await StopAsync();
+            _faults.TryRemove(repositoryIdentity, out _);
+            _failure.Dispose();
+            _failure = new CancellationTokenSource();
+            _ready = Task.CompletedTask;
+            _ensureSupport = null;
+            Volatile.Write(ref _status, new RepositoryIntelligenceStatus { RepositoryIdentity = repositoryIdentity });
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
     /// <summary>Stops the previous consumer before starting coverage for an explicitly bound repository.</summary>
     public async Task BindAsync(
         SessionId sessionId,

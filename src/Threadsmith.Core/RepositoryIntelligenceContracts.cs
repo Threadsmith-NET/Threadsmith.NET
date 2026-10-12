@@ -17,7 +17,11 @@ public enum RepositoryIntelligenceOperation
 }
 
 /// <summary>Explicit user lifecycle control or inspection, without model-facing activation authority.</summary>
-public sealed record ManageRepositoryIntelligenceCommand(SessionId SessionId, string RepositoryPath, string Action) : ICommand<RepositoryIntelligenceStatus>;
+public sealed record ManageRepositoryIntelligenceCommand(SessionId SessionId, string RepositoryPath, string Action) : ICommand<RepositoryIntelligenceStatus>
+{
+    /// <summary>The user explicitly selected Yes in the reset confirmation.</summary>
+    public bool ResetConfirmed { get; init; }
+}
 
 /// <summary>Claims coalesced commit work at the frontend's ordinary idle submission boundary.</summary>
 public sealed record TakeRepositoryIntelligenceRefreshCommand(SessionId SessionId, string RepositoryPath) : ICommand<bool>;
@@ -27,6 +31,13 @@ public interface IRepositoryIntelligenceOperations
 {
     /// <summary>Prepares a restricted operation without starting a separate model loop.</summary>
     Task<IRepositoryIntelligenceRun> BeginAsync(SessionId sessionId, RunId runId, string repositoryPath, RepositoryIntelligenceOperation operation, CancellationToken cancellationToken = default);
+
+    /// <summary>Prepares onboarding with an optional maximum number of newest commits.</summary>
+    Task<IRepositoryIntelligenceRun> BeginAsync(SessionId sessionId, RunId runId, string repositoryPath, RepositoryIntelligenceOperation operation, int? historyDepth, CancellationToken cancellationToken = default)
+    {
+        return historyDepth is null ? BeginAsync(sessionId, runId, repositoryPath, operation, cancellationToken)
+            : throw new NotSupportedException("Bounded-depth onboarding is unavailable.");
+    }
 }
 
 /// <summary>Transient source observations and publication owned by one ordinary model run.</summary>
@@ -44,11 +55,40 @@ public interface IRepositoryIntelligenceRun : IAsyncDisposable
     /// <summary>Bounded collection instructions and pending-path context.</summary>
     string Instructions { get; }
 
+    /// <summary>Next host-supplied chronological history page, or null when history delivery is complete.</summary>
+    int? PendingHistoryPage => null;
+
+    /// <summary>Optional newest-commit limit owned by the initiating user command.</summary>
+    int? HistoryDepth => null;
+
+    /// <summary>Pinned revision required to reuse a saved chronological cursor.</summary>
+    string? ResumeHistoryRevision => null;
+
+    /// <summary>Saves completed batch preparation independently of final publication.</summary>
+    Task SaveCheckpointAsync(string workingContext, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    /// <summary>Accepts a successfully delivered host history page and renders its collection guidance.</summary>
+    string AcceptHistoryPage(int page, GitLogResult result, string modelContent)
+    {
+        throw new NotSupportedException("This intelligence run does not consume history pages.");
+    }
+
+    /// <summary>Accepts a history page and publishes any resume or restart diagnostic.</summary>
+    Task<string> AcceptHistoryPageAsync(int page, GitLogResult result, string modelContent, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(AcceptHistoryPage(page, result, modelContent));
+    }
+
     /// <summary>Captures the observation sequence before reading a source.</summary>
     Task<long> CaptureSourceCheckpointAsync(string relativePath, CancellationToken cancellationToken = default);
 
     /// <summary>Records the identity of bytes actually delivered by the existing source reader.</summary>
     void ObserveSource(string relativePath, string contentHash, long checkpoint);
+
+    /// <summary>Records a complete historical file delivered by git_show, with its immutable revision.</summary>
+    void ObserveHistoricalSource(string relativePath, string contentHash, string revision)
+    {
+    }
 
     /// <summary>Resolves declared primary paths exclusively to observed source receipts.</summary>
     IReadOnlyList<RepositoryMemorySupport> ResolveSupports(IReadOnlyList<string> paths);

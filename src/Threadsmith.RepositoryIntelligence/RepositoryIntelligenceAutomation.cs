@@ -125,6 +125,31 @@ public sealed class RepositoryIntelligenceAutomation : ICommandHandler<TakeRepos
         }
     }
 
+    /// <summary>Discards commit work belonging to a reset collection after joining observation.</summary>
+    public async Task ResetAsync(string identity, CancellationToken cancellationToken = default)
+    {
+        await _lifecycle.WaitAsync(cancellationToken);
+        try
+        {
+            await StopAsync();
+            lock (_gate)
+            {
+                if (_identity == identity)
+                {
+                    _generation = 0;
+                    _attempted = 0;
+                    _completed = 0;
+                    _seen.Clear();
+                    _seenOrder.Clear();
+                }
+            }
+        }
+        finally
+        {
+            _lifecycle.Release();
+        }
+    }
+
     /// <summary>Joins observation before repository rebinding, disable, or shutdown.</summary>
     public async Task SuspendAsync(CancellationToken cancellationToken = default)
     {

@@ -129,7 +129,13 @@ public class InteractionController
     }
 
     /// <summary>Tracks explicit intelligence work using the ordinary foreground run lifetime.</summary>
-    public async Task<RunId> SubmitAsync(string text, RepositoryIntelligenceOperation operation, CancellationToken cancellationToken = default)
+    public Task<RunId> SubmitAsync(string text, RepositoryIntelligenceOperation operation, CancellationToken cancellationToken = default)
+    {
+        return SubmitAsync(text, operation, null, cancellationToken);
+    }
+
+    /// <summary>Tracks bounded-depth onboarding through the ordinary foreground lifetime.</summary>
+    public async Task<RunId> SubmitAsync(string text, RepositoryIntelligenceOperation operation, int? historyDepth, CancellationToken cancellationToken = default)
     {
         SessionId sessionId;
         lock (_gate)
@@ -148,7 +154,7 @@ public class InteractionController
             }
         }
 
-        var submission = _presenter.SubmitAsync(sessionId, text, operation, cancellationToken);
+        var submission = _presenter.SubmitAsync(sessionId, text, operation, historyDepth, cancellationToken);
         if (_presentProgressAsync is not null && !submission.IsCompleted)
         {
 #pragma warning disable VSTHRD003 // This callback presents the admission task started and awaited by this method.

@@ -176,8 +176,19 @@ public sealed class ArtifactStore : IArtifactStore
         delete.CommandText = "DELETE FROM artifacts WHERE content_hash = $hash;";
         delete.Parameters.AddWithValue("$hash", contentHash.ToLowerInvariant());
         await delete.ExecuteNonQueryAsync(cancellationToken);
+        try
+        {
+            File.Delete(Path.Combine(_artifactDirectory, relativePath));
+        }
+        catch (DirectoryNotFoundException)
+        {
+            // A missing shard (or storage root) means the body is already absent,
+            // just as a missing file does. Complete removal of its stale metadata.
+        }
+
+        // Keep metadata retryable if deleting the body fails. If commit fails after
+        // deletion, the next attempt can safely finish removing the metadata.
         await transaction.CommitAsync(cancellationToken);
-        File.Delete(Path.Combine(_artifactDirectory, relativePath));
         return true;
     }
 
@@ -212,7 +223,7 @@ public sealed class ArtifactStore : IArtifactStore
             var hash = reader.GetString(0);
             var kind = reader.GetString(1);
             var length = reader.GetInt64(2);
-            var sessionText = await reader.IsDBNullAsync(3) ? null : reader.GetString(3);
+            var sessionText = await reader.IsDBNullAsync(3, cancellationToken) ? null : reader.GetString(3);
             var relativePath = reader.GetString(4);
             var recordedAt = DateTimeOffset.Parse(reader.GetString(5), CultureInfo.InvariantCulture);
             results.Add(new ArtifactMetadata

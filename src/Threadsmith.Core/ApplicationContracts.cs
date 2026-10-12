@@ -45,6 +45,9 @@ public sealed record SubmitRequestCommand(
 {
     /// <summary>Explicit user or host-scheduled intelligence action under restricted tool authority.</summary>
     public RepositoryIntelligenceOperation IntelligenceOperation { get; init; }
+
+    /// <summary>Optional maximum newest commits for explicitly requested onboarding.</summary>
+    public int? IntelligenceHistoryDepth { get; init; }
 }
 
 /// <summary>Waits for a previously started run to reach a terminal state.</summary>

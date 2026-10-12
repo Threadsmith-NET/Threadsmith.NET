@@ -252,7 +252,56 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
             if (response.IsSuccessStatusCode)
             {
-                break;
+                var deliveredOutput = false;
+                using (response)
+                {
+                    await using var chunks = ReadResponseAsync(
+                        response, request, canonicalTools, toolNameMap, requestCancellation, cancellationToken)
+                        .GetAsyncEnumerator(cancellationToken);
+                    while (true)
+                    {
+                        bool hasNext;
+                        try
+                        {
+                            hasNext = await chunks.MoveNextAsync();
+                        }
+                        catch (Exception exception) when (exception is IOException or TransientModelException
+                            || (exception is HttpRequestException transport && IsTransientTransportFailure(transport)))
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            if (requestCancellation.IsCancellationRequested)
+                            {
+                                throw CreateTimeoutException(exception);
+                            }
+
+                            if (deliveredOutput || attempt == _profile.RetryPolicy.MaxAttempts)
+                            {
+                                if (exception is TransientModelException)
+                                {
+                                    throw;
+                                }
+
+                                throw new TransientModelException(
+                                    $"Model endpoint connection ended before completion ({TransportFailureKind(exception)}).",
+                                    exception);
+                            }
+
+                            break;
+                        }
+
+                        if (!hasNext)
+                        {
+                            yield break;
+                        }
+
+                        // A delivered chunk can already have caused visible output or tool execution.
+                        deliveredOutput = true;
+                        yield return chunks.Current;
+                    }
+                }
+
+                await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);
+                continue;
             }
 
             var statusCode = response.StatusCode;
@@ -276,12 +325,16 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
             await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);
         }
+    }
 
-        if (response is null)
-        {
-            throw new InvalidOperationException("Model endpoint returned no response.");
-        }
-
+    private async IAsyncEnumerable<ModelChunk> ReadResponseAsync(
+        HttpResponseMessage response,
+        ModelStreamRequest request,
+        IReadOnlyList<ModelToolDefinition> canonicalTools,
+        ModelToolWireNameMap toolNameMap,
+        CancellationTokenSource requestCancellation,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         Stream stream;
         try
         {
@@ -289,18 +342,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            response.Dispose();
             throw requestCancellation.IsCancellationRequested
                 ? CreateTimeoutException(exception)
                 : new TransientModelException("Model endpoint transport was cancelled while opening the response stream.", exception);
         }
-        catch
-        {
-            response.Dispose();
-            throw;
-        }
 
-        using (response)
         await using (stream)
         using (var reader = new StreamReader(stream, Encoding.UTF8))
         {
@@ -311,6 +357,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             var usageReported = false;
             var textGuard = canonicalTools.Count > 0 ? new NativeToolTextGuard() : null;
             var orphanedToolArguments = false;
+            var completed = false;
             while (true)
             {
                 string? line;
@@ -320,7 +367,6 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 }
                 catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
                 {
-                    // Never replay a response after headers or partial output have been consumed.
                     throw requestCancellation.IsCancellationRequested
                         ? CreateTimeoutException(exception)
                         : new TransientModelException("Model endpoint transport was cancelled while reading the response stream.", exception);
@@ -328,6 +374,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
                 if (line is null)
                 {
+                    if (!completed)
+                    {
+                        throw new TransientModelException("Model endpoint connection ended without a completed response.");
+                    }
+
                     break;
                 }
 
@@ -450,6 +501,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
                     if (choice.FinishReason is { } finishReason)
                     {
+                        completed = true;
                         if (textGuard is not null)
                         {
                             orphanedToolArguments |= textGuard.Complete(toolCallCount > 0, out var remainingText);
@@ -853,6 +905,16 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
     }
 
+    private static string TransportFailureKind(Exception exception)
+    {
+        return exception switch
+        {
+            HttpIOException io => $"HTTP {io.HttpRequestError}",
+            HttpRequestException http => $"HTTP {http.HttpRequestError}",
+            _ => "I/O failure",
+        };
+    }
+
     private static bool IsTransientTransportFailure(HttpRequestException exception)
     {
         return exception.HttpRequestError is HttpRequestError.NameResolutionError
@@ -861,7 +923,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             or HttpRequestError.ResponseEnded;
     }
 
-    private ModelProviderTimeoutException CreateTimeoutException(OperationCanceledException exception)
+    private ModelProviderTimeoutException CreateTimeoutException(Exception exception)
     {
         return new(
                 $"Model profile '{_profile.Name}' exceeded its {_profile.Timeout} request timeout.",

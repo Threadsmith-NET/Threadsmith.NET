@@ -137,7 +137,6 @@ public static class MemoryRerankingTests
     [InlineData("failure")]
     [InlineData("count")]
     [InlineData("nonfinite")]
-    [InlineData("truncated")]
     [InlineData("overlength")]
     [InlineData("negativeTokens")]
     public static async Task Invalid_reranking_preserves_hybrid_results_with_a_diagnostic(string mode)
@@ -151,7 +150,6 @@ public static class MemoryRerankingTests
                 "failure" => throw new TextCrossEncoderUnavailableException("missing assets"),
                 "count" => [],
                 "nonfinite" => [.. texts.Select(_ => new TextCrossEncoderScore(double.NaN, 12, false))],
-                "truncated" => [.. texts.Select(_ => new TextCrossEncoderScore(100, 300, true))],
                 "overlength" => [.. texts.Select(_ => new TextCrossEncoderScore(100, 300, false))],
                 _ => [.. texts.Select(_ => new TextCrossEncoderScore(100, -1, false))],
             },

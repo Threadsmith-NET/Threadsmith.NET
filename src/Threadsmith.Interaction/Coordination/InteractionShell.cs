@@ -101,8 +101,14 @@ public class InteractionPresenter
     /// <summary>Submits explicit intelligence work through ordinary run execution.</summary>
     public Task<RunId> SubmitAsync(SessionId sessionId, string text, RepositoryIntelligenceOperation operation, CancellationToken cancellationToken = default)
     {
+        return SubmitAsync(sessionId, text, operation, null, cancellationToken);
+    }
+
+    /// <summary>Submits onboarding depth through the ordinary command boundary.</summary>
+    public Task<RunId> SubmitAsync(SessionId sessionId, string text, RepositoryIntelligenceOperation operation, int? historyDepth, CancellationToken cancellationToken = default)
+    {
         return _dispatcher.DispatchAsync(
-            new SubmitRequestCommand(sessionId, text) { IntelligenceOperation = operation },
+            new SubmitRequestCommand(sessionId, text) { IntelligenceOperation = operation, IntelligenceHistoryDepth = historyDepth },
             cancellationToken);
     }
 

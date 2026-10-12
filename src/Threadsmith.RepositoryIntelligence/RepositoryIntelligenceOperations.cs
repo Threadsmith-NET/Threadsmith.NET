@@ -72,9 +72,25 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
     }
 
     /// <inheritdoc />
-    public async Task<IRepositoryIntelligenceRun> BeginAsync(
+    public Task<IRepositoryIntelligenceRun> BeginAsync(
         SessionId sessionId, RunId runId, string repositoryPath, RepositoryIntelligenceOperation operation, CancellationToken cancellationToken = default)
     {
+        return BeginAsync(sessionId, runId, repositoryPath, operation, null, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public async Task<IRepositoryIntelligenceRun> BeginAsync(
+        SessionId sessionId, RunId runId, string repositoryPath, RepositoryIntelligenceOperation operation, int? historyDepth, CancellationToken cancellationToken = default)
+    {
+        if (historyDepth is { } depth)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(depth);
+            if (operation != RepositoryIntelligenceOperation.Onboard)
+            {
+                throw new ArgumentException("History depth applies only to onboarding.", nameof(historyDepth));
+            }
+        }
+
         var identity = RepositoryIdentity.Create(repositoryPath);
         var options = _options.Capture(identity);
         if (operation is not (RepositoryIntelligenceOperation.Onboard or RepositoryIntelligenceOperation.Refresh or RepositoryIntelligenceOperation.Archeology))
@@ -115,12 +131,26 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
             var commitGeneration = _automation.CaptureGeneration(identity);
             RepositoryMemoryCollection? collection = null;
+            RepositoryIntelligenceCheckpoint? resume = null;
             if (operation != RepositoryIntelligenceOperation.Archeology)
             {
                 await _monitor.TrackCollectionAsync(sessionId, repositoryPath, options.Intelligence, cancellation.Token);
                 var snapshot = await _store.GetSnapshotAsync(identity, [], cancellation.Token);
                 state = await _store.GetIntelligenceStateAsync(identity, cancellation.Token);
                 collection = new RepositoryMemoryCollection(snapshot, operation == RepositoryIntelligenceOperation.Onboard, state.ChangeSequence);
+                if (operation == RepositoryIntelligenceOperation.Onboard)
+                {
+                    resume = await _store.ReadOnboardingCheckpointAsync(identity, cancellation.Token);
+                    if (resume is not null && (resume.HistoryDepth != historyDepth
+                        || resume.Entries.Count > options.Intelligence.MaximumStoredMemories
+                        || !resume.BaselineIntelligence.ToHashSet().SetEquals(snapshot.Entries
+                            .Where(entry => entry.Ownership == RepositoryMemoryOwnership.Intelligence)
+                            .Select(entry => new RepositoryMemoryInclusion(entry.Id, entry.Revision)))))
+                    {
+                        resume = null;
+                        await _events.PublishAsync(new DiagnosticObserved(sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.restarted", "Saved onboarding scope or published intelligence changed; starting a fresh collection."), cancellation.Token);
+                    }
+                }
             }
 
             var instructions = _prompts.Get(operation == RepositoryIntelligenceOperation.Archeology
@@ -131,8 +161,9 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                 PendingChangesCheckpoint = state.ChangeSequence,
                 state.ObservationGap,
                 options.Intelligence.MaximumStoredMemories,
+                HistoryDepth = historyDepth,
             });
-            return new IntelligenceRun(this, sessionId, repositoryPath, operation, collection, instructions, commitGeneration, cancellation);
+            return new IntelligenceRun(this, sessionId, repositoryPath, operation, collection, instructions, commitGeneration, cancellation, historyDepth, resume);
         }
         catch
         {
@@ -168,9 +199,19 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             return _monitor.Capture(identity);
         }
 
+        if (command.Action == "reset")
+        {
+            if (!command.ResetConfirmed)
+            {
+                throw new InvalidOperationException("Repository intelligence reset requires explicit user confirmation.");
+            }
+
+            return await ResetAsync(command, identity, cancellationToken);
+        }
+
         if (command.Action is not ("enable" or "disable"))
         {
-            throw new ArgumentException("Use intelligence status, enable, or disable.", nameof(command));
+            throw new ArgumentException("Use intelligence status, enable, disable, or reset.", nameof(command));
         }
 
         await SuspendAsync(cancellationToken);
@@ -200,14 +241,7 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
     /// <summary>Cancels and joins feature-owned inference before repository rebinding or disable.</summary>
     public async Task SuspendAsync(CancellationToken cancellationToken = default)
     {
-        Task cancellation;
-        lock (_cancellationGate)
-        {
-            cancellation = _activeCancellation?.CancelAsync() ?? Task.CompletedTask;
-        }
-
-        await cancellation;
-
+        await CancelActiveCollectionAsync();
         await _collectionGate.WaitAsync(cancellationToken);
         _collectionGate.Release();
         await _automation.SuspendAsync(cancellationToken);
@@ -224,6 +258,77 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         _lifetime.Dispose();
     }
 
+    private Task CancelActiveCollectionAsync()
+    {
+        lock (_cancellationGate)
+        {
+            return _activeCancellation?.CancelAsync() ?? Task.CompletedTask;
+        }
+    }
+
+    private async Task<RepositoryIntelligenceStatus> ResetAsync(
+        ManageRepositoryIntelligenceCommand command, string identity, CancellationToken cancellationToken)
+    {
+        await CancelActiveCollectionAsync();
+        await _collectionGate.WaitAsync(cancellationToken);
+        try
+        {
+            var wasEnabled = _options.Capture(identity).Intelligence.Enabled;
+            var configurationChanged = false;
+            try
+            {
+                await _automation.SuspendAsync(cancellationToken);
+                await _monitor.SuspendAsync(cancellationToken);
+                await _setEnabled(command.RepositoryPath, false, cancellationToken);
+                configurationChanged = true;
+                await _store.ResetIntelligenceAsync(identity, cancellationToken);
+            }
+            catch (Exception resetFailure)
+            {
+                var failures = new List<Exception> { resetFailure };
+                if (configurationChanged)
+                {
+                    try
+                    {
+                        await _setEnabled(command.RepositoryPath, wasEnabled, CancellationToken.None);
+                    }
+                    catch (Exception restoreFailure)
+                    {
+                        failures.Add(restoreFailure);
+                    }
+                }
+
+                try
+                {
+                    await BindAsync(command.SessionId, command.RepositoryPath, CancellationToken.None);
+                }
+                catch (Exception bindFailure)
+                {
+                    failures.Add(bindFailure);
+                }
+
+                if (failures.Count > 1)
+                {
+                    throw new AggregateException("Repository intelligence reset failed and recovery was incomplete.", failures);
+                }
+
+                throw;
+            }
+
+            // Persistence committed; finish revoking transient state even if the caller cancels now.
+            await _automation.ResetAsync(identity, CancellationToken.None);
+            await _monitor.ResetAsync(identity, CancellationToken.None);
+            await _events.PublishAsync(
+                new DiagnosticObserved(command.SessionId, DateTimeOffset.UtcNow, "intelligence.reset.completed", "Repository intelligence reset. Onboarding is required before it can be used again."),
+                CancellationToken.None);
+            return _monitor.Capture(identity);
+        }
+        finally
+        {
+            _collectionGate.Release();
+        }
+    }
+
     private sealed class IntelligenceRun : IRepositoryIntelligenceRun
     {
         private readonly RepositoryIntelligenceOperations _owner;
@@ -234,11 +339,14 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         private readonly CancellationTokenRegistration _monitorFailure;
         private readonly long _commitGeneration;
         private readonly ConcurrentDictionary<string, RepositoryMemorySupport> _sources = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+        private RepositoryIntelligenceCheckpoint? _resume;
+        private string? _historyRevision;
+        private string? _historyNotice;
         private bool _completed;
         private int _disposed;
 
         public IntelligenceRun(
-            RepositoryIntelligenceOperations owner, SessionId sessionId, string repositoryPath, RepositoryIntelligenceOperation operation, RepositoryMemoryCollection? collection, string instructions, long commitGeneration, CancellationTokenSource cancellation)
+            RepositoryIntelligenceOperations owner, SessionId sessionId, string repositoryPath, RepositoryIntelligenceOperation operation, RepositoryMemoryCollection? collection, string instructions, long commitGeneration, CancellationTokenSource cancellation, int? historyDepth, RepositoryIntelligenceCheckpoint? resume)
         {
             _owner = owner;
             _sessionId = sessionId;
@@ -246,19 +354,136 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             _identity = RepositoryIdentity.Create(repositoryPath);
             _commitGeneration = commitGeneration;
             _cancellation = cancellation;
+            CancellationToken = cancellation.Token;
             _monitorFailure = owner._monitor.FailureToken.Register(cancellation.Cancel);
             Operation = operation;
             Collection = collection;
             Instructions = instructions;
+            HistoryDepth = historyDepth;
+            _resume = resume;
+            PendingHistoryPage = operation == RepositoryIntelligenceOperation.Onboard ? resume?.NextHistoryPage ?? 0 : null;
         }
 
-        public CancellationToken CancellationToken => _cancellation.Token;
+        public CancellationToken CancellationToken { get; }
 
         public RepositoryIntelligenceOperation Operation { get; }
 
         public RepositoryMemoryCollection? Collection { get; }
 
-        public string Instructions { get; }
+        public string Instructions { get; private set; }
+
+        public int? HistoryDepth { get; }
+
+        public string? ResumeHistoryRevision => _resume?.HistoryRevision;
+
+        public int? PendingHistoryPage { get; private set; }
+
+        public string AcceptHistoryPage(int page, GitLogResult result, string modelContent)
+        {
+            if (PendingHistoryPage != page || !result.IsCollectionPage || result.IsTruncated || result.HistoryDepth != HistoryDepth
+                || (result.NextCollectionPage is { } next && next != result.CollectionPage + 1))
+            {
+                throw new InvalidOperationException("Incomplete or out-of-order onboarding history cannot be published.");
+            }
+
+            if (_resume is { } resume)
+            {
+                if (result.HistoryRevision == resume.HistoryRevision && result.CollectionPage == page)
+                {
+                    var collection = Collection ?? throw new InvalidOperationException("No collection owns the checkpoint.");
+                    collection.Restore(resume);
+                    foreach (var support in collection.Snapshot().SelectMany(entry => entry.Supports))
+                    {
+                        _sources[support.Path] = support;
+                    }
+
+                    Instructions += "\n" + JsonSerializer.Serialize(new
+                    {
+                        ResumedOnboarding = true,
+                        CompletedHistoryPages = page,
+                        PreparedAssertions = collection.Snapshot(forPublication: true).Count,
+                        resume.WorkingContext,
+                        resume.WorkingContextTruncated,
+                    });
+                    _historyNotice = $"Resuming repository onboarding after {page} completed history batches.";
+                }
+                else if (result.CollectionPage == 0)
+                {
+                    _historyNotice = "Repository HEAD changed since the saved onboarding checkpoint; starting a fresh collection.";
+                }
+                else
+                {
+                    throw new InvalidOperationException("Saved onboarding progress does not match delivered history.");
+                }
+
+                _resume = null;
+            }
+            else if (result.CollectionPage != page || (_historyRevision is not null && _historyRevision != result.HistoryRevision))
+            {
+                throw new InvalidOperationException("Onboarding history changed during collection.");
+            }
+
+            _historyRevision = result.HistoryRevision;
+
+            var instructions = _owner._prompts.Render(
+                PromptFileNames.ContextRepositoryIntelligenceHistory,
+                new Dictionary<string, string>(StringComparer.Ordinal) { ["HistoryJson"] = modelContent });
+            PendingHistoryPage = result.NextCollectionPage;
+            return instructions;
+        }
+
+        public async Task<string> AcceptHistoryPageAsync(int page, GitLogResult result, string modelContent, CancellationToken cancellationToken = default)
+        {
+            var instructions = AcceptHistoryPage(page, result, modelContent);
+            if (_historyNotice is { } notice)
+            {
+                _historyNotice = null;
+                await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.progress", notice), cancellationToken);
+            }
+
+            return instructions;
+        }
+
+        public async Task SaveCheckpointAsync(string workingContext, CancellationToken cancellationToken = default)
+        {
+            if (Operation != RepositoryIntelligenceOperation.Onboard || Collection is not { } collection
+                || PendingHistoryPage is not > 0 || _historyRevision is null)
+            {
+                return;
+            }
+
+            var length = Math.Min(32 * 1024, workingContext.Length);
+            if (length < workingContext.Length && length > 0 && char.IsHighSurrogate(workingContext[length - 1]))
+            {
+                length--;
+            }
+
+            await collection.Operations.WaitAsync(cancellationToken);
+            try
+            {
+                await _owner._store.SaveOnboardingCheckpointAsync(
+                    new RepositoryIntelligenceCheckpoint
+                    {
+                        RepositoryIdentity = _identity,
+                        HistoryRevision = _historyRevision,
+                        HistoryDepth = HistoryDepth,
+                        NextHistoryPage = PendingHistoryPage.Value,
+                        BaselineIntelligence = collection.Baseline.Entries.Where(entry => entry.Ownership == RepositoryMemoryOwnership.Intelligence)
+                            .Select(entry => new RepositoryMemoryInclusion(entry.Id, entry.Revision)).ToArray(),
+                        Entries = collection.Snapshot(),
+                        AcceptedIds = collection.AcceptedIds,
+                        WorkingContext = workingContext[..length],
+                        WorkingContextTruncated = length < workingContext.Length,
+                    },
+                    cancellationToken);
+            }
+            finally
+            {
+                collection.Operations.Release();
+            }
+
+            await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.checkpoint", $"Saved onboarding progress through {PendingHistoryPage} history batches."), cancellationToken);
+        }
 
         public async Task<long> CaptureSourceCheckpointAsync(string relativePath, CancellationToken cancellationToken = default)
         {
@@ -292,7 +517,17 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         {
             ArgumentNullException.ThrowIfNull(paths);
             return paths.Distinct(_sources.Comparer).Select(path => _sources.TryGetValue(path, out var source)
-                ? source : throw new InvalidOperationException($"Read primary support '{path}' through read_file during this collection before citing it.")).ToArray();
+                ? source : throw new InvalidOperationException($"Read primary support '{path}' through read_file or a complete git_show file during this collection before citing it.")).ToArray();
+        }
+
+        public void ObserveHistoricalSource(string relativePath, string contentHash, string revision)
+        {
+            ObserveSource(relativePath, contentHash, 0);
+            var path = relativePath.Replace('\\', '/');
+            if (_sources.TryGetValue(path, out var source))
+            {
+                _sources[path] = source with { Revision = revision, IsUnknown = true };
+            }
         }
 
         public Task<RepositoryIntelligenceChangePage> ReadChangesAsync(string? afterPath, CancellationToken cancellationToken = default)
@@ -320,6 +555,11 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             if (_completed || Collection is null)
             {
                 return;
+            }
+
+            if (PendingHistoryPage is not null)
+            {
+                throw new InvalidOperationException("Onboarding history is incomplete. The prior collection was preserved.");
             }
 
             var options = _owner._options.Capture(_identity);

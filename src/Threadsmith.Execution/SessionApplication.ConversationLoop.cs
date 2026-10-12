@@ -32,10 +32,9 @@ public sealed partial class SessionApplication
             ValidateIntelligenceCollectionTools(registration.IntelligenceOperation, ConversationToolAvailability.CreateSnapshot(
                 _toolPipeline, _toolRegistry, registration.SessionId, runId, invocationContext, toolsWithheld: false));
             registration.IntelligenceRun = await _intelligenceOperations.BeginAsync(
-                registration.SessionId, runId, invocationContext.RepositoryPath, registration.IntelligenceOperation, cancellationToken);
+                registration.SessionId, runId, invocationContext.RepositoryPath, registration.IntelligenceOperation, registration.IntelligenceHistoryDepth, cancellationToken);
             invocationContext = invocationContext with { IntelligenceRun = registration.IntelligenceRun };
             cancellationToken = registration.IntelligenceRun.CancellationToken;
-            registration.CurrentTurnHostContext = [.. registration.CurrentTurnHostContext, registration.IntelligenceRun.Instructions];
         }
 
         await using var operationScope = new ToolOperationScope(cancellationToken);
@@ -46,6 +45,16 @@ public sealed partial class SessionApplication
             _activeTurnCompactionPolicy.MaximumSourcesPerGroup,
             RequirePrompts(),
             _limits.MaxRetainedToolCalls);
+
+        if (registration.IntelligenceRun?.PendingHistoryPage is not null && invocationContext is not null)
+        {
+            await SupplyIntelligenceHistoryAsync(runId, registration, phase, invocationContext, loopState, 0, cancellationToken);
+        }
+
+        if (registration.IntelligenceRun is { } intelligence)
+        {
+            registration.CurrentTurnHostContext = [.. registration.CurrentTurnHostContext, intelligence.Instructions];
+        }
 
         SourceEditAnalysis? deferredFeedback = null;
         for (var modelRound = 1; maximumModelRounds <= 0 || modelRound <= maximumModelRounds; modelRound++)
@@ -153,6 +162,26 @@ public sealed partial class SessionApplication
 
             if (!outcome.ToolInvoked)
             {
+                if (registration.IntelligenceRun?.PendingHistoryPage is not null && invocationContext is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
+                    {
+                        loopState.CommitStandaloneMessage(modelRound, CreateVisibleAssistantMessage(outcome.TextOutput), purgeAfterCorrection: false);
+                        await ArchiveVisibleMessageAsync(registration.SessionId, runId, ConversationRole.Assistant, outcome.TextOutput, cancellationToken);
+                    }
+
+                    var checkpointContext = string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content);
+                    await registration.IntelligenceRun.SaveCheckpointAsync(_sanitizer.Sanitize(checkpointContext), cancellationToken);
+                    if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
+                    {
+                        throw new InvalidOperationException("The model round limit was reached before onboarding history completed. The prior collection was preserved.");
+                    }
+
+                    await SupplyIntelligenceHistoryAsync(runId, registration, phase, invocationContext, loopState, modelRound, cancellationToken);
+                    loopState.ReleaseCompletedReplay();
+                    continue;
+                }
+
                 if (_sourceEdits?.TakeFeedback(registration.SessionId, runId) is { } finalFeedback)
                 {
                     await _events.PublishAsync(
@@ -401,6 +430,7 @@ public sealed partial class SessionApplication
                 RepositoryMemoryCurrentInstruction = registration.MemoryCurrentInstruction,
                 RepositoryMemoryConcepts = registration.MemoryConcepts.ToArray(),
                 RetainedRepositoryMemories = registration.RetainedMemories,
+                ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
             };
             context = await _contextAssembler.AssembleAsync(
                 assemblyRequest,
@@ -1778,7 +1808,8 @@ public sealed partial class SessionApplication
             preparedOrdinaryAdmissionRequest);
         var ordinaryAdmissionStatus = registration.Budget.Check(
             ModelRequestAdmissionEstimator.ToBudgetDimensions(ordinaryAdmission));
-        var hasContextPressure = beforeEstimate.WireInputTokens >= pressureTargetTokens;
+        var hasRetentionPressure = loopState.HasRetentionPressure;
+        var hasContextPressure = beforeEstimate.WireInputTokens >= pressureTargetTokens || hasRetentionPressure;
         var hasBudgetPressure = ordinaryAdmissionStatus.IsExhausted;
         var pressureReason = (hasContextPressure, hasBudgetPressure) switch
         {
@@ -1788,7 +1819,11 @@ public sealed partial class SessionApplication
             _ => ActiveTurnCompactionPressureReason.None,
         };
         var eligibleGroupCount = loopState.GetEligibleGroupCount();
-        var effectiveRetentionTargetTokens = _activeTurnCompactionPolicy.RetainedRecentTokens;
+
+        // Allocation pressure must be able to release many small exchanges even when
+        // all of them fit inside the ordinary recent-token window. The cut selector
+        // still protects the newest group and every group not yet delivered.
+        var effectiveRetentionTargetTokens = hasRetentionPressure ? 1 : _activeTurnCompactionPolicy.RetainedRecentTokens;
         ActiveTurnCompactionAttemptObserver? attemptObserver = null;
         ActiveTurnSourceProjection? deterministicProjection = null;
         var sourceProjectionForSummary = loopState.SourceProjection;
@@ -2004,7 +2039,7 @@ public sealed partial class SessionApplication
             _activeTurnCompactionPolicy.MinimumSavingsTokens,
             _activeTurnCompactionPolicy.MaximumSourceGroups,
             _activeTurnCompactionPolicy.MaximumInputTokens);
-        if (activeTurnRecoveryDefinition is not null
+        if (!hasRetentionPressure && activeTurnRecoveryDefinition is not null
             && invocationContext is not null
             && loopState.BeginSourceProjectionAttempt(sourceProjectionAttemptIdentity))
         {
@@ -2914,6 +2949,7 @@ public sealed partial class SessionApplication
             new(StringComparer.Ordinal);
 
         private readonly List<ActiveTurnContinuationGroup> _groups = [];
+        private readonly HashSet<EvidenceId> _summarizedEvidenceIds = [];
         private readonly int _maximumSourcesPerGroup;
         private readonly IPromptLoader _prompts;
         private readonly List<string> _pendingFilesRead = [];
@@ -3042,20 +3078,9 @@ public sealed partial class SessionApplication
 
             // Completed exchanges become ordinary historical messages for every provider mapper.
             // Replay-only round markers must not survive revocation of private provider responses.
-            for (var index = 0; index < _groups.Count; index++)
-            {
-                _groups[index] = _groups[index] with
-                {
-                    Messages = _groups[index].Messages.Select(message => message with { ModelRound = null }).ToArray(),
-                };
-            }
-
-            _sourceProjection = null;
-
             // Reuse the history-rewrite fence so provider continuation cannot retain revoked memories
             // or enabled-only guidance in an earlier delivered prefix. Completed tool groups survive.
-            TransientState.Clear();
-            HistoryRewriteGeneration++;
+            ReleaseCompletedReplay();
             return refreshed;
 
             IEnumerable<(ModelMessageRole Role, string SectionId, string Content)> Instructions(ContextAssemblyResult context) =>
@@ -3073,6 +3098,9 @@ public sealed partial class SessionApplication
         }
 
         public IReadOnlyList<ActiveTurnContinuationGroup> Groups => _groups;
+
+        public IReadOnlyList<EvidenceId> RepresentedEvidenceIds =>
+            _summarizedEvidenceIds.Concat(GetEvidenceIds(_groups)).Distinct().ToArray();
 
         public long HistoryRewriteGeneration { get; private set; }
 
@@ -3115,7 +3143,30 @@ public sealed partial class SessionApplication
 
         public int RawGroupTokens => _groups.Sum(group => group.EstimatedTokens);
 
+        public bool HasRetentionPressure => (_maximumRetainedToolCalls > 0 && _retainedToolCalls >= _maximumRetainedToolCalls * 3L / 4)
+            || (MaximumOutputCharacters > 0 && _retainedOutputCharacters >= MaximumOutputCharacters * 3L / 4);
+
         public bool SemanticToolAttempted { get; set; }
+
+        public void ReleaseCompletedReplay()
+        {
+            if (!TransientState.HasResponses)
+            {
+                return;
+            }
+
+            for (var index = 0; index < _groups.Count; index++)
+            {
+                _groups[index] = _groups[index] with
+                {
+                    Messages = _groups[index].Messages.Select(message => message with { ModelRound = null }).ToArray(),
+                };
+            }
+
+            _sourceProjection = null;
+            TransientState.Clear();
+            HistoryRewriteGeneration++;
+        }
 
         public void ActivateSummary(
             ActiveTurnCompactionSummary summary,
@@ -3146,7 +3197,14 @@ public sealed partial class SessionApplication
             }
 
             var effectiveSourceProjection = sourceProjection ?? _sourceProjection;
+            _summarizedEvidenceIds.UnionWith(GetEvidenceIds(compactedPrefix));
             _groups.RemoveRange(0, compactedPrefix.Count);
+
+            // These bounds protect retained streaming allocations, not lifetime work. Compaction
+            // has discarded the old exchanges; account only for model output still retained.
+            var retainedMessages = _groups.SelectMany(group => group.Messages).Where(message => message.Role == ModelMessageRole.Assistant).ToArray();
+            _retainedToolCalls = retainedMessages.Count(message => message.ToolCallId is not null);
+            _retainedOutputCharacters = retainedMessages.Sum(message => message.GetModelVisibleContentLength() + (message.ToolName?.Length ?? 0));
             _sourceProjection = effectiveSourceProjection?.RetainGroups(
                 _groups.Select(group => group.Sequence).ToHashSet());
             CompactionSummary = summary;
@@ -3365,7 +3423,8 @@ public sealed partial class SessionApplication
         public void CommitStandaloneMessage(
             int modelRound,
             ModelMessage message,
-            bool purgeAfterCorrection)
+            bool purgeAfterCorrection,
+            IReadOnlyList<ActiveTurnSourceReference>? sources = null)
         {
             ArgumentNullException.ThrowIfNull(message);
             if (_currentCalls.Count > 0
@@ -3396,6 +3455,7 @@ public sealed partial class SessionApplication
                         ActiveTurnSourceKind.Group,
                         sequence.ToString(System.Globalization.CultureInfo.InvariantCulture),
                         sequence),
+                    .. (sources ?? []).Select(source => source with { GroupSequence = sequence }),
                 ],
                 FilesRead = [],
                 FilesChanged = [],
@@ -3592,6 +3652,28 @@ public sealed partial class SessionApplication
         {
             ArgumentOutOfRangeException.ThrowIfNegative(rounds);
             BackoffRoundsRemaining = rounds;
+        }
+
+        private static IEnumerable<EvidenceId> GetEvidenceIds(IEnumerable<ActiveTurnContinuationGroup> groups)
+        {
+            foreach (var group in groups)
+            {
+                foreach (var result in group.Results)
+                {
+                    if (result.EvidenceId is { } id)
+                    {
+                        yield return id;
+                    }
+                }
+
+                foreach (var source in group.Sources)
+                {
+                    if (source.Kind == ActiveTurnSourceKind.Evidence && Guid.TryParse(source.Id, out var id))
+                    {
+                        yield return new EvidenceId(id);
+                    }
+                }
+            }
         }
     }
 

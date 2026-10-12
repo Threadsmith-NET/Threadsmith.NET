@@ -36,6 +36,37 @@ public sealed class RepositoryMemoryCollection
     /// <summary>Generation of the current detached prepared contents.</summary>
     public long Generation => Interlocked.Read(ref _generation);
 
+    /// <summary>Captures the replacement selection together with a completed history checkpoint.</summary>
+    public IReadOnlyList<RepositoryMemoryId> AcceptedIds
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _accepted.ToArray();
+            }
+        }
+    }
+
+    /// <summary>Restores previously accepted preparation; current source coverage must be established again.</summary>
+    public void Restore(RepositoryIntelligenceCheckpoint checkpoint)
+    {
+        ArgumentNullException.ThrowIfNull(checkpoint);
+        if (checkpoint.RepositoryIdentity != Baseline.RepositoryIdentity)
+        {
+            throw new InvalidOperationException("Onboarding checkpoint belongs to another repository.");
+        }
+
+        SetPrepared(checkpoint.Entries.Select(entry => entry with
+        {
+            Supports = entry.Supports.Select(support => support with { IsUnknown = true }).ToArray(),
+        }).ToArray());
+        lock (_gate)
+        {
+            _accepted.UnionWith(checkpoint.AcceptedIds.Where(id => _entries.Any(entry => entry.Id == id)));
+        }
+    }
+
     /// <summary>Returns pending paths explicitly investigated during collection.</summary>
     public IReadOnlyList<string> CoveredPaths
     {

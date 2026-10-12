@@ -272,7 +272,7 @@ public static partial class AppBootstrapTests
         await events.PublishAsync(diagnostic, TestContext.Current.CancellationToken);
         await events.PublishAsync(new DiagnosticObserved(diagnostic.SessionId, diagnostic.OccurredAt, "unrelated", "Do not print"), TestContext.Current.CancellationToken);
 
-        Assert.Equal(expected + Environment.NewLine, writer.ToString());
+        Assert.Equal(Environment.NewLine + expected + Environment.NewLine, writer.ToString());
         Assert.Equal(sanitized, diagnostic.Message);
         Assert.DoesNotContain(writer.ToString(), character => character is '\u001b' or >= '\u007f' and <= '\u009f');
     }

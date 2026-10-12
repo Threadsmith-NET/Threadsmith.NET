@@ -60,17 +60,21 @@ public static class MemoryReconciliationTests
     }
 
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Fact]
-    public static async Task Confirmations_are_revision_specific_and_preserve_distinct_entries()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Confirmations_are_revision_specific_and_preserve_distinct_entries(bool pairTruncated)
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var generator = new TestMemoryEmbeddingGenerator();
         var baseline = MemoryTestData.CreateService(fixture, generator);
         var saved = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "Existing convention"));
-        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder());
+        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder { Score = (_, _) => new TextCrossEncoderScore(2, pairTruncated ? 300 : 12, pairTruncated) });
         var service = new RepositoryMemoryService(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new SecretOutputSanitizer(), search: search);
         var proposal = MemoryTestData.Operation("add", "Related distinct requirement") with { Options = Reconcile };
         var collision = await service.ExecuteAsync(proposal);
+        Assert.Equal(pairTruncated, collision.SearchDetails?.PairTruncated);
+        Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, collision.SearchDetails?.Reranker);
         var old = Assert.Single(collision.Entries);
         await baseline.ExecuteAsync(MemoryTestData.Operation("update", "Changed convention", old.Id));
 
@@ -114,7 +118,7 @@ public static class MemoryReconciliationTests
         var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
         var baseline = MemoryTestData.CreateService(fixture, generator);
         var original = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "original"));
-        var encoder = new MemoryScoreEncoder { Score = (_, _) => cancel ? throw new OperationCanceledException() : new(10, 256, true) };
+        var encoder = new MemoryScoreEncoder { Score = (_, _) => cancel ? throw new OperationCanceledException() : new(double.NaN, 12, false) };
         using var search = new HybridRepositoryMemoryRetriever(store, generator, encoder);
         var service = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: search);
         var operation = MemoryTestData.Operation("add", "replacement") with { Options = Reconcile with { MaxNumberOfRepoMemories = 1 } };

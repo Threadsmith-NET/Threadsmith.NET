@@ -523,6 +523,7 @@ public sealed partial class SessionApplication :
             criteria);
         registration = CreateRunRegistration(command.SessionId, runId, workspaceId, task, RunPhase.Intake, cancellationToken);
         registration.IntelligenceOperation = command.IntelligenceOperation;
+        registration.IntelligenceHistoryDepth = command.IntelligenceHistoryDepth;
         if (!_runs.TryAdd(runId, registration))
         {
             registration.Cancellation.Dispose();
@@ -1097,6 +1098,8 @@ public sealed partial class SessionApplication :
         public bool IntelligenceEnabled { get; set; }
 
         public RepositoryIntelligenceOperation IntelligenceOperation { get; set; }
+
+        public int? IntelligenceHistoryDepth { get; set; }
 
         public IRepositoryIntelligenceRun? IntelligenceRun { get; set; }
 

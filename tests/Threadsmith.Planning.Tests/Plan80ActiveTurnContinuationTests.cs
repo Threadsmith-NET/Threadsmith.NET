@@ -11,7 +11,7 @@ using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Plan 80 ordinary-loop grouping, eligibility, replacement, and inspection tests.</summary>
-public static class Plan80ActiveTurnContinuationTests
+public static partial class Plan80ActiveTurnContinuationTests
 {
     /// <summary>Positive savings can compact an older group above pressure while retaining two recent groups and the frozen prefix.</summary>
     [Fact]

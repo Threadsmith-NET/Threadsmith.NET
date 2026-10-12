@@ -12,16 +12,22 @@ public sealed record RepositoryIntelligenceCoverage
     /// <summary>Implementation question to investigate.</summary>
     public required string Question { get; init; }
 
-    /// <summary>Uninvestigated, investigating, investigated, or blocked.</summary>
+    /// <summary>Uninvestigated, investigating, investigated, blocked, or outOfScope.</summary>
     public required string Status { get; init; }
+
+    /// <summary>Required investigation gates publication; optional deeper research remains visible without blocking it.</summary>
+    public string Priority { get; init; } = "required";
 
     /// <summary>Evidence-based conclusion, including why no memory was warranted when applicable.</summary>
     public string Conclusion { get; init; } = string.Empty;
 
+    /// <summary>Explicit supported reason no published assertion is warranted; required when an investigated item has no accepted memory links.</summary>
+    public string NoMemoryReason { get; init; } = string.Empty;
+
     /// <summary>Remaining work or concrete reason investigation is blocked.</summary>
     public string Gaps { get; init; } = string.Empty;
 
-    /// <summary>Explicit scope or verification limits that do not represent unfinished implementation investigation.</summary>
+    /// <summary>Explicit scope or verification limits; optional questions require a reason why deeper research is unnecessary for the collected guidance.</summary>
     public string Limitations { get; init; } = string.Empty;
 
     /// <summary>Separately tracked investigation questions identified while answering this item.</summary>
@@ -35,4 +41,11 @@ public sealed record RepositoryIntelligenceCoverage
 }
 
 /// <summary>Bounded checklist inspection with a stable lexical cursor.</summary>
-public sealed record RepositoryIntelligenceCoveragePage(IReadOnlyList<RepositoryIntelligenceCoverage> Items, string? NextAfterKey);
+public sealed record RepositoryIntelligenceCoveragePage(IReadOnlyList<RepositoryIntelligenceCoverage> Items, string? NextAfterKey)
+{
+    /// <summary>Whether the complete initial survey was atomically saved.</summary>
+    public bool SurveyInitialized { get; init; }
+
+    /// <summary>Bounded unfinished proposals, inspected independently of checklist paging.</summary>
+    public IReadOnlyList<RepositoryMemoryReconciliation> PendingReconciliations { get; init; } = [];
+}

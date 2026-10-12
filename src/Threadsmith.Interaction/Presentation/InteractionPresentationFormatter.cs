@@ -588,7 +588,7 @@ internal static class InteractionPresentationFormatter
             output.Append("Outcome: ").AppendLine(outcome.GetString());
             if (root.TryGetProperty("Action", out var action)
                 && action.ValueKind == JsonValueKind.String
-                && action.GetString() is "coverage" or "updateCoverage")
+                && action.GetString() is "coverage" or "updateCoverage" or "initializeCoverage")
             {
                 if (root.TryGetProperty("Coverage", out var coverage)
                     && coverage.ValueKind == JsonValueKind.Object
@@ -604,7 +604,13 @@ internal static class InteractionPresentationFormatter
                             return null;
                         }
 
-                        output.Append("Investigation: ").Append(area.GetString()).Append(" — ").AppendLine(status.GetString());
+                        output.Append("Investigation: ").Append(area.GetString()).Append(" — ").Append(status.GetString());
+                        if (item.TryGetProperty("Priority", out var priority) && priority.ValueKind == JsonValueKind.String && priority.GetString() == "optional")
+                        {
+                            output.Append(" (optional)");
+                        }
+
+                        output.AppendLine();
                     }
 
                     if (items.GetArrayLength() == 0 && action.GetString() == "coverage")

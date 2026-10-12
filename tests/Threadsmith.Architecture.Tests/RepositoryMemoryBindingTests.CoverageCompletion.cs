@@ -11,6 +11,63 @@ using Xunit;
 
 public static partial class RepositoryMemoryBindingTests
 {
+    /// <summary>Optional research survives persistence without blocking required guidance or silently disappearing.</summary>
+    [Fact]
+    public static async Task Coverage_OptionalResearchSurvivesCheckpointAndAllowsPublication()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await BindingFixture.CreateAsync(false);
+        await using var intelligence = await IntelligenceFixture.CreateAsync(fixture, ct);
+        await using (var operations = intelligence.CreateOperations())
+        await using (var run = await operations.BeginAsync(SessionId.New(), RunId.New(), fixture.InitialRoot, RepositoryIntelligenceOperation.Onboard, ct))
+        {
+            await run.AcceptHistoryPageAsync(0, new GitLogResult([], false) { IsCollectionPage = true }, "{}", ct);
+            var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
+            {
+                RepositoryPath = fixture.InitialRoot, RequestedBy = "model", IntelligenceRun = run, TrustLevel = RepositoryTrustLevel.TrustedRead,
+            });
+            var tool = new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance);
+            var optional = new MemoryCoverageInput("internals", "Output", "How does the formatter allocate its buffers?", "uninvestigated", Gaps: "Buffer strategy unread.", Limitations: "Adding a command uses the public formatter; its allocation strategy does not affect that recipe.", Priority: "optional");
+            var result = await tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: optional), context, ct);
+            Assert.Equal("optional", Assert.Single(result.Value.Coverage!.Items).Priority);
+            Assert.True(run.Collection!.HasOpenCoverage);
+            await Assert.ThrowsAsync<ArgumentException>(() => tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: optional with { Limitations = string.Empty }), context, ct));
+            await Assert.ThrowsAsync<ArgumentException>(() => tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: optional with { Priority = "unknown" }), context, ct));
+            run.Collection.UpdateCoverage(new RepositoryIntelligenceCoverage
+            {
+                Key = "recipe", Area = "Output", Question = "How is output shared?", Status = "investigating", Gaps = "Verify the caller.", FollowUpKeys = ["internals"],
+            });
+            InitializeCoverageSurvey(run.Collection);
+            await run.ContinueCoverageAsync("Required recipe and optional buffer research.", ct);
+        }
+
+        await using var resumedOperations = intelligence.CreateOperations();
+        await using var resumed = await resumedOperations.BeginAsync(SessionId.New(), RunId.New(), fixture.InitialRoot, RepositoryIntelligenceOperation.Onboard, ct);
+        await resumed.AcceptHistoryPageAsync(0, new GitLogResult([], false) { IsCollectionPage = true }, "{}", ct);
+        Assert.Equal("optional", resumed.Collection!.Coverage.Single(item => item.Key == "internals").Priority);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => resumed.CompleteAsync(ct));
+        var required = resumed.Collection.Coverage.Single(item => item.Key == "recipe");
+        resumed.Collection.UpdateCoverage(required with
+        {
+            Status = "investigated", Gaps = string.Empty, Conclusion = "Use the formatter from the command caller.", NoMemoryReason = "Fixture-only assertion used to exercise optional checklist state.",
+            Supports = [new RepositoryMemorySupport { Path = "formatter.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
+        });
+        Assert.Null(await resumed.ContinueCoverageAsync("Required guidance complete; buffer research optional.", ct));
+        var diagnostic = new TaskCompletionSource<DiagnosticObserved>(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var subscription = intelligence.Events.Subscribe((item, _) =>
+        {
+            if (item is DiagnosticObserved { Code: "intelligence.onboarding.optional" } observed)
+            {
+                diagnostic.TrySetResult(observed);
+            }
+
+            return Task.CompletedTask;
+        });
+        await resumed.CompleteAsync(ct);
+        Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
+        Assert.Contains("allocation strategy", (await diagnostic.Task.WaitAsync(ct)).Message, StringComparison.Ordinal);
+    }
+
     /// <summary>A final-pass provider failure retains completed tool preparation and resumes without repeating history investigation.</summary>
     [Theory]
     [InlineData(true)]
@@ -53,6 +110,7 @@ public static partial class RepositoryMemoryBindingTests
         var first = CreateApplication(new ScriptedSession
         {
             Turns = [
+                new ScriptedTurn { ToolName = "memories", ArgumentsJson = """{"action":"initializeCoverage","survey":[{"key":"feature","area":"Fixture","question":"What implementation guidance exists?","status":"uninvestigated"}]}""" },
                 new ScriptedTurn { Text = "History complete; ready to publish." },
                 new ScriptedTurn { ToolName = "memories", ArgumentsJson = "{\"action\":\"updateCoverage\",\"coverage\":{\"key\":\"feature\",\"area\":\"Fixture\",\"question\":\"What implementation guidance exists?\",\"status\":\"investigating\",\"gaps\":\"Read the implementation.\"}}" },
                 new ScriptedTurn { Failure = ScriptFailureKind.TransientProvider },
@@ -73,7 +131,7 @@ public static partial class RepositoryMemoryBindingTests
             Turns = [
                 new ScriptedTurn { Text = "Try to finish with the open question." },
                 new ScriptedTurn { ToolName = "read_file", ArgumentsJson = "{\"path\":\"feature.txt\"}" },
-                new ScriptedTurn { ToolName = "memories", ArgumentsJson = "{\"action\":\"updateCoverage\",\"coverage\":{\"key\":\"feature\",\"area\":\"Fixture\",\"question\":\"What implementation guidance exists?\",\"status\":\"investigated\",\"conclusion\":\"Only fixture text; no useful memory warranted.\",\"limitations\":\"No tests were run.\",\"supportingPaths\":[\"feature.txt\"]}}" },
+                new ScriptedTurn { ToolName = "memories", ArgumentsJson = "{\"action\":\"updateCoverage\",\"coverage\":{\"key\":\"feature\",\"area\":\"Fixture\",\"question\":\"What implementation guidance exists?\",\"status\":\"investigated\",\"conclusion\":\"Only fixture text; no useful memory warranted.\",\"noMemoryReason\":\"Only fixture text; no reusable implementation.\",\"limitations\":\"No tests were run.\",\"supportingPaths\":[\"feature.txt\"]}}" },
                 new ScriptedTurn { Text = "Coverage complete." },
             ],
         });
@@ -87,10 +145,14 @@ public static partial class RepositoryMemoryBindingTests
     [Fact]
     public static void Coverage_RequiresSeparateOpenFollowupsAndAllowsRealLimitations()
     {
+        var legacy = System.Text.Json.JsonSerializer.Deserialize<RepositoryIntelligenceCoverage>("""
+            {"Key":"legacy","Area":"Tools","Question":"How do tools execute?","Status":"investigating"}
+            """);
+        Assert.Equal("required", legacy!.Priority);
         var collection = new RepositoryMemoryCollection(new RepositoryMemoryReadSnapshot("repo", 1, [], [], []), true, 0);
         var item = new RepositoryIntelligenceCoverage
         {
-            Key = "tools", Area = "Tools", Question = "How do tools execute?", Status = "investigated", Conclusion = "Reuse the pipeline.",
+            Key = "tools", Area = "Tools", Question = "How do tools execute?", Status = "investigated", Conclusion = "Reuse the pipeline.", NoMemoryReason = "Synthetic checklist fixture without a real implementation.",
             Gaps = "MCP integration remains unread.", Supports = [new RepositoryMemorySupport { Path = "pipeline.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
         };
         Assert.Throws<ArgumentException>(() => collection.UpdateCoverage(item));
@@ -99,6 +161,7 @@ public static partial class RepositoryMemoryBindingTests
         collection.UpdateCoverage(item with { Key = "mcp", Status = "investigating" });
         Assert.True(collection.HasOpenCoverage);
         collection.UpdateCoverage(item with { Key = "mcp", Gaps = string.Empty });
+        InitializeCoverageSurvey(collection);
         Assert.False(collection.HasOpenCoverage);
     }
 }

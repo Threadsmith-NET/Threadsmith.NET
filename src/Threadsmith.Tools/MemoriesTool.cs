@@ -8,12 +8,12 @@ public sealed record MemoriesInput(string Action, string? Id = null, string? Tex
     string? Kind = null, IReadOnlyList<string>? Concepts = null,
     IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null, long? ExpectedRevision = null,
     IReadOnlyList<string>? SupportingPaths = null, string? AfterPath = null, IReadOnlyList<string>? CoveredPaths = null,
-    MemoryCoverageInput? Coverage = null, string? AfterKey = null) : IConceptToolInput;
+    MemoryCoverageInput? Coverage = null, string? AfterKey = null, IReadOnlyList<MemoryCoverageInput>? Survey = null, string? ProposalKey = null, int ProposalOffset = 0) : IConceptToolInput;
 
 /// <summary>Onboarding investigation update; supporting paths are resolved to host-observed receipts.</summary>
 public sealed record MemoryCoverageInput(string Key, string Area, string Question, string Status,
     string Conclusion = "", string Gaps = "", IReadOnlyList<string>? MemoryIds = null, IReadOnlyList<string>? SupportingPaths = null,
-    string Limitations = "", IReadOnlyList<string>? FollowUpKeys = null);
+    string Limitations = "", IReadOnlyList<string>? FollowUpKeys = null, string Priority = "required", string NoMemoryReason = "", IReadOnlyList<string>? ResolvedProposalKeys = null);
 
 /// <summary>A stored revision explicitly acknowledged as distinct.</summary>
 public sealed record MemoryDistinctnessConfirmation(string Id, long Revision);
@@ -58,6 +58,9 @@ public sealed record MemoriesOutput(string Action, string Outcome, string? Id, b
 
     /// <summary>True only when this operation inserted an entry.</summary>
     public bool Added => Outcome == "added";
+
+    /// <summary>Identity of the unfinished collection proposal, available for explicit coverage disposition.</summary>
+    public string? ReconciliationKey { get; init; }
 
     /// <summary>Actionable collision resolution; no memory was written.</summary>
     public string? Resolution { get; init; }
@@ -110,7 +113,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             InputSchema = definition.InputSchema with
             {
                 JsonSchema = """
-                    {"type":"object","properties":{"action":{"type":"string","enum":["add","update","remove","list","changes","coverChanges","coverage","updateCoverage"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]},"kind":{"type":["string","null"],"enum":["unspecified","constraint","decision","convention","requirement","finding",null]},"concepts":{"type":["array","null"],"items":{"type":"string","maxLength":96},"maxItems":8},"confirmDistinctFrom":{"type":["array","null"],"items":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id","revision"],"additionalProperties":false}},"supportingPaths":{"type":["array","null"],"items":{"type":"string"}},"afterPath":{"type":["string","null"]},"coveredPaths":{"type":["array","null"],"items":{"type":"string"}},"expectedRevision":{"type":["integer","null"],"minimum":1},"afterKey":{"type":["string","null"],"maxLength":80},"coverage":{"type":["object","null"],"properties":{"key":{"type":"string","maxLength":80},"area":{"type":"string","maxLength":160},"question":{"type":"string","maxLength":600},"conclusion":{"type":"string","maxLength":1200},"gaps":{"type":"string","maxLength":600},"status":{"type":"string","enum":["uninvestigated","investigating","investigated","blocked"]},"memoryIds":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"supportingPaths":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"limitations":{"type":"string","maxLength":600},"followUpKeys":{"type":["array","null"],"items":{"type":"string","maxLength":80},"maxItems":8}},"required":["key","area","question","status"],"additionalProperties":false}},"required":["action"],"additionalProperties":false}
+                    {"type":"object","properties":{"action":{"type":"string","enum":["add","update","remove","list","changes","coverChanges","coverage","updateCoverage","initializeCoverage"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]},"kind":{"type":["string","null"],"enum":["unspecified","constraint","decision","convention","requirement","finding",null]},"concepts":{"type":["array","null"],"items":{"type":"string","maxLength":96},"maxItems":8},"confirmDistinctFrom":{"type":["array","null"],"items":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id","revision"],"additionalProperties":false}},"supportingPaths":{"type":["array","null"],"items":{"type":"string"}},"afterPath":{"type":["string","null"]},"coveredPaths":{"type":["array","null"],"items":{"type":"string"}},"expectedRevision":{"type":["integer","null"],"minimum":1},"afterKey":{"type":["string","null"],"maxLength":80},"coverage":{"type":["object","null"],"properties":{"key":{"type":"string","maxLength":80},"area":{"type":"string","maxLength":160},"question":{"type":"string","maxLength":600},"conclusion":{"type":"string","maxLength":1200},"gaps":{"type":"string","maxLength":600},"priority":{"type":"string","enum":["required","optional"]},"status":{"type":"string","enum":["uninvestigated","investigating","investigated","blocked","outOfScope"]},"memoryIds":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"supportingPaths":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"limitations":{"type":"string","maxLength":600},"followUpKeys":{"type":["array","null"],"items":{"type":"string","maxLength":80},"maxItems":8},"noMemoryReason":{"type":"string","maxLength":600},"resolvedProposalKeys":{"type":["array","null"],"items":{"type":"string","maxLength":64},"maxItems":8}},"required":["key","area","question","status"],"additionalProperties":false},"survey":{"type":["array","null"],"minItems":1,"maxItems":64,"items":{"type":"object","properties":{"key":{"type":"string","maxLength":80},"area":{"type":"string","maxLength":160},"question":{"type":"string","maxLength":600},"conclusion":{"type":"string","maxLength":1200},"gaps":{"type":"string","maxLength":600},"priority":{"type":"string","enum":["required","optional"]},"status":{"type":"string","enum":["uninvestigated","investigating","investigated","blocked","outOfScope"]},"memoryIds":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"supportingPaths":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"limitations":{"type":"string","maxLength":600},"followUpKeys":{"type":["array","null"],"items":{"type":"string","maxLength":80},"maxItems":8},"noMemoryReason":{"type":"string","maxLength":600},"resolvedProposalKeys":{"type":["array","null"],"items":{"type":"string","maxLength":64},"maxItems":8}},"required":["key","area","question","status"],"additionalProperties":false}},"proposalKey":{"type":["string","null"],"maxLength":64},"proposalOffset":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}
                     """,
             },
             Scheduling = new ToolSchedulingDescriptor
@@ -149,7 +152,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             throw new UnauthorizedAccessException("Archeology may read memories but cannot change them.");
         }
 
-        if (input.Action is "coverage" or "updateCoverage")
+        if (input.Action is "coverage" or "updateCoverage" or "initializeCoverage")
         {
             cancellationToken.ThrowIfCancellationRequested();
             var run = context.Invocation.IntelligenceRun;
@@ -158,7 +161,8 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
                 throw new UnauthorizedAccessException("Coverage belongs only to host-authorized onboarding.");
             }
 
-            if (input.Coverage is { } update)
+            var updates = new List<RepositoryIntelligenceCoverage>();
+            foreach (var update in input.Survey ?? (input.Coverage is { } single ? [single] : []))
             {
                 var paths = (update.SupportingPaths ?? []).Select(path => Path.GetRelativePath(
                     context.Invocation.RepositoryPath,
@@ -170,29 +174,69 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
                     throw new ToolArgumentValidationException("Coverage memoryIds must identify accepted prepared intelligence assertions.");
                 }
 
-                preparation.UpdateCoverage(new RepositoryIntelligenceCoverage
+                updates.Add(new RepositoryIntelligenceCoverage
                 {
                     Key = update.Key,
                     Area = update.Area,
                     Question = update.Question,
                     Status = update.Status,
                     Conclusion = update.Conclusion,
+                    NoMemoryReason = update.NoMemoryReason,
                     Gaps = update.Gaps,
                     Limitations = update.Limitations,
                     FollowUpKeys = update.FollowUpKeys ?? [],
+                    Priority = update.Priority,
                     MemoryIds = ids,
                     Supports = run.ResolveSupports(paths),
                 });
             }
 
+            if (input.Action == "initializeCoverage")
+            {
+                preparation.InitializeSurvey(updates);
+            }
+            else if (updates.Count > 0)
+            {
+                preparation.UpdateCoverage(updates[0], input.Coverage?.ResolvedProposalKeys);
+            }
+
+            var pending = preparation.PendingReconciliations;
+            if (input.ProposalKey is { } proposalKey)
+            {
+                var proposal = pending.SingleOrDefault(item => item.Key == proposalKey)
+                    ?? throw new ToolArgumentValidationException("The pending proposal no longer exists; inspect coverage again.");
+                if (input.ProposalOffset > proposal.Text.Length)
+                {
+                    throw new ToolArgumentValidationException("proposalOffset exceeds the proposed text length.");
+                }
+
+                if (input.ProposalOffset > 0 && input.ProposalOffset < proposal.Text.Length
+                    && char.IsLowSurrogate(proposal.Text[input.ProposalOffset]) && char.IsHighSurrogate(proposal.Text[input.ProposalOffset - 1]))
+                {
+                    throw new ToolArgumentValidationException("proposalOffset must not split a Unicode character; use the returned NextTextOffset.");
+                }
+
+                var end = Math.Min((long)input.ProposalOffset + 4000, proposal.Text.Length);
+                if (end < proposal.Text.Length && char.IsHighSurrogate(proposal.Text[(int)end - 1]) && char.IsLowSurrogate(proposal.Text[(int)end]))
+                {
+                    end--;
+                }
+
+                pending = [proposal with { Text = proposal.Text[input.ProposalOffset..(int)end], Confirmations = [], NextTextOffset = end < proposal.Text.Length ? (int)end : null }];
+            }
+            else
+            {
+                pending = pending.Select(item => item with { Text = item.Text.Length > 48 ? item.Text[..48] : item.Text, Confirmations = [], Concepts = [] }).ToArray();
+            }
+
             var items = new List<RepositoryIntelligenceCoverage>();
             var coverageBytes = 0;
             string? nextAfterKey = null;
-            foreach (var item in preparation.Coverage.Where(item => input.Coverage is null || item.Key == input.Coverage.Key)
+            foreach (var item in preparation.Coverage.Where(_ => input.ProposalKey is null).Where(item => input.Coverage is null || item.Key == input.Coverage.Key)
                 .Where(item => input.AfterKey is null || string.CompareOrdinal(item.Key, input.AfterKey) > 0))
             {
                 coverageBytes += JsonSerializer.SerializeToUtf8Bytes(item).Length;
-                if (items.Count == 4 || coverageBytes > 48 * 1024)
+                if (items.Count == 4 || coverageBytes > 24 * 1024)
                 {
                     nextAfterKey = items[^1].Key;
                     break;
@@ -205,7 +249,11 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
                 new MemoriesOutput(input.Action, "prepared", null, null, [], 0)
                 {
                     Prepared = true,
-                    Coverage = new RepositoryIntelligenceCoveragePage(items, nextAfterKey),
+                    Coverage = new RepositoryIntelligenceCoveragePage(items, nextAfterKey)
+                    {
+                        SurveyInitialized = preparation.InitialSurvey.Count > 0,
+                        PendingReconciliations = pending,
+                    },
                 },
                 [],
                 false);
@@ -315,8 +363,9 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             Prepared = collection is not null,
             EvictedIds = result.EvictedIds.Select(id => id.Value.ToString("D")).ToArray(),
             SearchDetails = result.SearchDetails,
+            ReconciliationKey = result.ReconciliationKey,
             Resolution = result.Outcome == "reconciliationRequired"
-                ? "Not added. Update an existing ID with its expectedRevision, or retry add with confirmDistinctFrom entries containing the displayed IDs and revisions to confirm that the proposed memory is distinct."
+                ? "Not added. Update a matching existing ID using expectedRevision, or retry the unchanged proposal with confirmDistinctFrom for the displayed IDs/revisions. Within collection, earlier confirmations accumulate for that exact proposal; changed proposals start fresh and changed candidate revisions require review."
                     + $" The bounded comparison window omitted {result.SearchDetails?.CandidateWindowOmissions ?? 0} discovered candidates; this is not exhaustive duplicate detection."
                 : null,
         };
@@ -334,11 +383,31 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     {
         ArgumentNullException.ThrowIfNull(input);
         _ = MemoryConcepts.Normalize(input.Concepts);
+        if (input.ProposalOffset < 0 || (input.ProposalOffset != 0 && input.ProposalKey is null)
+            || (input.ProposalKey is not null && (input.Action != "coverage" || input.ProposalKey.Length != 64 || input.AfterKey is not null)))
+        {
+            throw new ToolArgumentValidationException("Inspect pending proposals with coverage(proposalKey[,proposalOffset]); use returned NextTextOffset for remaining text.");
+        }
+
+        if ((input.Survey is not null) != (input.Action == "initializeCoverage") || input.Survey is { Count: < 1 or > 64 })
+        {
+            throw new ToolArgumentValidationException("initializeCoverage requires the complete survey array of 1–64 questions. Nothing was saved; retry the complete survey.");
+        }
+
+        foreach (var item in input.Survey ?? [])
+        {
+            if (item is null || item.Key is null || item.Area is null || item.Question is null || item.Status is null || item.Priority is null
+                || item.NoMemoryReason is null || item.ResolvedProposalKeys is { Count: > 0 } || item.Conclusion is null || item.Gaps is null || item.Limitations is null || item.MemoryIds?.Any(id => !IsId(id)) == true)
+            {
+                throw new ToolArgumentValidationException("The entire survey must contain valid coverage fields. Nothing was saved; retry the complete survey.");
+            }
+        }
+
         if ((input.Coverage is not null) != (input.Action == "updateCoverage")
             || (input.AfterKey is not null && (input.Action != "coverage" || input.AfterKey.Length > 80))
             || input.Coverage?.MemoryIds?.Any(id => !IsId(id)) == true
             || (input.Coverage is { } coverage && (coverage.Key is null || coverage.Area is null || coverage.Question is null
-                || coverage.Conclusion is null || coverage.Gaps is null || coverage.Limitations is null)))
+                || coverage.NoMemoryReason is null || coverage.ResolvedProposalKeys?.Any(key => key is null || key.Length != 64) == true || coverage.Conclusion is null || coverage.Gaps is null || coverage.Limitations is null || coverage.Priority is null)))
         {
             throw new ToolArgumentValidationException("updateCoverage requires coverage with valid fields and memory IDs; afterKey applies only to coverage inspection.");
         }
@@ -366,7 +435,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             "add" => input.Id is null && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "update" => IsId(input.Id) && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "remove" => IsId(input.Id) && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
-            "list" or "changes" or "coverChanges" or "coverage" or "updateCoverage" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
+            "list" or "changes" or "coverChanges" or "coverage" or "updateCoverage" or "initializeCoverage" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
             _ => false,
         };
         if (!valid)

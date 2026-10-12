@@ -57,11 +57,17 @@ public static partial class RepositoryMemoryBindingTests
 
         var registry = new ToolRegistry(tools, state);
         var events = new List<ToolInvocationCompleted>();
+        var started = new List<ToolInvocationStarted>();
         await using var subscription = intelligence.Events.Subscribe((item, _) =>
         {
             if (item is ToolInvocationCompleted completed)
             {
                 events.Add(completed);
+            }
+
+            if (item is ToolInvocationStarted invocation)
+            {
+                started.Add(invocation);
             }
 
             return Task.CompletedTask;
@@ -97,42 +103,37 @@ public static partial class RepositoryMemoryBindingTests
         if (revokeHistory || roundLimit)
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() => application.HandleAsync(new WaitForRunCommand(run), ct));
-            Assert.Equal(1, model.Requests);
-            Assert.Single(events);
+            Assert.Equal(roundLimit ? 1 : 2, model.Requests);
+            Assert.Single(started, item => item.ToolName == "git_log");
             var after = await intelligence.Store.GetSnapshotAsync(intelligence.Identity, [], ct);
             Assert.Equal(before.Entries.Select(item => (item.Id, item.Text, item.Revision)), after.Entries.Select(item => (item.Id, item.Text, item.Revision)));
             var checkpoint = await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct);
-            Assert.NotNull(checkpoint);
-            Assert.Equal(1, checkpoint.NextHistoryPage);
-            Assert.DoesNotContain("onboarding-secret-value", checkpoint.WorkingContext, StringComparison.Ordinal);
-            context = context with { DeniedToolIds = [] };
-            var resumed = await application.HandleAsync(new SubmitRequestCommand(session, "Continue onboarding") { IntelligenceOperation = RepositoryIntelligenceOperation.Onboard }, ct);
             if (roundLimit)
             {
-                await Assert.ThrowsAsync<InvalidOperationException>(() => application.HandleAsync(new WaitForRunCommand(resumed), ct));
-                var coverageCheckpoint = await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct);
-                Assert.True(coverageCheckpoint!.HistoryComplete);
-                Assert.True(coverageCheckpoint.CoverageReviewStarted);
-                Assert.Equal(2, model.Requests);
-                Assert.Equal(3, events.Count);
+                // A final answer without an initial survey cannot acknowledge the first history page.
+                Assert.Null(checkpoint);
+                Assert.Single(model.CapturedRequests);
             }
             else
             {
+                Assert.NotNull(checkpoint);
+                Assert.Equal(1, checkpoint.NextHistoryPage);
+                Assert.DoesNotContain("onboarding-secret-value", checkpoint.WorkingContext, StringComparison.Ordinal);
+                context = context with { DeniedToolIds = [] };
+                var resumed = await application.HandleAsync(new SubmitRequestCommand(session, "Continue onboarding") { IntelligenceOperation = RepositoryIntelligenceOperation.Onboard }, ct);
                 Assert.True(await application.HandleAsync(new WaitForRunCommand(resumed), ct));
-                Assert.Equal(4, model.Requests);
-                Assert.Equal(5, events.Count);
                 Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
-            }
 
-            var resumedHistory = Assert.Single(model.CapturedRequests[^1].Messages, message => message.SectionId.StartsWith("repository-intelligence-history-", StringComparison.Ordinal)).GetModelVisibleContent();
-            Assert.Contains("design step 16", resumedHistory, StringComparison.Ordinal);
-            Assert.DoesNotContain("design step 00", resumedHistory, StringComparison.Ordinal);
+                var resumedHistory = Assert.Single(model.CapturedRequests[^1].Messages, message => message.SectionId.StartsWith("repository-intelligence-history-", StringComparison.Ordinal)).GetModelVisibleContent();
+                Assert.Contains("design step 16", resumedHistory, StringComparison.Ordinal);
+                Assert.DoesNotContain("design step 00", resumedHistory, StringComparison.Ordinal);
+            }
         }
         else
         {
             Assert.True(await application.HandleAsync(new WaitForRunCommand(run), ct));
-            Assert.Equal(4, model.Requests);
-            Assert.Equal(4, events.Count);
+            Assert.Equal(2, started.Count(item => item.ToolName == "git_log"));
+            Assert.Contains(started, item => item.ToolName == "memories");
             var first = Assert.Single(model.CapturedRequests[0].Messages, message => message.SectionId.StartsWith("repository-intelligence-history-", StringComparison.Ordinal)).GetModelVisibleContent();
             Assert.Contains("design step 00", first, StringComparison.Ordinal);
             Assert.DoesNotContain("design step 16", first, StringComparison.Ordinal);

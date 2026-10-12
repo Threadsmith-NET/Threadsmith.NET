@@ -1,5 +1,7 @@
 namespace Threadsmith.Context;
 
+using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
@@ -44,6 +46,11 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
 
         var result = await ExecuteCoreAsync(request, cancellationToken);
         request.Collection?.Accept(result);
+        if (result.Entry is { } accepted && result.Outcome is "added" or "updated" or "unchanged" or "duplicate")
+        {
+            request.Collection?.CompleteReconciliation(accepted.Text);
+        }
+
         return result;
     }
 
@@ -207,12 +214,19 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
                         throw new InvalidOperationException("Memory reconciliation could not compare complete inputs. No memory was added. Check local inference and shorten oversized memories before retrying.");
                     }
 
-                    var collisions = matches.Selected.Where(candidate => !request.ConfirmDistinctFrom.Contains(
+                    var proposalKey = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
+                    {
+                        text, memoryType, kind, concepts, request.Sensitivity,
+                    })));
+                    var confirmations = request.Collection?.ConfirmReconciliation(proposalKey, text, request.ConfirmDistinctFrom, snapshot.Entries, write)
+                        ?? request.ConfirmDistinctFrom;
+                    var collisions = matches.Selected.Where(candidate => !confirmations.Contains(
                         new RepositoryMemoryInclusion(candidate.Entry.Id, candidate.Entry.Revision))).Select(candidate => candidate.Entry).ToArray();
                     if (collisions.Length > 0)
                     {
                         return new RepositoryMemoryOperationResult("reconciliationRequired", null, null, collisions, [])
                         {
+                            ReconciliationKey = request.Collection is null ? null : proposalKey,
                             Diagnostics = matches.Diagnostics,
                             SearchDetails = searchDetails,
                         };

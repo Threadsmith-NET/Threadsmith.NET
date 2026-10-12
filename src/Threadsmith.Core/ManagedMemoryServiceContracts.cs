@@ -66,6 +66,9 @@ public sealed record RepositoryMemoryOperationResult(
     IReadOnlyList<RepositoryMemoryEntry> Entries,
     IReadOnlyList<RepositoryMemoryId> EvictedIds)
 {
+    /// <summary>Collection-scoped proposal identity when reconciliation remains unfinished.</summary>
+    public string? ReconciliationKey { get; init; }
+
     /// <summary>Bounded diagnostics describing the write check.</summary>
     public IReadOnlyList<string> Diagnostics { get; init; } = [];
 

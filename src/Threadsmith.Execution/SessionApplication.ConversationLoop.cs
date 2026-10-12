@@ -180,26 +180,6 @@ public sealed partial class SessionApplication
 
             if (!outcome.ToolInvoked)
             {
-                if (registration.IntelligenceRun?.PendingHistoryPage is not null && invocationContext is not null)
-                {
-                    if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
-                    {
-                        loopState.CommitStandaloneMessage(modelRound, CreateVisibleAssistantMessage(outcome.TextOutput), purgeAfterCorrection: false);
-                        await ArchiveVisibleMessageAsync(registration.SessionId, runId, ConversationRole.Assistant, outcome.TextOutput, cancellationToken);
-                    }
-
-                    var checkpointContext = string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content);
-                    await registration.IntelligenceRun.SaveCheckpointAsync(_sanitizer.Sanitize(checkpointContext), cancellationToken);
-                    if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
-                    {
-                        throw new InvalidOperationException("The model round limit was reached before onboarding history completed. The prior collection was preserved.");
-                    }
-
-                    await SupplyIntelligenceHistoryAsync(runId, registration, phase, invocationContext, loopState, modelRound, cancellationToken);
-                    loopState.ReleaseCompletedReplay();
-                    continue;
-                }
-
                 if (registration.IntelligenceRun is { } coverage
                     && await coverage.ContinueCoverageAsync(_sanitizer.Sanitize(string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content)), cancellationToken) is { } coverageInstructions)
                 {
@@ -223,6 +203,26 @@ public sealed partial class SessionApplication
                         throw new InvalidOperationException("The model round limit was reached before onboarding coverage completed. Preparation was checkpointed; the prior collection was preserved.");
                     }
 
+                    loopState.ReleaseCompletedReplay();
+                    continue;
+                }
+
+                if (registration.IntelligenceRun?.PendingHistoryPage is not null && invocationContext is not null)
+                {
+                    if (!string.IsNullOrWhiteSpace(outcome.TextOutput))
+                    {
+                        loopState.CommitStandaloneMessage(modelRound, CreateVisibleAssistantMessage(outcome.TextOutput), purgeAfterCorrection: false);
+                        await ArchiveVisibleMessageAsync(registration.SessionId, runId, ConversationRole.Assistant, outcome.TextOutput, cancellationToken);
+                    }
+
+                    var checkpointContext = string.Join("\n", outcome.TextOutput, loopState.CompactionSummary?.Content);
+                    await registration.IntelligenceRun.SaveCheckpointAsync(_sanitizer.Sanitize(checkpointContext), cancellationToken);
+                    if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
+                    {
+                        throw new InvalidOperationException("The model round limit was reached before onboarding history completed. The prior collection was preserved.");
+                    }
+
+                    await SupplyIntelligenceHistoryAsync(runId, registration, phase, invocationContext, loopState, modelRound, cancellationToken);
                     loopState.ReleaseCompletedReplay();
                     continue;
                 }
@@ -2450,6 +2450,7 @@ public sealed partial class SessionApplication
                 ActiveTurnCompactionOutcome.ValidationRejected =>
                     ActiveTurnCompactionInspectionStatus.ValidationRejected,
                 ActiveTurnCompactionOutcome.Cancelled => ActiveTurnCompactionInspectionStatus.Cancelled,
+                ActiveTurnCompactionOutcome.CapacityExceeded => ActiveTurnCompactionInspectionStatus.CapacityExceeded,
                 ActiveTurnCompactionOutcome.AdmissionRejected
                     when attemptObserver.LastContinuationFitsContextCapacity == false =>
                     ActiveTurnCompactionInspectionStatus.CapacityExceeded,

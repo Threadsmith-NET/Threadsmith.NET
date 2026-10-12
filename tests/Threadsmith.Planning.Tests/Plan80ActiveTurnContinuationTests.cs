@@ -625,9 +625,11 @@ public static partial class Plan80ActiveTurnContinuationTests
         }
     }
 
-    /// <summary>An irreducible maximum-summary bound declines optional compaction without aborting an ordinary request that fits.</summary>
-    [Fact]
-    public static async Task Oversized_summary_bound_declines_context_only_compaction()
+    /// <summary>Candidate input or maximum-summary capacity failures retain the ordinary continuation and report capacity accurately.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Oversized_summary_bound_declines_context_only_compaction(bool oversizedCandidateInput)
     {
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-plan113-capacity-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -669,7 +671,9 @@ public static partial class Plan80ActiveTurnContinuationTests
             };
             var candidateProvider = new RequestCandidateProvider();
             var compactor = new ActiveTurnCompactor(
-                candidateProvider,
+                oversizedCandidateInput
+                    ? new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance)
+                    : candidateProvider,
                 new ActiveTurnCompactionValidator(policy, sanitizer, TestPromptLoader.Instance),
                 policy,
                 TestPromptLoader.Instance);
@@ -693,6 +697,9 @@ public static partial class Plan80ActiveTurnContinuationTests
                 new ExecutionLimits { MaxModelRounds = 4 },
                 activeTurnCompactor: compactor,
                 activeTurnCompactionPolicy: policy,
+                activeTurnCompactionProfile: oversizedCandidateInput
+                    ? CreateCompactionCandidateProfile(ModelProfileId.New()) with { ContextWindowTokens = 256 }
+                    : null,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
                 prompts: TestPromptLoader.Instance);
             var dispatcher = new CommandDispatcher([application]);
@@ -707,6 +714,11 @@ public static partial class Plan80ActiveTurnContinuationTests
             Assert.Equal(
                 ActiveTurnCompactionInspectionStatus.CapacityExceeded,
                 assembler.GetInspection(runId)?.ActiveTurnCompaction?.Status);
+            if (oversizedCandidateInput)
+            {
+                Assert.Contains("Source group", assembler.GetInspection(runId)?.ActiveTurnCompaction?.Rationale, StringComparison.Ordinal);
+                Assert.Contains("No provider request was sent", assembler.GetInspection(runId)?.ActiveTurnCompaction?.Rationale, StringComparison.Ordinal);
+            }
         }
         finally
         {

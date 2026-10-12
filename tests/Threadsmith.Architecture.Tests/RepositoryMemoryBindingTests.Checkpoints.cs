@@ -44,6 +44,7 @@ public static partial class RepositoryMemoryBindingTests
                 Key = "output", Area = "Presentation", Question = "How should features format output?", Status = "investigated",
                 Conclusion = "Use the shared formatter.", MemoryIds = [prepared.Id], Supports = prepared.Supports,
             });
+            InitializeCoverageSurvey(run.Collection);
             await run.SaveCheckpointAsync("Completed formatter investigation.", ct);
         }
 

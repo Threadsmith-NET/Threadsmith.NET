@@ -193,8 +193,8 @@ public static class MemoriesToolTests
         var definition = Assert.Single(definitions);
         using var schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
         var fields = schema.RootElement.GetProperty("properties");
-        Assert.Equal(["action", "afterKey", "afterPath", "concepts", "confirmDistinctFrom", "coverage", "coveredPaths", "expectedRevision", "id", "kind", "memoryType", "supportingPaths", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
-        Assert.Equal(["add", "update", "remove", "list", "changes", "coverChanges", "coverage", "updateCoverage"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(["action", "afterKey", "afterPath", "concepts", "confirmDistinctFrom", "coverage", "coveredPaths", "expectedRevision", "id", "kind", "memoryType", "proposalKey", "proposalOffset", "supportingPaths", "survey", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
+        Assert.Equal(["add", "update", "remove", "list", "changes", "coverChanges", "coverage", "updateCoverage", "initializeCoverage"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
         Assert.Contains("null", fields.GetProperty("id").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("null", fields.GetProperty("text").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
@@ -629,8 +629,8 @@ public static class MemoriesToolTests
         using var body = JsonDocument.Parse(handler.Body);
         var function = Assert.Single(body.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
         var schema = function.GetProperty("parameters");
-        Assert.Equal(13, schema.GetProperty("properties").EnumerateObject().Count());
-        Assert.Equal(8, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
+        Assert.Equal(16, schema.GetProperty("properties").EnumerateObject().Count());
+        Assert.Equal(9, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
         Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
         Assert.DoesNotContain("SubmissionObserver", handler.Body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("MemorySubmission", handler.Body, StringComparison.OrdinalIgnoreCase);

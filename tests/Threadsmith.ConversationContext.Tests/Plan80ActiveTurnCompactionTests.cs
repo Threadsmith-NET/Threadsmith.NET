@@ -195,8 +195,9 @@ public static class Plan80ActiveTurnCompactionTests
             model,
             policy with { MaximumInputTokens = estimate.WireInputTokens },
             TestPromptLoader.Instance);
-        Assert.Throws<ModelProviderException>(() => constrained.PrepareCandidate(request with { TaskContext = context }));
-        Assert.Equal(2, model.Requests.Count);
+        await constrained.PrepareCandidate(request with { TaskContext = context }).ExecuteAsync();
+        Assert.Equal(3, model.Requests.Count);
+        Assert.True(model.Requests[2].WireEstimate?.WireInputTokens > estimate.WireInputTokens);
     }
 
     /// <summary>Host-observed file lists are authoritative and cannot be fabricated by the candidate.</summary>
@@ -346,6 +347,131 @@ public static class Plan80ActiveTurnCompactionTests
         Assert.True(dispatched.WireEstimate?.WireInputTokens <= 52_429);
         using var document = JsonDocument.Parse(dispatched.Input);
         Assert.True(document.RootElement.GetProperty("newToolActivity").GetArrayLength() > 1);
+    }
+
+    /// <summary>A complete oversized first group uses the selected candidate capacity without admitting more groups.</summary>
+    [Fact]
+    public static async Task Oversized_first_group_uses_candidate_capacity_and_preserves_prior_summary()
+    {
+        var policy = new ActiveTurnCompactionPolicy();
+        var model = new TextModelProvider("## Goal\nUpdated large checkpoint.");
+        var prior = new ActiveTurnCompactionSummary
+        {
+            Version = 1,
+            ThroughGroupSequence = 1,
+            CoveredGroupSequences = [1],
+            Content = "## Goal\nPrior checkpoint.",
+            FilesRead = ["src/Prior.cs"],
+            FilesChanged = [],
+            ContentHash = "sha256:prior",
+        };
+        var request = CreateRequest([
+            CreateGroup(2, filesRead: ["src/Large.cs"], payloadCharacters: 308_477),
+            CreateGroup(3),
+        ]) with
+        {
+            PriorSummary = prior,
+            ProfileContextWindowTokens = 32_768,
+            CandidateProfile = CreateCandidateProfile(128_000, 16_384),
+        };
+        var compactor = new ActiveTurnCompactor(
+            new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance),
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
+
+        var result = await compactor.CompactAsync(request, new RecordingAttemptObserver());
+
+        Assert.Equal(ActiveTurnCompactionOutcome.Completed, result.Outcome);
+        var summary = Assert.IsType<ActiveTurnCompactionSummary>(result.Summary);
+        Assert.Equal([1L, 2L], summary.CoveredGroupSequences);
+        Assert.Equal(["src/Prior.cs", "src/Large.cs"], summary.FilesRead);
+        var dispatched = Assert.Single(model.Requests);
+        Assert.Equal(request.CandidateProfile.ProfileId, dispatched.ResolvedProfileId);
+        var estimate = Assert.IsType<ModelWireEstimate>(dispatched.WireEstimate);
+        Assert.True(estimate.WireInputTokens > policy.MaximumInputTokens);
+        Assert.True(estimate.TotalCapacityTokens <= 128_000);
+        using var input = JsonDocument.Parse(dispatched.Input);
+        Assert.Equal(prior.Content, input.RootElement.GetProperty("previousSummary").GetProperty("content").GetString());
+        var activity = Assert.Single(input.RootElement.GetProperty("newToolActivity").EnumerateArray());
+        Assert.Equal(2, activity.GetProperty("sequence").GetInt64());
+        Assert.Equal(2, activity.GetProperty("messages").GetArrayLength());
+    }
+
+    /// <summary>Ordinary batches retain the normal cap even when the selected model has more capacity.</summary>
+    [Fact]
+    public static async Task Ordinary_batch_retains_normal_input_limit()
+    {
+        var policy = new ActiveTurnCompactionPolicy();
+        var model = new TextModelProvider("## Goal\nCheckpoint.");
+        var groups = Enumerable.Range(1, 4).Select(index => CreateGroup(index, payloadCharacters: 100_000)).ToArray();
+        var provider = new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance);
+
+        var attempt = provider.PrepareCandidate(CreateRequest(groups));
+        await attempt.ExecuteAsync();
+
+        Assert.Equal(2, attempt.SelectedGroupCount);
+        Assert.True(Assert.Single(model.Requests).WireEstimate?.WireInputTokens <= policy.MaximumInputTokens);
+    }
+
+    /// <summary>Prior summary and output reserve participate in exact capacity admission with no provider calls on rejection.</summary>
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2_000)]
+    public static async Task Oversized_candidate_reports_capacity_and_retains_original_continuation(int providerOverheadTokens)
+    {
+        var policy = new ActiveTurnCompactionPolicy();
+        var model = new TextModelProvider("## Goal\nCheckpoint.") { PreparationOverheadTokens = providerOverheadTokens };
+        var provider = new ModelActiveTurnCompactionCandidateProvider(model, policy, TestPromptLoader.Instance);
+        var request = CreateRequest([CreateGroup(2, payloadCharacters: 308_477)]) with
+        {
+            PriorSummary = new ActiveTurnCompactionSummary
+            {
+                Version = 1,
+                ThroughGroupSequence = 1,
+                CoveredGroupSequences = [1],
+                Content = new string('p', 12_570),
+                ContentHash = "sha256:prior",
+                FilesRead = [],
+                FilesChanged = [],
+            },
+        };
+        await provider.PrepareCandidate(request).ExecuteAsync();
+        var estimate = Assert.IsType<ModelWireEstimate>(Assert.Single(model.Requests).WireEstimate);
+        model.Requests.Clear();
+        var constrained = request with
+        {
+            CandidateProfile = CreateCandidateProfile(checked((int)estimate.TotalCapacityTokens - 1), 16_384),
+        };
+        var compactor = new ActiveTurnCompactor(
+            provider,
+            new ActiveTurnCompactionValidator(policy, new SecretOutputSanitizer(), TestPromptLoader.Instance),
+            policy,
+            TestPromptLoader.Instance);
+        var observer = new RecordingAttemptObserver();
+
+        var result = await compactor.CompactAsync(constrained, observer);
+
+        Assert.Equal(ActiveTurnCompactionOutcome.CapacityExceeded, result.Outcome);
+        Assert.Equal(0, result.ProviderCalls);
+        Assert.Null(result.Summary);
+        Assert.Empty(model.Requests);
+        Assert.Empty(observer.Order);
+        Assert.Contains("Source group 2", result.Rationale, StringComparison.Ordinal);
+        Assert.Contains($"{estimate.WireInputTokens} input tokens", result.Rationale, StringComparison.Ordinal);
+        Assert.Contains($"{estimate.WireInputTokens - 1} available", result.Rationale, StringComparison.Ordinal);
+        Assert.Contains($"{estimate.OutputReserveTokens} output tokens reserved", result.Rationale, StringComparison.Ordinal);
+        Assert.Contains("original continuation remains active", result.Rationale, StringComparison.Ordinal);
+        Assert.Same(request.PriorSummary, constrained.PriorSummary);
+        Assert.Same(request.EligiblePrefix, constrained.EligiblePrefix);
+
+        var fitting = constrained with
+        {
+            CandidateProfile = constrained.CandidateProfile with { ContextWindowTokens = checked((int)estimate.TotalCapacityTokens) },
+        };
+        var accepted = await compactor.CompactAsync(fitting, observer);
+        Assert.Equal(ActiveTurnCompactionOutcome.Completed, accepted.Outcome);
+        Assert.Single(model.Requests);
     }
 
     /// <summary>Sensitive candidate input is rejected before hooks or provider I/O when the configured profile prohibits it.</summary>
@@ -815,7 +941,7 @@ public static class Plan80ActiveTurnCompactionTests
         };
     }
 
-    private sealed class TextModelProvider : IModelProvider
+    private sealed class TextModelProvider : IModelProvider, IModelRequestPreparationResolver
     {
         private readonly string _text;
         private readonly ModelUsage? _usage;
@@ -829,6 +955,17 @@ public static class Plan80ActiveTurnCompactionTests
         public List<ModelStreamRequest> Requests { get; } = [];
 
         public ModelFinishReason FinishReason { get; init; } = ModelFinishReason.Stop;
+
+        public int PreparationOverheadTokens { get; init; }
+
+        public ModelStreamRequest Prepare(ModelStreamRequest request)
+        {
+            var estimate = Assert.IsType<ModelWireEstimate>(request.WireEstimate);
+            return request with
+            {
+                WireEstimate = estimate with { WireInputTokens = estimate.WireInputTokens + PreparationOverheadTokens },
+            };
+        }
 
         public async IAsyncEnumerable<ModelChunk> StreamAsync(
             ModelStreamRequest request,

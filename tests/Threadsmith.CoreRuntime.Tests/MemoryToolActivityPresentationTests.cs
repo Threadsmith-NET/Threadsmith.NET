@@ -130,7 +130,7 @@ public static class MemoryToolActivityPresentationTests
             Entries = Array.Empty<object>(),
             Coverage = new
             {
-                Items = empty ? [] : new[] { new { Area = "Shared output\u009b31m", Status = "investigated" } },
+                Items = empty ? [] : new[] { new { Area = "Shared output\u009b31m", Status = "investigated", Priority = "optional" } },
                 NextAfterKey = empty ? null : "output",
             },
         });
@@ -138,7 +138,7 @@ public static class MemoryToolActivityPresentationTests
 
         Assert.DoesNotContain("No memories returned.", transcript.Text, StringComparison.Ordinal);
         Assert.Contains("Outcome: prepared", transcript.Text, StringComparison.Ordinal);
-        Assert.Contains(empty ? "No investigation checklist items on this page." : "Investigation: Shared output\\u009B31m — investigated", transcript.Text, StringComparison.Ordinal);
+        Assert.Contains(empty ? "No investigation checklist items on this page." : "Investigation: Shared output\\u009B31m — investigated (optional)", transcript.Text, StringComparison.Ordinal);
         Assert.Equal(!empty, transcript.Text.Contains("More investigation checklist items available.", StringComparison.Ordinal));
         Assert.DoesNotContain('\u009b', transcript.Text);
     }

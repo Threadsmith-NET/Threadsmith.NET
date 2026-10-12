@@ -489,6 +489,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                         Entries = collection.Snapshot(),
                         AcceptedIds = collection.AcceptedIds,
                         Coverage = collection.Coverage,
+                        InitialSurvey = collection.InitialSurvey,
+                        PendingReconciliations = collection.PendingReconciliations,
                         WorkingContext = workingContext[..length],
                         WorkingContextTruncated = length < workingContext.Length,
                     },
@@ -507,7 +509,19 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
         public async Task<string?> ContinueCoverageAsync(string workingContext, CancellationToken cancellationToken = default)
         {
-            if (Operation != RepositoryIntelligenceOperation.Onboard || PendingHistoryPage is not null || Collection is not { } collection)
+            if (Operation != RepositoryIntelligenceOperation.Onboard || Collection is not { } collection)
+            {
+                return null;
+            }
+
+            if (collection.InitialSurvey.Count == 0)
+            {
+                return _owner._prompts.Render(
+                    PromptFileNames.ContextRepositoryIntelligenceCoverage,
+                    new Dictionary<string, string>(StringComparer.Ordinal) { ["CoverageJson"] = JsonSerializer.Serialize(new { Phase = "initialSurveyRequired", SurveyInitialized = false }) });
+            }
+
+            if (PendingHistoryPage is not null)
             {
                 return null;
             }
@@ -524,8 +538,13 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             var summary = JsonSerializer.Serialize(new
             {
                 FirstReview = firstReview,
+                SurveyInitialized = true,
+                InitialAreas = collection.InitialSurvey.Select(item => new { item.Key, item.Area, item.Question }),
+                PendingReconciliations = collection.PendingReconciliations.Select(item => new { item.Key }),
+                InvalidMemoryLinks = coverage.Where(item => item.MemoryIds.Any(id => !collection.Snapshot(forPublication: true).Any(entry => entry.Id == id))).Select(item => item.Key),
                 TotalItems = coverage.Count,
-                OpenItems = coverage.Count(item => item.Status is "uninvestigated" or "investigating"),
+                OpenItems = coverage.Count(item => item.Priority == "required" && item.Status is "uninvestigated" or "investigating"),
+                OptionalItems = coverage.Count(item => item.Priority == "optional"),
                 BlockedItems = coverage.Count(item => item.Status == "blocked"),
             });
             await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.coverage", "History processing is complete. Continuing the final investigation coverage pass; preparation is checkpointed."), cancellationToken);
@@ -636,6 +655,11 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             foreach (var item in Collection.Coverage.Where(item => item.Status == "blocked"))
             {
                 await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.blocked", $"Investigation blocked: {item.Area}: {item.Gaps}"), CancellationToken.None);
+            }
+
+            foreach (var item in Collection.Coverage.Where(item => item.Priority == "optional" && item.Status is "uninvestigated" or "investigating"))
+            {
+                await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.optional", $"Optional investigation left open: {item.Area}: {item.Question} Scope: {item.Limitations}"), CancellationToken.None);
             }
 
             _owner._automation.Complete(_identity, _commitGeneration);

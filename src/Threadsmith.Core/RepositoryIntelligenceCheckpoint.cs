@@ -33,6 +33,12 @@ public sealed record RepositoryIntelligenceCheckpoint
     /// <summary>Entries explicitly accepted for the replacement collection.</summary>
     public IReadOnlyList<RepositoryMemoryId> AcceptedIds { get; init; } = [];
 
+    /// <summary>Unfinished proposals survive checkpoints; resumed confirmations require fresh review.</summary>
+    public IReadOnlyList<RepositoryMemoryReconciliation> PendingReconciliations { get; init; } = [];
+
+    /// <summary>Atomically established original repository survey; absent in older checkpoints.</summary>
+    public IReadOnlyList<RepositoryIntelligenceCoverage> InitialSurvey { get; init; } = [];
+
     /// <summary>Repository-specific investigation state; absent in checkpoints created before checklist support.</summary>
     public IReadOnlyList<RepositoryIntelligenceCoverage> Coverage { get; init; } = [];
 

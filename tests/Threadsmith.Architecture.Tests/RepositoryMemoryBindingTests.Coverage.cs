@@ -25,7 +25,7 @@ public static partial class RepositoryMemoryBindingTests
         });
         var tool = new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance);
         var before = run.Collection!.Snapshot();
-        var update = new MemoryCoverageInput("area-4", "Feature", "How does a feature join shared output?", "investigated", "No reusable convention established from this example.", SupportingPaths: ["guide.txt"]);
+        var update = new MemoryCoverageInput("area-4", "Feature", "How does a feature join shared output?", "investigated", "No reusable convention established from this example.", SupportingPaths: ["guide.txt"], NoMemoryReason: "The fixture is a single example without a reusable convention.");
         await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: update), context, ct));
         Assert.Empty(run.Collection.Coverage);
         await File.WriteAllTextAsync(Path.Combine(fixture.InitialRoot, "guide.txt"), "A single implementation example.", ct);
@@ -64,8 +64,18 @@ public static partial class RepositoryMemoryBindingTests
         var remainder = await pipeline.InvokeAsync(invocation with { ArgumentsJson = JsonSerializer.Serialize(new { action = "coverage", afterKey = cursor }) }, ct);
         Assert.True(remainder.Succeeded, remainder.Error);
         using var rest = JsonDocument.Parse(remainder.ResultJson!);
-        Assert.Equal(5 - firstCount, rest.RootElement.GetProperty("Coverage").GetProperty("Items").GetArrayLength());
-        Assert.Equal(JsonValueKind.Null, rest.RootElement.GetProperty("Coverage").GetProperty("NextAfterKey").ValueKind);
+        var total = firstCount + rest.RootElement.GetProperty("Coverage").GetProperty("Items").GetArrayLength();
+        var next = rest.RootElement.GetProperty("Coverage").GetProperty("NextAfterKey").GetString();
+        while (next is not null)
+        {
+            var more = await pipeline.InvokeAsync(invocation with { ArgumentsJson = JsonSerializer.Serialize(new { action = "coverage", afterKey = next }) }, ct);
+            Assert.True(more.Succeeded, more.Error);
+            using var remaining = JsonDocument.Parse(more.ResultJson!);
+            total += remaining.RootElement.GetProperty("Coverage").GetProperty("Items").GetArrayLength();
+            next = remaining.RootElement.GetProperty("Coverage").GetProperty("NextAfterKey").GetString();
+        }
+
+        Assert.Equal(5, total);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(new MemoriesInput("coverage"), context with { Invocation = context.Invocation with { IntelligenceRun = null } }, ct));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: update), context with { Invocation = context.Invocation with { IntelligenceRun = null } }, ct));
     }
@@ -83,5 +93,10 @@ public static partial class RepositoryMemoryBindingTests
             Key = "output", Area = "Presentation", Question = "How is output formatted?", Status = status,
         }));
         Assert.Empty(collection.Coverage);
+    }
+
+    private static void InitializeCoverageSurvey(RepositoryMemoryCollection collection)
+    {
+        collection.InitializeSurvey(collection.Coverage.Select(item => item with { Status = "uninvestigated", Supports = [], MemoryIds = [] }).ToArray());
     }
 }

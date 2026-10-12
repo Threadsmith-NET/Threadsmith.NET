@@ -129,9 +129,9 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
 | `Context-RepositoryArcheology.md` | Read-only investigation using repository intelligence, current source, and relevant Git history. | `None` |
-| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare evidence-supported memories and covered changes; maintain a checkpointed onboarding coverage checklist and perform a host-required final gap pass with open-item publication fencing. | `None` |
-| `Context-RepositoryIntelligenceHistory.md` | Depth-scoped chronological onboarding batches, resumable completion checkpoints with investigation coverage, and final current-source verification and gap investigation; Git metadata remains untrusted evidence. | [`HistoryJson`](#placeholder-historyjson) |
-| `Context-RepositoryIntelligenceCoverage.md` | Mandatory final coverage investigation; separate unfinished questions from scope limitations, resolve open follow-ups before publication, and resume checkpointed preparation. | [`CoverageJson`](#placeholder-coveragejson) |
+| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare evidence-supported memories and covered changes; survey and prioritize a deduplicated checklist, use bounded exploration and caller/reference navigation with primary source receipts, stop at supported recipes, and audit checklist conclusions against accepted memory text before publication. | `None` |
+| `Context-RepositoryIntelligenceHistory.md` | Depth-scoped chronological discovery signals, resumable checkpoints, checklist reconciliation between batches, and focused current-source verification; Git metadata remains untrusted evidence. | [`HistoryJson`](#placeholder-historyjson) |
+| `Context-RepositoryIntelligenceCoverage.md` | Atomic initial-survey recovery and final coverage review for missing major areas, unsupported generalizations, and material contradictions; distinguish required investigation from optional research, audit useful conclusions against actual accepted memory text, repair missing recipes and bundled advice through normal reconciliation, and resume checkpointed preparation. | [`CoverageJson`](#placeholder-coveragejson) |
 | `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
@@ -592,7 +592,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
+| `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates with required or optional investigation priority. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
 | `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
 
 #### `read_file` family
@@ -908,9 +908,11 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-version"></a>`Version` | Schema, wrapper, package, or protocol version identified by the surrounding prompt. |
 | <a id="placeholder-workspacefilename"></a>`WorkspaceFileName` | Display name of the current workspace or repository file. |
 
-| <a id="placeholder-coveragejson"></a>`CoverageJson` | Host-owned checklist item/open/blocked counts and first-review indicator; detailed investigation notes remain available through the memories tool. |
+| <a id="placeholder-coveragejson"></a>`CoverageJson` | Host-owned initial-survey-required phase, or final-review total/required-open/optional/blocked counts, preserved initial areas, pending reconciliation keys, invalid memory links and first-review indicator. Detailed investigation notes and paged pending proposal text remain available through the memories tool. |
 | <a id="placeholder-historyjson"></a>`HistoryJson` | Sanitized bounded Git commit messages and changed paths, pinned history revision, requested depth, and chronological page/continuation cursor supplied by the host. |
 | <a id="placeholder-feedbackjson"></a>`FeedbackJson` | Sanitized bounded source-edit analysis with status, generation, coverage, diagnostics and omissions; pending, obsolete, or unmeasured error counts are omitted. |
+
+Repository-intelligence coverage admission: `Context-RepositoryIntelligenceCollection.md` and `Context-RepositoryIntelligenceHistory.md` direct atomic initial survey submission through `memories initializeCoverage(survey)` before history advances. `Context-RepositoryIntelligenceCoverage.md` uses its existing `CoverageJson` token for either initial-survey recovery or final review, including preserved initial areas, pending reconciliation keys, and invalid memory links. `Tool-memories-Description.md` explains cumulative collection confirmations, unchanged-proposal metadata, pending-proposal inspection with `coverage(proposalKey[,proposalOffset])`, explicit `noMemoryReason`/`resolvedProposalKeys`, and evidence-backed `outOfScope` dispositions. These assets provide wording; code owns atomic admission, identity preservation, revision checks, bounded paging, and publication gates. No token names or asset filenames changed.
 
 ## Related references
 

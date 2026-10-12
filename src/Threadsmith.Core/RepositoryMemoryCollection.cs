@@ -3,12 +3,13 @@ namespace Threadsmith.Core;
 using System.Text.Json;
 
 /// <summary>Transient prepared intelligence changes; only the shared store materializes and publishes them.</summary>
-public sealed class RepositoryMemoryCollection
+public sealed partial class RepositoryMemoryCollection
 {
     private readonly Lock _gate = new();
     private readonly HashSet<RepositoryMemoryId> _accepted = [];
     private readonly HashSet<string> _coveredPaths = new(StringComparer.Ordinal);
     private readonly Dictionary<string, RepositoryIntelligenceCoverage> _coverage = new(StringComparer.Ordinal);
+    private IReadOnlyList<RepositoryIntelligenceCoverage> _initialSurvey = [];
     private IReadOnlyList<RepositoryMemoryEntry> _entries;
     private long _generation;
 
@@ -60,13 +61,24 @@ public sealed class RepositoryMemoryCollection
             throw new InvalidOperationException("Onboarding checkpoint belongs to another repository.");
         }
 
+        if (checkpoint.InitialSurvey.Count > 0)
+        {
+            InitializeSurvey(checkpoint.InitialSurvey);
+        }
+
         foreach (var item in checkpoint.Coverage)
         {
             UpdateCoverage(item with
             {
-                Status = item.Status == "investigated" ? "investigating" : item.Status,
+                Status = item.Status is "investigated" or "outOfScope" ? "investigating" : item.Status,
                 Supports = item.Supports.Select(support => support with { IsUnknown = true }).ToArray(),
             });
+        }
+
+        foreach (var proposal in checkpoint.PendingReconciliations)
+        {
+            // Resume rechecks every candidate revision through the ordinary search; old acknowledgments confer no authority.
+            ConfirmReconciliation(proposal.Key, proposal.Text, [], [], new RepositoryMemoryWrite { Text = proposal.Text, Origin = RepositoryMemoryOrigin.Model, MemoryType = Enum.Parse<RepositoryMemoryType>(proposal.MemoryType, true), Kind = Enum.Parse<ManagedRepositoryMemoryKind>(proposal.Kind, true), Concepts = proposal.Concepts });
         }
 
         SetPrepared(checkpoint.Entries.Select(entry => entry with
@@ -91,41 +103,25 @@ public sealed class RepositoryMemoryCollection
         }
     }
 
-    /// <summary>Publication requires a nonempty map with no unfinished questions or missing follow-ups.</summary>
+    /// <summary>Publication requires required investigation with no unfinished required questions or missing follow-ups.</summary>
     public bool HasOpenCoverage
     {
         get
         {
             lock (_gate)
             {
-                return _coverage.Count == 0 || _coverage.Values.Any(item => item.Status is "uninvestigated" or "investigating"
+                return _initialSurvey.Count == 0 || _reconciliations.Count > 0 || !_coverage.Values.Any(item => item.Priority == "required") || _coverage.Values.Any(item => (item.Priority == "required" && item.Status is "uninvestigated" or "investigating")
                     || (item.Status == "investigated" && !string.IsNullOrWhiteSpace(item.Gaps))
+                    || (item.Status == "investigated" && item.MemoryIds.Any(id => !_accepted.Contains(id) || !_entries.Any(entry => entry.Id == id)))
                     || item.FollowUpKeys.Any(key => !_coverage.ContainsKey(key)));
             }
         }
     }
 
     /// <summary>Records or reopens an investigation question without consuming memory capacity.</summary>
-    public void UpdateCoverage(RepositoryIntelligenceCoverage item)
+    public void UpdateCoverage(RepositoryIntelligenceCoverage item, IReadOnlyList<string>? resolvedProposalKeys = null)
     {
-        ArgumentNullException.ThrowIfNull(item);
-        if (string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 80
-            || string.IsNullOrWhiteSpace(item.Area) || item.Area.Length > 160
-            || string.IsNullOrWhiteSpace(item.Question) || item.Question.Length > 600
-            || item.Conclusion.Length > 1200 || item.Gaps.Length > 600 || item.Limitations.Length > 600
-            || item.FollowUpKeys.Count > 8 || item.FollowUpKeys.Any(key => string.IsNullOrWhiteSpace(key) || key.Length > 80 || key == item.Key)
-            || item.Supports.Count > 8 || item.MemoryIds.Count > 8
-            || item.Status is not ("uninvestigated" or "investigating" or "investigated" or "blocked")
-            || (item.Status == "investigated" && (item.Supports.Count == 0 || string.IsNullOrWhiteSpace(item.Conclusion) || !string.IsNullOrWhiteSpace(item.Gaps)))
-            || (item.Status == "blocked" && string.IsNullOrWhiteSpace(item.Gaps)))
-        {
-            throw new ArgumentException("Coverage requires bounded fields, a valid status, evidence, conclusion and no unfinished gaps for investigated items, and a reason for blocked items.", nameof(item));
-        }
-
-        if (JsonSerializer.SerializeToUtf8Bytes(item).Length > 24 * 1024)
-        {
-            throw new ArgumentException("One coverage item must fit 24 KiB of serialized evidence and notes.", nameof(item));
-        }
+        ValidateCoverage(item);
 
         lock (_gate)
         {
@@ -134,7 +130,86 @@ public sealed class RepositoryMemoryCollection
                 throw new InvalidOperationException("Coverage allows at most 64 investigation questions; refine existing areas instead of adding file inventories.");
             }
 
+            var original = _initialSurvey.FirstOrDefault(area => area.Key == item.Key);
+            if (original is not null && (original.Area != item.Area || original.Question != item.Question || original.Priority != item.Priority))
+            {
+                throw new ArgumentException("Initial survey identities and priorities are preserved. Resolve the original question or mark it outOfScope with evidence; add follow-up questions separately.", nameof(item));
+            }
+
+            if (item.Status == "investigated" && item.MemoryIds.Any(id => !_accepted.Contains(id) || !_entries.Any(entry => entry.Id == id)))
+            {
+                throw new ArgumentException("Investigated coverage must link currently accepted prepared assertions, including after reconciliation or eviction.", nameof(item));
+            }
+
+            var resolved = resolvedProposalKeys ?? [];
+            if (resolved.Count > 8 || resolved.Any(key => !_reconciliations.ContainsKey(key))
+                || (resolved.Count > 0 && item.Status != "investigated"))
+            {
+                throw new ArgumentException("Resolve only listed pending proposal keys on investigated coverage, linking accepted assertions or giving noMemoryReason. Nothing was changed.", nameof(resolvedProposalKeys));
+            }
+
+            foreach (var key in resolved)
+            {
+                _reconciliations.Remove(key);
+            }
+
             _coverage[item.Key] = item with { Supports = item.Supports.ToArray(), MemoryIds = item.MemoryIds.ToArray(), FollowUpKeys = item.FollowUpKeys.ToArray() };
+        }
+    }
+
+    /// <summary>Immutable repository-derived areas against which final coverage is checked.</summary>
+    public IReadOnlyList<RepositoryIntelligenceCoverage> InitialSurvey
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _initialSurvey.ToArray();
+            }
+        }
+    }
+
+    /// <summary>Validates and records the entire initial map atomically without discarding previously discovered questions.</summary>
+    public void InitializeSurvey(IReadOnlyList<RepositoryIntelligenceCoverage> items)
+    {
+        ArgumentNullException.ThrowIfNull(items);
+        if (items.Count is < 1 or > 64 || items.Select(item => item.Key).Distinct(StringComparer.Ordinal).Count() != items.Count
+            || !items.Any(item => item.Priority == "required"))
+        {
+            throw new ArgumentException("initializeCoverage requires 1–64 uniquely keyed areas and at least one required question. Retry the complete survey; nothing was saved.", nameof(items));
+        }
+
+        foreach (var item in items)
+        {
+            ValidateCoverage(item);
+            if (item.Status != "uninvestigated" || item.MemoryIds.Count != 0 || item.Supports.Count != 0)
+            {
+                throw new ArgumentException("Initial survey areas must be uninvestigated with no assertion links or support receipts. Retry the complete survey; nothing was saved.", nameof(items));
+            }
+        }
+
+        lock (_gate)
+        {
+            if (_initialSurvey.Count > 0)
+            {
+                if (_initialSurvey.Count == items.Count && items.All(item => _initialSurvey.Any(prior => prior.Key == item.Key && prior.Area == item.Area && prior.Question == item.Question && prior.Priority == item.Priority)))
+                {
+                    return;
+                }
+
+                throw new InvalidOperationException("The initial survey is already saved. Use updateCoverage for investigation and additional areas; its original identities cannot be replaced.");
+            }
+
+            if (_coverage.Values.Any(prior => !items.Any(item => item.Key == prior.Key && item.Area == prior.Area && item.Question == prior.Question && item.Priority == prior.Priority)))
+            {
+                throw new ArgumentException("The complete survey must retain every previously discovered area's key, area, question, and priority. Nothing was saved.", nameof(items));
+            }
+
+            _initialSurvey = items.Select(item => item with { Supports = [], MemoryIds = [], FollowUpKeys = item.FollowUpKeys.ToArray() }).ToArray();
+            foreach (var item in _initialSurvey)
+            {
+                _coverage.TryAdd(item.Key, item);
+            }
         }
     }
 
@@ -195,6 +270,32 @@ public sealed class RepositoryMemoryCollection
             {
                 _accepted.Add(entry.Id);
             }
+        }
+    }
+
+    private static void ValidateCoverage(RepositoryIntelligenceCoverage item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        if (string.IsNullOrWhiteSpace(item.Key) || item.Key.Length > 80
+            || string.IsNullOrWhiteSpace(item.Area) || item.Area.Length > 160
+            || string.IsNullOrWhiteSpace(item.Question) || item.Question.Length > 600
+            || item.NoMemoryReason.Length > 600 || item.Conclusion.Length > 1200 || item.Gaps.Length > 600 || item.Limitations.Length > 600
+            || item.FollowUpKeys.Count > 8 || item.FollowUpKeys.Any(key => string.IsNullOrWhiteSpace(key) || key.Length > 80 || key == item.Key)
+            || item.Supports.Count > 8 || item.MemoryIds.Count > 8
+            || item.Priority is not ("required" or "optional")
+            || (item.Priority == "optional" && string.IsNullOrWhiteSpace(item.Limitations))
+            || item.Status is not ("uninvestigated" or "investigating" or "investigated" or "blocked" or "outOfScope")
+            || (item.Status == "investigated" && (item.Supports.Count == 0 || string.IsNullOrWhiteSpace(item.Conclusion) || !string.IsNullOrWhiteSpace(item.Gaps)))
+            || (item.Status == "investigated" && item.MemoryIds.Count == 0 && string.IsNullOrWhiteSpace(item.NoMemoryReason))
+            || (item.Status == "outOfScope" && (item.Supports.Count == 0 || string.IsNullOrWhiteSpace(item.Conclusion) || string.IsNullOrWhiteSpace(item.Limitations) || !string.IsNullOrWhiteSpace(item.Gaps)))
+            || (item.Status == "blocked" && string.IsNullOrWhiteSpace(item.Gaps)))
+        {
+            throw new ArgumentException("Coverage requires bounded fields, a valid status, evidence, conclusion and no unfinished gaps for investigated items, a reason for blocked items, an explicit scope reason for optional investigation, and accepted memoryIds or noMemoryReason for investigated items.", nameof(item));
+        }
+
+        if (JsonSerializer.SerializeToUtf8Bytes(item).Length > 24 * 1024)
+        {
+            throw new ArgumentException("One coverage item must fit 24 KiB of serialized evidence and notes.", nameof(item));
         }
     }
 }

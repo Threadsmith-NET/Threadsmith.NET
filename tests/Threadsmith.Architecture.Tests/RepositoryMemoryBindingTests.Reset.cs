@@ -105,6 +105,8 @@ public static partial class RepositoryMemoryBindingTests
         {
             Key = "fixture", Area = "Fixture", Question = "What guidance exists?", Status = "blocked", Gaps = "Fixture provides no source to inspect.",
         });
+        InitializeCoverageSurvey(onboard.Collection);
+        await onboard.ContinueCoverageAsync("Survey and blocked fixture review complete.", ct);
         await onboard.CompleteAsync(ct);
         Assert.True((await store.GetIntelligenceStateAsync(intelligence.Identity, ct)).Onboarded);
     }

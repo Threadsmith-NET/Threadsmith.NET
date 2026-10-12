@@ -37,7 +37,7 @@ public sealed record ActiveTurnCompactionPolicy
     /// <summary>Maximum groups supplied to one candidate operation.</summary>
     public int MaximumSourceGroups { get; init; } = 48;
 
-    /// <summary>Maximum candidate wire input; zero uses the selected model's available input capacity.</summary>
+    /// <summary>Normal candidate wire input limit; an oversized first group may use the selected model's available capacity. Zero uses that capacity for all batches.</summary>
     public int MaximumInputTokens { get; init; } = 65_536;
 
     /// <summary>Maximum aggregate call/result messages across one candidate prefix.</summary>
@@ -711,6 +711,30 @@ public enum ActiveTurnCompactionOutcome
 
     /// <summary>The prepared summary and continuation could not be admitted before provider I/O.</summary>
     AdmissionRejected,
+
+    /// <summary>The candidate input cannot fit the selected model before provider I/O.</summary>
+    CapacityExceeded,
+}
+
+/// <summary>Reports a host-measured candidate capacity failure without exposing repository content.</summary>
+internal sealed class ActiveTurnCompactionCapacityException : Exception
+{
+    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
+    public ActiveTurnCompactionCapacityException()
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
+    public ActiveTurnCompactionCapacityException(string message)
+        : base(message)
+    {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="ActiveTurnCompactionCapacityException"/> class.</summary>
+    public ActiveTurnCompactionCapacityException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
 }
 
 /// <summary>Closed outcome of one candidate-provider attempt at the host model-request boundary.</summary>
@@ -1066,7 +1090,10 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
         if (prepared.WireEstimate is { } preparedEstimate
             && preparedEstimate.TotalCapacityTokens > profile.ContextWindowTokens)
         {
-            throw new ModelProviderException("The prepared summary request exceeds its selected model capacity.");
+            throw new ActiveTurnCompactionCapacityException(
+                $"The prepared summary request requires an estimated {preparedEstimate.WireInputTokens} input tokens; "
+                + $"the selected model has {profile.ContextWindowTokens - preparedEstimate.OutputReserveTokens} available "
+                + $"with {preparedEstimate.OutputReserveTokens} output tokens reserved.");
         }
 
         return new ModelCandidateAttempt(_model, prepared, input.Envelope);
@@ -1111,7 +1138,21 @@ public sealed class ModelActiveTurnCompactionCandidateProvider : IActiveTurnComp
                 WireEstimate = estimate,
             });
             estimate = prepared.WireEstimate ?? estimate;
-            if (estimate.WireInputTokens <= maximumCandidateInputTokens)
+            if (groupCount == 1 && estimate.TotalCapacityTokens > profile.ContextWindowTokens)
+            {
+                throw new ActiveTurnCompactionCapacityException(
+                    $"Source group {request.EligiblePrefix[0].Sequence}, together with the previous summary, prompt, and serialization overhead, "
+                    + $"requires an estimated {estimate.WireInputTokens} input tokens; the selected model has "
+                    + $"{profile.ContextWindowTokens - estimate.OutputReserveTokens} available with {estimate.OutputReserveTokens} output tokens reserved.");
+            }
+
+            if (groupCount == 1 && estimate.WireInputTokens > maximumCandidateInputTokens)
+            {
+                return input;
+            }
+
+            if (estimate.WireInputTokens <= maximumCandidateInputTokens
+                && estimate.TotalCapacityTokens <= profile.ContextWindowTokens)
             {
                 selectedInput = input;
             }
@@ -1631,6 +1672,16 @@ public sealed class ActiveTurnCompactor : IActiveTurnCompactor
             try
             {
                 candidateAttempt = _provider.PrepareCandidate(request);
+            }
+            catch (ActiveTurnCompactionCapacityException exception)
+            {
+                activity?.SetTag("threadsmith.active_turn.outcome", "capacity_exceeded");
+                activity?.SetStatus(ActivityStatusCode.Error, "capacity_exceeded");
+                return CreateFailure(
+                    ActiveTurnCompactionOutcome.CapacityExceeded,
+                    exception.Message + " No provider request was sent; the original continuation remains active.",
+                    calls,
+                    startedAt);
             }
             catch (Exception exception) when (
                 exception is TransientModelException

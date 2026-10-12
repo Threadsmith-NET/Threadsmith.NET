@@ -103,14 +103,14 @@ public static partial class RepositoryMemoryBindingTests
         if (restriction == "available")
         {
             Assert.True(await application.HandleAsync(new WaitForRunCommand(run), ct));
-            Assert.Equal(3, model.Requests);
+            Assert.Equal(4, model.Requests);
             Assert.Equal(1, enabledWrites);
         }
         else
         {
             var error = await Assert.ThrowsAsync<InvalidOperationException>(() => application.HandleAsync(new WaitForRunCommand(run), ct));
             Assert.Contains("requires the enabled built-in memories and read_file tools", error.Message, StringComparison.Ordinal);
-            Assert.Equal(restriction == "revoked" ? 1 : 0, model.Requests);
+            Assert.Equal(restriction == "revoked" ? 2 : 0, model.Requests);
             Assert.Equal(0, enabledWrites);
             var after = await intelligence.Store.GetSnapshotAsync(intelligence.Identity, [], ct);
             Assert.Equal(before.Entries.Select(item => (item.Id, item.Text, item.Revision)), after.Entries.Select(item => (item.Id, item.Text, item.Revision)));
@@ -294,14 +294,20 @@ public static partial class RepositoryMemoryBindingTests
         {
             Requests++;
             CapturedRequests.Add(request);
+            if (request.ToolContinuationRound == 0)
+            {
+                _coverageRound = 0;
+            }
+
             _callback();
             var turn = new ScriptedTurn { Text = _text };
             if (_finishCoverage && request.Messages.Any(message => message.SectionId == "repository-intelligence-coverage"))
             {
                 turn = _coverageRound++ switch
                 {
-                    0 => new ScriptedTurn { ToolName = "read_file", ArgumentsJson = "{\"path\":\"feature.txt\"}" },
-                    1 => new ScriptedTurn { ToolName = "memories", ArgumentsJson = "{\"action\":\"updateCoverage\",\"coverage\":{\"key\":\"feature\",\"area\":\"Fixture feature\",\"question\":\"What is implemented?\",\"status\":\"investigated\",\"conclusion\":\"Fixture content inspected; no reusable recipe warranted.\",\"supportingPaths\":[\"feature.txt\"]}}" },
+                    0 => new ScriptedTurn { ToolName = "memories", ArgumentsJson = """{"action":"initializeCoverage","survey":[{"key":"feature","area":"Fixture feature","question":"What is implemented?","status":"uninvestigated"}]}""" },
+                    1 => new ScriptedTurn { ToolName = "read_file", ArgumentsJson = "{\"path\":\"feature.txt\"}" },
+                    2 => new ScriptedTurn { ToolName = "memories", ArgumentsJson = "{\"action\":\"updateCoverage\",\"coverage\":{\"key\":\"feature\",\"area\":\"Fixture feature\",\"question\":\"What is implemented?\",\"status\":\"investigated\",\"conclusion\":\"Fixture content inspected; no reusable recipe warranted.\",\"noMemoryReason\":\"Fixture content contains no reusable recipe.\",\"supportingPaths\":[\"feature.txt\"]}}" },
                     _ => turn,
                 };
             }

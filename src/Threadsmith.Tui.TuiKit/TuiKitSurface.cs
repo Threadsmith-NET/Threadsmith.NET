@@ -1209,7 +1209,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _prompt.Draw(view, 0, 0, _owner._prompt, _owner.ResolvePaneStyle(PresentationTextRole.ComposerPrompt, PresentationTextRole.ComposerBackgroundPaneRole));
             if (!_owner.CanEdit)
             {
-                _prompt.Draw(surface, 2, 0, " Read-only — return to MAIN ", background);
+                _prompt.Draw(surface, 2, 0, " Read-Only ", background);
             }
         }
 

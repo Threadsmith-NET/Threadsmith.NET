@@ -184,6 +184,9 @@ public static partial class RepositoryMemoryBindingTests
             TrustLevel = RepositoryTrustLevel.TrustedRead,
         });
         var tool = new GitShowTool(new GitQueryService(), TestPromptLoader.Instance);
+        var investigator = context with { Invocation = context.Invocation with { RequestedBy = "model", IsChildAgent = true } };
+        await tool.ExecuteAsync(new GitShowInput { Revision = revision, Paths = ["guide.txt"] }, investigator, ct);
+        Assert.Throws<InvalidOperationException>(() => run.ResolveSupports(["guide.txt"]));
         var result = await tool.ExecuteAsync(new GitShowInput { Revision = revision, Paths = ["guide.txt"] }, context, ct);
         Assert.Equal("historical pattern", result.Value.Content);
         var support = Assert.Single(run.ResolveSupports(["guide.txt"]));
@@ -205,6 +208,9 @@ public static partial class RepositoryMemoryBindingTests
             Context = context.Invocation with { AllowedExecutables = ["git"] },
         };
         Assert.False((await pipeline.InvokeAsync(invocation with { Context = invocation.Context with { IntelligenceRun = null } }, ct)).Succeeded);
+        var childInvocation = invocation with { Context = invocation.Context with { RequestedBy = "model", IsChildAgent = true } };
+        Assert.True((await pipeline.InvokeAsync(childInvocation, ct)).Succeeded);
+        Assert.Equal(current, Assert.Single(run.ResolveSupports(["guide.txt"])));
         var preparation = pipeline.PreflightBatch([new ToolBatchRequest(0, "historical-source", invocation)]);
         Assert.True(preparation.Succeeded);
         var completed = await pipeline.InvokePreparedBatchAsync(preparation.Preparation!, ct);

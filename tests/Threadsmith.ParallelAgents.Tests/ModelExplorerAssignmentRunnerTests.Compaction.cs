@@ -18,8 +18,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, true, false)]
     [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, true)]
     [InlineData(AgentRole.Implementer, WorkloadClass.CodeEdit, 12_000, false, true)]
+    [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, false, true)]
     public async Task RunAsync_CompactionAndEvidenceRead_PreservesTaskAndAccountsForSummary(
-        AgentRole role, WorkloadClass workload, int contentCharacters, bool inheritEvidence, bool useCompactionProfile)
+        AgentRole role, WorkloadClass workload, int contentCharacters, bool inheritEvidence, bool useCompactionProfile, bool onboarding = false)
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
@@ -62,13 +63,19 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         }
 
         var usage = new SessionUsageProjection();
+        var parent = CreateParentContext(plan, [tool.Definition.Id]);
+        if (onboarding)
+        {
+            parent = parent with { Invocation = parent.Invocation with { IntelligenceRun = new Plan91DelegationToolTests.InvestigatorIntelligenceRun() } };
+        }
+
         var runner = CreateRunner(
             provider,
             CreatePipeline(registry, events, sanitizer),
             evidence,
             sanitizer,
             profile,
-            CreateParentContext(plan, [tool.Definition.Id]),
+            parent,
             registry.GetRegistrations(plan.Provenance.SessionId, plan.Provenance.ParentRunId),
             usage,
             CreateOptions() with
@@ -88,9 +95,17 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var outcome = await runner.RunAsync(plan, assignment);
 
         Assert.Equal(AgentRunStatus.Completed, outcome.Status);
+        if (onboarding)
+        {
+            Assert.True(tool.LastInvocationContext?.IsChildAgent);
+            Assert.NotNull(tool.LastInvocationContext?.IntelligenceRun);
+            Assert.Null(tool.LastInvocationContext?.IntelligenceSourceObserver);
+        }
+
         Assert.Equal("An unrestricted final response.", outcome.Response);
         Assert.Equal(1, summaryProvider.Summaries);
         Assert.Equal(4, outcome.Usage.ToolCalls);
+        Assert.All(evidence.Snapshot(plan.Provenance.SessionId), item => Assert.True(item.Kind != EvidenceKind.Failure, item.Content));
         Assert.Equal(inheritEvidence ? 4 : 3, evidence.Snapshot(plan.Provenance.SessionId).Count);
         Assert.Equal(50, usage.GetSnapshot(plan.Provenance.SessionId).InputTokens);
         var requests = provider.Requests.Where(request => request.Messages.Any(message => message.SectionId == "child-assignment")).ToArray();

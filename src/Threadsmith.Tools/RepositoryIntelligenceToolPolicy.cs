@@ -20,7 +20,22 @@ internal static class RepositoryIntelligenceToolPolicy
 
         if (definition.Id == "memories")
         {
-            return true;
+            return !context.IsChildAgent;
+        }
+
+        if (definition.Id == "read_agent_evidence")
+        {
+            return context.IsChildAgent
+                && definition.SideEffect == ToolSideEffect.ReadOnly;
+        }
+
+        if (definition.Id == "delegate_agents")
+        {
+            return context.IntelligenceRun is { Operation: RepositoryIntelligenceOperation.Onboard, IsCoverageReviewActive: true } run
+                && !run.CancellationToken.IsCancellationRequested
+                && !context.IsChildAgent
+                && context.RequestedBy == "model"
+                && context.WorkspaceId is not null;
         }
 
         return definition.SideEffect == ToolSideEffect.ReadOnly

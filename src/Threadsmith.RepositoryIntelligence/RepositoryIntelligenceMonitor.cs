@@ -149,6 +149,78 @@ public sealed class RepositoryIntelligenceMonitor : IRepositoryIntelligenceStatu
         }
     }
 
+    /// <summary>Reuses saved evidence only when the observed repository bytes still match.</summary>
+    internal async Task<IReadOnlyList<RepositoryMemorySupport>> VerifySupportsAsync(
+        string root, IReadOnlyList<RepositoryMemorySupport> supports, CancellationToken cancellationToken)
+    {
+        var identity = RepositoryIdentity.Create(root);
+        var verified = new List<RepositoryMemorySupport>();
+        foreach (var group in supports.Where(support => support.Revision is null).GroupBy(support => support.Path))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var fullPath = Path.GetFullPath(group.Key, root);
+            if (!File.Exists(fullPath) || !IsObservableSupportPath(root, fullPath))
+            {
+                continue;
+            }
+
+            await EnsureSupportAsync(identity, group.Key, cancellationToken);
+            var sequence = await _store.GetIntelligenceCheckpointAsync(identity, cancellationToken);
+            var hash = await ReadSupportHashAsync(root, fullPath, cancellationToken);
+            foreach (var support in group.DistinctBy(support => support.ContentHash).Where(support => support.ContentHash == hash))
+            {
+                verified.Add(support with { IsUnknown = false, IsDirty = false, ObservedAt = DateTimeOffset.UtcNow, ObservedChangeSequence = sequence });
+            }
+        }
+
+        return verified;
+    }
+
+    private static bool IsObservableSupportPath(string root, string fullPath)
+    {
+        var relative = Path.GetRelativePath(root, fullPath);
+        if (Path.IsPathRooted(relative) || relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || RepositoryObservationPaths.IsHostStatePath(relative))
+        {
+            return false;
+        }
+
+        try
+        {
+            for (var current = fullPath; current != root && current is not null; current = Path.GetDirectoryName(current))
+            {
+                if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+        catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<string?> ReadSupportHashAsync(string root, string fullPath, CancellationToken cancellationToken)
+    {
+        if (!IsObservableSupportPath(root, fullPath))
+        {
+            return File.Exists(fullPath) ? null : new string('0', 64);
+        }
+
+        try
+        {
+            await using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            return Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, cancellationToken));
+        }
+        catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return new string('0', 64);
+        }
+    }
+
     private async Task BindCoreAsync(
         SessionId sessionId, string repositoryPath, RepositoryIntelligenceOptions options, bool collecting, bool recovering, CancellationToken cancellationToken)
     {
@@ -457,20 +529,10 @@ public sealed class RepositoryIntelligenceMonitor : IRepositoryIntelligenceStatu
                         continue;
                     }
 
-                    try
+                    var hash = await ReadSupportHashAsync(root, fullPath, cancellationToken);
+                    if (hash is not null)
                     {
-                        if ((File.GetAttributes(fullPath) & FileAttributes.ReparsePoint) != 0)
-                        {
-                            continue;
-                        }
-
-                        await using var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, FileOptions.Asynchronous | FileOptions.SequentialScan);
-                        var hash = Convert.ToHexStringLower(await SHA256.HashDataAsync(stream, cancellationToken));
                         observations.Add(support with { ContentHash = hash });
-                    }
-                    catch (IOException exception) when (exception is FileNotFoundException or DirectoryNotFoundException)
-                    {
-                        observations.Add(support with { ContentHash = new string('0', 64) });
                     }
                 }
 

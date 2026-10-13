@@ -587,6 +587,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextChildAgentStructuredFindingsTask prompt asset.</summary>
     public const string ContextChildAgentStructuredFindingsTask = "Context-ChildAgent-StructuredFindingsTask.md";
 
+    /// <summary>Gets the final onboarding investigator task asset.</summary>
+    public const string ContextChildAgentIntelligenceInvestigation = "Context-ChildAgent-IntelligenceInvestigation.md";
+
     /// <summary>Gets the stable filename for the ContextChildAgentEvidenceProgressExpanded prompt asset.</summary>
     public const string ContextChildAgentEvidenceProgressExpanded = "Context-ChildAgent-EvidenceProgressExpanded.md";
 
@@ -1150,6 +1153,7 @@ public static class PromptFileNames
         ContextChildAgentInitialEvidenceNone,
         ContextChildAgentTask,
         ContextChildAgentStructuredFindingsTask,
+        ContextChildAgentIntelligenceInvestigation,
         ContextChildAgentEvidenceProgressExpanded,
         ContextChildAgentEvidenceProgressPayloadOnly,
         ContextChildAgentEvidenceProgressNoProgress,
@@ -1369,6 +1373,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextChildAgentInitialEvidenceNone,
             PromptFileNames.ContextChildAgentTask,
             PromptFileNames.ContextChildAgentStructuredFindingsTask,
+            PromptFileNames.ContextChildAgentIntelligenceInvestigation,
             PromptFileNames.ContextChildAgentEvidenceProgressExpanded,
             PromptFileNames.ContextChildAgentEvidenceProgressPayloadOnly,
             PromptFileNames.ContextChildAgentEvidenceProgressNoProgress,

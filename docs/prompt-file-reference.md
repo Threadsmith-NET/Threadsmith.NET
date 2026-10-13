@@ -40,13 +40,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 26 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 27 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **289** | Complete deployed catalog. |
+| **Total** | **290** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -94,7 +94,7 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
 | `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
-| `System-RepositoryIntelligenceGuidance.md` | Enabled-only advisory architecture guidance, current-source authority, reuse, history investigation, clarification of ambiguous task conflicts, and respect for explicit user-directed departures. | `None` |
+| `System-RepositoryIntelligenceGuidance.md` | Enabled-only advisory implementation hints with supporting code/documentation file lists to inspect for similar implementations and reuse; current-source verification, history investigation, clarification of ambiguous task conflicts, and respect for explicit user-directed departures. | `None` |
 | `System-StandingPreferenceGuidance.md` | Caption for always-included standing-preference memory blocks. | `None` |
 
 #### `RequiredOutput` family
@@ -129,9 +129,9 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ActiveRun-Steering.md` | Context framing for `ActiveRun-Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-RepositoryMemory-Refresh.md` | Current memory snapshot appended after completed tool results while preserving provider replay history. | [`Text`](#placeholder-text) |
 | `Context-RepositoryArcheology.md` | Read-only investigation using repository intelligence, current source, and relevant Git history. | `None` |
-| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare evidence-supported memories and covered changes; survey and prioritize a deduplicated checklist, use bounded exploration and caller/reference navigation with primary source receipts, stop at supported recipes, and audit checklist conclusions against accepted memory text before publication. | `None` |
+| `Context-RepositoryIntelligenceCollection.md` | Onboarding and refresh investigation of practical extension paths, reusable facilities, scoped conventions, and design evolution; reconcile guidance discovered across repository documentation with source and tests, then prepare 1–2 sentence implementation hints with short verified supporting file lists and concepts using the ordinary memory guidance, plus covered changes; survey and prioritize a deduplicated checklist, use bounded exploration and caller/reference navigation with primary source receipts, stop at supported recipes, and audit checklist conclusions against accepted memory text before publication. | `None` |
 | `Context-RepositoryIntelligenceHistory.md` | Depth-scoped chronological discovery signals, resumable checkpoints, checklist reconciliation between batches, and focused current-source verification; Git metadata remains untrusted evidence. | [`HistoryJson`](#placeholder-historyjson) |
-| `Context-RepositoryIntelligenceCoverage.md` | Atomic initial-survey recovery and final coverage review for missing major areas, unsupported generalizations, and material contradictions; distinguish required investigation from optional research, audit useful conclusions against actual accepted memory text, repair missing recipes and bundled advice through normal reconciliation, and resume checkpointed preparation. | [`CoverageJson`](#placeholder-coveragejson) |
+| `Context-RepositoryIntelligenceCoverage.md` | Atomic initial-survey recovery and final coverage review with up to two brief-only read-only investigators and parent evidence verification for missing major areas, unsupported generalizations, and material contradictions; distinguish required investigation from optional research, audit useful conclusions against actual accepted memory text, repair missing recipes and bundled advice through normal reconciliation, and resume checkpointed preparation. | [`CoverageJson`](#placeholder-coveragejson) |
 | `Context-ExecutionOutcome.md` | Authoritative disk-effect outcome archived as historical data at ordinary completion or failure, without automatic validation; bounded changed paths, any recorded validation evidence, artifact reference, and residual risks. | [`OutcomeJson`](#placeholder-outcomejson) |
 
 #### `ActiveTurnCompaction` family
@@ -161,6 +161,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ChildAgent-RepositoryInstructionsNone.md` | Delegated-child context framing for `RepositoryInstructionsNone`. | `None` |
 | `Context-ChildAgent-Steering.md` | Delegated-child context framing for `Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-ChildAgent-StructuredFindingsTask.md` | Ordinary delegated-child task guidance; legacy filename retained. | `None` |
+| `Context-ChildAgent-IntelligenceInvestigation.md` | Focused read-only final-onboarding investigation; concise recipes and source locations for parent verification, with no memory or publication authority. | `None` |
 | `Context-ChildAgent-Task.md` | Delegated-child context framing for `Task`. | [`BaselineIdentity`](#placeholder-baselineidentity), [`Objective`](#placeholder-objective), [`SuppliedContext`](#placeholder-suppliedcontext), [`Tasks`](#placeholder-tasks) |
 
 #### `CurrentTurn` family
@@ -746,7 +747,7 @@ A placeholder's exact value is computed by the host at the call site. The descri
 | <a id="placeholder-assignmentid"></a>`AssignmentId` | Stable delegated-child assignment identifier used to correlate task, status, finding, omission, child-detail, and review-detail blocks. |
 | <a id="placeholder-attemptnumber"></a>`AttemptNumber` | Current host-controlled correction or retry attempt number. |
 | <a id="placeholder-availabletools"></a>`AvailableTools` | Rendered inventory of tools available to the current request in the legacy request envelope. |
-| <a id="placeholder-baselineidentity"></a>`BaselineIdentity` | Threadsmith workspace fingerprint identifying the captured baseline against which a proposed change is checked. This is not a Git revision or reference. |
+| <a id="placeholder-baselineidentity"></a>`BaselineIdentity` | Threadsmith workspace fingerprint identifying the captured baseline against which a proposed change is checked. This is not a Git revision or reference. Empty for read-only live-repository access without a captured mutation baseline. |
 | <a id="placeholder-boundarykind"></a>`BoundaryKind` | Classification of a call-flow boundary, such as unresolved or compiler-known dispatch. |
 | <a id="placeholder-callee"></a>`Callee` | Called symbol at the destination of a call relationship. |
 | <a id="placeholder-caller"></a>`Caller` | Calling symbol at the source of a call relationship. |

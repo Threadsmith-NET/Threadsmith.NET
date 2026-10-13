@@ -884,6 +884,27 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         Assert.DoesNotContain(context.Evidence, item => item.EvidenceId == sensitiveId);
     }
 
+    /// <summary>The frozen policy controls preload even when a caller substitutes a different policy.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ContextAssembler_RespectsFrozenParentEvidenceSelection(bool includeParentEvidence)
+    {
+        await using var events = new DomainEventStream();
+        var evidence = new EvidenceStore(events, new SecretOutputSanitizer());
+        var assignment = CreateAssignment(CreateProfile().Id, []);
+        assignment = assignment with { Policy = assignment.Policy with { IncludeParentEvidence = includeParentEvidence } };
+        var plan = CreatePlan(assignment);
+        await evidence.AddAsync(CreateParentEvidence(plan, EvidenceId.New(), "Parent accumulated evidence", EvidenceSensitivity.None));
+
+        var context = new AgentContextAssembler(evidence).Assemble(
+            plan,
+            assignment with { Policy = assignment.Policy with { IncludeParentEvidence = !includeParentEvidence } });
+
+        Assert.Equal(includeParentEvidence ? 1 : 0, context.Evidence.Count);
+        Assert.Equal(assignment.InitialContext, context.InitialContext);
+    }
+
     /// <summary>Invalid or unavailable tool requests remain rejected even though answer text has no schema.</summary>
     [Theory]
     [InlineData("inspect_metadata", "{")]

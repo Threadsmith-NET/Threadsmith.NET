@@ -56,7 +56,15 @@ public static class DelegationPlanValidator
         }
 
         ValidateText(plan.Provenance.RepositoryIdentity, nameof(plan.Provenance.RepositoryIdentity), maximumText);
-        ValidateText(plan.Provenance.BaselineIdentity, nameof(plan.Provenance.BaselineIdentity), maximumText);
+        if (plan.Provenance.BaselineIdentity is not null)
+        {
+            ValidateText(plan.Provenance.BaselineIdentity, nameof(plan.Provenance.BaselineIdentity), maximumText);
+        }
+        else if (plan.Assignments.Any(assignment => assignment.Mode is not AgentRunMode.ReadOnlyBaseline and not AgentRunMode.ReadOnlyReview))
+        {
+            throw new InvalidDataException("Delegation with write access requires a captured mutation baseline.");
+        }
+
         var approvedPlanIdentity = plan.Provenance.ApprovedPlanIdentity;
         var hasApprovedPlanIdentity = approvedPlanIdentity is not null;
         var hasApprovedPlanRevision = plan.Provenance.ApprovedPlanRevision.HasValue;

@@ -51,6 +51,11 @@ public sealed partial class SessionApplication
             await SupplyIntelligenceHistoryAsync(runId, registration, phase, invocationContext, loopState, 0, cancellationToken);
         }
 
+        if (registration.IntelligenceRun?.CanCompleteWithoutModel == true)
+        {
+            return;
+        }
+
         if (registration.IntelligenceRun is { } intelligence)
         {
             registration.CurrentTurnHostContext = [.. registration.CurrentTurnHostContext, intelligence.Instructions];
@@ -93,6 +98,7 @@ public sealed partial class SessionApplication
                 modelRound,
                 boundarySteering,
                 cancellationToken);
+            CheckRunWallClockBudget(registration);
             var round = await PrepareConversationRoundAsync(
                 runId,
                 registration,
@@ -773,6 +779,7 @@ public sealed partial class SessionApplication
                     cancellationToken);
             }
 
+            CheckRunWallClockBudget(round.Registration);
             var requestStopwatch = Stopwatch.StartNew();
             try
             {
@@ -829,7 +836,11 @@ public sealed partial class SessionApplication
                 round.Registration.ModelRequestWallClockAccrued += requestElapsed;
             }
 
-            if (modelWallClockBudget?.IsExhausted == true)
+            if (modelWallClockBudget?.IsExhausted == true
+                && (modelWallClockBudget.ExhaustedDimensions != BudgetExhaustionDimension.WallClock
+                    || streamState.PendingToolCalls.Count > 0
+                    || streamState.CorrectiveTurnRequested
+                    || !streamState.HasAcceptedOutput))
             {
                 throw new BudgetExceededException(
                     modelWallClockBudget.Reason ?? "Execution budget exhausted.");
@@ -2834,15 +2845,17 @@ public sealed partial class SessionApplication
             _continuationAdmissionProvider = continuationAdmissionProvider;
         }
 
-        public Task BeforeProviderCallAsync(
+        public async Task BeforeProviderCallAsync(
             ActiveTurnCompactionRequest request,
             int attempt,
             Guid invocationId,
             CancellationToken cancellationToken = default)
         {
-            return _owner.InvokeBeforeModelRequestHookAsync(
+            CheckRunWallClockBudget(_registration);
+            await _owner.InvokeBeforeModelRequestHookAsync(
                 CreateBoundary(request, attempt, invocationId),
                 cancellationToken);
+            CheckRunWallClockBudget(_registration);
         }
 
         public Task<bool> TryBeforeProviderCallAsync(

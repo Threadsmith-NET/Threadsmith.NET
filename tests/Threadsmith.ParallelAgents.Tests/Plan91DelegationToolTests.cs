@@ -14,7 +14,7 @@ using Threadsmith.Tools.Jira;
 using Xunit;
 
 /// <summary>Verifies Plan 91 model-facing contracts and frozen child policy construction.</summary>
-public sealed class Plan91DelegationToolTests
+public sealed partial class Plan91DelegationToolTests
 {
     /// <summary>A read-only child executes Jira under its narrowed network and tool policy.</summary>
     [Fact]

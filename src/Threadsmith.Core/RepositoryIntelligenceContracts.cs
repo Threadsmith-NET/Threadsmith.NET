@@ -67,6 +67,9 @@ public interface IRepositoryIntelligenceRun : IAsyncDisposable
     /// <summary>Final coverage preparation is checkpointed between ordinary model rounds.</summary>
     bool IsCoverageReviewActive => false;
 
+    /// <summary>A completed resumed collection has current host-verified evidence and needs only normal publication.</summary>
+    bool CanCompleteWithoutModel => false;
+
     /// <summary>Starts or continues the final coverage pass; null permits normal completion.</summary>
     Task<string?> ContinueCoverageAsync(string workingContext, CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
 
@@ -205,7 +208,11 @@ public sealed record RepositoryIntelligenceOptions
     public int MaximumStoredMemories { get; init; } = 20;
 
     /// <summary>Independent recall policy using the shared search engine.</summary>
-    public RepositoryMemorySearchOptions Recall { get; init; } = new();
+    public RepositoryMemorySearchOptions Recall { get; init; } = new()
+    {
+        RerankerEnabled = true,
+        ConceptRecallEnabled = true,
+    };
 
     /// <summary>Whether collection requires shared reconciliation before adding guidance.</summary>
     public bool ReconciliationEnabled { get; init; } = true;

@@ -287,6 +287,15 @@ public sealed record ToolInvocationContext
     [JsonIgnore]
     public IRepositoryIntelligenceRun? IntelligenceRun { get; init; }
 
+    /// <summary>Host-owned child scope, retained when the requester changes to the child model.</summary>
+    [JsonIgnore]
+    public bool IsChildAgent { get; init; }
+
+    /// <summary>Primary-reader receipts belong to the collecting parent, never its investigators.</summary>
+    [JsonIgnore]
+    public IRepositoryIntelligenceRun? IntelligenceSourceObserver =>
+        IsChildAgent ? null : IntelligenceRun;
+
     /// <summary>Request-local evidence references authorized for active-turn recovery.</summary>
     [JsonIgnore]
     public IReadOnlyList<ActiveTurnEvidenceReference> ActiveTurnEvidenceReferences { get; init; } = [];

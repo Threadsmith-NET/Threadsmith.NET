@@ -340,6 +340,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         private readonly long _commitGeneration;
         private readonly ConcurrentDictionary<string, RepositoryMemorySupport> _sources = new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
         private RepositoryIntelligenceCheckpoint? _resume;
+        private IReadOnlyList<RepositoryMemorySupport> _verifiedResumeSupports = [];
+        private bool _resumed;
         private string? _historyRevision;
         private int _lastHistoryPage;
         private bool _historyAccepted;
@@ -400,7 +402,8 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
                         throw new InvalidOperationException("Saved final coverage does not match the history boundary.");
                     }
 
-                    collection.Restore(resume);
+                    collection.Restore(resume, _verifiedResumeSupports);
+                    _resumed = true;
                     IsCoverageReviewActive = resume.CoverageReviewStarted;
                     foreach (var support in collection.Snapshot().SelectMany(entry => entry.Supports))
                     {
@@ -448,6 +451,13 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
         public async Task<string> AcceptHistoryPageAsync(int page, GitLogResult result, string modelContent, CancellationToken cancellationToken = default)
         {
+            if (_resume is { } resume && result.HistoryRevision == resume.HistoryRevision && result.CollectionPage == page)
+            {
+                await _owner._events.PublishAsync(new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.onboarding.progress", "Checking saved onboarding evidence for changes."), cancellationToken);
+                _verifiedResumeSupports = await _owner._monitor.VerifySupportsAsync(
+                    _repositoryPath, resume.Entries.SelectMany(entry => entry.Supports).Concat(resume.Coverage.SelectMany(item => item.Supports)).ToArray(), cancellationToken);
+            }
+
             var instructions = AcceptHistoryPage(page, result, modelContent);
             if (_historyNotice is { } notice)
             {
@@ -457,6 +467,10 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
             return instructions;
         }
+
+        public bool CanCompleteWithoutModel => _resumed && PendingHistoryPage is null && IsCoverageReviewActive
+            && Collection is { HasOpenCoverage: false } collection
+            && collection.Snapshot(forPublication: true).All(entry => entry.Supports.Count > 0 && entry.Supports.All(support => !support.IsUnknown && !support.IsDirty));
 
         public async Task SaveCheckpointAsync(string workingContext, CancellationToken cancellationToken = default)
         {

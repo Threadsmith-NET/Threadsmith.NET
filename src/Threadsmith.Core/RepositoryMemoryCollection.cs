@@ -52,8 +52,8 @@ public sealed partial class RepositoryMemoryCollection
         }
     }
 
-    /// <summary>Restores previously accepted preparation; current source coverage must be established again.</summary>
-    public void Restore(RepositoryIntelligenceCheckpoint checkpoint)
+    /// <summary>Restores accepted preparation, retaining completed coverage only for host-verified source receipts.</summary>
+    public void Restore(RepositoryIntelligenceCheckpoint checkpoint, IReadOnlyList<RepositoryMemorySupport>? verifiedSupports = null)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         if (checkpoint.RepositoryIdentity != Baseline.RepositoryIdentity)
@@ -66,12 +66,29 @@ public sealed partial class RepositoryMemoryCollection
             InitializeSurvey(checkpoint.InitialSurvey);
         }
 
+        var verified = (verifiedSupports ?? []).ToDictionary(support => (support.Path, support.ContentHash));
+        RepositoryMemorySupport RestoreSupport(RepositoryMemorySupport support) => support.Revision is null
+            && verified.TryGetValue((support.Path, support.ContentHash), out var current)
+            ? current : support with { IsUnknown = true };
+        SetPrepared(checkpoint.Entries.Select(entry => entry with
+        {
+            Supports = entry.Supports.Select(RestoreSupport).ToArray(),
+        }).ToArray());
+        lock (_gate)
+        {
+            _accepted.UnionWith(checkpoint.AcceptedIds.Where(id => _entries.Any(entry => entry.Id == id)));
+        }
+
         foreach (var item in checkpoint.Coverage)
         {
+            var supports = item.Supports.Select(RestoreSupport).ToArray();
+            var changed = supports.Any(support => support.IsUnknown || support.IsDirty)
+                || item.MemoryIds.Any(id => !_entries.Any(entry => entry.Id == id)
+                    || _entries.First(entry => entry.Id == id).Supports.Any(support => support.IsUnknown || support.IsDirty));
             UpdateCoverage(item with
             {
-                Status = item.Status is "investigated" or "outOfScope" ? "investigating" : item.Status,
-                Supports = item.Supports.Select(support => support with { IsUnknown = true }).ToArray(),
+                Status = changed && item.Status is "investigated" or "outOfScope" ? "investigating" : item.Status,
+                Supports = supports,
             });
         }
 
@@ -79,15 +96,6 @@ public sealed partial class RepositoryMemoryCollection
         {
             // Resume rechecks every candidate revision through the ordinary search; old acknowledgments confer no authority.
             ConfirmReconciliation(proposal.Key, proposal.Text, [], [], new RepositoryMemoryWrite { Text = proposal.Text, Origin = RepositoryMemoryOrigin.Model, MemoryType = Enum.Parse<RepositoryMemoryType>(proposal.MemoryType, true), Kind = Enum.Parse<ManagedRepositoryMemoryKind>(proposal.Kind, true), Concepts = proposal.Concepts });
-        }
-
-        SetPrepared(checkpoint.Entries.Select(entry => entry with
-        {
-            Supports = entry.Supports.Select(support => support with { IsUnknown = true }).ToArray(),
-        }).ToArray());
-        lock (_gate)
-        {
-            _accepted.UnionWith(checkpoint.AcceptedIds.Where(id => _entries.Any(entry => entry.Id == id)));
         }
     }
 

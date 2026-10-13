@@ -109,6 +109,30 @@ public static class RepoConfigTests
         Assert.False(config.GetSection("context:repositoryMemory").Exists());
     }
 
+    /// <summary>Intelligence recall enables reranking by default while honoring explicit layered overrides.</summary>
+    [Theory]
+    [InlineData(null, null, true)]
+    [InlineData("false", null, false)]
+    [InlineData("false", "true", true)]
+    [InlineData("true", "false", false)]
+    public static void IntelligenceRecallRerankingBinds(string? userValue, string? repositoryValue, bool expected)
+    {
+        const string key = "tools:config:memories:Intelligence:Recall:RerankerEnabled";
+        var user = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        var repository = new ConfigurationBuilder().AddInMemoryCollection().Build();
+        user[key] = userValue;
+        repository[key] = repositoryValue;
+        const string conceptsKey = "tools:config:memories:Intelligence:Recall:Concepts:Enabled";
+        user[conceptsKey] = userValue;
+        repository[conceptsKey] = repositoryValue;
+        var configuration = new RepositoryMemoryConfiguration(repository, user, Path.GetTempPath());
+
+        Assert.Equal(expected, configuration.CaptureCurrent().Intelligence.Recall.RerankerEnabled);
+        Assert.True(new RepositoryIntelligenceOptions().Recall.RerankerEnabled);
+        Assert.Equal(expected, configuration.CaptureCurrent().Intelligence.Recall.ConceptRecallEnabled);
+        Assert.True(new RepositoryIntelligenceOptions().Recall.ConceptRecallEnabled);
+    }
+
     /// <summary>Every strategy §21.2 key must be present in the loaded config.</summary>
     [Theory]
     [MemberData(nameof(RequiredKeyData))]

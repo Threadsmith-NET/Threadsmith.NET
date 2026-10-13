@@ -324,7 +324,7 @@ public sealed class GitShowTool : Tool<GitShowInput, GitShowResult>
             result = result with { Files = result.Files.Select(file => ReferenceEquals(file, largest) ? file with { Content = null, IsTruncated = true } : file).ToArray() };
         }
 
-        if (context.Invocation.IntelligenceRun is { } intelligence
+        if (context.Invocation.IntelligenceSourceObserver is { } intelligence
             && result.Revision.Length is 40 or 64 && result.Revision.All(Uri.IsHexDigit))
         {
             if (request.Path is { } path && result.Kind == GitObjectKind.Blob && !result.IsBinary && !result.IsTruncated)

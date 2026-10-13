@@ -305,7 +305,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 
         if (input.Snapshot)
         {
-            var observationCheckpoint = context.Invocation.IntelligenceRun is { } intelligence && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
+            var observationCheckpoint = context.Invocation.IntelligenceSourceObserver is { } intelligence && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
                 ? await intelligence.CaptureSourceCheckpointAsync(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), cancellationToken) : 0;
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken);
             if (bytes.Length > _limits.ReadFileMaximumBytes)
@@ -341,7 +341,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             var relativePath = GetDisplayPath(path, context.Invocation);
             if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation))
             {
-                context.Invocation.IntelligenceRun?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), digest, observationCheckpoint);
+                context.Invocation.IntelligenceSourceObserver?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), digest, observationCheckpoint);
             }
 
             var snapshot = new ReadFileOutput(relativePath, 1, null, 0, [], false, null, null)
@@ -353,7 +353,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
             return new ToolExecution<ReadFileOutput>(snapshot, [new ToolProvenanceSource("file", ToolPathRules.IsWithinScratchpad(path, context.Invocation) ? path : relativePath)]);
         }
 
-        var sourceCheckpoint = context.Invocation.IntelligenceRun is { } intelligenceRun && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
+        var sourceCheckpoint = context.Invocation.IntelligenceSourceObserver is { } intelligenceRun && !ToolPathRules.IsWithinScratchpad(path, context.Invocation)
             ? await intelligenceRun.CaptureSourceCheckpointAsync(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), cancellationToken) : 0;
         var sourceBytes = await File.ReadAllBytesAsync(path, cancellationToken);
         using var sourceStream = new MemoryStream(sourceBytes, writable: false);
@@ -394,7 +394,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         var sourceHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(sourceBytes));
         if (!ToolPathRules.IsWithinScratchpad(path, context.Invocation))
         {
-            context.Invocation.IntelligenceRun?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), sourceHash, sourceCheckpoint);
+            context.Invocation.IntelligenceSourceObserver?.ObserveSource(Path.GetRelativePath(context.Invocation.RepositoryPath, path).Replace('\\', '/'), sourceHash, sourceCheckpoint);
         }
 
         var sourceLocation = endLine is null

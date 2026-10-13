@@ -27,6 +27,11 @@ public static partial class RepositoryMemoryBindingTests
     [InlineData("missing-reader")]
     [InlineData("revoked")]
     [InlineData("available")]
+    [InlineData("final-budget")]
+    [InlineData("final-model-budget")]
+    [InlineData("next-round-budget")]
+    [InlineData("hook-budget")]
+    [InlineData("tool-model-budget")]
     public static async Task Collection_requires_effective_tools_before_admission_and_publication(string restriction)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -60,15 +65,41 @@ public static partial class RepositoryMemoryBindingTests
             restriction == "missing-reader" ? tools.Take(1) : tools,
             toolState,
             runtimeOptions: new ToolRuntimeOptions { Defaults = new ToolRuntimeOverride { MaximumOutputBytes = 32768 } });
+        var completionBudget = new CollectionCompletionBudget();
+        var modelRequests = 0;
+        var completedTools = 0;
         var model = new CallbackModel(
             () =>
         {
+            modelRequests++;
+            if ((restriction == "final-model-budget" && modelRequests == 1)
+                || (restriction == "tool-model-budget" && modelRequests == 2))
+            {
+                completionBudget.ExpireNextWallClock = true;
+            }
+
             if (restriction == "revoked")
             {
                 context = context with { DeniedToolIds = ["memories"] };
             }
         },
             finishCoverage: true);
+        await using var budgetSubscription = intelligence.Events.Subscribe((item, _) =>
+        {
+            // Exclude host history admission, which runs before the first model request.
+            if (item is ToolInvocationCompleted && model.Requests > 0)
+            {
+                completedTools++;
+            }
+
+            if ((restriction == "final-budget" && item is ToolInvocationCompleted && model.Requests == 4)
+                || (restriction == "next-round-budget" && item is ToolInvocationCompleted && model.Requests == 2))
+            {
+                completionBudget.Expired = true;
+            }
+
+            return Task.CompletedTask;
+        });
         await using var operations = new RepositoryIntelligenceOperations(
             intelligence.Store,
             intelligence.Options,
@@ -84,7 +115,7 @@ public static partial class RepositoryMemoryBindingTests
         var application = new SessionApplication(
             intelligence.Events,
             model,
-            new ExecutionBudget(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1))),
+            completionBudget,
             new SecretOutputSanitizer(),
             NullLogger<SessionApplication>.Instance,
             toolPipeline: new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance),
@@ -92,19 +123,49 @@ public static partial class RepositoryMemoryBindingTests
             toolRegistry: registry,
             correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
             prompts: TestPromptLoader.Instance,
+            hooks: restriction == "hook-budget" ? new ExpiringCollectionHook(completionBudget) : null,
             intelligenceOperations: operations);
         var session = await application.HandleAsync(new CreateSessionCommand("admission"), ct);
+        if (restriction == "final-model-budget")
+        {
+            await operations.BindAsync(session, fixture.InitialRoot, ct);
+            await intelligence.Monitor.WaitUntilReadyAsync(ct);
+        }
+
         var run = await application.HandleAsync(
             new SubmitRequestCommand(session, "Collect intelligence")
             {
-                IntelligenceOperation = RepositoryIntelligenceOperation.Onboard,
+                IntelligenceOperation = restriction == "final-model-budget"
+                    ? RepositoryIntelligenceOperation.Refresh
+                    : RepositoryIntelligenceOperation.Onboard,
             },
             ct);
-        if (restriction == "available")
+        if (restriction is "available" or "final-budget" or "final-model-budget")
         {
             Assert.True(await application.HandleAsync(new WaitForRunCommand(run), ct));
-            Assert.Equal(4, model.Requests);
+            Assert.Equal(restriction == "final-model-budget" ? 1 : 4, model.Requests);
             Assert.Equal(1, enabledWrites);
+            Assert.Equal(restriction is "final-budget" or "final-model-budget", completionBudget.Expired);
+            Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
+        }
+        else if (restriction == "next-round-budget")
+        {
+            await Assert.ThrowsAsync<BudgetExceededException>(() => application.HandleAsync(new WaitForRunCommand(run), ct));
+            Assert.Equal(2, model.Requests);
+            Assert.Equal(0, enabledWrites);
+            Assert.NotNull(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
+            var after = await intelligence.Store.GetSnapshotAsync(intelligence.Identity, [], ct);
+            Assert.Equal(before.Entries.Select(item => (item.Id, item.Text, item.Revision)), after.Entries.Select(item => (item.Id, item.Text, item.Revision)));
+        }
+        else if (restriction is "hook-budget" or "tool-model-budget")
+        {
+            await Assert.ThrowsAsync<BudgetExceededException>(() => application.HandleAsync(new WaitForRunCommand(run), ct));
+            Assert.Equal(restriction == "hook-budget" ? 0 : 2, model.Requests);
+            Assert.Equal(0, completedTools);
+            Assert.Equal(0, enabledWrites);
+            Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
+            var after = await intelligence.Store.GetSnapshotAsync(intelligence.Identity, [], ct);
+            Assert.Equal(before.Entries.Select(item => (item.Id, item.Text, item.Revision)), after.Entries.Select(item => (item.Id, item.Text, item.Revision)));
         }
         else
         {
@@ -270,6 +331,57 @@ public static partial class RepositoryMemoryBindingTests
             Subscriptions++;
             return Queue.Reader.ReadAllAsync(cancellationToken);
         }
+    }
+
+    private sealed class ExpiringCollectionHook : IHookCoordinator
+    {
+        private readonly CollectionCompletionBudget _budget;
+
+        public ExpiringCollectionHook(CollectionCompletionBudget budget) => _budget = budget;
+
+        public IReadOnlyList<HookHandlerDescriptor> Handlers => [];
+
+        public HookHandlerDescriptor? GetHandler(HookHandlerId handlerId) => null;
+
+        public bool SetEnabled(HookHandlerId handlerId, bool enabled) => false;
+
+        public Task<HookBoundaryDecision> InvokeAsync(HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (point == HookPoint.BeforeModelRequest)
+            {
+                _budget.ExpireNextWallClock = true;
+            }
+
+            return Task.FromResult(new HookBoundaryDecision(HookDecisionKind.Continue, [], []));
+        }
+
+        public Task<HookBoundaryDecision> InvokeHandlerAsync(HookHandlerId handlerId, HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class CollectionCompletionBudget : IBudget
+    {
+        private readonly ExecutionBudget _inner = new(new BudgetDimensions(100000, 1000, TimeSpan.FromHours(1)));
+
+        public bool Expired { get; set; }
+
+        public bool ExpireNextWallClock { get; set; }
+
+        public BudgetStatus Check(BudgetDimensions delta) => ApplyExpiry(_inner.Check(delta));
+
+        public BudgetStatus Accrue(BudgetDimensions delta)
+        {
+            if (ExpireNextWallClock && delta.WallClock > TimeSpan.Zero)
+            {
+                Expired = true;
+            }
+
+            return ApplyExpiry(_inner.Accrue(delta));
+        }
+
+        private BudgetStatus ApplyExpiry(BudgetStatus status) => Expired
+            ? status with { IsExhausted = true, ExhaustedDimensions = BudgetExhaustionDimension.WallClock, Reason = "Fixture wall-clock limit reached." }
+            : status;
     }
 
     private sealed class CallbackModel : IModelProvider

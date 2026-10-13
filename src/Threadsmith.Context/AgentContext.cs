@@ -8,8 +8,8 @@ public sealed record AgentContextSnapshot
     /// <summary>Owning assignment.</summary>
     public required AgentAssignmentId AssignmentId { get; init; }
 
-    /// <summary>Immutable baseline identity.</summary>
-    public required string BaselineIdentity { get; init; }
+    /// <summary>Captured baseline identity, or null for read-only live-workspace access.</summary>
+    public string? BaselineIdentity { get; init; }
 
     /// <summary>Host-approved objective.</summary>
     public required string Objective { get; init; }
@@ -68,7 +68,8 @@ public sealed class AgentContextAssembler
             + TokenEstimator.Estimate(assignment.InitialContext)
             + assignment.Tasks.Sum(TokenEstimator.Estimate);
         var selected = new List<Evidence>();
-        foreach (var evidence in _evidence.Snapshot(plan.Provenance.SessionId)
+        foreach (var evidence in (assignment.Policy.IncludeParentEvidence
+            ? _evidence.Snapshot(plan.Provenance.SessionId) : [])
             .Where(item => !item.IsStale)
             .Where(item => item.RunId is null || item.RunId == plan.Provenance.ParentRunId)
             .Where(item => assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive

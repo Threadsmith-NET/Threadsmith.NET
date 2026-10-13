@@ -28,13 +28,13 @@ public enum AgentRole
 /// <summary>Repository authority granted to a child run.</summary>
 public enum AgentRunMode
 {
-    /// <summary>Reads one immutable parent baseline.</summary>
+    /// <summary>Reads the parent workspace with optional captured-baseline provenance.</summary>
     ReadOnlyBaseline,
 
     /// <summary>May propose assignment-scoped mutations in a managed worktree.</summary>
     IsolatedWorktreeMutation,
 
-    /// <summary>Reads immutable change and evidence artifacts for review.</summary>
+    /// <summary>Reads the parent workspace and change or evidence artifacts for review.</summary>
     ReadOnlyReview,
 
     /// <summary>Uses the parent workspace and the parent's inherited tool authority.</summary>
@@ -335,6 +335,9 @@ public sealed record AgentPolicySnapshot
     /// <summary>Host rationale for the model selection.</summary>
     public required string ModelSelectionRationale { get; init; }
 
+    /// <summary>Whether the context assembler may preload governed parent evidence.</summary>
+    public bool IncludeParentEvidence { get; init; } = true;
+
     /// <summary>Versioned context policy identity.</summary>
     public required string ContextPolicyVersion { get; init; }
 
@@ -415,8 +418,8 @@ public sealed record DelegationProvenance
     /// <summary>Repository identity.</summary>
     public required string RepositoryIdentity { get; init; }
 
-    /// <summary>Exact immutable baseline identity.</summary>
-    public required string BaselineIdentity { get; init; }
+    /// <summary>Captured baseline identity, or null for read-only access to the live workspace without a mutation baseline.</summary>
+    public string? BaselineIdentity { get; init; }
 
     /// <summary>Owning workspace.</summary>
     public required WorkspaceId WorkspaceId { get; init; }

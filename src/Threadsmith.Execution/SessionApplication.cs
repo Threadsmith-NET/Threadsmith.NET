@@ -559,7 +559,8 @@ public sealed partial class SessionApplication :
         RunId runId,
         RunRegistration registration)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var stopwatch = registration.RunStopwatch;
+        stopwatch.Start();
         Exception? failure = null;
         var cancelled = false;
         var succeeded = false;
@@ -627,7 +628,9 @@ public sealed partial class SessionApplication :
                 registration.Machine.Phase,
                 registration.Cancellation.Token);
             stopwatch.Stop();
-            AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
+
+            // Admission limits stop further work; final accounting must not discard completed results.
+            _ = AccrueUnchargedWallClock(registration, stopwatch.Elapsed);
 
             registration.Cancellation.Token.ThrowIfCancellationRequested();
 
@@ -785,7 +788,7 @@ public sealed partial class SessionApplication :
         }
     }
 
-    private static void AccrueUnchargedWallClockOrThrow(
+    private static BudgetStatus AccrueUnchargedWallClock(
         RunRegistration registration,
         TimeSpan elapsed)
     {
@@ -797,17 +800,24 @@ public sealed partial class SessionApplication :
             chargedModelWallClock = TimeSpan.Zero;
         }
 
-        var unchargedWallClock = elapsed > chargedModelWallClock
-            ? elapsed - chargedModelWallClock
+        var unsettledWallClock = elapsed - registration.RunWallClockSettled;
+        var unchargedWallClock = unsettledWallClock > chargedModelWallClock
+            ? unsettledWallClock - chargedModelWallClock
             : TimeSpan.Zero;
+        registration.RunWallClockSettled = elapsed;
         registration.ModelRequestWallClockSettled = registration.ModelRequestWallClockAccrued;
-        var elapsedStatus = registration.Budget.Accrue(new BudgetDimensions(
+        return registration.Budget.Accrue(new BudgetDimensions(
             0,
             0,
             unchargedWallClock));
-        if (elapsedStatus.IsExhausted)
+    }
+
+    private static void CheckRunWallClockBudget(RunRegistration registration)
+    {
+        var status = AccrueUnchargedWallClock(registration, registration.RunStopwatch.Elapsed);
+        if (status.IsExhausted)
         {
-            throw new BudgetExceededException(elapsedStatus.Reason ?? "Execution budget exhausted.");
+            throw new BudgetExceededException(status.Reason ?? "Execution budget exhausted before further work.");
         }
     }
 
@@ -1090,6 +1100,10 @@ public sealed partial class SessionApplication :
         public TimeSpan ModelRequestWallClockAccrued { get; set; }
 
         public TimeSpan ModelRequestWallClockSettled { get; set; }
+
+        public TimeSpan RunWallClockSettled { get; set; }
+
+        public Stopwatch RunStopwatch { get; } = new();
 
         public string? RepositoryIdentity { get; set; }
 

@@ -24,6 +24,36 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
     }
 
     /// <inheritdoc />
+    public async Task<RepositoryMemoryEntry?> GetEntryAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
+        using var collectionLease = await EnterCollectionAsync(repositoryIdentity, cancellationToken);
+        await using var connection = new SqliteConnection(_connectionString);
+        await OpenConnectionAsync(connection, cancellationToken);
+        await using var transaction = connection.BeginTransaction(deferred: _collection is null);
+        await ApplyCollectionAsync(connection, transaction, cancellationToken);
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], memoryId: id, cancellationToken: cancellationToken);
+        await CompleteTransactionAsync(connection, transaction, repositoryIdentity, false, cancellationToken);
+        return entries.FirstOrDefault();
+    }
+
+    /// <inheritdoc />
+    public async Task<long?> GetRevisionAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repositoryIdentity);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_collection is not null)
+        {
+            return null;
+        }
+
+        await using var connection = new SqliteConnection(_connectionString);
+        await OpenConnectionAsync(connection, cancellationToken);
+        await using var command = CreateCommand(connection, null, "SELECT revision FROM managed_memory_repositories WHERE repository_identity = $repo;", repositoryIdentity);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
+    }
+
+    /// <inheritdoc />
     public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
         string repositoryIdentity,
         IReadOnlyList<string> lexicalTerms,
@@ -60,11 +90,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         await using var transaction = connection.BeginTransaction(deferred: _collection is null);
         await ApplyCollectionAsync(connection, transaction, cancellationToken);
         var warnings = new List<string>();
-        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, warnings, cancellationToken: cancellationToken);
-        if (ownership is not null)
-        {
-            entries.RemoveAll(entry => entry.Ownership != ownership);
-        }
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, warnings, ownership: ownership, cancellationToken: cancellationToken);
 
         await using var generation = CreateCommand(connection, transaction, "SELECT revision FROM managed_memory_repositories WHERE repository_identity = $repo;", repositoryIdentity);
         var revision = Convert.ToInt64(await generation.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
@@ -120,7 +146,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         var entry = CreateEntry(repositoryIdentity, RepositoryMemoryId.New(), write, hash, now, now, 1, model, embedding);
         await InsertEntryAsync(connection, transaction, entry, cancellationToken: cancellationToken);
         List<RepositoryMemoryEntry> committed = [entry];
-        await ReadSupportsAsync(connection, transaction, repositoryIdentity, committed, entry.Id, cancellationToken);
+        await ReadSupportsAsync(connection, transaction, repositoryIdentity, committed, entry.Id, null, cancellationToken);
         entry = committed[0];
         await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
         await CompleteTransactionAsync(connection, transaction, repositoryIdentity, true, cancellationToken);
@@ -212,7 +238,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         await ReplaceConceptsAsync(connection, transaction, updated, cancellationToken);
         await ReplaceSupportsAsync(connection, transaction, updated, cancellationToken);
         List<RepositoryMemoryEntry> committed = [updated];
-        await ReadSupportsAsync(connection, transaction, repositoryIdentity, committed, updated.Id, cancellationToken);
+        await ReadSupportsAsync(connection, transaction, repositoryIdentity, committed, updated.Id, null, cancellationToken);
         updated = committed[0];
         entries.Remove(existing);
         entries.Add(updated);
@@ -234,7 +260,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
         await OpenConnectionAsync(connection, cancellationToken);
         await using var transaction = connection.BeginTransaction(deferred: false);
         await ApplyCollectionAsync(connection, transaction, cancellationToken);
-        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], cancellationToken: cancellationToken);
+        var entries = await ReadEntriesAsync(connection, transaction, repositoryIdentity, [], memoryId: id, cancellationToken: cancellationToken);
         var existing = entries.FirstOrDefault(entry => entry.Id == id);
         if (existing is null)
         {

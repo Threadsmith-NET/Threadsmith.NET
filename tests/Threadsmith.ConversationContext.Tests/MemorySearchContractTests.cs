@@ -8,6 +8,35 @@ using Xunit;
 /// <summary>Search limits and execution evidence are independent of the consumer's context policy.</summary>
 public static class MemorySearchContractTests
 {
+    /// <summary>Cached rankings avoid repeated native lookup and survive irrelevant file observations.</summary>
+    [Fact]
+    public static async Task Ranking_hit_skips_fuzzy_lookup_and_unrelated_observations_keep_it_valid()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "cancellation convention"), ct);
+        var resolver = new CountingTermResolver();
+        using var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString, termResolver: resolver);
+        using var search = new HybridRepositoryMemoryRetriever(store, generator);
+        var request = new RepositoryMemorySearchRequest
+        {
+            RepositoryIdentity = MemoryTestData.Repository,
+            Query = "cancelation",
+            Options = new RepositoryMemorySearchOptions { Lexical = new() { FuzzyEnabled = true } },
+        };
+        var first = await search.SearchAsync(request, ct);
+        Assert.False(first.RankingCacheHit);
+        Assert.Equal(1, resolver.Calls);
+        await store.RecordIntelligenceChangesAsync(MemoryTestData.Repository, ["unrelated.cs"], false, cancellationToken: ct);
+        Assert.True((await search.SearchAsync(request, ct)).RankingCacheHit);
+        Assert.Equal(1, resolver.Calls);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "cancellation rules"), ct);
+        Assert.False((await search.SearchAsync(request, ct)).RankingCacheHit);
+        Assert.Equal(2, resolver.Calls);
+    }
+
     /// <summary>Result and comparison windows report separate omissions and share ranking cache evidence.</summary>
     [Fact]
     public static async Task Independent_search_limits_report_comparison_and_result_omissions()
@@ -132,5 +161,17 @@ public static class MemorySearchContractTests
         var details = Assert.IsType<RepositoryMemorySearchDetails>(result.SearchDetails);
         Assert.Equal(truncated ? RepositoryMemorySearchBranchStatus.Completed : RepositoryMemorySearchBranchStatus.Unavailable, details.Reranker);
         Assert.Equal(truncated, details.PairTruncated);
+    }
+
+    private sealed class CountingTermResolver : IRepositoryMemoryTermResolver
+    {
+        public int Calls { get; private set; }
+
+        public Task<MemoryTermResolution> ResolveTermsAsync(RepositoryMemoryVocabularySnapshot snapshot, IReadOnlyList<string> queries, int maximumDistance, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            return Task.FromResult(new MemoryTermResolution([new MemoryTermMatch("cancelation", "cancellation", 1)]));
+        }
     }
 }

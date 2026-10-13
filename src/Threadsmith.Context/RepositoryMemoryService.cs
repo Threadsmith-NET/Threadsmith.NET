@@ -34,6 +34,12 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
     }
 
     /// <inheritdoc />
+    public Task<RepositoryMemoryEntry?> GetEntryAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    {
+        return _store.GetEntryAsync(repositoryIdentity, id, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public async Task<RepositoryMemoryOperationResult> ExecuteAsync(
         RepositoryMemoryOperationRequest request,
         CancellationToken cancellationToken = default)
@@ -93,8 +99,10 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
         cancellationToken.ThrowIfCancellationRequested();
         ValidateArguments(request);
         var store = request.Collection is null ? _store : _store.ForCollection(request.Collection);
-        var snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, [], cancellationToken);
-        var target = request.Id is { } targetId ? snapshot.Entries.FirstOrDefault(entry => entry.Id == targetId) : null;
+        var snapshot = request.Action == "remove" ? null : await store.GetSnapshotAsync(request.RepositoryIdentity, [], cancellationToken);
+        var target = request.Id is { } targetId
+            ? snapshot is null ? await store.GetEntryAsync(request.RepositoryIdentity, targetId, cancellationToken) : snapshot.Entries.FirstOrDefault(entry => entry.Id == targetId)
+            : null;
         if (target is not null && target.Ownership != request.Ownership)
         {
             throw new InvalidOperationException("This operation cannot mutate memories owned by another partition.");
@@ -106,6 +114,7 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
             return new RepositoryMemoryOperationResult(removed is null ? "absent" : "removed", removeId, removed, [], []);
         }
 
+        ArgumentNullException.ThrowIfNull(snapshot);
         if (request.Action == "list")
         {
             return new RepositoryMemoryOperationResult("listed", null, null, snapshot.Entries, []);

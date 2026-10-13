@@ -50,7 +50,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             }
 
             var resolution = await _termResolver.ResolveTermsAsync(
-                new RepositoryMemoryVocabularySnapshot(snapshot.RepositoryIdentity, snapshot.Revision, vocabulary) { Kind = MemoryVocabularyKind.Text },
+                new RepositoryMemoryVocabularySnapshot(snapshot.RepositoryIdentity, snapshot.Revision, vocabulary) { Kind = MemoryVocabularyKind.Text, Ownership = ownership },
                 pending,
                 options.FuzzyMaximumDistance,
                 cancellationToken);

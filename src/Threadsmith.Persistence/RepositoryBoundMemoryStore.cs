@@ -99,6 +99,18 @@ public sealed class RepositoryBoundMemoryStore : IManagedRepositoryMemoryStore, 
     }
 
     /// <inheritdoc />
+    public Task<RepositoryMemoryEntry?> GetEntryAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).GetEntryAsync(repositoryIdentity, id, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<long?> GetRevisionAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        return GetStore(repositoryIdentity).GetRevisionAsync(repositoryIdentity, cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(string repositoryIdentity, IReadOnlyList<string> lexicalTerms, CancellationToken cancellationToken = default)
     {
         return GetStore(repositoryIdentity).GetSnapshotAsync(repositoryIdentity, lexicalTerms, cancellationToken);

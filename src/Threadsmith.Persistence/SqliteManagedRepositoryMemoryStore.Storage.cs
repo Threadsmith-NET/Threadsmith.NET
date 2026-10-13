@@ -10,7 +10,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
 {
     /// <summary>Reads detached rows in the caller transaction for CRUD, migration and retrieval.</summary>
     internal static async Task<List<RepositoryMemoryEntry>> ReadEntriesAsync(
-        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<string> warnings, bool includesMemoryType = true, CancellationToken cancellationToken = default)
+        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<string> warnings, bool includesMemoryType = true, RepositoryMemoryOwnership? ownership = null, RepositoryMemoryId? memoryId = null, CancellationToken cancellationToken = default)
     {
         await using var command = connection.CreateCommand();
         if (transaction is not null)
@@ -34,6 +34,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                     embedding, embedding_space_id, embedding_dimensions, embedding_content_hash, embedding_revision
                 FROM managed_memories WHERE repository_identity = $repo ORDER BY created_at, memory_id;
                 """;
+        ApplyReadFilters(command, ownership, memoryId);
         var entries = new List<RepositoryMemoryEntry>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -100,6 +101,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         if (includesMemoryType)
         {
             await using var concepts = CreateCommand(connection, transaction, "SELECT memory_id, concept FROM managed_memory_concepts WHERE repository_identity = $repo ORDER BY concept;", repositoryIdentity);
+            ApplyReadFilters(concepts, ownership, memoryId);
             await using var conceptReader = await concepts.ExecuteReaderAsync(cancellationToken);
             var byId = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             while (await conceptReader.ReadAsync(cancellationToken))
@@ -125,7 +127,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
 
         if (includesMemoryType)
         {
-            await ReadSupportsAsync(connection, transaction, repositoryIdentity, entries, null, cancellationToken);
+            await ReadSupportsAsync(connection, transaction, repositoryIdentity, entries, memoryId, ownership, cancellationToken);
         }
 
         return entries;
@@ -416,5 +418,23 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         {
             warnings.Add(warning);
         }
+    }
+
+    private static void ApplyReadFilters(SqliteCommand command, RepositoryMemoryOwnership? ownership, RepositoryMemoryId? memoryId)
+    {
+        var filter = string.Empty;
+        if (ownership is { } partition)
+        {
+            filter += " AND memory_id IN (SELECT memory_id FROM managed_memories WHERE repository_identity = $repo AND ownership = $ownership)";
+            command.Parameters.AddWithValue("$ownership", (int)partition);
+        }
+
+        if (memoryId is { } id)
+        {
+            filter += " AND memory_id = $memoryId";
+            command.Parameters.AddWithValue("$memoryId", id.Value.ToString());
+        }
+
+        command.CommandText = command.CommandText.Replace(" ORDER BY", filter + " ORDER BY", StringComparison.Ordinal);
     }
 }

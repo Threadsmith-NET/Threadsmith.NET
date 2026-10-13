@@ -416,10 +416,17 @@ public interface IManagedRepositoryMemoryStore
         throw new NotSupportedException("The memory store does not support intelligence tracking.");
     }
 
-    /// <summary>Atomically records observed paths or a coverage gap and advances candidate metadata revision.</summary>
+    /// <summary>Atomically records observations and advances retrieval revision only when support metadata changes.</summary>
     Task RecordIntelligenceChangesAsync(string repositoryIdentity, IReadOnlyList<string> paths, bool observationGap, string? fault = null, CancellationToken cancellationToken = default)
     {
         throw new NotSupportedException("The memory store does not support intelligence tracking.");
+    }
+
+    /// <summary>Reads the retrieval revision without materializing entries; null disables early cache lookup.</summary>
+    Task<long?> GetRevisionAsync(string repositoryIdentity, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<long?>(null);
     }
 
     /// <summary>Filters ownership before lexical expansion and semantic qualification.</summary>
@@ -439,6 +446,13 @@ public interface IManagedRepositoryMemoryStore
         var entries = snapshot.Entries.Where(entry => entry.Ownership == ownership).ToArray();
         var ids = entries.Select(entry => entry.Id).ToHashSet();
         return snapshot with { Entries = entries, LexicalMatches = snapshot.LexicalMatches.Where(match => ids.Contains(match.Id)).ToArray() };
+    }
+
+    /// <summary>Reads one detached memory without requiring unrelated entries.</summary>
+    async Task<RepositoryMemoryEntry?> GetEntryAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await GetSnapshotAsync(repositoryIdentity, [], cancellationToken);
+        return snapshot.Entries.FirstOrDefault(entry => entry.Id == id);
     }
 
     /// <summary>Reads entries and qualified, safely quoted lexical matches in one database snapshot.</summary>

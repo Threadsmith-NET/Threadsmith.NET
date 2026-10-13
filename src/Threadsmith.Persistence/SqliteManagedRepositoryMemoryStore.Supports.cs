@@ -14,14 +14,14 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
     }
 
     private static async Task ReadSupportsAsync(
-        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<RepositoryMemoryEntry> entries, RepositoryMemoryId? memoryId, CancellationToken cancellationToken)
+        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<RepositoryMemoryEntry> entries, RepositoryMemoryId? memoryId, RepositoryMemoryOwnership? ownership, CancellationToken cancellationToken)
     {
         const string sql = """
             SELECT memory_id, path, content_hash, observed_at, source_revision, dirty, unknown, observed_sequence
-            FROM managed_memory_supports WHERE repository_identity = $repo AND ($id IS NULL OR memory_id = $id) ORDER BY memory_id, path;
+            FROM managed_memory_supports WHERE repository_identity = $repo ORDER BY memory_id, path;
             """;
         await using var command = CreateCommand(connection, transaction, sql, repositoryIdentity);
-        command.Parameters.AddWithValue("$id", memoryId is { } id ? id.Value.ToString() : DBNull.Value);
+        ApplyReadFilters(command, ownership, memoryId);
         var supports = new Dictionary<RepositoryMemoryId, List<RepositoryMemorySupport>>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))

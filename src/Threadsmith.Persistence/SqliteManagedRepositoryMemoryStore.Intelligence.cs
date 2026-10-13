@@ -177,21 +177,27 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             INSERT INTO repository_intelligence_changes(repository_identity, path, sequence) VALUES($repo, $path, $sequence)
             ON CONFLICT(repository_identity, path) DO UPDATE SET sequence = $sequence;
             UPDATE managed_memory_supports SET dirty = 1 WHERE repository_identity = $repo
-                AND (path = $path OR substr(path, 1, length($path) + 1) = $path || '/');
+                AND dirty = 0 AND (path = $path OR substr(path, 1, length($path) + 1) = $path || '/');
+            SELECT changes();
             """;
+        var retrievalChanged = false;
         foreach (var changed in paths.Distinct(StringComparer.Ordinal))
         {
             path.Value = NormalizeSourcePath(changed);
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            retrievalChanged |= Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture) > 0;
         }
 
         if (observationGap || fault is not null)
         {
-            command.CommandText = "UPDATE managed_memory_supports SET unknown = 1 WHERE repository_identity = $repo;";
-            await command.ExecuteNonQueryAsync(cancellationToken);
+            command.CommandText = "UPDATE managed_memory_supports SET unknown = 1 WHERE repository_identity = $repo AND unknown = 0;";
+            retrievalChanged |= await command.ExecuteNonQueryAsync(cancellationToken) > 0;
         }
 
-        await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
+        if (retrievalChanged)
+        {
+            await AdvanceRevisionAsync(connection, transaction, repositoryIdentity, cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 }

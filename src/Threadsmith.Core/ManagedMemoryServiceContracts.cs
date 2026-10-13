@@ -87,6 +87,13 @@ public interface IManagedRepositoryMemoryService
         RepositoryMemoryOperationRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads one detached memory without requiring unrelated entries.</summary>
+    async Task<RepositoryMemoryEntry?> GetEntryAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await GetSnapshotAsync(repositoryIdentity, cancellationToken);
+        return snapshot.Entries.FirstOrDefault(entry => entry.Id == id);
+    }
+
     /// <summary>Reads current entries without generating embeddings or changing usage.</summary>
     Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
         string repositoryIdentity,

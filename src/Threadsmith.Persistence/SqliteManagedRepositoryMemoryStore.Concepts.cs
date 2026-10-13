@@ -8,7 +8,7 @@ using Threadsmith.Core;
 public sealed partial class SqliteManagedRepositoryMemoryStore : IRepositoryMemoryTermResolver, IDisposable
 {
     private readonly SemaphoreSlim _conceptGate = new(1, 1);
-    private readonly Dictionary<MemoryVocabularyKind, RepositoryMemoryVocabularySnapshot> _vocabularies = [];
+    private readonly Dictionary<(MemoryVocabularyKind Kind, RepositoryMemoryOwnership? Ownership, bool IncludeStandingPreferences), RepositoryMemoryVocabularySnapshot> _vocabularies = [];
     private SqliteConnection? _conceptConnection;
     private bool _conceptResolverDisposed;
 
@@ -34,7 +34,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IRepositoryMemo
         try
         {
             ObjectDisposedException.ThrowIf(_conceptResolverDisposed, this);
-            if (!Enum.IsDefined(snapshot.Kind))
+            if (!Enum.IsDefined(snapshot.Kind) || (snapshot.Ownership is { } ownership && !Enum.IsDefined(ownership)))
             {
                 throw new ArgumentOutOfRangeException(nameof(snapshot));
             }
@@ -44,19 +44,15 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IRepositoryMemo
                 DiscardConceptVocabulary();
             }
 
-            var cacheHit = _vocabularies.TryGetValue(snapshot.Kind, out var current) && _conceptConnection is not null
+            var scope = (snapshot.Kind, snapshot.Ownership, snapshot.IncludeStandingPreferences);
+            var cacheHit = _vocabularies.TryGetValue(scope, out var current) && _conceptConnection is not null
                 && current.Vocabulary.SequenceEqual(snapshot.Vocabulary, StringComparer.Ordinal);
             if (queries.Count == 0 || snapshot.Vocabulary.Count == 0)
             {
-                if (!cacheHit)
-                {
-                    DiscardConceptVocabulary();
-                }
-
                 return new MemoryTermResolution([], VocabularyCacheHit: cacheHit);
             }
 
-            var table = snapshot.Kind == MemoryVocabularyKind.Text ? "text_vocabulary" : "concept_vocabulary";
+            var table = $"vocabulary_{(int)snapshot.Kind}_{(snapshot.Ownership is { } partition ? (int)partition + 1 : 0)}_{(snapshot.IncludeStandingPreferences ? 1 : 0)}";
             if (_conceptConnection is null)
             {
                 var suffix = OperatingSystem.IsWindows() ? ".dll" : OperatingSystem.IsMacOS() ? ".dylib" : ".so";
@@ -88,7 +84,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IRepositoryMemo
                     await populate.ExecuteNonQueryAsync(cancellationToken);
                 }
 
-                _vocabularies[snapshot.Kind] = snapshot with { Vocabulary = snapshot.Vocabulary.ToArray() };
+                _vocabularies[scope] = snapshot with { Vocabulary = snapshot.Vocabulary.ToArray() };
             }
 
             var connection = _conceptConnection ?? throw new InvalidOperationException("The native vocabulary was not initialized.");

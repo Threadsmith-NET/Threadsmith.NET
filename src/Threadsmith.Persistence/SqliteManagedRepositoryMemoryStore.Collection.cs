@@ -51,7 +51,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 throw new InvalidOperationException("Intelligence capacity changed during collection. The prior collection was preserved; retry using the current capacity.");
             }
 
-            await ApplyPreparedEntriesAsync(connection, transaction, identity, prepared, cancellationToken);
+            await ApplyPreparedEntriesAsync(connection, transaction, identity, prepared, existing, cancellationToken);
             const string complete = """
                 INSERT INTO repository_intelligence_state(repository_identity, onboarded, refreshed_sequence, observation_gap)
                 VALUES($repo, 1, $checkpoint, 0)
@@ -99,7 +99,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
     private Task ApplyCollectionAsync(SqliteConnection connection, SqliteTransaction transaction, CancellationToken cancellationToken)
     {
         return _collection is null ? Task.CompletedTask
-            : ApplyPreparedEntriesAsync(connection, transaction, _collection.Baseline.RepositoryIdentity, _collection.Snapshot(), cancellationToken);
+            : ApplyPreparedEntriesAsync(connection, transaction, _collection.Baseline.RepositoryIdentity, _collection.Snapshot(), null, cancellationToken);
     }
 
     private async Task CompleteTransactionAsync(
@@ -122,14 +122,15 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
     }
 
     private static async Task ApplyPreparedEntriesAsync(
-        SqliteConnection connection, SqliteTransaction transaction, string identity, IReadOnlyList<RepositoryMemoryEntry> prepared, CancellationToken cancellationToken)
+        SqliteConnection connection, SqliteTransaction transaction, string identity, IReadOnlyList<RepositoryMemoryEntry> prepared, List<RepositoryMemoryEntry>? existing, CancellationToken cancellationToken)
     {
         if (prepared.Any(entry => entry.RepositoryIdentity != identity || entry.Ownership != RepositoryMemoryOwnership.Intelligence))
         {
             throw new InvalidOperationException("Prepared collection contains an unauthorized memory.");
         }
 
-        var existing = await ReadEntriesAsync(connection, transaction, identity, [], cancellationToken: cancellationToken);
+        existing ??= await ReadEntriesAsync(connection, transaction, identity, [], cancellationToken: cancellationToken);
+        var existingById = existing.ToDictionary(entry => entry.Id);
         var ids = prepared.Select(entry => entry.Id).ToHashSet();
         foreach (var entry in existing.Where(entry => entry.Ownership == RepositoryMemoryOwnership.Intelligence && !ids.Contains(entry.Id)))
         {
@@ -139,7 +140,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         var replacements = new List<RepositoryMemoryEntry>();
         foreach (var entry in prepared)
         {
-            var current = existing.FirstOrDefault(candidate => candidate.Id == entry.Id);
+            var current = existingById.GetValueOrDefault(entry.Id);
             if (current is not null && current.Ownership != RepositoryMemoryOwnership.Intelligence)
             {
                 throw new InvalidOperationException("Collection cannot replace ordinary memories.");

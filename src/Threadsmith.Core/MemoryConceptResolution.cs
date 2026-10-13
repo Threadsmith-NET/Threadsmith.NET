@@ -11,6 +11,12 @@ public sealed record RepositoryMemoryVocabularySnapshot(string RepositoryIdentit
 {
     /// <summary>Separates bounded text and concept vocabularies in the same native owner.</summary>
     public MemoryVocabularyKind Kind { get; init; }
+
+    /// <summary>Separates ordinary, intelligence and combined search vocabularies.</summary>
+    public RepositoryMemoryOwnership? Ownership { get; init; }
+
+    /// <summary>Separates concept searches that include standing preferences.</summary>
+    public bool IncludeStandingPreferences { get; init; }
 }
 
 /// <summary>Native fuzzy vocabulary capability on the existing repository memory store.</summary>

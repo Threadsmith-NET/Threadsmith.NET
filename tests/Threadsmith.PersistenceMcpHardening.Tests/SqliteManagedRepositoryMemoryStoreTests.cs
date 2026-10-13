@@ -13,6 +13,54 @@ using Xunit;
 /// <summary>Real SQLite contracts for explicit memories, snapshots, revisions, eviction and migration.</summary>
 public sealed class SqliteManagedRepositoryMemoryStoreTests
 {
+    /// <summary>Pending changes are retained while only changed support flags invalidate retrieval.</summary>
+    [Fact]
+    public async Task Observations_only_advance_retrieval_revision_when_support_flags_change()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        await fixture.Store.AddAsync("repo", Write("supported guidance") with
+        {
+            Ownership = RepositoryMemoryOwnership.Intelligence,
+            Supports = [new RepositoryMemorySupport { Path = "src/feature.cs", ContentHash = new string('a', 64), ObservedAt = fixture.Clock.GetUtcNow() }],
+        }, Model, Embedding, new(), ct);
+        var initial = await fixture.Store.GetRevisionAsync("repo", ct);
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", ["unrelated.cs"], false, cancellationToken: ct);
+        Assert.Equal(initial, await fixture.Store.GetRevisionAsync("repo", ct));
+        Assert.Equal(1, await fixture.ScalarAsync("SELECT count(*) FROM repository_intelligence_changes;"));
+
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", ["src"], false, cancellationToken: ct);
+        var dirty = await fixture.Store.GetRevisionAsync("repo", ct);
+        Assert.Equal(initial + 1, dirty);
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", ["src/feature.cs"], false, cancellationToken: ct);
+        Assert.Equal(dirty, await fixture.Store.GetRevisionAsync("repo", ct));
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", [], true, cancellationToken: ct);
+        Assert.Equal(dirty + 1, await fixture.Store.GetRevisionAsync("repo", ct));
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", [], true, "watcher fault", ct);
+        Assert.Equal(dirty + 1, await fixture.Store.GetRevisionAsync("repo", ct));
+        var support = Assert.Single(Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [], ct)).Entries).Supports);
+        Assert.True(support.IsDirty);
+        Assert.True(support.IsUnknown);
+        Assert.Equal(3, await fixture.ScalarAsync("SELECT count(*) FROM repository_intelligence_changes;"));
+    }
+
+    /// <summary>Partition and identity reads exclude unrelated content before embedding validation.</summary>
+    [Fact]
+    public async Task Filtered_reads_do_not_decode_unrelated_entries()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var ordinary = Assert.IsType<RepositoryMemoryEntry>((await fixture.Store.AddAsync("repo", Write("ordinary guidance"), Model, Embedding, new(), ct)).Entry);
+        await fixture.Store.AddAsync("repo", Write("intelligence guidance") with { Ownership = RepositoryMemoryOwnership.Intelligence }, Model, Embedding, new(), ct);
+        await fixture.ExecuteAsync("UPDATE managed_memories SET embedding = X'0102' WHERE ownership = 1;");
+        var snapshot = await fixture.Store.GetSnapshotAsync("repo", [], new(), RepositoryMemoryOwnership.Ordinary, ct);
+        Assert.Equal(ordinary.Id, Assert.Single(snapshot.Entries).Id);
+        Assert.Empty(snapshot.Warnings);
+        Assert.Equal(ordinary.Id, (await fixture.Store.GetEntryAsync("repo", ordinary.Id, ct))?.Id);
+        Assert.Null(await fixture.Store.GetEntryAsync("other", ordinary.Id, ct));
+        Assert.Null(await fixture.Store.GetEntryAsync("repo", RepositoryMemoryId.New(), ct));
+    }
+
     /// <summary>Metadata rows round-trip and cascade away through ordinary managed writes.</summary>
     [Fact]
     public async Task Concepts_cascade_on_removal_and_add_fence_precedes_eviction()
@@ -72,6 +120,12 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.False((await fixture.Store.ResolveTermsAsync(textSnapshot, ["serialisation"], 20, ct)).VocabularyCacheHit);
         Assert.True((await fixture.Store.ResolveTermsAsync(snapshot, ["cancelation"], 20, ct)).VocabularyCacheHit);
         Assert.True((await fixture.Store.ResolveTermsAsync(textSnapshot, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        var intelligence = snapshot with { Ownership = RepositoryMemoryOwnership.Intelligence, Vocabulary = ["serialization"] };
+        var ordinary = snapshot with { Ownership = RepositoryMemoryOwnership.Ordinary };
+        Assert.False((await fixture.Store.ResolveTermsAsync(intelligence, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        Assert.False((await fixture.Store.ResolveTermsAsync(ordinary, ["cancelation"], 20, ct)).VocabularyCacheHit);
+        Assert.True((await fixture.Store.ResolveTermsAsync(intelligence, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        Assert.True((await fixture.Store.ResolveTermsAsync(ordinary, ["cancelation"], 20, ct)).VocabularyCacheHit);
         var nextRevision = snapshot with { Revision = 2 };
         Assert.False((await fixture.Store.ResolveTermsAsync(nextRevision, ["cancelation"], 20, ct)).VocabularyCacheHit);
         var nextRepository = nextRevision with { RepositoryIdentity = "other-repo" };

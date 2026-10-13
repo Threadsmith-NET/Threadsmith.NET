@@ -99,6 +99,34 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            var model = _generator.Model;
+            var queryKey = model.SpaceId + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(query)));
+            var diagnostics = new List<string>();
+            var crossEncoderModel = request.Options.RerankerEnabled ? GetCrossEncoderModel(diagnostics) : null;
+            var minimumKey = string.Join(':', semanticMinimum.ToString("R", CultureInfo.InvariantCulture), request.Options.MaximumQueryTerms, request.Options.MaximumDiagnostics);
+            var rerankerKey = request.Options.RerankerEnabled
+                ? string.Join(':', crossEncoderModel?.ModelId ?? "unavailable", crossEncoderModel?.MaxInputTokens, crossEncoderModel?.MaxBatchSize, request.Options.RerankerCandidateLimit)
+                : "disabled";
+            string RankingKey(long revision) => string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, revision, request.Ownership, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
+            string? DegradedKey(string key) => request.UserTurnId is { } turn ? key + ":degraded:" + turn.Value.ToString("D") : null;
+            RepositoryMemoryRetrievalResult? CachedRanking(string key)
+            {
+                var degraded = DegradedKey(key);
+                return _rankingCache.TryGetValue(key, out var cached)
+                    || (degraded is not null && _rankingCache.TryGetValue(degraded, out cached))
+                    ? cached with { QueryEmbeddingCacheHit = _queryCache.ContainsKey(queryKey), RankingCacheHit = true }
+                    : null;
+            }
+
+            // A hit represents the immutable snapshot at this revision read. A miss must use
+            // the subsequent snapshot's own revision, since a writer may commit between reads.
+            if (_rankingCache.Count > 0 && request.Collection is null
+                && await store.GetRevisionAsync(request.RepositoryIdentity, cancellationToken) is { } revision
+                && CachedRanking(RankingKey(revision)) is { } earlyCached)
+            {
+                return earlyCached;
+            }
+
             var terms = Tokenize(query).Where(term => !StopWords.Contains(term)).Take(request.Options.MaximumQueryTerms).ToArray();
             var snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, request.Ownership, cancellationToken);
             memorySetRevision = snapshot.Revision;
@@ -126,22 +154,11 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 };
             }
 
-            var model = _generator.Model;
-            var queryKey = model.SpaceId + ":" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(query)));
-
-            // Retrieval settings affect selections, while the embedding cache remains model/query-only.
-            var minimumKey = string.Join(':', semanticMinimum.ToString("R", CultureInfo.InvariantCulture), request.Options.MaximumQueryTerms, request.Options.MaximumDiagnostics);
-            var diagnostics = new List<string>(snapshot.Warnings.Take(request.Options.MaximumDiagnostics));
-            var crossEncoderModel = request.Options.RerankerEnabled ? GetCrossEncoderModel(diagnostics) : null;
-            var rerankerKey = request.Options.RerankerEnabled
-                ? string.Join(':', crossEncoderModel?.ModelId ?? "unavailable", crossEncoderModel?.MaxInputTokens, crossEncoderModel?.MaxBatchSize, request.Options.RerankerCandidateLimit)
-                : "disabled";
-            var rankKey = string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, snapshot.Revision, request.Ownership, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
-            var degradedKey = request.UserTurnId is { } turn ? rankKey + ":degraded:" + turn.Value.ToString("D") : null;
-            if (_rankingCache.TryGetValue(rankKey, out var cached)
-                || (degradedKey is not null && _rankingCache.TryGetValue(degradedKey, out cached)))
+            diagnostics.InsertRange(0, snapshot.Warnings.Take(request.Options.MaximumDiagnostics));
+            var rankKey = RankingKey(snapshot.Revision);
+            if (CachedRanking(rankKey) is { } cached)
             {
-                return cached with { QueryEmbeddingCacheHit = _queryCache.ContainsKey(queryKey), RankingCacheHit = true };
+                return cached;
             }
 
             var queryCacheHit = _queryCache.TryGetValue(queryKey, out var embedding);
@@ -192,7 +209,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     memorySetRevision = snapshot.Revision;
                     standingPreferences = SelectStandingPreferences(snapshot);
                     snapshot = request.IncludeStandingPreferences ? snapshot : SelectSituationalSnapshot(snapshot);
-                    rankKey = string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, snapshot.Revision, request.Ownership, request.IncludeStandingPreferences, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), string.Join(',', request.RetainedMemories), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
+                    rankKey = RankingKey(snapshot.Revision);
                 }
             }
 
@@ -230,7 +247,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             MemoryTermResolution resolution = new([]);
             if (pending.Count > 0 && request.Options.ConceptFuzzyEnabled && _store is IRepositoryMemoryTermResolver resolver)
             {
-                resolution = await resolver.ResolveTermsAsync(new RepositoryMemoryVocabularySnapshot(request.RepositoryIdentity, snapshot.Revision, vocabulary), pending, request.Options.ConceptFuzzyMaximumDistance, cancellationToken);
+                resolution = await resolver.ResolveTermsAsync(new RepositoryMemoryVocabularySnapshot(request.RepositoryIdentity, snapshot.Revision, vocabulary) { Ownership = request.Ownership, IncludeStandingPreferences = request.IncludeStandingPreferences }, pending, request.Options.ConceptFuzzyMaximumDistance, cancellationToken);
             }
             else if (pending.Count > 0 && request.Options.ConceptFuzzyEnabled)
             {
@@ -349,9 +366,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             {
                 AddBounded(_rankingCache, rankKey, result, request.Options.MaximumCacheEntries);
             }
-            else if (resolution.DegradedReason is null && snapshot.FuzzyLexicalStatus != RepositoryMemorySearchBranchStatus.Unavailable && request.UserTurnId is { } userTurn)
+            else if (resolution.DegradedReason is null && snapshot.FuzzyLexicalStatus != RepositoryMemorySearchBranchStatus.Unavailable && DegradedKey(rankKey) is { } degradedKey)
             {
-                AddBounded(_rankingCache, rankKey + ":degraded:" + userTurn.Value.ToString("D"), result, request.Options.MaximumCacheEntries);
+                AddBounded(_rankingCache, degradedKey, result, request.Options.MaximumCacheEntries);
             }
 
             return result;

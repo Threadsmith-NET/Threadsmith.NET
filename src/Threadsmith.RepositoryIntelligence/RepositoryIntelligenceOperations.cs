@@ -549,13 +549,14 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
             }
 
             var coverage = collection.Coverage;
+            var acceptedIds = collection.Snapshot(forPublication: true).Select(entry => entry.Id).ToHashSet();
             var summary = JsonSerializer.Serialize(new
             {
                 FirstReview = firstReview,
                 SurveyInitialized = true,
                 InitialAreas = collection.InitialSurvey.Select(item => new { item.Key, item.Area, item.Question }),
                 PendingReconciliations = collection.PendingReconciliations.Select(item => new { item.Key }),
-                InvalidMemoryLinks = coverage.Where(item => item.MemoryIds.Any(id => !collection.Snapshot(forPublication: true).Any(entry => entry.Id == id))).Select(item => item.Key),
+                InvalidMemoryLinks = coverage.Where(item => item.MemoryIds.Any(id => !acceptedIds.Contains(id))).Select(item => item.Key),
                 TotalItems = coverage.Count,
                 OpenItems = coverage.Count(item => item.Priority == "required" && item.Status is "uninvestigated" or "investigating"),
                 OptionalItems = coverage.Count(item => item.Priority == "optional"),

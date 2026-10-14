@@ -495,7 +495,7 @@ public sealed record CodeExploreAdaptiveOptions
         ArgumentOutOfRangeException.ThrowIfNegative(RecommendedFollowUpCount);
         if (!Enum.IsDefined(PresentationVerbosity))
         {
-            throw new ArgumentOutOfRangeException(nameof(PresentationVerbosity));
+            throw new InvalidOperationException($"{nameof(PresentationVerbosity)} must be a defined {nameof(CodeExplorePresentationVerbosity)} value.");
         }
 
         return this with

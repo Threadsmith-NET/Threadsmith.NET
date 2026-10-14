@@ -30,7 +30,9 @@ public static partial class RepositoryMemoryBindingTests
                 intelligence.Identity,
                 new RepositoryMemoryWrite
                 {
-                    Text = "Reuse the shared formatter at output boundaries.", Origin = RepositoryMemoryOrigin.Model, Ownership = RepositoryMemoryOwnership.Intelligence,
+                    Text = "Reuse the shared formatter at output boundaries.",
+                    Origin = RepositoryMemoryOrigin.Model,
+                    Ownership = RepositoryMemoryOwnership.Intelligence,
                     Supports = [new RepositoryMemorySupport { Path = "formatter.cs", ContentHash = new string('a', 64), ObservedAt = DateTimeOffset.UtcNow }],
                 },
                 model,
@@ -41,8 +43,13 @@ public static partial class RepositoryMemoryBindingTests
             run.Collection!.Accept(new RepositoryMemoryOperationResult("added", prepared.Id, prepared, [], []));
             run.Collection.UpdateCoverage(new RepositoryIntelligenceCoverage
             {
-                Key = "output", Area = "Presentation", Question = "How should features format output?", Status = "investigated",
-                Conclusion = "Use the shared formatter.", MemoryIds = [prepared.Id], Supports = prepared.Supports,
+                Key = "output",
+                Area = "Presentation",
+                Question = "How should features format output?",
+                Status = "investigated",
+                Conclusion = "Use the shared formatter.",
+                MemoryIds = [prepared.Id],
+                Supports = prepared.Supports,
             });
             InitializeCoverageSurvey(run.Collection);
             await run.SaveCheckpointAsync("Completed formatter investigation.", ct);
@@ -69,7 +76,10 @@ public static partial class RepositoryMemoryBindingTests
             requestedPage,
             new GitLogResult([], false)
             {
-                IsCollectionPage = true, CollectionPage = deliveredPage, HistoryDepth = depth, HistoryRevision = change == "head" ? new string('b', 40) : revision,
+                IsCollectionPage = true,
+                CollectionPage = deliveredPage,
+                HistoryDepth = depth,
+                HistoryRevision = change == "head" ? new string('b', 40) : revision,
             },
             "{}",
             ct);

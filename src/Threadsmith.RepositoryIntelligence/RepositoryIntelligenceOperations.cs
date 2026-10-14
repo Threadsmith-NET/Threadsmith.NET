@@ -679,7 +679,7 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
 
             _owner._automation.Complete(_identity, _commitGeneration);
             await _owner._events.PublishAsync(
-                new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.collection.completed",                 $"Repository intelligence {Operation.ToString().ToLowerInvariant()} committed {Collection.Snapshot(forPublication: true).Count} assertions."),
+                new DiagnosticObserved(_sessionId, DateTimeOffset.UtcNow, "intelligence.collection.completed", $"Repository intelligence {Operation.ToString().ToLowerInvariant()} committed {Collection.Snapshot(forPublication: true).Count} assertions."),
                 CancellationToken.None);
         }
 

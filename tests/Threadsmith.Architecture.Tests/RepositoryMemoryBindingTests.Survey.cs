@@ -21,7 +21,9 @@ public static partial class RepositoryMemoryBindingTests
         collection.InitializeSurvey([area]);
         var closed = area with
         {
-            Status = "investigated", Conclusion = "The accepted assertion records this recipe.", MemoryIds = [entry.Id],
+            Status = "investigated",
+            Conclusion = "The accepted assertion records this recipe.",
+            MemoryIds = [entry.Id],
             Supports = [new RepositoryMemorySupport { Path = "fixture.txt", ContentHash = new string('a', 64), ObservedAt = DateTimeOffset.UtcNow }],
         };
         Assert.Throws<ArgumentException>(() => collection.UpdateCoverage(closed));
@@ -49,7 +51,8 @@ public static partial class RepositoryMemoryBindingTests
         Assert.Throws<ArgumentException>(() => collection.UpdateCoverage(second with { Priority = "optional", Limitations = "Finish early." }));
         var closed = first with
         {
-            Status = "investigated", Conclusion = "The fixture has no reusable implementation.",
+            Status = "investigated",
+            Conclusion = "The fixture has no reusable implementation.",
             Supports = [new RepositoryMemorySupport { Path = "fixture.txt", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
         };
         Assert.Throws<ArgumentException>(() => collection.UpdateCoverage(closed));
@@ -63,7 +66,10 @@ public static partial class RepositoryMemoryBindingTests
         var restored = new RepositoryMemoryCollection(collection.Baseline, true, 0);
         restored.Restore(new RepositoryIntelligenceCheckpoint
         {
-            RepositoryIdentity = "repo", HistoryRevision = null, InitialSurvey = collection.InitialSurvey, Coverage = collection.Coverage,
+            RepositoryIdentity = "repo",
+            HistoryRevision = null,
+            InitialSurvey = collection.InitialSurvey,
+            Coverage = collection.Coverage,
         });
         Assert.All(restored.Coverage, item => Assert.Equal("investigating", item.Status));
         Assert.True(restored.HasOpenCoverage);
@@ -86,7 +92,10 @@ public static partial class RepositoryMemoryBindingTests
         collection.ConfirmReconciliation(key, text, [], []);
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
         {
-            RepositoryPath = fixture.InitialRoot, RequestedBy = "model", IntelligenceRun = run, TrustLevel = RepositoryTrustLevel.TrustedRead,
+            RepositoryPath = fixture.InitialRoot,
+            RequestedBy = "model",
+            IntelligenceRun = run,
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
         });
         var tool = new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance);
         var first = (await tool.ExecuteAsync(new MemoriesInput("coverage", ProposalKey: key), context, ct)).Value.Coverage!.PendingReconciliations.Single();
@@ -101,7 +110,9 @@ public static partial class RepositoryMemoryBindingTests
         Assert.Null(last.NextTextOffset);
         var closed = area with
         {
-            Status = "investigated", Conclusion = "The proposed assertion describes an obsolete placeholder.", NoMemoryReason = "The fixture has no implemented behavior warranting retained guidance.",
+            Status = "investigated",
+            Conclusion = "The proposed assertion describes an obsolete placeholder.",
+            NoMemoryReason = "The fixture has no implemented behavior warranting retained guidance.",
             Supports = [new RepositoryMemorySupport { Path = "fixture.txt", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
         };
         collection.UpdateCoverage(closed);
@@ -109,8 +120,11 @@ public static partial class RepositoryMemoryBindingTests
         Assert.Throws<ArgumentException>(() => collection.UpdateCoverage(closed, [new string('b', 64)]));
         var checkpoint = new RepositoryIntelligenceCheckpoint
         {
-            RepositoryIdentity = collection.Baseline.RepositoryIdentity, HistoryRevision = null,
-            InitialSurvey = collection.InitialSurvey, Coverage = collection.Coverage, PendingReconciliations = collection.PendingReconciliations,
+            RepositoryIdentity = collection.Baseline.RepositoryIdentity,
+            HistoryRevision = null,
+            InitialSurvey = collection.InitialSurvey,
+            Coverage = collection.Coverage,
+            PendingReconciliations = collection.PendingReconciliations,
         };
         var restored = new RepositoryMemoryCollection(collection.Baseline, true, 0);
         restored.Restore(checkpoint);

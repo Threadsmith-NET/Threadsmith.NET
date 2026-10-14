@@ -44,16 +44,16 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         request.Options.Validate();
         var query = BuildQuery(request, out var bounded);
         var search = new RepositoryMemorySearchRequest
-            {
-                RepositoryIdentity = request.RepositoryIdentity,
-                Query = query,
-                QueryBounded = bounded,
-                Options = RepositoryMemorySearchOptions.ForRecall(request.Options),
-                Ownership = RepositoryMemoryOwnership.Ordinary,
-                UserTurnId = request.UserTurnId,
-                Concepts = request.Concepts,
-                RetainedMemories = request.RetainedMemories,
-            };
+        {
+            RepositoryIdentity = request.RepositoryIdentity,
+            Query = query,
+            QueryBounded = bounded,
+            Options = RepositoryMemorySearchOptions.ForRecall(request.Options),
+            Ownership = RepositoryMemoryOwnership.Ordinary,
+            UserTurnId = request.UserTurnId,
+            Concepts = request.Concepts,
+            RetainedMemories = request.RetainedMemories,
+        };
         var ordinary = await SearchAsync(search, cancellationToken);
         if (!request.IntelligenceEnabled || !request.Options.Intelligence.Enabled)
         {

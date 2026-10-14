@@ -198,11 +198,11 @@ public sealed partial class SessionApplication
                     loopState.CommitStandaloneMessage(
                         modelRound,
                         new ModelMessage
-                    {
-                        Role = ModelMessageRole.HostContext,
-                        SectionId = "repository-intelligence-coverage",
-                        Content = [new ModelContentPart { Content = coverageInstructions }],
-                    },
+                        {
+                            Role = ModelMessageRole.HostContext,
+                            SectionId = "repository-intelligence-coverage",
+                            Content = [new ModelContentPart { Content = coverageInstructions }],
+                        },
                         purgeAfterCorrection: false);
                     if (maximumModelRounds > 0 && modelRound == maximumModelRounds)
                     {

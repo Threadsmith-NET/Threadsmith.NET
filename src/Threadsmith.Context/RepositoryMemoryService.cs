@@ -225,7 +225,11 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
 
                     var proposalKey = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
                     {
-                        text, memoryType, kind, concepts, request.Sensitivity,
+                        text,
+                        memoryType,
+                        kind,
+                        concepts,
+                        request.Sensitivity,
                     })));
                     var confirmations = request.Collection?.ConfirmReconciliation(proposalKey, text, request.ConfirmDistinctFrom, snapshot.Entries, write)
                         ?? request.ConfirmDistinctFrom;

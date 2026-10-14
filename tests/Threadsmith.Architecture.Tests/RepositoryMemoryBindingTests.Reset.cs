@@ -27,7 +27,10 @@ public static partial class RepositoryMemoryBindingTests
             intelligence.Identity,
             new RepositoryMemoryWrite
             {
-                Text = "Supported intelligence", Origin = RepositoryMemoryOrigin.Model, Ownership = RepositoryMemoryOwnership.Intelligence, Concepts = ["architecture"],
+                Text = "Supported intelligence",
+                Origin = RepositoryMemoryOrigin.Model,
+                Ownership = RepositoryMemoryOwnership.Intelligence,
+                Concepts = ["architecture"],
                 Supports = [new RepositoryMemorySupport { Path = "service.cs", ContentHash = new string('a', 64), ObservedAt = DateTimeOffset.UtcNow }],
             },
             model,
@@ -103,7 +106,11 @@ public static partial class RepositoryMemoryBindingTests
         Assert.NotNull(await onboard.ContinueCoverageAsync("Final pass", ct));
         onboard.Collection!.UpdateCoverage(new RepositoryIntelligenceCoverage
         {
-            Key = "fixture", Area = "Fixture", Question = "What guidance exists?", Status = "blocked", Gaps = "Fixture provides no source to inspect.",
+            Key = "fixture",
+            Area = "Fixture",
+            Question = "What guidance exists?",
+            Status = "blocked",
+            Gaps = "Fixture provides no source to inspect.",
         });
         InitializeCoverageSurvey(onboard.Collection);
         await onboard.ContinueCoverageAsync("Survey and blocked fixture review complete.", ct);

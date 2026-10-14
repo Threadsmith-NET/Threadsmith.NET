@@ -32,7 +32,9 @@ public static class MemoryReconciliationTests
         var service = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: search);
         var proposal = MemoryTestData.Operation("add", "Independent recipe") with
         {
-            Collection = collection, Ownership = RepositoryMemoryOwnership.Intelligence, Options = Reconcile,
+            Collection = collection,
+            Ownership = RepositoryMemoryOwnership.Intelligence,
+            Options = Reconcile,
             Supports = [new RepositoryMemorySupport { Path = "recipe.cs", ContentHash = new string('a', 64), ObservedAt = DateTimeOffset.UtcNow }],
         };
         var initial = await service.ExecuteAsync(proposal, ct);

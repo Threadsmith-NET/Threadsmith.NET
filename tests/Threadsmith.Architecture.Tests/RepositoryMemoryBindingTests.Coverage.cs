@@ -21,7 +21,10 @@ public static partial class RepositoryMemoryBindingTests
         await using var run = await operations.BeginAsync(SessionId.New(), RunId.New(), fixture.InitialRoot, RepositoryIntelligenceOperation.Onboard, ct);
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
         {
-            RepositoryPath = fixture.InitialRoot, RequestedBy = "model", IntelligenceRun = run, TrustLevel = RepositoryTrustLevel.TrustedRead,
+            RepositoryPath = fixture.InitialRoot,
+            RequestedBy = "model",
+            IntelligenceRun = run,
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
         });
         var tool = new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance);
         var before = run.Collection!.Snapshot();
@@ -41,8 +44,11 @@ public static partial class RepositoryMemoryBindingTests
         {
             var large = update with
             {
-                Key = $"area-{index}", Area = new string('界', 160), Question = new string('界', 600),
-                Conclusion = new string('界', 1200), Limitations = new string('界', 600),
+                Key = $"area-{index}",
+                Area = new string('界', 160),
+                Question = new string('界', 600),
+                Conclusion = new string('界', 1200),
+                Limitations = new string('界', 600),
             };
             await tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: large), context, ct);
         }
@@ -50,7 +56,11 @@ public static partial class RepositoryMemoryBindingTests
         var pipeline = new ToolInvocationPipeline(new ToolRegistry([tool]), new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
         var invocation = new ToolInvocationRequest
         {
-            SessionId = context.SessionId, RunId = context.RunId, ToolId = "memories", ArgumentsJson = "{\"action\":\"coverage\"}", Context = context.Invocation,
+            SessionId = context.SessionId,
+            RunId = context.RunId,
+            ToolId = "memories",
+            ArgumentsJson = "{\"action\":\"coverage\"}",
+            Context = context.Invocation,
         };
         var page = await pipeline.InvokeAsync(invocation, ct);
         Assert.True(page.Succeeded, page.Error);
@@ -90,7 +100,10 @@ public static partial class RepositoryMemoryBindingTests
         var collection = new RepositoryMemoryCollection(new RepositoryMemoryReadSnapshot("repo", 1, [], [], []), true, 0);
         Assert.Throws<ArgumentException>(() => collection.UpdateCoverage(new RepositoryIntelligenceCoverage
         {
-            Key = "output", Area = "Presentation", Question = "How is output formatted?", Status = status,
+            Key = "output",
+            Area = "Presentation",
+            Question = "How is output formatted?",
+            Status = status,
         }));
         Assert.Empty(collection.Coverage);
     }

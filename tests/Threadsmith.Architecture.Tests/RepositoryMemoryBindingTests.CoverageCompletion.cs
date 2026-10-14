@@ -33,7 +33,9 @@ public static partial class RepositoryMemoryBindingTests
                 intelligence.Identity,
                 new RepositoryMemoryWrite
                 {
-                    Text = "Reuse the inspected implementation.", Origin = RepositoryMemoryOrigin.Model, Ownership = RepositoryMemoryOwnership.Intelligence,
+                    Text = "Reuse the inspected implementation.",
+                    Origin = RepositoryMemoryOrigin.Model,
+                    Ownership = RepositoryMemoryOwnership.Intelligence,
                     Concepts = ["output", "tools"],
                     Supports = [new RepositoryMemorySupport { Path = "feature.txt", ContentHash = hash, ObservedAt = DateTimeOffset.UtcNow }],
                 },
@@ -45,7 +47,9 @@ public static partial class RepositoryMemoryBindingTests
             collection.InitializeSurvey([new RepositoryIntelligenceCoverage { Key = "feature", Area = "Feature", Question = "What guidance applies?", Status = "uninvestigated" }]);
             collection.UpdateCoverage(collection.Coverage[0] with
             {
-                Status = "investigated", Conclusion = "Inspected the fixture.", MemoryIds = [added.Entry.Id],
+                Status = "investigated",
+                Conclusion = "Inspected the fixture.",
+                MemoryIds = [added.Entry.Id],
                 Supports = [new RepositoryMemorySupport { Path = "feature.txt", ContentHash = hash, ObservedAt = DateTimeOffset.UtcNow }],
             });
             await preparation.ContinueCoverageAsync("Investigation complete.", ct);
@@ -109,7 +113,10 @@ public static partial class RepositoryMemoryBindingTests
             await run.AcceptHistoryPageAsync(0, new GitLogResult([], false) { IsCollectionPage = true }, "{}", ct);
             var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), new ToolInvocationContext
             {
-                RepositoryPath = fixture.InitialRoot, RequestedBy = "model", IntelligenceRun = run, TrustLevel = RepositoryTrustLevel.TrustedRead,
+                RepositoryPath = fixture.InitialRoot,
+                RequestedBy = "model",
+                IntelligenceRun = run,
+                TrustLevel = RepositoryTrustLevel.TrustedRead,
             });
             var tool = new MemoriesTool(new UnusedMemories(), intelligence.Options, TestPromptLoader.Instance);
             var optional = new MemoryCoverageInput("internals", "Output", "How does the formatter allocate its buffers?", "uninvestigated", Gaps: "Buffer strategy unread.", Limitations: "Adding a command uses the public formatter; its allocation strategy does not affect that recipe.", Priority: "optional");
@@ -120,7 +127,12 @@ public static partial class RepositoryMemoryBindingTests
             await Assert.ThrowsAsync<ArgumentException>(() => tool.ExecuteAsync(new MemoriesInput("updateCoverage", Coverage: optional with { Priority = "unknown" }), context, ct));
             run.Collection.UpdateCoverage(new RepositoryIntelligenceCoverage
             {
-                Key = "recipe", Area = "Output", Question = "How is output shared?", Status = "investigating", Gaps = "Verify the caller.", FollowUpKeys = ["internals"],
+                Key = "recipe",
+                Area = "Output",
+                Question = "How is output shared?",
+                Status = "investigating",
+                Gaps = "Verify the caller.",
+                FollowUpKeys = ["internals"],
             });
             InitializeCoverageSurvey(run.Collection);
             await run.ContinueCoverageAsync("Required recipe and optional buffer research.", ct);
@@ -134,7 +146,10 @@ public static partial class RepositoryMemoryBindingTests
         var required = resumed.Collection.Coverage.Single(item => item.Key == "recipe");
         resumed.Collection.UpdateCoverage(required with
         {
-            Status = "investigated", Gaps = string.Empty, Conclusion = "Use the formatter from the command caller.", NoMemoryReason = "Fixture-only assertion used to exercise optional checklist state.",
+            Status = "investigated",
+            Gaps = string.Empty,
+            Conclusion = "Use the formatter from the command caller.",
+            NoMemoryReason = "Fixture-only assertion used to exercise optional checklist state.",
             Supports = [new RepositoryMemorySupport { Path = "formatter.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
         });
         Assert.Null(await resumed.ContinueCoverageAsync("Required guidance complete; buffer research optional.", ct));
@@ -237,8 +252,14 @@ public static partial class RepositoryMemoryBindingTests
         var collection = new RepositoryMemoryCollection(new RepositoryMemoryReadSnapshot("repo", 1, [], [], []), true, 0);
         var item = new RepositoryIntelligenceCoverage
         {
-            Key = "tools", Area = "Tools", Question = "How do tools execute?", Status = "investigated", Conclusion = "Reuse the pipeline.", NoMemoryReason = "Synthetic checklist fixture without a real implementation.",
-            Gaps = "MCP integration remains unread.", Supports = [new RepositoryMemorySupport { Path = "pipeline.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
+            Key = "tools",
+            Area = "Tools",
+            Question = "How do tools execute?",
+            Status = "investigated",
+            Conclusion = "Reuse the pipeline.",
+            NoMemoryReason = "Synthetic checklist fixture without a real implementation.",
+            Gaps = "MCP integration remains unread.",
+            Supports = [new RepositoryMemorySupport { Path = "pipeline.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
         };
         Assert.Throws<ArgumentException>(() => collection.UpdateCoverage(item));
         collection.UpdateCoverage(item with { Gaps = string.Empty, Limitations = "History before requested depth excluded.", FollowUpKeys = ["mcp"] });

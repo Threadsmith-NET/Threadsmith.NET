@@ -175,8 +175,12 @@ public static class SessionResumePresentationTests
         {
             return new SessionCatalogEntry
             {
-                SessionId = sessionId, RepositoryIdentity = "repo", RepositoryDisplayName = "repo",
-                CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow, State = SessionLifecycleState.Idle,
+                SessionId = sessionId,
+                RepositoryIdentity = "repo",
+                RepositoryDisplayName = "repo",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                State = SessionLifecycleState.Idle,
             };
         }
 
@@ -184,8 +188,15 @@ public static class SessionResumePresentationTests
         {
             return new ConversationMessage
             {
-                Id = ConversationMessageId.New(), SessionId = Target, RunId = RunId.New(), Sequence = sequence,
-                Role = role, Content = content, ContentHash = "hash", EstimatedTokens = 1, OccurredAt = DateTimeOffset.UtcNow,
+                Id = ConversationMessageId.New(),
+                SessionId = Target,
+                RunId = RunId.New(),
+                Sequence = sequence,
+                Role = role,
+                Content = content,
+                ContentHash = "hash",
+                EstimatedTokens = 1,
+                OccurredAt = DateTimeOffset.UtcNow,
             };
         }
     }

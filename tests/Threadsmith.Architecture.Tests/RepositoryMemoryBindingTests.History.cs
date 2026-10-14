@@ -203,7 +203,9 @@ public static partial class RepositoryMemoryBindingTests
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new AllowApprovalPolicy(), intelligence.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
         var invocation = new ToolInvocationRequest
         {
-            SessionId = context.SessionId, RunId = context.RunId, ToolId = "git_show",
+            SessionId = context.SessionId,
+            RunId = context.RunId,
+            ToolId = "git_show",
             ArgumentsJson = JsonSerializer.Serialize(new GitShowInput { Revision = revision, Paths = ["guide.txt"] }),
             Context = context.Invocation with { AllowedExecutables = ["git"] },
         };

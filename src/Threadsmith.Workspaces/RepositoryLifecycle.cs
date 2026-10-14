@@ -895,7 +895,7 @@ public sealed class RepositoryLifecycle :
                 "The repository configuration directory cannot be a symbolic link or junction.");
         }
 
-        await RepositorySettingsCoordinator.ExecuteWriteAsync(
+        await RepositorySettingsCoordinator.UpdateAsync(
             configurationPath,
             async token =>
             {
@@ -935,16 +935,6 @@ public sealed class RepositoryLifecycle :
                 solution["path"] = solutionRelativePath is null
                     ? null
                     : JsonValue.Create(solutionRelativePath);
-                Directory.CreateDirectory(configurationDirectory);
-                if ((File.GetAttributes(configurationDirectory) & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new UnauthorizedAccessException(
-                        "The repository configuration directory cannot be a symbolic link or junction.");
-                }
-
-                var temporaryPath = Path.Combine(
-                    configurationDirectory,
-                    $".config-{Guid.NewGuid():N}.tmp");
                 var serialized = root.ToJsonString(
                     new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
                 if (Encoding.UTF8.GetByteCount(serialized) > _maximumConfigurationBytes)
@@ -952,24 +942,9 @@ public sealed class RepositoryLifecycle :
                     throw new InvalidDataException("The updated repository configuration exceeds its configured byte limit.");
                 }
 
-                try
-                {
-                    await File.WriteAllTextAsync(
-                        temporaryPath,
-                        serialized,
-                        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                        token);
-                    File.Move(temporaryPath, configurationPath, overwrite: true);
-                }
-                finally
-                {
-                    if (File.Exists(temporaryPath))
-                    {
-                        File.Delete(temporaryPath);
-                    }
-                }
+                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(serialized));
             },
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows()

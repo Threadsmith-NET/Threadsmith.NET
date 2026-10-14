@@ -50,9 +50,9 @@ public sealed class UserAllowedNetworkHostStore
         }
 
         var normalized = WebFetchUrlPolicy.Normalize($"https://{hostname}/", 8192).IdnHost.ToLowerInvariant();
-        await RepositorySettingsCoordinator.ExecuteWriteAsync(
+        await RepositorySettingsCoordinator.UpdateAsync(
             _configurationPath,
-            async token =>
+            _ =>
             {
                 var root = ReadRoot();
                 if (root["tools"] is not (null or JsonObject))
@@ -80,7 +80,7 @@ public sealed class UserAllowedNetworkHostStore
                 if (hosts.Any(node => node is JsonValue value && value.TryGetValue<string>(out var host)
                     && string.Equals(host, normalized, StringComparison.OrdinalIgnoreCase)))
                 {
-                    return;
+                    return Task.FromResult<RepositorySettingsUpdate?>(null);
                 }
 
                 hosts.Add(normalized);
@@ -90,26 +90,9 @@ public sealed class UserAllowedNetworkHostStore
                     throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
                 }
 
-                var directory = Path.GetDirectoryName(_configurationPath)
-                    ?? throw new InvalidOperationException("The user configuration path has no parent directory.");
-                Directory.CreateDirectory(directory);
-                var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_configurationPath)}.{Guid.NewGuid():N}.tmp");
-                try
-                {
-                    await File.WriteAllBytesAsync(temporaryPath, bytes, token);
-                    token.ThrowIfCancellationRequested();
-                    RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(_configurationPath);
-                    File.Move(temporaryPath, _configurationPath, overwrite: true);
-                }
-                finally
-                {
-                    if (File.Exists(temporaryPath))
-                    {
-                        File.Delete(temporaryPath);
-                    }
-                }
+                return Task.FromResult<RepositorySettingsUpdate?>(new(bytes));
             },
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 
     private JsonObject ReadRoot()

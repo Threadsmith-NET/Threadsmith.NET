@@ -8,6 +8,34 @@ using Xunit;
 /// <summary>Verifies repository-scoped plan-27 tool availability state.</summary>
 public static class ToolStateManagerTests
 {
+    /// <summary>Tool-state persistence also ignores a pre-existing fixed-name temporary entry.</summary>
+    [Fact]
+    public static async Task Disable_preserves_repository_controlled_temporary_entry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var repository = CreateTemporaryDirectory();
+        var directory = Path.Combine(repository, ".threadsmith");
+        var configPath = Path.Combine(directory, "config.json");
+        try
+        {
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(configPath + ".tmp", "sentinel", ct);
+            var state = new ToolStateManager([new TestTool("optional").Definition], new ConfigurationBuilder().Build(), configPath);
+
+            await state.DisableAsync("optional", ct);
+
+            Assert.False(state.IsEnabled("optional"));
+            Assert.Equal("sentinel", await File.ReadAllTextAsync(configPath + ".tmp", ct));
+            Assert.Equal([configPath + ".tmp"], Directory.GetFiles(directory, "*.tmp"));
+            using var saved = JsonDocument.Parse(await File.ReadAllTextAsync(configPath, ct));
+            Assert.Equal("optional", saved.RootElement.GetProperty("tools").GetProperty("disabled")[0].GetString());
+        }
+        finally
+        {
+            Directory.Delete(repository, recursive: true);
+        }
+    }
+
     /// <summary>An explicitly empty enabled array remains a fail-closed allowlist.</summary>
     [Fact]
     public static async Task EmptyEnabledAllowList_DisablesNonEssentialTools()

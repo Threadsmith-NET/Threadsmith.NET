@@ -383,14 +383,14 @@ public static class RepoConfigTests
 
     /// <summary>The user config is scaffolded from the shipped catalog on first launch and never overwritten.</summary>
     [Fact]
-    public static void UserConfigurationIsScaffoldedFromCatalogWhenMissing()
+    public static async Task UserConfigurationIsScaffoldedFromCatalogWhenMissing()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"threadsmith-scaffold-{Guid.NewGuid():N}");
         var userConfig = Path.Combine(tempDir, ".threadsmith", "config.json");
         try
         {
             // First launch: the file does not exist, so it is scaffolded from the shipped catalog.
-            Threadsmith.App.Program.ScaffoldUserConfigurationIfMissing(userConfig);
+            await Threadsmith.App.Program.ScaffoldUserConfigurationIfMissingAsync(userConfig, TestContext.Current.CancellationToken);
             Assert.True(File.Exists(userConfig), $"Expected scaffolded user config at {userConfig}");
             var scaffolded = new ConfigurationBuilder()
                 .AddJsonFile(userConfig, optional: false)
@@ -410,13 +410,13 @@ public static class RepoConfigTests
             // The scaffolded file is strict JSON: System.Text.Json rejects comments, so a
             // successful parse proves no // or /* */ comments survived the copy. (Glob values
             // such as "**/*.env" legitimately contain "/*" inside string literals.)
-            var written = File.ReadAllText(userConfig);
+            var written = await File.ReadAllTextAsync(userConfig, TestContext.Current.CancellationToken);
             using var parsed = JsonDocument.Parse(written);
             Assert.NotEmpty(parsed.RootElement.EnumerateObject());
 
             // A user edit must be preserved: re-scaffolding must not overwrite an existing file.
-            File.WriteAllText(userConfig, "{ \"execution\": { \"maxModelRounds\": 3 } }\n");
-            Threadsmith.App.Program.ScaffoldUserConfigurationIfMissing(userConfig);
+            await File.WriteAllTextAsync(userConfig, "{ \"execution\": { \"maxModelRounds\": 3 } }\n", TestContext.Current.CancellationToken);
+            await Threadsmith.App.Program.ScaffoldUserConfigurationIfMissingAsync(userConfig, TestContext.Current.CancellationToken);
             var preserved = new ConfigurationBuilder()
                 .AddJsonFile(userConfig, optional: false)
                 .Build();

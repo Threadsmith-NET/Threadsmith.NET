@@ -1,5 +1,6 @@
 namespace Threadsmith.Workspaces;
 
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
@@ -292,18 +293,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     {
         var configurationPath = _repositoryConfigurationPath
             ?? throw new InvalidOperationException("A repository configuration path is required.");
-        var directory = Path.GetDirectoryName(configurationPath);
-        if (string.IsNullOrWhiteSpace(directory))
-        {
-            throw new InvalidOperationException("The repository configuration path has no parent directory.");
-        }
-
-        var repositoryRoot = Directory.GetParent(directory)?.FullName
-            ?? throw new InvalidOperationException("The repository configuration path has no repository root.");
-        EnsureNoReparsePoints(repositoryRoot, configurationPath);
-        Directory.CreateDirectory(directory);
-        EnsureNoReparsePoints(repositoryRoot, configurationPath);
-        await RepositorySettingsCoordinator.ExecuteWriteAsync(
+        await RepositorySettingsCoordinator.UpdateAsync(
             configurationPath,
             async token =>
             {
@@ -325,27 +315,9 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                     _ => throw new ArgumentOutOfRangeException(nameof(policy)),
                 };
 
-                var temporaryPath = configurationPath + $".{Guid.NewGuid():N}.tmp";
-                try
-                {
-                    EnsureNoReparsePoints(repositoryRoot, configurationPath);
-                    await File.WriteAllTextAsync(
-                        temporaryPath,
-                        root.ToJsonString(_jsonOptions) + Environment.NewLine,
-                        token);
-                    EnsureNoReparsePoints(repositoryRoot, configurationPath);
-                    File.Move(temporaryPath, configurationPath, overwrite: true);
-                }
-                finally
-                {
-                    if (File.Exists(temporaryPath))
-                    {
-                        EnsureNoReparsePoints(repositoryRoot, temporaryPath);
-                        File.Delete(temporaryPath);
-                    }
-                }
+                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(_jsonOptions) + Environment.NewLine));
             },
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 
     private static void EnsureNoReparsePoints(string repositoryRoot, string candidatePath)

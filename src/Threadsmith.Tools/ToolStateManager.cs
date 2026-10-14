@@ -1,5 +1,6 @@
 namespace Threadsmith.Tools;
 
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
@@ -484,18 +485,10 @@ public sealed class ToolStateManager : IToolStateManager
         CancellationToken cancellationToken)
     {
         var configurationPath = _repositoryConfigurationPath;
-        await RepositorySettingsCoordinator.ExecuteWriteAsync(
+        await RepositorySettingsCoordinator.UpdateAsync(
             configurationPath,
             async token =>
             {
-                var directory = Path.GetDirectoryName(configurationPath);
-                if (string.IsNullOrWhiteSpace(directory))
-                {
-                    throw new InvalidOperationException(
-                        "The repository configuration path has no parent directory.");
-                }
-
-                Directory.CreateDirectory(directory);
                 var root = File.Exists(configurationPath)
                     ? JsonNode.Parse(
                         await File.ReadAllTextAsync(configurationPath, token),
@@ -530,13 +523,8 @@ public sealed class ToolStateManager : IToolStateManager
                     tools.Remove("defaultEnabledOverrides");
                 }
 
-                var temporaryPath = configurationPath + ".tmp";
-                await File.WriteAllTextAsync(
-                    temporaryPath,
-                    root.ToJsonString(_jsonOptions) + Environment.NewLine,
-                    token);
-                File.Move(temporaryPath, configurationPath, overwrite: true);
+                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(_jsonOptions) + Environment.NewLine));
             },
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 }

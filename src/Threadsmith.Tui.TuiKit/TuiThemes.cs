@@ -1,10 +1,10 @@
 namespace Threadsmith.Tui.TuiKit;
 
-using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
+using Threadsmith.Core;
 using Threadsmith.Interaction.Contracts;
 using Threadsmith.Interaction.Presentation;
 
@@ -12,7 +12,6 @@ using Threadsmith.Interaction.Presentation;
 internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceStore
 {
     private readonly int _maximumConfigurationBytes;
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(PathComparer);
     private readonly string _configurationPath;
 
     /// <summary>Initializes a new instance of the <see cref="UserConfigurationThemePreferenceStore"/> class.</summary>
@@ -28,47 +27,22 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
     public async Task SetDefaultThemeAsync(string themeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(themeId);
-        var gate = Gates.GetOrAdd(_configurationPath, static _ => new SemaphoreSlim(1, 1));
-        await gate.WaitAsync(cancellationToken);
-        try
-        {
-            var directory = Path.GetDirectoryName(_configurationPath)
-                ?? throw new InvalidOperationException("The user configuration path has no parent directory.");
-            Directory.CreateDirectory(directory);
-            RejectReparsePoint(directory);
-            RejectReparsePoint(_configurationPath);
-
-            (var original, var root) = await ReadRootAsync(cancellationToken).ConfigureAwait(false);
-            var tui = GetOrCreateObject(root, "tui");
-            SetProperty(tui, "defaultTheme", themeId);
-            var updated = UpdateThemeDefault(original, themeId);
-            if (updated.Length > _maximumConfigurationBytes)
+        await RepositorySettingsCoordinator.UpdateAsync(
+            _configurationPath,
+            async token =>
             {
-                throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
-            }
-
-            var temporaryPath = Path.Combine(directory, $".{Path.GetFileName(_configurationPath)}.{Guid.NewGuid():N}.tmp");
-            try
-            {
-                await File.WriteAllBytesAsync(
-                    temporaryPath,
-                    updated,
-                    cancellationToken).ConfigureAwait(false);
-                RejectReparsePoint(temporaryPath);
-                File.Move(temporaryPath, _configurationPath, overwrite: true);
-            }
-            finally
-            {
-                if (File.Exists(temporaryPath))
+                (var original, var root) = await ReadRootAsync(token).ConfigureAwait(false);
+                var tui = GetOrCreateObject(root, "tui");
+                SetProperty(tui, "defaultTheme", themeId);
+                var updated = UpdateThemeDefault(original, themeId);
+                if (updated.Length > _maximumConfigurationBytes)
                 {
-                    File.Delete(temporaryPath);
+                    throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
                 }
-            }
-        }
-        finally
-        {
-            gate.Release();
-        }
+
+                return new RepositorySettingsUpdate(updated);
+            },
+            cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
     private static JsonObject GetOrCreateObject(JsonObject parent, string propertyName)
@@ -91,15 +65,6 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         var created = new JsonObject();
         parent[propertyName] = created;
         return created;
-    }
-
-    private static void RejectReparsePoint(string path)
-    {
-        if ((File.Exists(path) || Directory.Exists(path))
-            && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new UnauthorizedAccessException("User configuration paths cannot be links or reparse points.");
-        }
     }
 
     private static void SetProperty(JsonObject parent, string propertyName, string value)
@@ -392,10 +357,6 @@ internal sealed class UserConfigurationThemePreferenceStore : IThemePreferenceSt
         ObjectLocation Root,
         ObjectLocation? Tui,
         ValueLocation? DefaultTheme);
-
-    private static StringComparer PathComparer => OperatingSystem.IsWindows()
-        ? StringComparer.OrdinalIgnoreCase
-        : StringComparer.Ordinal;
 }
 
 /// <summary>Loads bounded theme configuration and merges it with compiled themes.</summary>

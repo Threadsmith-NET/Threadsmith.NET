@@ -1,5 +1,6 @@
 namespace Threadsmith.Tools;
 
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
@@ -36,7 +37,7 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
         var identity = RepositoryIdentity.Create(repositoryPath);
         var current = Capture(identity);
         var path = Path.Combine(repositoryPath, ".threadsmith", "config.json");
-        await RepositorySettingsCoordinator.ExecuteWriteAsync(
+        await RepositorySettingsCoordinator.UpdateAsync(
             path,
             async token =>
             {
@@ -56,12 +57,9 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
                 }
 
                 section["Enabled"] = enabled;
-                Directory.CreateDirectory(Path.GetDirectoryName(path) ?? throw new InvalidOperationException("Repository configuration has no parent directory."));
-                var temporary = path + ".tmp";
-                await File.WriteAllTextAsync(temporary, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine, token);
-                File.Move(temporary, path, overwrite: true);
+                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine));
             },
-            cancellationToken);
+            cancellationToken: cancellationToken);
         BindRepository(repositoryPath, current with { Intelligence = current.Intelligence with { Enabled = enabled } });
     }
 

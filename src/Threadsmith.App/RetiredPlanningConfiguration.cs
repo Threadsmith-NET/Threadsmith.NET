@@ -68,53 +68,31 @@ internal static class RetiredPlanningConfiguration
 
         try
         {
-            await RepositorySettingsCoordinator.ExecuteWriteAsync(
+            await RepositorySettingsCoordinator.UpdateAsync(
                 path,
                 async token =>
                 {
                     if (!File.Exists(path) || File.GetAttributes(path).HasFlag(FileAttributes.ReadOnly)
                         || new FileInfo(path).Length > MaximumBytes)
                     {
-                        return;
+                        return null;
                     }
 
                     var original = await File.ReadAllBytesAsync(path, token);
                     if (original.Length > MaximumBytes)
                     {
-                        return;
+                        return null;
                     }
 
                     var updated = RemoveProperties(original);
                     if (updated is null)
                     {
-                        return;
+                        return null;
                     }
 
-                    var temporary = path + $".{Guid.NewGuid():N}.tmp";
-                    try
-                    {
-                        await File.WriteAllBytesAsync(temporary, updated, token);
-                        RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(path);
-
-                        // Do not overwrite an external writer that changed this file during migration.
-                        var current = await File.ReadAllBytesAsync(path, token);
-                        if (!original.AsSpan().SequenceEqual(current))
-                        {
-                            return;
-                        }
-
-                        token.ThrowIfCancellationRequested();
-                        File.Replace(temporary, path, destinationBackupFileName: null);
-                    }
-                    finally
-                    {
-                        if (File.Exists(temporary))
-                        {
-                            File.Delete(temporary);
-                        }
-                    }
+                    return new RepositorySettingsUpdate(updated) { ExpectedContent = original };
                 },
-                cancellationToken);
+                cancellationToken: cancellationToken);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
         {

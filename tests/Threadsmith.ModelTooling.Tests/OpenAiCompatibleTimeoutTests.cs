@@ -200,6 +200,100 @@ public static class OpenAiCompatibleTimeoutTests
         }
     }
 
+    /// <summary>Both transport phases use one retry budget, while delivered output prevents replay.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    public static async Task InterruptedBody_UsesRemainingAttemptsUnlessOutputDelivered(bool exhaustRetries, bool partialOutput, bool reasoningOnly = false)
+    {
+        var attempts = 0;
+        var submissions = 0;
+        var streams = new List<ControlledStream>();
+        using var client = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            Assert.All(streams, stream => Assert.True(stream.IsDisposed));
+            if (++attempts == 1)
+            {
+                throw new HttpRequestException(HttpRequestError.ConnectionError, "private detail");
+            }
+
+            if (attempts == 2 || exhaustRetries)
+            {
+                var prefix = partialOutput
+                    ? "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
+                    : "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n";
+                if (reasoningOnly)
+                {
+                    prefix = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"partial reasoning\"}}]}\n\n" + prefix;
+                }
+
+                var stream = new ControlledStream(
+                    prefix,
+                    (_, _) => throw new HttpIOException(HttpRequestError.ResponseEnded, "private detail"));
+                streams.Add(stream);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) });
+            }
+
+            return Task.FromResult(Response(CompletedResponse));
+        }));
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
+        var request = Request() with { SubmissionObserver = () => submissions++ };
+        var chunks = new List<ModelChunk>();
+        async Task CollectAsync()
+        {
+            await foreach (var chunk in provider.StreamAsync(request, TestContext.Current.CancellationToken))
+            {
+                chunks.Add(chunk);
+            }
+        }
+
+        if (exhaustRetries || partialOutput)
+        {
+            var error = await Assert.ThrowsAsync<TransientModelException>(CollectAsync);
+            Assert.Contains("ResponseEnded", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("private detail", error.Message, StringComparison.Ordinal);
+            Assert.Equal(partialOutput ? "partial" : string.Empty, string.Concat(chunks.Select(chunk => chunk.Text)));
+        }
+        else
+        {
+            await CollectAsync();
+            Assert.Equal("answer", string.Concat(chunks.Select(chunk => chunk.Text)));
+        }
+
+        Assert.Equal(reasoningOnly && !partialOutput ? 1 : 0, chunks.Count(chunk => chunk.Reasoning == ModelStreamRetry.ReasoningBoundary().Reasoning));
+        Assert.Equal(partialOutput ? 2 : 3, attempts);
+        Assert.Equal(attempts, submissions);
+        Assert.All(streams, stream => Assert.True(stream.IsDisposed));
+    }
+
+    /// <summary>Cancellation of a failed first body cannot trigger a second submission.</summary>
+    [Fact]
+    public static async Task InterruptedBody_CallerCancellation_DoesNotRetry()
+    {
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var attempts = 0;
+        using var client = new HttpClient(new RecordingHandler((_, _) =>
+        {
+            attempts++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new ControlledStream(string.Empty, async (_, _) =>
+                {
+                    await caller.CancelAsync();
+                    throw new HttpIOException(HttpRequestError.ResponseEnded, "private detail");
+                })),
+            });
+        }));
+        var provider = new OpenAiCompatibleModelProvider(client, Profile(600));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+            await provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token));
+        Assert.Equal(1, attempts);
+    }
+
     private static ModelStreamRequest Request()
     {
         return new() { RunId = RunId.New(), Input = "Explain the design." };

@@ -82,6 +82,7 @@ public sealed class SessionUsageProjection
                 StablePrefixComponentCount = estimate.StablePrefixComponentCount,
                 EstimationBasis = estimate.EstimationBasis,
                 Components = estimate.Components,
+                Memories = request.MemorySubmission?.Items.ToArray() ?? [],
             }
             : null;
         ObserveRequest(sessionId, identity.RunId, new AgentRequestStatus(request.ResolvedProfileId, request.ReasoningLevel, estimate?.WireInputTokens, contextWindow, System.Diagnostics.Stopwatch.GetTimestamp()) { ContextUsage = snapshot });

@@ -29,6 +29,10 @@ internal sealed class ContextUsageModal : Modal
     private int _top;
     private int _page = 1;
     private bool _categoryView;
+    private bool _memoryView;
+    private int _memoryTop;
+    private int _memoryWidth;
+    private IReadOnlyList<string> _memoryLines = [];
     private double _maximum;
     private int _basisWidth;
     private IReadOnlyList<string> _basisLines = [];
@@ -62,6 +66,26 @@ internal sealed class ContextUsageModal : Modal
         else if (key.Code == KeyCode.F12)
         {
             _toggleMouse();
+        }
+        else if (key.Code == KeyCode.Character && key.Rune is 'm' or 'M')
+        {
+            _memoryView = !_memoryView;
+        }
+        else if (_memoryView)
+        {
+            _memoryTop = Math.Clamp(
+                key.Code switch
+                {
+                    KeyCode.Up => _memoryTop - 1,
+                    KeyCode.Down => _memoryTop + 1,
+                    KeyCode.PageUp => _memoryTop - _page,
+                    KeyCode.PageDown => _memoryTop + _page,
+                    KeyCode.Home => 0,
+                    KeyCode.End => _memoryLines.Count - _page,
+                    _ => _memoryTop,
+                },
+                0,
+                Math.Max(0, _memoryLines.Count - _page));
         }
         else if (key.Code == KeyCode.Tab)
         {
@@ -105,7 +129,15 @@ internal sealed class ContextUsageModal : Modal
 
         if (mouse.Kind == MouseEventKind.Wheel)
         {
-            _selected = Math.Clamp(_selected + (mouse.Button == MouseButton.WheelUp ? -3 : 3), 0, Math.Max(0, _rows.Count - 1));
+            var delta = mouse.Button == MouseButton.WheelUp ? -3 : 3;
+            if (_memoryView)
+            {
+                _memoryTop = Math.Clamp(_memoryTop + delta, 0, Math.Max(0, _memoryLines.Count - _page));
+            }
+            else
+            {
+                _selected = Math.Clamp(_selected + delta, 0, Math.Max(0, _rows.Count - 1));
+            }
         }
 
         return true;
@@ -130,6 +162,12 @@ internal sealed class ContextUsageModal : Modal
         }
 
         Draw(view, 1, $"{snapshot.ModelName ?? snapshot.ModelProfileId?.Value.ToString() ?? "Model unknown"} · {snapshot.Stage} #{snapshot.Round + 1} · {snapshot.CapturedAt:HH:mm:ss} UTC · {(snapshot.DispatchStarted ? "submitted" : "prepared; submission unobserved")}");
+        if (_memoryView)
+        {
+            RenderMemories(view, snapshot);
+            return;
+        }
+
         Draw(view, 2, $"Host-stable prefix {snapshot.StablePrefixTokens:N0} tokens · cache eligible · actual cache use requires provider telemetry");
         if (_basisWidth != view.Size.Width)
         {
@@ -208,7 +246,29 @@ internal sealed class ContextUsageModal : Modal
 
         var stableSuffix = !_categoryView && _selected < _stablePrefixRows ? " · stable prefix" : string.Empty;
         Draw(view, view.Size.Height - 2, _rows.Count > 0 ? $"{ContextUsageFormatter.Label(_rows[_selected].Label)} · {_rows[_selected].Tokens:N0} tokens · {ContextUsageFormatter.Percent(_rows[_selected].Tokens, snapshot.InputTokens)} of input{stableSuffix}" : "No included content.");
-        Draw(view, view.Size.Height - 1, "↑↓ PgUp/Dn Home/End · Tab categories/order · Esc close");
+        Draw(view, view.Size.Height - 1, "↑↓ PgUp/Dn Home/End · Tab categories/order · M memories · Esc close");
+    }
+
+    private void RenderMemories(BufferSurface view, ContextUsageSnapshot snapshot)
+    {
+        if (_memoryWidth != view.Size.Width)
+        {
+            _memoryWidth = view.Size.Width;
+            _memoryLines = ContextUsageFormatter.FormatMemories(snapshot).ReplaceLineEndings("\n").Split('\n')
+                .SelectMany(line => line.Length == 0 ? (IEnumerable<string>)[string.Empty]
+                    : TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(line)), _memoryWidth).Select(wrapped => wrapped.ToPlainString()))
+                .ToArray();
+        }
+
+        _page = Math.Max(1, view.Size.Height - 4);
+        _memoryTop = Math.Clamp(_memoryTop, 0, Math.Max(0, _memoryLines.Count - _page));
+        Draw(view, 2, $"Included memories: {snapshot.Memories.Count}", PresentationTextRole.Memory);
+        for (var index = 0; index < Math.Min(_page, _memoryLines.Count - _memoryTop); index++)
+        {
+            _text[_textIndex++ % _text.Length].Draw(view, 0, index + 3, _memoryLines[_memoryTop + index], _style(PresentationTextRole.Memory));
+        }
+
+        Draw(view, view.Size.Height - 1, "↑↓ PgUp/Dn Home/End scroll · M usage · Esc close");
     }
 
     private void Draw(ISurface surface, int y, string text, PresentationTextRole role = PresentationTextRole.Default)

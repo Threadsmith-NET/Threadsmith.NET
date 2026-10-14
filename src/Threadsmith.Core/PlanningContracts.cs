@@ -171,6 +171,15 @@ public sealed record ConversationContextItemProjection
 /// <summary>One repository-scoped memory inclusion or omission decision.</summary>
 public sealed record RepositoryMemoryContextItemProjection
 {
+    /// <summary>Complete sanitized included assertion text, independent of display preferences.</summary>
+    public string Text { get; init; } = string.Empty;
+
+    /// <summary>Immutable category ownership of the assertion.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; }
+
+    /// <summary>Supporting-source provenance captured with the inspected request.</summary>
+    public IReadOnlyList<RepositoryMemorySupport> Supports { get; init; } = [];
+
     /// <summary>Stable repository-memory identifier.</summary>
     public required RepositoryMemoryId Id { get; init; }
 
@@ -458,6 +467,9 @@ public sealed record ContextInspectionProjection
 
     /// <summary>Repository-scoped memory inclusion, omission, staleness, and pressure decisions.</summary>
     public IReadOnlyList<RepositoryMemoryContextItemProjection> RepositoryMemoryItems { get; init; } = [];
+
+    /// <summary>Effective output choice; content remains available to inspection regardless.</summary>
+    public bool ShowMemoryOutput { get; init; } = true;
 
     /// <summary>Branch availability and search-window omissions before context admission.</summary>
     public RepositoryMemorySearchDetails? RepositoryMemorySearch { get; init; }

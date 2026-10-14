@@ -70,6 +70,9 @@ public sealed record GitDiffResult(
 /// <summary>A bounded local Git history request.</summary>
 public sealed record GitLogRequest
 {
+    /// <summary>Host requester identity permitted to advance onboarding history.</summary>
+    public const string CollectionRequestor = "host:repository-intelligence-history";
+
     /// <summary>Validated starting revision. Defaults to HEAD when omitted or null.</summary>
     public string? Revision { get; init; } = "HEAD";
 
@@ -87,10 +90,55 @@ public sealed record GitCommitSummary(
     string AuthorName,
     string AuthorEmail,
     DateTimeOffset AuthoredAt,
-    string Subject);
+    string Subject)
+{
+    /// <summary>Commit message supplied by chronological collection, without a patch.</summary>
+    public string? Message { get; init; }
+
+    /// <summary>Whether a following page continues this commit's message.</summary>
+    public bool MessageContinues { get; init; }
+
+    /// <summary>Changed paths in this page, relative to the first parent (or the empty tree for a root).</summary>
+    public IReadOnlyList<string> ChangedPaths { get; init; } = [];
+
+    /// <summary>Whether another page continues this commit's changed paths.</summary>
+    public bool PathsContinue { get; init; }
+
+    /// <summary>Whether this record continues a commit introduced by an earlier page.</summary>
+    public bool IsContinuation { get; init; }
+
+    /// <summary>Changed paths withheld by the invocation's read policy.</summary>
+    public int OmittedPaths { get; init; }
+}
 
 /// <summary>Bounded Git history output.</summary>
-public sealed record GitLogResult(IReadOnlyList<GitCommitSummary> Commits, bool IsTruncated);
+public sealed record GitLogResult(IReadOnlyList<GitCommitSummary> Commits, bool IsTruncated)
+{
+    /// <summary>Zero-based host history batch index, including continued commit records.</summary>
+    public int CollectionPage { get; init; }
+
+    /// <summary>Requested maximum newest commits, or null for full ancestry.</summary>
+    public int? HistoryDepth { get; init; }
+
+    /// <summary>Pinned commit whose reachable history is being visited parent before child.</summary>
+    public string? HistoryRevision { get; init; }
+
+    /// <summary>Next chronological collection page, or null after the history stream ends.</summary>
+    public int? NextCollectionPage { get; init; }
+
+    /// <summary>Whether this result belongs to the host's chronological onboarding traversal.</summary>
+    public bool IsCollectionPage { get; init; }
+
+    /// <summary>Whether the opened directory has Git history available.</summary>
+    public bool IsGitRepository { get; init; } = true;
+}
+
+/// <summary>One operation-owned chronological Git stream; no history database or complete output buffer.</summary>
+public interface IGitHistoryReader : IAsyncDisposable
+{
+    /// <summary>Reads the next bounded page, retaining a partially delivered commit for the following page.</summary>
+    Task<GitLogResult> ReadPageAsync(int maximumCommits, int maximumCharacters, CancellationToken cancellationToken = default);
+}
 
 /// <summary>Git object kinds exposed by the show tool.</summary>
 public enum GitObjectKind
@@ -219,6 +267,19 @@ public sealed record GitBranchComparisonResult(
 /// <summary>Host boundary for closed, local-only Git queries.</summary>
 public interface IGitQueryService
 {
+    /// <summary>Opens a bounded stream of all locally reachable HEAD history, parent before child.</summary>
+    Task<IGitHistoryReader> OpenHistoryAsync(string repositoryPath, CancellationToken cancellationToken = default)
+    {
+        throw new NotSupportedException("Chronological Git history is unavailable.");
+    }
+
+    /// <summary>Opens an oldest-first stream restricted to the newest depth commits when supplied.</summary>
+    Task<IGitHistoryReader> OpenHistoryAsync(string repositoryPath, int? depth, CancellationToken cancellationToken = default)
+    {
+        return depth is null ? OpenHistoryAsync(repositoryPath, cancellationToken)
+            : throw new NotSupportedException("Bounded-depth history is unavailable.");
+    }
+
     /// <summary>Gets bounded local working-tree counts, or null when the implementation cannot supply them.</summary>
     Task<RepositoryGitStatus?> GetWorkingTreeStatusAsync(string repositoryPath, CancellationToken cancellationToken = default)
     {

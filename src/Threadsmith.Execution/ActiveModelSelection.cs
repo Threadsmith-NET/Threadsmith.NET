@@ -486,17 +486,10 @@ public sealed class ActiveModelSelectionService :
         var configurationPath = _configurationPath;
         try
         {
-            await RepositorySettingsCoordinator.ExecuteWriteAsync(
+            await RepositorySettingsCoordinator.UpdateAsync(
                 configurationPath,
                 async token =>
                 {
-                    var directory = Path.GetDirectoryName(configurationPath)
-                        ?? throw new InvalidOperationException(
-                            "Repository configuration path has no parent directory.");
-
-                    RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(configurationPath);
-                    Directory.CreateDirectory(directory);
-                    RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(configurationPath);
                     var root = await LoadRootAsync(configurationPath, token);
                     (var modelName, var model) = GetOrCreateObject(root, "model");
                     SetScalar(model, "providerId", definition.ProviderId);
@@ -510,36 +503,9 @@ public sealed class ActiveModelSelectionService :
                         throw new InvalidOperationException("Repository model preferences exceed the configured file size limit.");
                     }
 
-                    var temporaryPath = Path.Combine(
-                        directory,
-                        $".{Path.GetFileName(configurationPath)}.{Guid.NewGuid():N}.tmp");
-                    try
-                    {
-                        RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(configurationPath);
-                        await File.WriteAllTextAsync(
-                            temporaryPath,
-                            json,
-                            new UTF8Encoding(false, true),
-                            token);
-                        token.ThrowIfCancellationRequested();
-                        if (File.GetAttributes(temporaryPath).HasFlag(FileAttributes.ReparsePoint))
-                        {
-                            throw new UnauthorizedAccessException(
-                                "Repository settings temporary files cannot be links or reparse points.");
-                        }
-
-                        RepositorySettingsCoordinator.EnsureUnlinkedRepositorySettingsPath(configurationPath);
-                        File.Move(temporaryPath, configurationPath, overwrite: true);
-                    }
-                    finally
-                    {
-                        if (File.Exists(temporaryPath))
-                        {
-                            File.Delete(temporaryPath);
-                        }
-                    }
+                    return new RepositorySettingsUpdate(new UTF8Encoding(false, true).GetBytes(json));
                 },
-                cancellationToken);
+                cancellationToken: cancellationToken);
             return (true, null);
         }
         catch (OperationCanceledException)

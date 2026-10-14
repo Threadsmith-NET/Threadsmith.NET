@@ -17,7 +17,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(1_025, false, true)]
     [InlineData(4_097, false, false)]
     [InlineData(4_097, true, true)]
-    public async Task RunAsync_ReportedTokenUsage_RespectsProfileMaximumNotReserve(int reportedTokens, bool isEstimate, bool succeeds)
+    [InlineData(8_000, false, true, 4_000)]
+    [InlineData(8_000, false, false, 4_097)]
+    public async Task RunAsync_ReportedTokenUsage_RespectsProfileMaximumNotReserve(int reportedTokens, bool isEstimate, bool succeeds, int? maximumAttemptOutputTokens = null)
     {
         // Arrange
         await using var events = new DomainEventStream();
@@ -28,7 +30,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var plan = CreatePlan(assignment);
         const string response = "The implementation checks cancellation before each iteration.";
         var registry = new ToolRegistry([]);
-        var provider = new ReportedTokenProvider(response, reportedTokens, isEstimate);
+        var provider = new ReportedTokenProvider(response, reportedTokens, isEstimate, maximumAttemptOutputTokens);
         var usage = new SessionUsageProjection();
         var runner = CreateRunner(
             provider,
@@ -70,12 +72,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         private readonly string _response;
         private readonly int _reportedTokens;
         private readonly bool _isEstimate;
+        private readonly int? _maximumAttemptOutputTokens;
 
-        public ReportedTokenProvider(string response, int reportedTokens, bool isEstimate)
+        public ReportedTokenProvider(string response, int reportedTokens, bool isEstimate, int? maximumAttemptOutputTokens)
         {
             _response = response;
             _reportedTokens = reportedTokens;
             _isEstimate = isEstimate;
+            _maximumAttemptOutputTokens = maximumAttemptOutputTokens;
         }
 
         public int RequestCount { get; private set; }
@@ -91,7 +95,7 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             {
                 Reasoning = new string('a', 5_000),
                 Output = new TextModelOutput(_response),
-                Usage = new ModelUsage(20, _reportedTokens, IsEstimate: _isEstimate),
+                Usage = new ModelUsage(20, _reportedTokens, IsEstimate: _isEstimate) { MaximumAttemptOutputTokens = _maximumAttemptOutputTokens },
             };
         }
     }

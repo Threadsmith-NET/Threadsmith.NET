@@ -404,11 +404,14 @@ Trusted machine/user/environment configuration. Implementation: `src/Threadsmith
 
 ### `tools:config:memories`
 
-Ordinary configuration; repository rebinding supported. Binding: `src/Threadsmith.Tools/RepositoryMemoryConfiguration.cs`. Recall and reconciliation have independent blocks with the same search settings; see [memory operations](conversation-context.md#reconciliation-and-concept-recall) for the full schema and migration guidance.
+Ordinary configuration; repository rebinding supported. Binding: `src/Threadsmith.Tools/RepositoryMemoryConfiguration.cs`. Recall and reconciliation have independent blocks with the same search settings; see [memory operations](conversation-context.md#reconciliation-and-concept-recall) for the full schema and migration guidance. [Intelligence settings](conversation-context.md#repository-intelligence) use the same search mechanics with separate recall and reconciliation blocks; shared text/query/output/cache bounds still apply.
 
 | Field | Default | Purpose |
 |---|---:|---|
-| `MaxNumberOfRepoMemories` | `20` | Shared storage capacity. |
+| `MaxNumberOfRepoMemories` | `20` | Ordinary memory storage capacity, including standing preferences. |
+| `Intelligence:MaximumStoredMemories` | `20` | Independent intelligence storage capacity. |
+| `Intelligence:Recall:MaximumResults` | `3` | Independent intelligence context limit; zero disables intelligence recall. |
+| `Intelligence:Reconciliation:MaximumResults` | `24` | Intelligence reconciliation result limit. |
 | `standingPreferenceWarningThreshold` | `3` | Warning threshold for committed standing preferences. |
 | `MaximumTextCharacters` | `2000` | Complete sanitized memory text limit. |
 | `MaximumQueryTerms` | `32` | Shared lexical query-term bound. |

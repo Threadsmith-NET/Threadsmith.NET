@@ -59,6 +59,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         RepositorySecretProvider repositorySecretProvider,
         SemanticEngineRegistry semanticEngines,
         SemanticRefreshCoordinator semanticRefreshCoordinator,
+        RepositoryFileObserver repositoryFileObserver,
         SemanticRefreshPublicationGateRouter semanticRefreshPublicationGate,
         SemanticMutationEngine semanticMutations,
         ProcessManager processManager,
@@ -109,6 +110,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         RepositorySecretProvider = repositorySecretProvider;
         SemanticEngines = semanticEngines;
         SemanticRefreshCoordinator = semanticRefreshCoordinator;
+        RepositoryFileObserver = repositoryFileObserver;
         SemanticRefreshPublicationGate = semanticRefreshPublicationGate;
         SemanticMutations = semanticMutations;
         ProcessManager = processManager;
@@ -141,6 +143,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         await _semanticSubscription.DisposeAsync();
         await _semanticObserver.DisposeAsync();
         await SemanticRefreshCoordinator.DisposeAsync();
+        RepositoryFileObserver.Dispose();
         await _hookSubscription.DisposeAsync();
         await _hookObserver.DisposeAsync();
         await HookCoordinator.DisposeAsync();
@@ -226,6 +229,9 @@ internal sealed class HostFoundation : IAsyncDisposable
 
     /// <summary>Gets the single workspace semantic-refresh authority.</summary>
     internal SemanticRefreshCoordinator SemanticRefreshCoordinator { get; }
+
+    /// <summary>Shared source observation independently consumed by semantics and intelligence.</summary>
+    internal RepositoryFileObserver RepositoryFileObserver { get; }
 
     /// <summary>Gets the deferred application-owned semantic publication boundary.</summary>
     internal SemanticRefreshPublicationGateRouter SemanticRefreshPublicationGate { get; }
@@ -371,6 +377,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         ContextLifecycleObserver? contextLifecycle = null;
         SemanticEngineRegistry? semanticEngines = null;
         SemanticRefreshCoordinator? semanticRefreshCoordinator = null;
+        RepositoryFileObserver? repositoryFileObserver = null;
         SemanticRefreshPublicationGateRouter? semanticRefreshPublicationGate = null;
         SemanticLifecycleObserver? semanticObserver = null;
         HttpClient? jiraHttpClient = null;
@@ -438,11 +445,13 @@ internal sealed class HostFoundation : IAsyncDisposable
                 secretLimits);
             semanticEngines = new SemanticEngineRegistry(events, loggerFactory, promptLoader, resourceLimits: operationalLimits.Semantic);
             semanticRefreshPublicationGate = new SemanticRefreshPublicationGateRouter();
+            repositoryFileObserver = new RepositoryFileObserver();
             semanticRefreshCoordinator = new SemanticRefreshCoordinator(
                 semanticEngines,
                 events,
                 loggerFactory.CreateLogger<SemanticRefreshCoordinator>(),
                 semanticRefreshPublicationGate,
+                fileObserver: repositoryFileObserver,
                 resourceLimits: configuration.GetSection("semanticRefresh:limits").Get<SemanticRefreshResourceLimits>(options => options.ErrorOnUnknownConfiguration = true));
             var semanticMutations = new SemanticMutationEngine(
                 semanticEngines,
@@ -591,6 +600,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 repositorySecretProvider,
                 semanticEngines,
                 semanticRefreshCoordinator,
+                repositoryFileObserver,
                 semanticRefreshPublicationGate,
                 semanticMutations,
                 processManager,
@@ -628,6 +638,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 await semanticRefreshCoordinator.DisposeAsync();
             }
 
+            repositoryFileObserver?.Dispose();
             if (semanticEngines is not null)
             {
                 await semanticEngines.DisposeAsync();

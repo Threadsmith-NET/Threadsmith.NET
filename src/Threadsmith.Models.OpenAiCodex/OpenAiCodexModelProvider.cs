@@ -81,7 +81,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 cancellationToken.ThrowIfCancellationRequested();
 
                 // Never replay consumed output: callers may already have observed a tool or text chunk.
-                throw new TransientModelException("The Codex Responses connection ended before completion.", exception);
+                throw new TransientModelException($"The Codex Responses connection ended before completion ({TransportFailureKind(exception)}).", exception);
             }
 
             if (!hasNext)
@@ -91,6 +91,16 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
 
             yield return enumerator.Current;
         }
+    }
+
+    private static string TransportFailureKind(Exception exception)
+    {
+        return exception switch
+        {
+            HttpIOException io => $"HTTP {io.HttpRequestError}",
+            HttpRequestException http => $"HTTP {http.HttpRequestError}",
+            _ => "I/O failure",
+        };
     }
 
     private static bool IsTransientTransportFailure(HttpRequestException exception)
@@ -156,23 +166,50 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             {
                 if (response.IsSuccessStatusCode)
                 {
-                    await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
-                    using StreamReader reader = new(stream);
-                    await foreach (var chunk in ReadEventsAsync(
-                        reader,
-                        toolNameMap,
-                        profileOutputLimit,
-                        _profile.MaximumStreamedBytes,
-                        _profile.MaximumToolCalls,
-                        timeout.Token).ConfigureAwait(false))
+                    await using var chunks = ReadResponseAsync(
+                        response, toolNameMap, profileOutputLimit, timeout.Token).GetAsyncEnumerator(timeout.Token);
+                    var deliveredOutput = false;
+                    var deliveredReasoning = false;
+                    var retry = false;
+                    while (true)
                     {
-                        yield return chunk;
+                        bool hasNext;
+                        try
+                        {
+                            hasNext = await chunks.MoveNextAsync().ConfigureAwait(false);
+                        }
+                        catch (Exception exception) when (!deliveredOutput
+                            && attempt < _profile.RetryPolicy.MaxAttempts
+                            && (exception is IOException or TransientModelException
+                                || (exception is HttpRequestException transport && IsTransientTransportFailure(transport))))
+                        {
+                            timeout.Token.ThrowIfCancellationRequested();
+                            retry = true;
+                            break;
+                        }
+
+                        if (!hasNext)
+                        {
+                            break;
+                        }
+
+                        // Answer, tool, usage and replay data commit this attempt; preliminary reasoning does not.
+                        deliveredOutput |= !ModelStreamRetry.IsReasoningOnly(chunks.Current);
+                        deliveredReasoning |= chunks.Current.Reasoning is not null;
+                        yield return chunks.Current;
                     }
 
-                    yield break;
-                }
+                    if (!retry)
+                    {
+                        yield break;
+                    }
 
-                if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    if (deliveredReasoning)
+                    {
+                        yield return ModelStreamRetry.ReasoningBoundary();
+                    }
+                }
+                else if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
                     && !replayedAfterAuthenticationRejection
                     && _refreshAccessTokenAsync is not null)
                 {
@@ -195,10 +232,11 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     }
                 }
 
-                if (IsTransient(response.StatusCode) && attempt < _profile.RetryPolicy.MaxAttempts)
+                if ((response.IsSuccessStatusCode || IsTransient(response.StatusCode)) && attempt < _profile.RetryPolicy.MaxAttempts)
                 {
                     try
                     {
+                        response.Dispose();
                         await Task.Delay(_profile.RetryPolicy.Delay, timeout.Token).ConfigureAwait(false);
                     }
                     catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
@@ -218,6 +256,26 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     throw new ModelProviderTimeoutException("The Codex error response timed out.", exception);
                 }
             }
+        }
+    }
+
+    private async IAsyncEnumerable<ModelChunk> ReadResponseAsync(
+        HttpResponseMessage response,
+        ModelToolWireNameMap toolNameMap,
+        int profileOutputLimit,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var reader = new StreamReader(stream);
+        await foreach (var chunk in ReadEventsAsync(
+            reader,
+            toolNameMap,
+            profileOutputLimit,
+            _profile.MaximumStreamedBytes,
+            _profile.MaximumToolCalls,
+            cancellationToken).ConfigureAwait(false))
+        {
+            yield return chunk;
         }
     }
 
@@ -520,7 +578,9 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     yield break;
                 case "response.failed":
                 case "error":
-                    throw new ModelProviderException("The Codex Responses stream reported a provider error.");
+                    var errorRoot = root.TryGetProperty("response", out var failedResponse) && failedResponse.ValueKind == JsonValueKind.Object ? failedResponse : root;
+                    var errorDetails = ReadErrorIdentifiers(errorRoot);
+                    throw new ModelProviderException("The Codex Responses stream reported a provider error." + (errorDetails is null ? string.Empty : $" {errorDetails}"));
             }
         }
 
@@ -656,30 +716,34 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             }
 
             using var document = JsonDocument.Parse(body.ToString());
-            var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
-            {
-                return null;
-            }
-
-            var error = root.TryGetProperty("error", out var nestedError)
-                && nestedError.ValueKind == JsonValueKind.Object
-                ? nestedError
-                : root;
-            var code = GetString(error, "code");
-            var parameter = GetString(error, "param");
-            var parts = new[]
-            {
-                IsSafeErrorIdentifier(code, 64) ? $"Code: {code}." : null,
-                IsSafeErrorIdentifier(parameter, 128) ? $"Parameter: {parameter}." : null,
-            }.Where(part => !string.IsNullOrWhiteSpace(part));
-            var details = string.Join(' ', parts);
-            return details.Length == 0 ? null : details;
+            return ReadErrorIdentifiers(document.RootElement);
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
         {
             return null;
         }
+    }
+
+    private static string? ReadErrorIdentifiers(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var error = root.TryGetProperty("error", out var nestedError)
+            && nestedError.ValueKind == JsonValueKind.Object
+            ? nestedError
+            : root;
+        var code = GetString(error, "code");
+        var parameter = GetString(error, "param");
+        var parts = new[]
+        {
+            IsSafeErrorIdentifier(code, 64) ? $"Code: {code}." : null,
+            IsSafeErrorIdentifier(parameter, 128) ? $"Parameter: {parameter}." : null,
+        }.Where(part => !string.IsNullOrWhiteSpace(part));
+        var details = string.Join(' ', parts);
+        return details.Length == 0 ? null : details;
     }
 
     private static bool IsSafeErrorIdentifier(string? value, int maximumLength)

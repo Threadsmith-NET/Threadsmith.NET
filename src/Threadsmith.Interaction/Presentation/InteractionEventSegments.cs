@@ -57,6 +57,11 @@ internal static class InteractionEventSegments
                     null => PresentationTextRole.Warning,
                     _ => PresentationTextRole.Status,
                 };
+                if (diagnostic.Code.StartsWith("intelligence.", StringComparison.Ordinal))
+                {
+                    Add(segments, Environment.NewLine, diagnosticRole);
+                }
+
                 Add(segments, $"[{diagnostic.Code}] {diagnostic.Message}{Environment.NewLine}", diagnosticRole);
                 break;
             case TestRunCompleted tests:
@@ -182,6 +187,9 @@ internal static class InteractionEventSegments
                 return;
             case ModelOutputObserved:
                 Add(segments, text, PresentationTextRole.Default);
+                return;
+            case MemoriesIncluded:
+                Add(segments, text, PresentationTextRole.Memory);
                 return;
             case ToolInvocationStarted:
                 Add(segments, text, PresentationTextRole.Reasoning);

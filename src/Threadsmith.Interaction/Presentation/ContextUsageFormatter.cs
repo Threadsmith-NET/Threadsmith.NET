@@ -8,6 +8,50 @@ using Threadsmith.Interaction.Markdown;
 /// <summary>Shared size-only labels, percentages and category accounting for both frontends.</summary>
 public static class ContextUsageFormatter
 {
+    /// <summary>Formats the captured memory content and provenance for every context inspection surface.</summary>
+    public static string FormatMemoryContext(RepositoryMemoryContextItemProjection item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        var category = item.Ownership == RepositoryMemoryOwnership.Intelligence ? "intelligence" : item.MemoryType.ToString();
+        var output = new StringBuilder()
+            .Append("  ").Append(item.Included ? "included " : "omitted ").Append(category)
+            .Append(" memory: ").Append(item.Rationale).Append('\n')
+            .Append(item.Text).Append('\n');
+        if (item.Supports.Count > 0)
+        {
+            output.Append("  Supporting files:\n");
+        }
+
+        foreach (var support in item.Supports)
+        {
+            output.Append("    - ").Append(support.Path);
+            if (support.IsDirty)
+            {
+                output.Append(" (changed since collection)");
+            }
+
+            if (support.IsUnknown)
+            {
+                output.Append(" (observation gap; current state uncertain)");
+            }
+
+            output.Append('\n');
+        }
+
+        output.Append('\n');
+        return TerminalControlEncoder.Encode(output.ToString()
+            .Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'));
+    }
+
+    /// <summary>Formats all memory content from a frozen request for the shared context viewer.</summary>
+    public static string FormatMemories(ContextUsageSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return snapshot.Memories.Count == 0
+            ? "No memory content was included in this request."
+            : string.Concat(snapshot.Memories.Select(ContextUsageFormatter.FormatMemoryContext));
+    }
+
     /// <summary>Explains why no actual request can yet be inspected.</summary>
     public const string Unavailable = "No captured request usage is available. Send a request first; resumed sessions need a new request.";
 

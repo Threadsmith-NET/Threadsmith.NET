@@ -679,26 +679,26 @@ public sealed class HeadlessShell
             var sessionId = await _dispatcher.DispatchAsync(
                 new CreateSessionCommand(sessionName),
                 cancellationToken);
+            var intelligenceRequest = request.Trim().Equals("/intelligence", StringComparison.OrdinalIgnoreCase)
+                || request.TrimStart().StartsWith("/intelligence ", StringComparison.OrdinalIgnoreCase);
             var repositoryReady = await OpenRepositoryForHeadlessRunAsync(
                 sessionId,
                 repositoryPath,
                 trustLevel,
                 solutionPath,
+                !intelligenceRequest,
                 cancellationToken);
             if (!repositoryReady)
             {
                 return 2;
             }
 
-            if (!await EnsureSemanticRequestReadinessAsync(sessionId, cancellationToken))
+            if (!intelligenceRequest && !await EnsureSemanticRequestReadinessAsync(sessionId, cancellationToken))
             {
                 return 2;
             }
 
-            var runId = await _dispatcher.DispatchAsync(
-                new SubmitRequestCommand(sessionId, request),
-                cancellationToken);
-            return await WaitAndWriteRunAsync(sessionId, runId, cancellationToken);
+            return await RunRepositoryInputAsync(sessionId, repositoryPath, request, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -799,6 +799,7 @@ public sealed class HeadlessShell
                 repositoryPath,
                 trustLevel,
                 solutionPath,
+                true,
                 cancellationToken)
                 ? 0
                 : 2;
@@ -816,26 +817,68 @@ public sealed class HeadlessShell
         }
     }
 
+    private async Task<int> RunRepositoryInputAsync(SessionId sessionId, string repositoryPath, string request, CancellationToken cancellationToken)
+    {
+        var operation = RepositoryIntelligenceOperation.None;
+        int? historyDepth = null;
+        var parts = request.Trim().Split(' ', 3, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length > 0 && parts[0].Equals("/intelligence", StringComparison.OrdinalIgnoreCase))
+        {
+            var action = parts.Length > 1 ? parts[1].ToLowerInvariant() : "status";
+
+            if (action == "reset")
+            {
+                throw new InvalidOperationException("Run /intelligence reset in the interactive terminal (--tui) and confirm Yes to reset repository intelligence.");
+            }
+
+            if (action is "status" or "enable" or "disable")
+            {
+                var status = await _dispatcher.DispatchAsync(new ManageRepositoryIntelligenceCommand(sessionId, repositoryPath, action), cancellationToken);
+                await _output.WriteLineAsync(JsonSerializer.Serialize(status).AsMemory(), cancellationToken);
+                return 0;
+            }
+
+            operation = action switch
+            {
+                "onboard" => RepositoryIntelligenceOperation.Onboard,
+                "refresh" => RepositoryIntelligenceOperation.Refresh,
+                "archeology" when parts.Length == 3 => RepositoryIntelligenceOperation.Archeology,
+                _ => throw new ArgumentException("Use /intelligence onboard, refresh, archeology <question>, enable, disable, or status."),
+            };
+            request = operation == RepositoryIntelligenceOperation.Archeology ? parts[2] : action + " repository intelligence.";
+            if (operation == RepositoryIntelligenceOperation.Onboard)
+            {
+                historyDepth = RepositoryIntelligenceDepth.Parse(parts.Length == 3 ? parts[2] : null);
+            }
+        }
+
+        while (true)
+        {
+            var runId = await _dispatcher.DispatchAsync(new SubmitRequestCommand(sessionId, request) { IntelligenceOperation = operation, IntelligenceHistoryDepth = historyDepth }, cancellationToken);
+            var result = await WaitAndWriteRunAsync(sessionId, runId, cancellationToken);
+            if (result != 0 || !await _dispatcher.DispatchAsync(new TakeRepositoryIntelligenceRefreshCommand(sessionId, repositoryPath), cancellationToken))
+            {
+                return result;
+            }
+
+            request = "Refresh repository intelligence after an observed commit.";
+            operation = RepositoryIntelligenceOperation.Refresh;
+            historyDepth = null;
+        }
+    }
+
     private async Task<int> WaitAndWriteRunAsync(
         SessionId sessionId,
         RunId runId,
         CancellationToken cancellationToken)
     {
         var key = new ProjectionKey("session", sessionId.Value.ToString("D"));
-        SessionProjection? state;
+        var completion = _dispatcher.DispatchAsync(new WaitForRunCommand(runId), cancellationToken);
         var approvalRequired = false;
-        while (true)
+        while (!completion.IsCompleted)
         {
-            state = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
-            if (state?.Phase is RunPhase.Completion
-                or RunPhase.Failed
-                or RunPhase.Cancelled
-                or RunPhase.RolledBack)
-            {
-                break;
-            }
-
-            if (state?.Mutation is { IsApplied: false, IsRolledBack: false, RequiredApproval: not MutationApprovalLevel.PolicyAutoApproved } pending)
+            var current = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
+            if (current?.Mutation is { IsApplied: false, IsRolledBack: false, RequiredApproval: not MutationApprovalLevel.PolicyAutoApproved } pending)
             {
                 StagedMutationSet? review;
                 try
@@ -854,7 +897,7 @@ public sealed class HeadlessShell
                     await _dispatcher.DispatchAsync(new CancelRunCommand(sessionId, runId), cancellationToken);
                     try
                     {
-                        await _dispatcher.DispatchAsync(new WaitForRunCommand(runId), cancellationToken);
+                        await completion;
                     }
                     catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                     {
@@ -868,9 +911,8 @@ public sealed class HeadlessShell
             await Task.Delay(TimeSpan.FromMilliseconds(10), cancellationToken);
         }
 
-        var succeeded = !approvalRequired && await _dispatcher.DispatchAsync(
-            new WaitForRunCommand(runId),
-            cancellationToken);
+        var succeeded = !approvalRequired && await completion;
+        var state = await _projections.GetAsync<SessionProjection>(key, cancellationToken);
         if (state is null)
         {
             return 1;
@@ -999,6 +1041,7 @@ public sealed class HeadlessShell
         string repositoryPath,
         RepositoryTrustLevel trustLevel,
         string? solutionPath,
+        bool requireSemantic,
         CancellationToken cancellationToken)
     {
         var opened = await _dispatcher.DispatchAsync(
@@ -1028,6 +1071,11 @@ public sealed class HeadlessShell
             }
 
             return false;
+        }
+
+        if (!requireSemantic)
+        {
+            return true;
         }
 
         var useRememberedSolution = solutionPath is null

@@ -183,7 +183,7 @@ public sealed class AgentNaturalResponseClassificationTests
             AssignmentId = outcome.AssignmentId,
             ChildRunId = outcome.ChildRunId,
             Generation = outcome.Generation,
-            ParentBaselineIdentity = plan.Provenance.BaselineIdentity,
+            ParentBaselineIdentity = Assert.IsType<string>(plan.Provenance.BaselineIdentity),
             WorktreeIdentity = "test-worktree",
             DiffArtifact = new ExecutionArtifactReference("hash", "diff", 4),
             Validation = new MutationValidationResult(

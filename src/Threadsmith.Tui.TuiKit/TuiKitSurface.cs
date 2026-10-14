@@ -83,6 +83,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private Task _clipboardRead = Task.CompletedTask;
     private Task _utilityModal = Task.CompletedTask;
     private TaskCompletionSource<InteractionInput>? _read;
+    private bool _pendingIdleYield;
     private SessionStatusSnapshot? _status;
     private SessionStatusSnapshot? _formattedStatus;
     private InteractionActivity? _activity;
@@ -330,6 +331,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             () =>
         {
             _agents.Present(batch);
+            _pendingIdleYield |= batch.Target is null && batch.Items.OfType<PresentationTextItem>().Any(item => item.WakeIdleInput);
             if (batch.Target is null)
             {
                 foreach (var item in batch.Items.OfType<PresentationTextItem>())
@@ -546,6 +548,15 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _started.TrySetResult();
             while (!cancellationToken.IsCancellationRequested)
             {
+                if (_pendingIdleYield && _read is not null && ReferenceEquals(_composer, _ordinary)
+                    && _composer.Text.Length == 0 && !_app.Modals.IsActive)
+                {
+                    if (_read.TrySetResult(new InteractionInput(false, string.Empty, _stop.Token, InteractionInputKind.IdleOutputYield)))
+                    {
+                        _pendingIdleYield = false;
+                    }
+                }
+
                 if (_layoutSize != _backend.Size)
                 {
                     _layoutSize = _backend.Size;
@@ -1198,7 +1209,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _prompt.Draw(view, 0, 0, _owner._prompt, _owner.ResolvePaneStyle(PresentationTextRole.ComposerPrompt, PresentationTextRole.ComposerBackgroundPaneRole));
             if (!_owner.CanEdit)
             {
-                _prompt.Draw(surface, 2, 0, " Read-only — return to MAIN ", background);
+                _prompt.Draw(surface, 2, 0, " Read-Only ", background);
             }
         }
 

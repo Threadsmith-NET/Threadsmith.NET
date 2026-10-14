@@ -22,7 +22,7 @@ internal static class ConversationToolAvailability
 
         ToolRegistration[] registrations =
         [
-            .. (callerRegistrations ?? toolRegistry.GetRegistrations(sessionId, runId))
+            .. (callerRegistrations ?? toolRegistry.GetRegistrations(sessionId, runId, invocationContext))
                 .Where(registration => IsAdvertised(registration.Tool.Definition, invocationContext)),
         ];
         return new ConversationToolSnapshot(
@@ -37,6 +37,11 @@ internal static class ConversationToolAvailability
         if (context is null)
         {
             return true;
+        }
+
+        if (!RepositoryIntelligenceToolPolicy.IsAllowed(definition, context))
+        {
+            return false;
         }
 
         var scratchpadEligible = context.Scratchpad.IsActive

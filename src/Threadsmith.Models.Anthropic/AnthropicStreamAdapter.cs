@@ -198,7 +198,7 @@ internal sealed class AnthropicStreamAdapter
     {
         if (!_stopped || !_started || _stopReason is null)
         {
-            throw new MalformedModelOutputException("Anthropic stream ended without message_stop; no tools were released.");
+            throw new TransientModelException("Anthropic stream ended without message_stop; no tools were released.");
         }
 
         var finish = _stopReason switch

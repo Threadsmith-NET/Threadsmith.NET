@@ -13,6 +13,54 @@ using Xunit;
 /// <summary>Real SQLite contracts for explicit memories, snapshots, revisions, eviction and migration.</summary>
 public sealed class SqliteManagedRepositoryMemoryStoreTests
 {
+    /// <summary>Pending changes are retained while only changed support flags invalidate retrieval.</summary>
+    [Fact]
+    public async Task Observations_only_advance_retrieval_revision_when_support_flags_change()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        await fixture.Store.AddAsync("repo", Write("supported guidance") with
+        {
+            Ownership = RepositoryMemoryOwnership.Intelligence,
+            Supports = [new RepositoryMemorySupport { Path = "src/feature.cs", ContentHash = new string('a', 64), ObservedAt = fixture.Clock.GetUtcNow() }],
+        }, Model, Embedding, new(), ct);
+        var initial = await fixture.Store.GetRevisionAsync("repo", ct);
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", ["unrelated.cs"], false, cancellationToken: ct);
+        Assert.Equal(initial, await fixture.Store.GetRevisionAsync("repo", ct));
+        Assert.Equal(1, await fixture.ScalarAsync("SELECT count(*) FROM repository_intelligence_changes;"));
+
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", ["src"], false, cancellationToken: ct);
+        var dirty = await fixture.Store.GetRevisionAsync("repo", ct);
+        Assert.Equal(initial + 1, dirty);
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", ["src/feature.cs"], false, cancellationToken: ct);
+        Assert.Equal(dirty, await fixture.Store.GetRevisionAsync("repo", ct));
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", [], true, cancellationToken: ct);
+        Assert.Equal(dirty + 1, await fixture.Store.GetRevisionAsync("repo", ct));
+        await fixture.Store.RecordIntelligenceChangesAsync("repo", [], true, "watcher fault", ct);
+        Assert.Equal(dirty + 1, await fixture.Store.GetRevisionAsync("repo", ct));
+        var support = Assert.Single(Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [], ct)).Entries).Supports);
+        Assert.True(support.IsDirty);
+        Assert.True(support.IsUnknown);
+        Assert.Equal(3, await fixture.ScalarAsync("SELECT count(*) FROM repository_intelligence_changes;"));
+    }
+
+    /// <summary>Partition and identity reads exclude unrelated content before embedding validation.</summary>
+    [Fact]
+    public async Task Filtered_reads_do_not_decode_unrelated_entries()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await MemoryDatabase.CreateAsync();
+        var ordinary = Assert.IsType<RepositoryMemoryEntry>((await fixture.Store.AddAsync("repo", Write("ordinary guidance"), Model, Embedding, new(), ct)).Entry);
+        await fixture.Store.AddAsync("repo", Write("intelligence guidance") with { Ownership = RepositoryMemoryOwnership.Intelligence }, Model, Embedding, new(), ct);
+        await fixture.ExecuteAsync("UPDATE managed_memories SET embedding = X'0102' WHERE ownership = 1;");
+        var snapshot = await fixture.Store.GetSnapshotAsync("repo", [], new(), RepositoryMemoryOwnership.Ordinary, ct);
+        Assert.Equal(ordinary.Id, Assert.Single(snapshot.Entries).Id);
+        Assert.Empty(snapshot.Warnings);
+        Assert.Equal(ordinary.Id, (await fixture.Store.GetEntryAsync("repo", ordinary.Id, ct))?.Id);
+        Assert.Null(await fixture.Store.GetEntryAsync("other", ordinary.Id, ct));
+        Assert.Null(await fixture.Store.GetEntryAsync("repo", RepositoryMemoryId.New(), ct));
+    }
+
     /// <summary>Metadata rows round-trip and cascade away through ordinary managed writes.</summary>
     [Fact]
     public async Task Concepts_cascade_on_removal_and_add_fence_precedes_eviction()
@@ -72,6 +120,12 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.False((await fixture.Store.ResolveTermsAsync(textSnapshot, ["serialisation"], 20, ct)).VocabularyCacheHit);
         Assert.True((await fixture.Store.ResolveTermsAsync(snapshot, ["cancelation"], 20, ct)).VocabularyCacheHit);
         Assert.True((await fixture.Store.ResolveTermsAsync(textSnapshot, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        var intelligence = snapshot with { Ownership = RepositoryMemoryOwnership.Intelligence, Vocabulary = ["serialization"] };
+        var ordinary = snapshot with { Ownership = RepositoryMemoryOwnership.Ordinary };
+        Assert.False((await fixture.Store.ResolveTermsAsync(intelligence, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        Assert.False((await fixture.Store.ResolveTermsAsync(ordinary, ["cancelation"], 20, ct)).VocabularyCacheHit);
+        Assert.True((await fixture.Store.ResolveTermsAsync(intelligence, ["serialisation"], 20, ct)).VocabularyCacheHit);
+        Assert.True((await fixture.Store.ResolveTermsAsync(ordinary, ["cancelation"], 20, ct)).VocabularyCacheHit);
         var nextRevision = snapshot with { Revision = 2 };
         Assert.False((await fixture.Store.ResolveTermsAsync(nextRevision, ["cancelation"], 20, ct)).VocabularyCacheHit);
         var nextRepository = nextRevision with { RepositoryIdentity = "other-repo" };
@@ -110,9 +164,9 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Empty(removed.LexicalExpansions);
     }
 
-    /// <summary>Upgrading populated type-aware storage preserves durable data and expands only lexical membership.</summary>
+    /// <summary>Upgrading populated type-aware storage through version fourteen preserves durable data and ordinary ownership.</summary>
     [Fact]
-    public async Task Version_twelve_preserves_populated_version_eleven_memories()
+    public async Task Version_fourteen_preserves_populated_version_eleven_memories()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await MemoryDatabase.CreateAsync(migrate: false);
@@ -138,19 +192,21 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         var names = (string)(await columns.ExecuteScalarAsync(ct))!;
         Assert.Equal(0, await fixture.ScalarAsync($"SELECT count(*) FROM (SELECT {names} FROM migration_expected EXCEPT SELECT {names} FROM managed_memories);"));
         var snapshot = await fixture.Store.GetSnapshotAsync("repo", ["memory"], ct);
-        Assert.Equal(10, snapshot.Revision);
+        Assert.Equal(11, snapshot.Revision);
         Assert.Equal(2, snapshot.Entries.Count);
         Assert.Equal(2, snapshot.LexicalMatches.Count);
         Assert.Single(snapshot.Entries, entry => entry.MemoryType == RepositoryMemoryType.StandingPreference);
         Assert.All(snapshot.Entries, entry =>
         {
+            Assert.Equal(RepositoryMemoryOwnership.Ordinary, entry.Ownership);
+            Assert.Empty(entry.Supports);
             Assert.Equal(ManagedRepositoryMemoryKind.Unspecified, entry.Kind);
             Assert.Empty(entry.Concepts);
             Assert.Equal(7, entry.InclusionCount);
             Assert.Equal(new float[] { 1, 0, 0 }, entry.Embedding.ToArray());
         });
         await new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All).RunAsync(ct);
-        Assert.Equal(10, (await fixture.Store.GetSnapshotAsync("repo", [], ct)).Revision);
+        Assert.Equal(11, (await fixture.Store.GetSnapshotAsync("repo", [], ct)).Revision);
     }
 
     private static readonly TextEmbeddingModelDescriptor Model = new("test-space", 3, 256);
@@ -443,7 +499,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Forgotten, userCommand: true, "Forgotten manual");
         await InsertLegacyAsync(fixture, RepositoryMemoryId.New(), RepositoryMemoryAuthority.UserAuthored, RepositoryMemoryValidity.Active, userCommand: false, "No command provenance");
         var runner = new MigrationRunner(fixture.ConnectionString, DefaultMigrations.All);
-        Assert.Equal(13, await runner.RunAsync());
+        Assert.Equal(15, await runner.RunAsync());
         var imported = Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries);
         Assert.Equal(manual, imported.Id);
         Assert.Equal(2_001, imported.Text.Length);
@@ -457,7 +513,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await using var query = restored.CreateCommand();
         query.CommandText = "SELECT count(*) FROM repository_memory;";
         Assert.Equal(4L, await query.ExecuteScalarAsync());
-        Assert.Equal(13, await runner.RunAsync());
+        Assert.Equal(15, await runner.RunAsync());
         Assert.Equal(1, await fixture.ScalarAsync("SELECT imported_count FROM managed_memory_migration;"));
         Assert.Equal(3, await fixture.ScalarAsync("SELECT dropped_count FROM managed_memory_migration;"));
     }
@@ -524,7 +580,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         await using var count = verify.CreateCommand();
         count.CommandText = "SELECT count(*) FROM managed_memories;";
         Assert.Equal(22L, await count.ExecuteScalarAsync());
-        Assert.Equal(13, await new MigrationRunner(connectionString, DefaultMigrations.All).ReadCurrentVersionAsync());
+        Assert.Equal(15, await new MigrationRunner(connectionString, DefaultMigrations.All).ReadCurrentVersionAsync());
     }
 
     /// <summary>Repository switches select distinct local databases and reject stale identity calls.</summary>

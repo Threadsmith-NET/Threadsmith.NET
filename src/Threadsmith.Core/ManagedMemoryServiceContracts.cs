@@ -3,6 +3,15 @@ namespace Threadsmith.Core;
 /// <summary>One explicit repository-memory operation with host-supplied authority and options.</summary>
 public sealed record RepositoryMemoryOperationRequest
 {
+    /// <summary>Host-owned preparation scope; absent for ordinary immediate memory operations.</summary>
+    public RepositoryMemoryCollection? Collection { get; init; }
+
+    /// <summary>Host-supplied operation authority; model arguments cannot select ownership.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; }
+
+    /// <summary>Host-observed primary sources; null preserves existing provenance.</summary>
+    public IReadOnlyList<RepositoryMemorySupport>? Supports { get; init; }
+
     /// <summary>Canonical repository identity supplied by the host.</summary>
     public required string RepositoryIdentity { get; init; }
 
@@ -57,6 +66,9 @@ public sealed record RepositoryMemoryOperationResult(
     IReadOnlyList<RepositoryMemoryEntry> Entries,
     IReadOnlyList<RepositoryMemoryId> EvictedIds)
 {
+    /// <summary>Collection-scoped proposal identity when reconciliation remains unfinished.</summary>
+    public string? ReconciliationKey { get; init; }
+
     /// <summary>Bounded diagnostics describing the write check.</summary>
     public IReadOnlyList<string> Diagnostics { get; init; } = [];
 
@@ -74,6 +86,13 @@ public interface IManagedRepositoryMemoryService
     Task<RepositoryMemoryOperationResult> ExecuteAsync(
         RepositoryMemoryOperationRequest request,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Reads one detached memory without requiring unrelated entries.</summary>
+    async Task<RepositoryMemoryEntry?> GetEntryAsync(string repositoryIdentity, RepositoryMemoryId id, CancellationToken cancellationToken = default)
+    {
+        var snapshot = await GetSnapshotAsync(repositoryIdentity, cancellationToken);
+        return snapshot.Entries.FirstOrDefault(entry => entry.Id == id);
+    }
 
     /// <summary>Reads current entries without generating embeddings or changing usage.</summary>
     Task<RepositoryMemoryReadSnapshot> GetSnapshotAsync(
@@ -97,6 +116,9 @@ public interface IManagedRepositoryMemoryService
 /// <summary>Bounded retrieval query made exclusively from current instructions and active task intent.</summary>
 public sealed record RepositoryMemoryRetrievalRequest
 {
+    /// <summary>Host-confirmed onboarded and healthy intelligence eligibility.</summary>
+    public bool IntelligenceEnabled { get; init; }
+
     /// <summary>Bounded normalized hints accumulated in this user turn.</summary>
     public IReadOnlyList<string> Concepts { get; init; } = [];
 
@@ -141,6 +163,9 @@ public sealed record RepositoryMemoryRetrievalResult(
     bool QueryEmbeddingCacheHit = false,
     bool RankingCacheHit = false)
 {
+    /// <summary>Independent intelligence search evidence from the same shared search implementation.</summary>
+    public RepositoryMemorySearchDetails? IntelligenceSearchDetails { get; init; }
+
     /// <summary>Whether every enabled search branch and complete-pair check succeeded.</summary>
     public bool IsComplete { get; init; } = true;
 

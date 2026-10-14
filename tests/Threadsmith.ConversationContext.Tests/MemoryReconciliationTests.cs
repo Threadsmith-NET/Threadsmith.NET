@@ -16,6 +16,42 @@ public static class MemoryReconciliationTests
         MaxRepoMemoriesInContext = 0,
     };
 
+    /// <summary>Collection retries preserve reviewed candidates while fencing changed proposals and revisions.</summary>
+    [Fact]
+    public static async Task Collection_confirmations_accumulate_but_do_not_cross_proposals_or_revisions()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
+        var baseline = MemoryTestData.CreateService(fixture, generator);
+        var first = (await baseline.ExecuteAsync(MemoryTestData.Operation("add", "First convention"), ct)).Entry!;
+        var second = (await baseline.ExecuteAsync(MemoryTestData.Operation("add", "Second convention"), ct)).Entry!;
+        var collection = new RepositoryMemoryCollection(await baseline.GetSnapshotAsync(MemoryTestData.Repository, ct), true, 0);
+        using var search = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder());
+        var service = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: search);
+        var proposal = MemoryTestData.Operation("add", "Independent recipe") with
+        {
+            Collection = collection, Ownership = RepositoryMemoryOwnership.Intelligence, Options = Reconcile,
+            Supports = [new RepositoryMemorySupport { Path = "recipe.cs", ContentHash = new string('a', 64), ObservedAt = DateTimeOffset.UtcNow }],
+        };
+        var initial = await service.ExecuteAsync(proposal, ct);
+        Assert.Equal(2, initial.Entries.Count);
+        var partial = await service.ExecuteAsync(proposal with { ConfirmDistinctFrom = [new(first.Id, first.Revision)] }, ct);
+        Assert.Equal(second.Id, Assert.Single(partial.Entries).Id);
+        var changed = await service.ExecuteAsync(proposal with { Text = "Changed recipe", ConfirmDistinctFrom = [new(second.Id, second.Revision)] }, ct);
+        Assert.Equal(first.Id, Assert.Single(changed.Entries).Id);
+        var revised = (await baseline.ExecuteAsync(MemoryTestData.Operation("update", "Revised convention", first.Id), ct)).Entry!;
+        var stale = await service.ExecuteAsync(proposal with { ConfirmDistinctFrom = [new(second.Id, second.Revision)] }, ct);
+        Assert.Equal(revised.Revision, Assert.Single(stale.Entries).Revision);
+        var saved = await service.ExecuteAsync(proposal with { ConfirmDistinctFrom = [new(first.Id, revised.Revision)] }, ct);
+        Assert.Equal("added", saved.Outcome);
+        Assert.Single(collection.Snapshot(forPublication: true));
+        Assert.DoesNotContain(collection.PendingReconciliations, item => item.Key == initial.ReconciliationKey);
+        Assert.Single(collection.PendingReconciliations);
+        Assert.Equal(2, (await baseline.GetSnapshotAsync(MemoryTestData.Repository, ct)).Entries.Count);
+    }
+
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
     [Theory]
     [InlineData(RepositoryMemoryOrigin.Manual, RepositoryMemoryType.Situational)]
@@ -60,17 +96,21 @@ public static class MemoryReconciliationTests
     }
 
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
-    [Fact]
-    public static async Task Confirmations_are_revision_specific_and_preserve_distinct_entries()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Confirmations_are_revision_specific_and_preserve_distinct_entries(bool pairTruncated)
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var generator = new TestMemoryEmbeddingGenerator();
         var baseline = MemoryTestData.CreateService(fixture, generator);
         var saved = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "Existing convention"));
-        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder());
+        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder { Score = (_, _) => new TextCrossEncoderScore(2, pairTruncated ? 300 : 12, pairTruncated) });
         var service = new RepositoryMemoryService(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new SecretOutputSanitizer(), search: search);
         var proposal = MemoryTestData.Operation("add", "Related distinct requirement") with { Options = Reconcile };
         var collision = await service.ExecuteAsync(proposal);
+        Assert.Equal(pairTruncated, collision.SearchDetails?.PairTruncated);
+        Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, collision.SearchDetails?.Reranker);
         var old = Assert.Single(collision.Entries);
         await baseline.ExecuteAsync(MemoryTestData.Operation("update", "Changed convention", old.Id));
 
@@ -114,7 +154,7 @@ public static class MemoryReconciliationTests
         var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
         var baseline = MemoryTestData.CreateService(fixture, generator);
         var original = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "original"));
-        var encoder = new MemoryScoreEncoder { Score = (_, _) => cancel ? throw new OperationCanceledException() : new(10, 256, true) };
+        var encoder = new MemoryScoreEncoder { Score = (_, _) => cancel ? throw new OperationCanceledException() : new(double.NaN, 12, false) };
         using var search = new HybridRepositoryMemoryRetriever(store, generator, encoder);
         var service = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: search);
         var operation = MemoryTestData.Operation("add", "replacement") with { Options = Reconcile with { MaxNumberOfRepoMemories = 1 } };

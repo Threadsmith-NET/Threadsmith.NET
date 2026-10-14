@@ -283,6 +283,19 @@ public sealed record ToolDefinition
 /// <summary>Repository and requester state evaluated for every tool invocation.</summary>
 public sealed record ToolInvocationContext
 {
+    /// <summary>Host-scoped collection or read-only archeology authority.</summary>
+    [JsonIgnore]
+    public IRepositoryIntelligenceRun? IntelligenceRun { get; init; }
+
+    /// <summary>Host-owned child scope, retained when the requester changes to the child model.</summary>
+    [JsonIgnore]
+    public bool IsChildAgent { get; init; }
+
+    /// <summary>Primary-reader receipts belong to the collecting parent, never its investigators.</summary>
+    [JsonIgnore]
+    public IRepositoryIntelligenceRun? IntelligenceSourceObserver =>
+        IsChildAgent ? null : IntelligenceRun;
+
     /// <summary>Request-local evidence references authorized for active-turn recovery.</summary>
     [JsonIgnore]
     public IReadOnlyList<ActiveTurnEvidenceReference> ActiveTurnEvidenceReferences { get; init; } = [];

@@ -574,7 +574,7 @@ internal sealed class ChildAgentModelLoop
                 }
 
                 // Estimates support accounting but cannot prove the provider exceeded its output capacity.
-                if (usage is { IsEstimate: false } && usage.OutputTokens > maximumOutputTokens)
+                if (usage is { IsEstimate: false } && (usage.MaximumAttemptOutputTokens ?? usage.OutputTokens) > maximumOutputTokens)
                 {
                     throw new InvalidDataException("The child response exceeds its output token bound.");
                 }

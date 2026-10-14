@@ -67,7 +67,8 @@ public sealed class SemanticRefreshCoordinator :
     private readonly SemanticRefreshResourceLimits _resourceLimits;
     private readonly TimeSpan _settleInterval;
     private readonly TimeProvider _timeProvider;
-    private readonly Func<string, FileSystemWatcher> _watcherFactory;
+    private readonly IRepositoryFileObserver _fileObserver;
+    private readonly bool _ownsFileObserver;
     private readonly bool _watchFileSystem;
     private long _nextBindingGeneration;
     private int _disposed;
@@ -81,7 +82,8 @@ public sealed class SemanticRefreshCoordinator :
         TimeProvider? timeProvider = null,
         TimeSpan? settleInterval = null,
         TimeSpan? maximumBurstWindow = null,
-        SemanticRefreshResourceLimits? resourceLimits = null)
+        SemanticRefreshResourceLimits? resourceLimits = null,
+        IRepositoryFileObserver? fileObserver = null)
         : this(
             new RegistrySemanticRefreshBackend(semanticEngines),
             events,
@@ -93,7 +95,8 @@ public sealed class SemanticRefreshCoordinator :
             watchFileSystem: true,
             fileSnapshotReader: null,
             pathSafetyValidator: null,
-            resourceLimits: resourceLimits)
+            resourceLimits: resourceLimits,
+            fileObserver: fileObserver)
     {
         semanticEngines.SetConfidencePublisher(PublishWorkspaceConfidenceAsync);
         _startupProgress = semanticEngines.StartupProgress;
@@ -178,7 +181,8 @@ public sealed class SemanticRefreshCoordinator :
         TimeSpan? recentHostEchoLifetime = null,
         Func<string, FileSystemWatcher>? watcherFactory = null,
         SemanticRefreshResourceLimits? resourceLimits = null,
-        SemanticStartupProgress? startupProgress = null)
+        SemanticStartupProgress? startupProgress = null,
+        IRepositoryFileObserver? fileObserver = null)
     {
         ArgumentNullException.ThrowIfNull(backend);
         ArgumentNullException.ThrowIfNull(events);
@@ -210,7 +214,8 @@ public sealed class SemanticRefreshCoordinator :
         _timeProvider = timeProvider ?? TimeProvider.System;
         _settleInterval = settleInterval ?? _defaultSettleInterval;
         _maximumBurstWindow = maximumBurstWindow ?? _defaultMaximumBurstWindow;
-        _watcherFactory = watcherFactory ?? (static path => new FileSystemWatcher(path));
+        _fileObserver = fileObserver ?? new RepositoryFileObserver(watcherFactory ?? (static path => new FileSystemWatcher(path)), logger);
+        _ownsFileObserver = fileObserver is null;
         if (_maximumBurstWindow < _settleInterval)
         {
             throw new ArgumentException(
@@ -294,7 +299,7 @@ public sealed class SemanticRefreshCoordinator :
                     normalizedRequest,
                     Interlocked.Increment(ref _nextBindingGeneration),
                     _watchFileSystem,
-                    _watcherFactory);
+                    _fileObserver);
                 if (_workspaceBindings.Remove(request.WorkspaceId, out var replacedWorkspace))
                 {
                     // Direct binding adopts the engine's already-loaded preparation and retires older operations.
@@ -852,6 +857,10 @@ public sealed class SemanticRefreshCoordinator :
         }
 
         _lifetimeCancellation.Dispose();
+        if (_ownsFileObserver)
+        {
+            _fileObserver.Dispose();
+        }
     }
 
     /// <summary>Begins lifecycle binding and reports whether the workspace already has one authority.</summary>
@@ -958,7 +967,7 @@ public sealed class SemanticRefreshCoordinator :
                     normalizedRequest,
                     Interlocked.Increment(ref _nextBindingGeneration),
                     _watchFileSystem,
-                    _watcherFactory)
+                    _fileObserver)
                 {
                     IsLoading = true,
                 };
@@ -1236,10 +1245,10 @@ public sealed class SemanticRefreshCoordinator :
             }
 
             binding.DirtyVersion++;
-            if (change.Kind is SemanticFileChangeKind.Created
+            if (change.Source != SemanticRefreshReason.Recovery && change.Kind is (SemanticFileChangeKind.Created
                 or SemanticFileChangeKind.Deleted
                 or SemanticFileChangeKind.Renamed
-                or SemanticFileChangeKind.Uncertain)
+                or SemanticFileChangeKind.Uncertain))
             {
                 binding.WatcherRestartRequired = true;
             }
@@ -1586,7 +1595,7 @@ public sealed class SemanticRefreshCoordinator :
         var prepared = await PrepareBatchAsync(binding, batch, cancellationToken);
         if (prepared.HasUnstableSnapshot)
         {
-            var unstableReason = batch.RecoveryRequired
+            var unstableReason = batch.RecoveryRequired || batch.Changes.Any(change => change.Source == SemanticRefreshReason.Recovery)
                 ? SemanticRefreshReason.Recovery
                 : prepared.Changes.Any(change => change.Source == SemanticRefreshReason.ExternalChange)
                     ? SemanticRefreshReason.ExternalChange
@@ -1632,7 +1641,7 @@ public sealed class SemanticRefreshCoordinator :
             {
                 ThrowIfObsolete(binding);
                 binding.AppliedVersion = Math.Max(binding.AppliedVersion, batch.TargetDirtyVersion);
-                var cleanReason = batch.RecoveryRequired
+                var cleanReason = batch.RecoveryRequired || batch.Changes.Any(change => change.Source == SemanticRefreshReason.Recovery)
                     ? SemanticRefreshReason.Recovery
                     : batch.Changes.Any(change => change.Source == SemanticRefreshReason.ExternalChange)
                         ? SemanticRefreshReason.ExternalChange
@@ -1658,7 +1667,7 @@ public sealed class SemanticRefreshCoordinator :
             ? SemanticRefreshMode.Full
             : SemanticRefreshMode.Incremental;
         var manualForce = batch.TargetForceVersion > binding.ForceAppliedVersion;
-        var reason = batch.RecoveryRequired
+        var reason = batch.RecoveryRequired || batch.Changes.Any(change => change.Source == SemanticRefreshReason.Recovery)
             ? SemanticRefreshReason.Recovery
             : manualForce
                 ? SemanticRefreshReason.Manual
@@ -2917,9 +2926,9 @@ public sealed class SemanticRefreshCoordinator :
     private sealed class WorkspaceBinding
     {
         private readonly Lock _watcherGate = new();
-        private readonly Func<string, FileSystemWatcher> _watcherFactory;
+        private readonly IRepositoryFileObserver _fileObserver;
         private readonly bool _watchFileSystem;
-        private readonly List<FileSystemWatcher> _watchers = [];
+        private readonly List<IRepositoryDirectoryObservation> _watchers = [];
         private IReadOnlySet<string> _watchedDirectories = new HashSet<string>(PathComparer);
         private SemanticRefreshInventory? _ancestorInventory;
         private HashSet<string> _compilerAncestorDirectories = new(PathComparer);
@@ -2928,12 +2937,12 @@ public sealed class SemanticRefreshCoordinator :
             SemanticLoadRequest request,
             long generation,
             bool watchFileSystem,
-            Func<string, FileSystemWatcher> watcherFactory)
+            IRepositoryFileObserver fileObserver)
         {
             Request = request;
             Generation = generation;
             _watchFileSystem = watchFileSystem;
-            _watcherFactory = watcherFactory;
+            _fileObserver = fileObserver;
             AppliedIdentities = new Dictionary<string, string>(PathComparer);
             HostIdentities = new Dictionary<string, HashSet<string>>(PathComparer);
             HostMismatchPaths = new HashSet<string>(PathComparer);
@@ -3051,7 +3060,6 @@ public sealed class SemanticRefreshCoordinator :
                             changed,
                             failed);
                         _watchers.Add(watcher);
-                        watcher.EnableRaisingEvents = true;
                     }
 
                     Volatile.Write(ref _watchedDirectories, new HashSet<string>(_watchers.Select(watcher => watcher.Path), PathComparer));
@@ -3114,16 +3122,16 @@ public sealed class SemanticRefreshCoordinator :
 
             lock (_watcherGate)
             {
-                var replacements = new List<FileSystemWatcher>();
+                var replacements = new List<IRepositoryDirectoryObservation>();
                 try
                 {
                     var roots = GetWatcherRoots();
                     var before = CaptureWatcherTopology(roots);
                     foreach (var path in roots)
                     {
+                        _watchers.FirstOrDefault(watcher => PathComparer.Equals(watcher.Path, path))?.Restart();
                         var replacement = CreateWatcher(path, changed, failed);
                         replacements.Add(replacement);
-                        replacement.EnableRaisingEvents = true;
                     }
 
                     var replaced = _watchers.ToArray();
@@ -3161,46 +3169,22 @@ public sealed class SemanticRefreshCoordinator :
             }
         }
 
-        private FileSystemWatcher CreateWatcher(
+        private IRepositoryDirectoryObservation CreateWatcher(
             string path,
             Action<SemanticFileChange> changed,
             Action failed)
         {
-            var watcher = _watcherFactory(path);
-            watcher.IncludeSubdirectories = false;
-            watcher.InternalBufferSize = 4 * 1024;
-            watcher.NotifyFilter = NotifyFilters.FileName
-                | NotifyFilters.DirectoryName
-                | NotifyFilters.LastWrite
-                | NotifyFilters.Size;
-            watcher.Changed += (_, args) => changed(CreateChange(args, SemanticFileChangeKind.Changed));
-            watcher.Created += (_, args) => changed(CreateChange(args, SemanticFileChangeKind.Created));
-            watcher.Deleted += (_, args) => changed(CreateChange(args, SemanticFileChangeKind.Deleted));
-            watcher.Renamed += (_, args) => changed(new SemanticFileChange(
-                Request.SessionId,
-                args.FullPath,
-                SemanticFileChangeKind.Renamed,
-                SemanticRefreshReason.ExternalChange,
-                args.OldFullPath));
-            watcher.Renamed += (_, args) => changed(new SemanticFileChange(
-                Request.SessionId,
-                args.OldFullPath,
-                SemanticFileChangeKind.Deleted,
-                SemanticRefreshReason.ExternalChange));
-            watcher.Error += (_, _) =>
-            {
-                if (!Directory.Exists(path))
+            return _fileObserver.Subscribe(
+                path,
+                change =>
                 {
-                    // Windows reports a removed or moved watcher root as an error. Reconcile
-                    // its directory lifecycle; compiler descendants determine semantic work.
-                    changed(new SemanticFileChange(Request.SessionId, path, SemanticFileChangeKind.Deleted));
-                }
-                else
-                {
-                    failed();
-                }
-            };
-            return watcher;
+                    changed(new SemanticFileChange(Request.SessionId, change.Path, change.Kind, change.ObservationRestarted ? SemanticRefreshReason.Recovery : SemanticRefreshReason.ExternalChange, change.PreviousPath));
+                    if (change.PreviousPath is { } previous)
+                    {
+                        changed(new SemanticFileChange(Request.SessionId, previous, SemanticFileChangeKind.Deleted));
+                    }
+                },
+                failed);
         }
 
         private void DisposeWatchers()
@@ -3347,17 +3331,6 @@ public sealed class SemanticRefreshCoordinator :
             {
                 return true;
             }
-        }
-
-        private SemanticFileChange CreateChange(
-            FileSystemEventArgs args,
-            SemanticFileChangeKind kind)
-        {
-            return new SemanticFileChange(
-                Request.SessionId,
-                args.FullPath,
-                kind,
-                SemanticRefreshReason.ExternalChange);
         }
     }
 

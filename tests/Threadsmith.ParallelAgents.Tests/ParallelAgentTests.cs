@@ -596,7 +596,7 @@ public sealed class ParallelAgentTests
             AssignmentId = assignment.AssignmentId,
             ChildRunId = assignment.ChildRunId,
             Generation = plan.Provenance.Generation,
-            ParentBaselineIdentity = plan.Provenance.BaselineIdentity,
+            ParentBaselineIdentity = Assert.IsType<string>(plan.Provenance.BaselineIdentity),
             WorktreeIdentity = "worktree",
             TouchedPaths = paths,
             DiffArtifact = new ExecutionArtifactReference("hash", "diff", 4),

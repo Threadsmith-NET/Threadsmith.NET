@@ -67,57 +67,21 @@ public static class RepositoryInitializer
         var status = await GetStatusAsync(repositoryPath, cancellationToken);
         var configurationDirectory = Path.Combine(status.RepositoryPath, ".threadsmith");
         var configurationPath = Path.Combine(configurationDirectory, "config.json");
-        if (File.Exists(configurationPath))
-        {
-            return new RepositoryInitializationResult(
-                status.RepositoryPath,
-                configurationPath,
-                false);
-        }
-
-        Directory.CreateDirectory(configurationDirectory);
-        if ((File.GetAttributes(configurationDirectory) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new UnauthorizedAccessException(
-                "The repository configuration directory cannot be a symbolic link or junction.");
-        }
-
-        var temporaryPath = Path.Combine(
-            configurationDirectory,
-            $".config-{Guid.NewGuid():N}.tmp");
+        var created = false;
         try
         {
-            await File.WriteAllTextAsync(
-                temporaryPath,
-                InitialConfiguration + Environment.NewLine,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                cancellationToken);
-            try
-            {
-                File.Move(temporaryPath, configurationPath, overwrite: false);
-            }
-            catch (IOException) when (File.Exists(configurationPath))
-            {
-                File.Delete(temporaryPath);
-                return new RepositoryInitializationResult(
-                    status.RepositoryPath,
-                    configurationPath,
-                    false);
-            }
+            created = await RepositorySettingsCoordinator.UpdateAsync(
+                configurationPath,
+                _ => Task.FromResult<RepositorySettingsUpdate?>(File.Exists(configurationPath)
+                    ? null
+                    : new(Encoding.UTF8.GetBytes(InitialConfiguration + Environment.NewLine)) { Overwrite = false }),
+                cancellationToken: cancellationToken);
         }
-        catch
+        catch (IOException) when (File.Exists(configurationPath))
         {
-            if (File.Exists(temporaryPath))
-            {
-                File.Delete(temporaryPath);
-            }
-
-            throw;
+            // A writer outside the process created the destination; preserve its file.
         }
 
-        return new RepositoryInitializationResult(
-            status.RepositoryPath,
-            configurationPath,
-            true);
+        return new RepositoryInitializationResult(status.RepositoryPath, configurationPath, created);
     }
 }

@@ -10,7 +10,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
 {
     /// <summary>Reads detached rows in the caller transaction for CRUD, migration and retrieval.</summary>
     internal static async Task<List<RepositoryMemoryEntry>> ReadEntriesAsync(
-        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<string> warnings, bool includesMemoryType = true, CancellationToken cancellationToken = default)
+        SqliteConnection connection, SqliteTransaction? transaction, string repositoryIdentity, List<string> warnings, bool includesMemoryType = true, RepositoryMemoryOwnership? ownership = null, RepositoryMemoryId? memoryId = null, CancellationToken cancellationToken = default)
     {
         await using var command = connection.CreateCommand();
         if (transaction is not null)
@@ -24,7 +24,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 SELECT memory_id, text, content_hash, content_revision, origin, memory_type, sensitivity,
                     created_at, updated_at, inclusion_count, last_included_at,
                     source_session_id, source_run_id, source_invocation_id,
-                    embedding, embedding_space_id, embedding_dimensions, embedding_content_hash, embedding_revision, kind
+                    embedding, embedding_space_id, embedding_dimensions, embedding_content_hash, embedding_revision, kind, ownership
                 FROM managed_memories WHERE repository_identity = $repo ORDER BY created_at, memory_id;
                 """
             : """
@@ -34,6 +34,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                     embedding, embedding_space_id, embedding_dimensions, embedding_content_hash, embedding_revision
                 FROM managed_memories WHERE repository_identity = $repo ORDER BY created_at, memory_id;
                 """;
+        ApplyReadFilters(command, ownership, memoryId);
         var entries = new List<RepositoryMemoryEntry>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
@@ -86,6 +87,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 SourceSessionId = NullableString(reader, 10 + typeOffset),
                 SourceRunId = NullableString(reader, 11 + typeOffset),
                 SourceInvocationId = NullableString(reader, 12 + typeOffset),
+                Ownership = includesMemoryType ? (RepositoryMemoryOwnership)reader.GetInt32(20) : RepositoryMemoryOwnership.Ordinary,
                 Kind = includesMemoryType ? (ManagedRepositoryMemoryKind)reader.GetInt32(19) : ManagedRepositoryMemoryKind.Unspecified,
                 Embedding = vector,
                 EmbeddingSpaceId = space,
@@ -99,6 +101,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         if (includesMemoryType)
         {
             await using var concepts = CreateCommand(connection, transaction, "SELECT memory_id, concept FROM managed_memory_concepts WHERE repository_identity = $repo ORDER BY concept;", repositoryIdentity);
+            ApplyReadFilters(concepts, ownership, memoryId);
             await using var conceptReader = await concepts.ExecuteReaderAsync(cancellationToken);
             var byId = new Dictionary<string, List<string>>(StringComparer.Ordinal);
             while (await conceptReader.ReadAsync(cancellationToken))
@@ -120,6 +123,11 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                     entries[index] = entries[index] with { Concepts = values.Order(StringComparer.Ordinal).ToArray() };
                 }
             }
+        }
+
+        if (includesMemoryType)
+        {
+            await ReadSupportsAsync(connection, transaction, repositoryIdentity, entries, memoryId, ownership, cancellationToken);
         }
 
         return entries;
@@ -160,10 +168,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         command.CommandText = includesMemoryType
             ? """
                 INSERT INTO managed_memories(memory_id, repository_identity, text, content_hash, content_revision,
-                    origin, memory_type, kind, sensitivity, created_at, updated_at, source_session_id, source_run_id, source_invocation_id,
+                    origin, memory_type, kind, ownership, sensitivity, created_at, updated_at, source_session_id, source_run_id, source_invocation_id,
                     inclusion_count, last_included_at, embedding, embedding_space_id, embedding_dimensions,
                     embedding_content_hash, embedding_revision)
-                VALUES($id, $repo, $text, $hash, $revision, $origin, $memoryType, $kind, $sensitivity, $created, $updated,
+                VALUES($id, $repo, $text, $hash, $revision, $origin, $memoryType, $kind, $ownership, $sensitivity, $created, $updated,
                     $session, $run, $invocation, 0, NULL, $embedding, $space, $dimensions, $vectorHash, $vectorRevision);
                 """
             : """
@@ -179,6 +187,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         if (includesMemoryType)
         {
             await ReplaceConceptsAsync(connection, transaction, entry, cancellationToken);
+            await ReplaceSupportsAsync(connection, transaction, entry, cancellationToken);
         }
     }
 
@@ -301,6 +310,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         command.Parameters.AddWithValue("$origin", entry.Origin == RepositoryMemoryOrigin.Manual ? "manual" : "model");
         command.Parameters.AddWithValue("$memoryType", (int)entry.MemoryType);
         command.Parameters.AddWithValue("$kind", (int)entry.Kind);
+        command.Parameters.AddWithValue("$ownership", (int)entry.Ownership);
         command.Parameters.AddWithValue("$sensitivity", (int)entry.Sensitivity);
         command.Parameters.AddWithValue("$created", entry.CreatedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("$updated", entry.UpdatedAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
@@ -408,5 +418,23 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         {
             warnings.Add(warning);
         }
+    }
+
+    private static void ApplyReadFilters(SqliteCommand command, RepositoryMemoryOwnership? ownership, RepositoryMemoryId? memoryId)
+    {
+        var filter = string.Empty;
+        if (ownership is { } partition)
+        {
+            filter += " AND memory_id IN (SELECT memory_id FROM managed_memories WHERE repository_identity = $repo AND ownership = $ownership)";
+            command.Parameters.AddWithValue("$ownership", (int)partition);
+        }
+
+        if (memoryId is { } id)
+        {
+            filter += " AND memory_id = $memoryId";
+            command.Parameters.AddWithValue("$memoryId", id.Value.ToString());
+        }
+
+        command.CommandText = command.CommandText.Replace(" ORDER BY", filter + " ORDER BY", StringComparison.Ordinal);
     }
 }

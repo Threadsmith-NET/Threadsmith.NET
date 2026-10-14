@@ -13,6 +13,24 @@ using Xunit;
 /// <summary>Plan 56 durable catalog and independent clone verification.</summary>
 public static partial class Plan56SessionLifecycleTests
 {
+    /// <summary>Successful transitions notify consumers; failed resumes retain the current owner.</summary>
+    [Fact]
+    public static async Task Successful_transitions_notify_the_repository_consumers_of_the_active_session()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        var activated = new List<SessionCatalogEntry>();
+        await using var harness = LifecycleHarness.Create("repo-a", catalog, fixture.Conversations, sessionActivated: activated.Add);
+        var first = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand(), ct);
+        var second = await harness.Lifecycle.HandleAsync(new CreateNewSessionCommand(), ct);
+        var clone = await harness.Lifecycle.HandleAsync(new CloneSessionCommand(), ct);
+        var resumed = await harness.Lifecycle.HandleAsync(new ResumeSessionCommand(first.ActiveSession.SessionId), ct);
+        Assert.Equal(new[] { first.ActiveSession, second.ActiveSession, clone.ActiveSession, resumed.ActiveSession }, activated);
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => harness.Lifecycle.HandleAsync(new ResumeSessionCommand(SessionId.New()), ct));
+        Assert.Equal(4, activated.Count);
+    }
+
     /// <summary>Migration 8 makes pre-catalog durable sessions selectable without losing conversation metadata.</summary>
     [Fact]
     public static async Task Migration_8_backfills_existing_durable_sessions()
@@ -704,7 +722,8 @@ public static partial class Plan56SessionLifecycleTests
             IConversationStore conversations,
             ActiveModelSelectionService? activeModels = null,
             IModelProvider? modelProvider = null,
-            JsonlModelExchangeLog? modelExchangeLog = null)
+            JsonlModelExchangeLog? modelExchangeLog = null,
+            Action<SessionCatalogEntry>? sessionActivated = null)
         {
             var events = new DomainEventStream();
             var sanitizer = new SecretOutputSanitizer();
@@ -733,7 +752,8 @@ public static partial class Plan56SessionLifecycleTests
                 new UnusedContextAssembler(),
                 usage,
                 activeModels,
-                modelExchangeLog: modelExchangeLog);
+                modelExchangeLog: modelExchangeLog,
+                sessionActivated: sessionActivated);
             return new LifecycleHarness(events, evidence, usage, lifecycle, sessions);
         }
     }

@@ -209,6 +209,9 @@ public sealed record ContextAssemblyRequest
     /// <summary>Whether host tool enable/deny policy permits automatic memory injection.</summary>
     public bool RepositoryMemoriesEnabled { get; init; } = true;
 
+    /// <summary>Host-confirmed effective intelligence eligibility for this submission.</summary>
+    public bool IntelligenceEnabled { get; init; }
+
     /// <summary>Immutable effective memory limits for the current turn.</summary>
     public RepositoryMemoryOptions? RepositoryMemoryOptions { get; init; }
 
@@ -250,6 +253,9 @@ public sealed record ContextAssemblyRequest
 
     /// <summary>Request-local host-owned model messages appended to the assembled request.</summary>
     public IReadOnlyList<ModelMessage> AdditionalMessages { get; init; } = [];
+
+    /// <summary>Evidence already represented by this turn's continuation groups or successfully compacted summaries.</summary>
+    public IReadOnlyList<EvidenceId> ActiveTurnEvidenceIds { get; init; } = [];
 
     /// <summary>Authoritative archived current user message.</summary>
     public ConversationMessageId? CurrentMessageId { get; init; }

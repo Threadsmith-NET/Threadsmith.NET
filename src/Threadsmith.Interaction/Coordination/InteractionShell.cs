@@ -95,9 +95,33 @@ public class InteractionPresenter
         string text,
         CancellationToken cancellationToken = default)
     {
+        return SubmitAsync(sessionId, text, RepositoryIntelligenceOperation.None, cancellationToken);
+    }
+
+    /// <summary>Submits explicit intelligence work through ordinary run execution.</summary>
+    public Task<RunId> SubmitAsync(SessionId sessionId, string text, RepositoryIntelligenceOperation operation, CancellationToken cancellationToken = default)
+    {
+        return SubmitAsync(sessionId, text, operation, null, cancellationToken);
+    }
+
+    /// <summary>Submits onboarding depth through the ordinary command boundary.</summary>
+    public Task<RunId> SubmitAsync(SessionId sessionId, string text, RepositoryIntelligenceOperation operation, int? historyDepth, CancellationToken cancellationToken = default)
+    {
         return _dispatcher.DispatchAsync(
-            new SubmitRequestCommand(sessionId, text),
+            new SubmitRequestCommand(sessionId, text) { IntelligenceOperation = operation, IntelligenceHistoryDepth = historyDepth },
             cancellationToken);
+    }
+
+    /// <summary>Claims coalesced automatic work at the ordinary composer admission boundary.</summary>
+    public Task<bool> TakeIntelligenceRefreshAsync(SessionId sessionId, string repositoryPath, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(new TakeRepositoryIntelligenceRefreshCommand(sessionId, repositoryPath), cancellationToken);
+    }
+
+    /// <summary>Uses the shared command boundary for explicit intelligence state changes.</summary>
+    public Task<RepositoryIntelligenceStatus> ManageIntelligenceAsync(ManageRepositoryIntelligenceCommand command, CancellationToken cancellationToken = default)
+    {
+        return _dispatcher.DispatchAsync(command, cancellationToken);
     }
 
     /// <summary>Forces one authoritative semantic refresh through the command boundary.</summary>
@@ -868,9 +892,7 @@ public class InteractionPresenter
                 + string.Concat(state.ContextInspection.Evidence.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} "
                         + $"{item.Kind}: {item.Rationale}\n"))
-                + string.Concat(state.ContextInspection.RepositoryMemoryItems.Select(item =>
-                        $"  {(item.Included ? "included" : "omitted")} repository-memory "
-                        + $"{item.Origin}: {item.Rationale}\n"))
+                + string.Concat(state.ContextInspection.RepositoryMemoryItems.Select(ContextUsageFormatter.FormatMemoryContext))
                 + string.Concat(state.ContextInspection.PromptAssets.Select(asset =>
                         $"  prompt {asset.Position}: {asset.Id}@{asset.Version}\n"))
                 + string.Concat(state.ContextInspection.ModelRationale.Select(reason =>

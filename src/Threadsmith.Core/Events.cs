@@ -17,6 +17,7 @@ using System.Text.Json.Serialization;
 [JsonDerivedType(typeof(PlanApprovalPolicyChanged), "planApprovalPolicyChanged")]
 [JsonDerivedType(typeof(PlanRevisionRequested), "planRevisionRequested")]
 [JsonDerivedType(typeof(ContextAssembled), "contextAssembled")]
+[JsonDerivedType(typeof(MemoriesIncluded), "memoriesIncluded")]
 [JsonDerivedType(typeof(ModelFallbackSelected), "modelFallbackSelected")]
 [JsonDerivedType(typeof(ActiveTurnCompactionStarted), "activeTurnCompactionStarted")]
 [JsonDerivedType(typeof(ActiveTurnCompactionCompleted), "activeTurnCompactionCompleted")]
@@ -620,6 +621,10 @@ public sealed record RunTransitionFailed(
 public sealed record ModelOutputObserved(SessionId SessionId, DateTimeOffset OccurredAt, string Text)
     : DomainEvent(SessionId, OccurredAt);
 
+/// <summary>Sanitized memory content was actually included in a submitted provider request.</summary>
+public sealed record MemoriesIncluded(SessionId SessionId, DateTimeOffset OccurredAt, RunId RunId, IReadOnlyList<RepositoryMemoryContextItemProjection> Items)
+    : DomainEvent(SessionId, OccurredAt);
+
 /// <summary>Model reasoning text was observed during streaming.</summary>
 public sealed record ModelReasoningObserved(SessionId SessionId, DateTimeOffset OccurredAt, string Text)
     : DomainEvent(SessionId, OccurredAt);
@@ -896,6 +901,7 @@ public static class DomainEventJson
             ["planApprovalPolicyChanged"] = typeof(PlanApprovalPolicyChanged),
             ["planRevisionRequested"] = typeof(PlanRevisionRequested),
             ["contextAssembled"] = typeof(ContextAssembled),
+            ["memoriesIncluded"] = typeof(MemoriesIncluded),
             ["modelFallbackSelected"] = typeof(ModelFallbackSelected),
             ["activeTurnCompactionStarted"] = typeof(ActiveTurnCompactionStarted),
             ["activeTurnCompactionCompleted"] = typeof(ActiveTurnCompactionCompleted),

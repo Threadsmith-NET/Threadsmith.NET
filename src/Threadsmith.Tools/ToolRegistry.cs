@@ -34,6 +34,13 @@ public interface IToolRegistry
     /// <summary>Returns one atomic enabled registration snapshot eligible for a session and run.</summary>
     IReadOnlyList<ToolRegistration> GetRegistrations(SessionId sessionId, RunId runId);
 
+    /// <summary>Returns registrations including built-in readers temporarily available to onboarding and archeology runs.</summary>
+    IReadOnlyList<ToolRegistration> GetRegistrations(SessionId sessionId, RunId runId, ToolInvocationContext? context)
+        => GetRegistrations(sessionId, runId);
+
+    /// <summary>Resolves a registration under the initiating run's temporary availability.</summary>
+    ToolRegistration GetRegistration(string toolId, ToolInvocationContext context) => GetRegistration(toolId);
+
     /// <summary>All registered definitions in deterministic order, including disabled tools.</summary>
     IReadOnlyList<ToolDefinition> AllDefinitions { get; }
 
@@ -119,15 +126,37 @@ public sealed class ToolRegistry : IToolRegistry
     /// <inheritdoc />
     public IReadOnlyList<ToolRegistration> GetRegistrations(SessionId sessionId, RunId runId)
     {
+        return GetRegistrations(sessionId, runId, null);
+    }
+
+    /// <inheritdoc />
+    public IReadOnlyList<ToolRegistration> GetRegistrations(SessionId sessionId, RunId runId, ToolInvocationContext? context)
+    {
         lock (_gate)
         {
             return _tools.Values
-                .Where(tool => _stateManager is null || _stateManager.IsEnabled(tool.Definition.Id))
-                .Where(tool => _activationPolicy is null
-                    || _activationPolicy.IsActive(tool.Definition.Id, sessionId, runId))
+                .Where(tool => IsIntelligenceHistoryReader(tool, context)
+                    || ((_stateManager is null || _stateManager.IsEnabled(tool.Definition.Id))
+                        && (_activationPolicy is null || _activationPolicy.IsActive(tool.Definition.Id, sessionId, runId))))
                 .OrderBy(tool => tool.Definition.Id, StringComparer.Ordinal)
                 .Select(tool => new ToolRegistration(tool, GetSourceUnsafe(tool.Definition.Id)))
                 .ToArray();
+        }
+    }
+
+    /// <inheritdoc />
+    public ToolRegistration GetRegistration(string toolId, ToolInvocationContext context)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(toolId);
+        ArgumentNullException.ThrowIfNull(context);
+        lock (_gate)
+        {
+            if (_tools.TryGetValue(toolId, out var tool) && IsIntelligenceHistoryReader(tool, context))
+            {
+                return new ToolRegistration(tool, GetSourceUnsafe(toolId));
+            }
+
+            return GetRegistration(toolId);
         }
     }
 
@@ -293,6 +322,13 @@ public sealed class ToolRegistry : IToolRegistry
             _stateManager?.Unregister(toolId);
             return true;
         }
+    }
+
+    private static bool IsIntelligenceHistoryReader(ITool tool, ToolInvocationContext? context)
+    {
+        return context?.IntelligenceRun is { Operation: RepositoryIntelligenceOperation.Onboard or RepositoryIntelligenceOperation.Archeology } run
+            && !run.CancellationToken.IsCancellationRequested
+            && ConfiguredTool.Unwrap(tool) is GitLogTool or GitShowTool or GitDiffTool;
     }
 
     private ITool GetEnabledTool(string toolId)

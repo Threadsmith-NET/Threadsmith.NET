@@ -39,8 +39,33 @@ public sealed class DelegateAgentsPlanFactory
         _models = models;
     }
 
-    /// <summary>Validates, captures, and freezes one fork/join plan.</summary>
+    /// <summary>Freezes a fork/join plan with baseline or read-only live-workspace provenance.</summary>
     public DelegationPlan Create(DelegateAgentsInput input, ToolExecutionContext context)
+    {
+        var workspaceId = ValidateRequest(input, context);
+        WorkspaceBaseline? baseline;
+        try
+        {
+            baseline = _workspaces.GetWorkspace(workspaceId).Baseline;
+        }
+        catch (KeyNotFoundException) when (input.Agents.All(agent => agent.ToolAccess == DelegateAgentToolAccess.ReadOnly))
+        {
+            var snapshotId = context.Invocation.ModelVisibleToolSnapshotId
+                ?? throw new InvalidOperationException("Read-only delegation requires the parent request's workspace context.");
+            var captured = _toolSnapshots.ResolveContext(snapshotId, context.SessionId, context.RunId);
+            if (captured?.WorkspaceId != workspaceId
+                || !PathsEqual(captured.RepositoryPath, context.Invocation.RepositoryPath))
+            {
+                throw new InvalidOperationException("Read-only delegation workspace context does not match the parent request.");
+            }
+
+            baseline = null;
+        }
+
+        return CreatePlan(input, context, workspaceId, baseline);
+    }
+
+    private WorkspaceId ValidateRequest(DelegateAgentsInput input, ToolExecutionContext context)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
@@ -50,11 +75,36 @@ public sealed class DelegateAgentsPlanFactory
         }
 
         DelegateAgentsInputValidator.Validate(input, _options);
-        var workspaceId = context.Invocation.WorkspaceId
+        if (context.Invocation.IntelligenceRun is { } intelligence)
+        {
+            if (context.Invocation.IsChildAgent
+                || intelligence.Operation != RepositoryIntelligenceOperation.Onboard
+                || !intelligence.IsCoverageReviewActive
+                || intelligence.CancellationToken.IsCancellationRequested)
+            {
+                throw new UnauthorizedAccessException("Intelligence investigators are available only during final onboarding coverage.");
+            }
+
+            if (input.Agents.Count > 2 || input.Agents.Any(request =>
+                request.Role != AgentRole.Explorer || request.ToolAccess != DelegateAgentToolAccess.ReadOnly))
+            {
+                throw new ArgumentException("Onboarding accepts at most two read-only Explorer investigators per call.", nameof(input));
+            }
+
+            if (input.Agents.Any(request => (long)request.Task.Length + request.Context.Length > 8_192))
+            {
+                throw new ArgumentException("Each onboarding investigator needs a task and brief totaling at most 8192 characters.", nameof(input));
+            }
+        }
+
+        return context.Invocation.WorkspaceId
             ?? throw new InvalidOperationException("Agent delegation requires an opened workspace.");
-        var baseline = _workspaces.GetWorkspace(workspaceId).Baseline;
-        if (baseline.WorkspaceId != workspaceId
-            || !PathsEqual(baseline.RepositoryPath, context.Invocation.RepositoryPath))
+    }
+
+    private DelegationPlan CreatePlan(DelegateAgentsInput input, ToolExecutionContext context, WorkspaceId workspaceId, WorkspaceBaseline? baseline)
+    {
+        if (baseline is not null && (baseline.WorkspaceId != workspaceId
+            || !PathsEqual(baseline.RepositoryPath, context.Invocation.RepositoryPath)))
         {
             throw new InvalidOperationException("Agent delegation workspace context does not match the active baseline.");
         }
@@ -74,8 +124,8 @@ public sealed class DelegateAgentsPlanFactory
                 SessionId = context.SessionId,
                 ParentRunId = context.RunId,
                 ToolInvocationId = context.ToolInvocationId,
-                RepositoryIdentity = baseline.RepositoryPath,
-                BaselineIdentity = WorkspaceBaselineIdentity.Create(baseline),
+                RepositoryIdentity = context.Invocation.RepositoryPath,
+                BaselineIdentity = baseline is null ? null : WorkspaceBaselineIdentity.Create(baseline),
                 WorkspaceId = workspaceId,
             },
             Assignments = assignments,
@@ -109,7 +159,9 @@ public sealed class DelegateAgentsPlanFactory
                     ? AgentRunMode.ReadOnlyBaseline
                     : AgentRunMode.ReadOnlyReview,
             Objective = request.Task.Trim(),
-            Tasks = [_prompts.Get(PromptFileNames.ContextChildAgentStructuredFindingsTask)],
+            Tasks = [_prompts.Get(context.Invocation.IntelligenceRun is null
+                ? PromptFileNames.ContextChildAgentStructuredFindingsTask
+                : PromptFileNames.ContextChildAgentIntelligenceInvestigation)],
             InitialContext = request.Context.Trim(),
             OutputSchema = DelegateAgentsContract.ResponseSchema,
             StoppingCondition = "Stop after the assigned question is answered or the bounded evidence surface is exhausted.",
@@ -133,7 +185,9 @@ public sealed class DelegateAgentsPlanFactory
                 ModelSelectionRationale = context.Invocation.ModelProfileId is null && preference.ProfileId is null
                     ? "Select a compatible profile for the child role."
                     : "Prefer the frozen parent profile, subject to role configuration and request compatibility.",
-                ContextPolicyVersion = ContextPolicyVersion,
+                IncludeParentEvidence = context.Invocation.IntelligenceRun is null,
+                ContextPolicyVersion = context.Invocation.IntelligenceRun is null
+                    ? ContextPolicyVersion : "agent-context/onboarding-brief/1",
                 ToolPolicyVersion = request.ToolAccess == DelegateAgentToolAccess.ReadOnly
                     ? ReadOnlyToolPolicyVersion
                     : InheritToolPolicyVersion,

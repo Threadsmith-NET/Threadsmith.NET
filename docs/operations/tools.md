@@ -98,3 +98,9 @@ Eligible built-in read/search/semantic/validation/process tools accept optional 
 Tool/service output and runtime limits are configurable. See [Resource limits](resource-limits.md) for defaults, per-tool runtime overrides, source concurrency, and the independent limits that apply to a result.
 
 `edit_source` applies ordered text/create/delete/move operations through `SourceEditApplication` and the existing transactional writer. Exact review supplies authorization when mutation policy requires it; there is no second generic approval. Compiler findings and incomplete coverage are advisory feedback, while invalid paths, instructions and stale source identities reject unsafe edits. Effect receipts feed ordinary model continuations. The model chooses build and test tool calls after resolving incremental compiler findings; response completion records disk effects without launching validation.
+
+### Intelligence collection and inspection
+
+During explicit onboarding or refresh, the same `memories` tool accepts `supportingPaths` for intelligence adds/updates after primary sources were read in that collection. `action:"changes"` pages pending paths with `afterPath`; `action:"coverChanges"` prepares acknowledgments using `coveredPaths`. These actions and intelligence write authority are scoped to the host-authorized collection. Normal model calls cannot select intelligence ownership, onboard, or replace a collection. A successful run publishes prepared changes; cancellation/failure preserves committed data.
+
+Ordinary model `list` excludes intelligence when disabled or ineffective. Manual `/memory list` and `/memory inspect <id>` retain access to preserved entries. Archeology is read-only. See [repository intelligence operations](conversation-context.md#repository-intelligence) for lifecycle, separate capacities, warnings, and commit detection limits.

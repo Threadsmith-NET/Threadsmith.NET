@@ -198,6 +198,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | `maintenance-semantic-validation-reconciliation.md` | Reuse proven semantic snapshots and bound validation reconciliation work |
 | Maintenance | [maintenance-semantic-startup-progress.md](maintenance-semantic-startup-progress.md) | Early startup presentation and timed semantic initialization status |
 | Maintenance | [maintenance-resumed-conversation-output.md](maintenance-resumed-conversation-output.md) | Replace resumed output with saved conversation at the latest exchange |
+| Implementation | [repository-intelligence-as-memory.md](repository-intelligence-as-memory.md) | Repository intelligence through shared memory recall and reconciliation |
 
 ## Update discipline
 

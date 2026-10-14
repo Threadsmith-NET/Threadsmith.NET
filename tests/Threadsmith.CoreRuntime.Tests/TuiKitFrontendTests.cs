@@ -202,8 +202,8 @@ public static class TuiKitFrontendTests
         foreach (var modal in modals)
         {
             var large = modal is CommandHelpModal;
-            var frameWidth = Math.Min(large ? 140 : 90, width - 4);
-            var frameHeight = Math.Min(large ? 40 : 24, height - 3);
+            var frameWidth = Math.Min(modal is ChoiceModal ? 38 : large ? 140 : 90, width - 4);
+            var frameHeight = Math.Min(modal is ChoiceModal ? 8 : large ? 40 : 24, height - 3);
             var left = (width - frameWidth) / 2;
             var top = (height - 1 - frameHeight) / 2;
             var cells = new CellBuffer(width, height);

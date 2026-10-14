@@ -6,6 +6,8 @@ using Threadsmith.Cli;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Extensions.Runtime;
+using Threadsmith.Interaction.Markdown;
+using Threadsmith.Interaction.Presentation;
 using Threadsmith.Tools;
 using Threadsmith.Tui.TuiKit;
 
@@ -131,7 +133,7 @@ internal static class ShellRunner
                     processCancellation.Token);
             }
 
-            if (context.CommandLine.RepositoryOptionsSpecified)
+            if (context.CommandLine.RepositoryOptionsSpecified || request.TrimStart().StartsWith("/intelligence", StringComparison.OrdinalIgnoreCase))
             {
                 if (context.CommandLine.RequestArguments.Count > 0)
                 {
@@ -225,6 +227,19 @@ internal static class ShellRunner
         var memoryInvocations = new HashSet<ToolInvocationId>();
         return events.Subscribe(async (domainEvent, cancellationToken) =>
         {
+            if (domainEvent is MemoriesIncluded memories)
+            {
+                await output.WriteLineAsync("Memory:".AsMemory(), cancellationToken);
+                await output.WriteAsync(string.Concat(memories.Items.Select(ContextUsageFormatter.FormatMemoryContext)).AsMemory(), cancellationToken);
+                return;
+            }
+
+            if (domainEvent is DiagnosticObserved diagnostic && diagnostic.Code.StartsWith("intelligence.", StringComparison.Ordinal))
+            {
+                await output.WriteLineAsync((Environment.NewLine + TerminalControlEncoder.Encode($"[{diagnostic.Code}] {diagnostic.Message}")).AsMemory(), cancellationToken);
+                return;
+            }
+
             if (domainEvent is ToolInvocationStarted { ToolName: "memories" } started
                 && started.Source is not { Kind: not ToolActivitySourceKind.BuiltIn })
             {

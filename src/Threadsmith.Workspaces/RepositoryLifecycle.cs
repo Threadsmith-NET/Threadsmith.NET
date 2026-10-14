@@ -73,6 +73,7 @@ public sealed class RepositoryLifecycle :
 
     private readonly Func<string, CancellationToken, Task>? _repositoryOpened;
     private readonly Func<IReadOnlyList<string>>? _repositoryOpenWarnings;
+    private readonly Func<SessionId, string, CancellationToken, Task>? _repositoryReady;
 
     private readonly Lock _sessionGate = new();
 
@@ -91,7 +92,8 @@ public sealed class RepositoryLifecycle :
         Func<string, CancellationToken, Task>? repositoryOpened = null,
         WorkspaceResourceLimits? resourceLimits = null,
         int maximumConfigurationBytes = 1024 * 1024,
-        Func<IReadOnlyList<string>>? repositoryOpenWarnings = null)
+        Func<IReadOnlyList<string>>? repositoryOpenWarnings = null,
+        Func<SessionId, string, CancellationToken, Task>? repositoryReady = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(factsStore);
@@ -108,6 +110,7 @@ public sealed class RepositoryLifecycle :
         _mutationApprovalPolicy = mutationApprovalPolicy;
         _repositoryOpened = repositoryOpened;
         _repositoryOpenWarnings = repositoryOpenWarnings;
+        _repositoryReady = repositoryReady;
     }
 
     /// <inheritdoc />
@@ -314,6 +317,11 @@ public sealed class RepositoryLifecycle :
         if (_repositoryOpened is not null)
         {
             await _repositoryOpened(repositoryPath, cancellationToken);
+        }
+
+        if (_repositoryReady is not null)
+        {
+            await _repositoryReady(command.SessionId, repositoryPath, cancellationToken);
         }
 
         return new RepositoryOpenResult(
@@ -887,7 +895,7 @@ public sealed class RepositoryLifecycle :
                 "The repository configuration directory cannot be a symbolic link or junction.");
         }
 
-        await RepositorySettingsCoordinator.ExecuteWriteAsync(
+        await RepositorySettingsCoordinator.UpdateAsync(
             configurationPath,
             async token =>
             {
@@ -927,16 +935,6 @@ public sealed class RepositoryLifecycle :
                 solution["path"] = solutionRelativePath is null
                     ? null
                     : JsonValue.Create(solutionRelativePath);
-                Directory.CreateDirectory(configurationDirectory);
-                if ((File.GetAttributes(configurationDirectory) & FileAttributes.ReparsePoint) != 0)
-                {
-                    throw new UnauthorizedAccessException(
-                        "The repository configuration directory cannot be a symbolic link or junction.");
-                }
-
-                var temporaryPath = Path.Combine(
-                    configurationDirectory,
-                    $".config-{Guid.NewGuid():N}.tmp");
                 var serialized = root.ToJsonString(
                     new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine;
                 if (Encoding.UTF8.GetByteCount(serialized) > _maximumConfigurationBytes)
@@ -944,24 +942,9 @@ public sealed class RepositoryLifecycle :
                     throw new InvalidDataException("The updated repository configuration exceeds its configured byte limit.");
                 }
 
-                try
-                {
-                    await File.WriteAllTextAsync(
-                        temporaryPath,
-                        serialized,
-                        new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                        token);
-                    File.Move(temporaryPath, configurationPath, overwrite: true);
-                }
-                finally
-                {
-                    if (File.Exists(temporaryPath))
-                    {
-                        File.Delete(temporaryPath);
-                    }
-                }
+                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(serialized));
             },
-            cancellationToken);
+            cancellationToken: cancellationToken);
     }
 
     private static StringComparer PathComparer => OperatingSystem.IsWindows()

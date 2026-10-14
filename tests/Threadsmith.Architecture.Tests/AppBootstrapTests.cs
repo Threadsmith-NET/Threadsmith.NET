@@ -8,6 +8,7 @@ using Threadsmith.App;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Models;
+using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Xunit;
 
@@ -251,6 +252,29 @@ public static partial class AppBootstrapTests
         await events.PublishAsync(new ToolInvocationCompleted(session, now, malformed, true, "{malformed"), TestContext.Current.CancellationToken);
 
         Assert.Equal($"{Environment.NewLine}You now have 4 preference memories. You may want to consider adding some of these to AGENTS.md for the repo.{Environment.NewLine}{Environment.NewLine}", writer.ToString());
+    }
+
+    /// <summary>Headless intelligence diagnostics encode controls after sanitization without changing the event.</summary>
+    [Theory]
+    [InlineData("intelligence.monitor.failed", "Access denied: src/\u009b2Jλ.cs", "[intelligence.monitor.failed] Access denied: src/\\u009B2Jλ.cs")]
+    [InlineData("intelligence.monitor.failed", "Access denied: src/\u009dtitle\u009c.cs", "[intelligence.monitor.failed] Access denied: src/\\u009Dtitle\\u009C.cs")]
+    [InlineData("intelligence.monitor.failed", "Access denied: src/\u001b[2J.cs", "[intelligence.monitor.failed] Access denied: src/[2J.cs")]
+    [InlineData("intelligence.commit.observing", "Ordinary diagnostic\nwith\ttwo lines.", "[intelligence.commit.observing] Ordinary diagnostic\nwith\ttwo lines.")]
+    [InlineData("intelligence.custom\u009b2J", "Message", "[intelligence.custom\\u009B2J] Message")]
+    public static async Task HeadlessIntelligenceDiagnostics_EncodeTerminalControls(string code, string message, string expected)
+    {
+        await using var events = new DomainEventStream();
+        await using var writer = new StringWriter();
+        await using var subscription = ShellRunner.SubscribeMemoryWarnings(events, writer);
+        var sanitized = new SecretOutputSanitizer().Sanitize(message);
+        var diagnostic = new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, code, sanitized);
+
+        await events.PublishAsync(diagnostic, TestContext.Current.CancellationToken);
+        await events.PublishAsync(new DiagnosticObserved(diagnostic.SessionId, diagnostic.OccurredAt, "unrelated", "Do not print"), TestContext.Current.CancellationToken);
+
+        Assert.Equal(Environment.NewLine + expected + Environment.NewLine, writer.ToString());
+        Assert.Equal(sanitized, diagnostic.Message);
+        Assert.DoesNotContain(writer.ToString(), character => character is '\u001b' or >= '\u007f' and <= '\u009f');
     }
 
     /// <summary>Direct application publishes include the worker dependency manifest required by its apphost.</summary>

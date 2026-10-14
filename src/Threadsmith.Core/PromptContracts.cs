@@ -146,6 +146,21 @@ public static class PromptFileNames
     /// <summary>Gets the relevance caveat preceding optional repository memory references.</summary>
     public const string SystemRepositoryMemoryGuidance = "System-RepositoryMemoryGuidance.md";
 
+    /// <summary>Enabled-only advisory exploration and supporting-source guidance.</summary>
+    public const string SystemRepositoryIntelligenceGuidance = "System-RepositoryIntelligenceGuidance.md";
+
+    /// <summary>Restricted architectural collection through the shared memory workflow.</summary>
+    public const string ContextRepositoryIntelligenceCollection = "Context-RepositoryIntelligenceCollection.md";
+
+    /// <summary>Chronological onboarding batch guidance surrounding untrusted Git metadata.</summary>
+    public const string ContextRepositoryIntelligenceHistory = "Context-RepositoryIntelligenceHistory.md";
+
+    /// <summary>Host-requested final investigation pass after chronological history completes.</summary>
+    public const string ContextRepositoryIntelligenceCoverage = "Context-RepositoryIntelligenceCoverage.md";
+
+    /// <summary>On-demand source and history investigation without mutation authority.</summary>
+    public const string ContextRepositoryArcheology = "Context-RepositoryArcheology.md";
+
     /// <summary>Gets the guidance for standing preferences included independently of query relevance.</summary>
     public const string SystemStandingPreferenceGuidance = "System-StandingPreferenceGuidance.md";
 
@@ -572,6 +587,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextChildAgentStructuredFindingsTask prompt asset.</summary>
     public const string ContextChildAgentStructuredFindingsTask = "Context-ChildAgent-StructuredFindingsTask.md";
 
+    /// <summary>Gets the final onboarding investigator task asset.</summary>
+    public const string ContextChildAgentIntelligenceInvestigation = "Context-ChildAgent-IntelligenceInvestigation.md";
+
     /// <summary>Gets the stable filename for the ContextChildAgentEvidenceProgressExpanded prompt asset.</summary>
     public const string ContextChildAgentEvidenceProgressExpanded = "Context-ChildAgent-EvidenceProgressExpanded.md";
 
@@ -987,6 +1005,11 @@ public static class PromptFileNames
         SystemConversationOutput,
         SystemRepositoryInstructionsNone,
         SystemRepositoryMemoryGuidance,
+        SystemRepositoryIntelligenceGuidance,
+        ContextRepositoryIntelligenceCollection,
+        ContextRepositoryIntelligenceHistory,
+        ContextRepositoryIntelligenceCoverage,
+        ContextRepositoryArcheology,
         SystemStandingPreferenceGuidance,
         SystemGovernedRequestState,
         SystemLegacyRequestEnvelope,
@@ -1130,6 +1153,7 @@ public static class PromptFileNames
         ContextChildAgentInitialEvidenceNone,
         ContextChildAgentTask,
         ContextChildAgentStructuredFindingsTask,
+        ContextChildAgentIntelligenceInvestigation,
         ContextChildAgentEvidenceProgressExpanded,
         ContextChildAgentEvidenceProgressPayloadOnly,
         ContextChildAgentEvidenceProgressNoProgress,
@@ -1299,6 +1323,7 @@ public static class PromptAssetCatalog
             PromptFileNames.SystemConversationOutput,
             PromptFileNames.SystemRepositoryInstructionsNone,
             PromptFileNames.SystemRepositoryMemoryGuidance,
+            PromptFileNames.SystemRepositoryIntelligenceGuidance,
             PromptFileNames.SystemStandingPreferenceGuidance,
             PromptFileNames.SystemGovernedRequestState,
             PromptFileNames.SystemLegacyRequestEnvelope,
@@ -1348,6 +1373,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ContextChildAgentInitialEvidenceNone,
             PromptFileNames.ContextChildAgentTask,
             PromptFileNames.ContextChildAgentStructuredFindingsTask,
+            PromptFileNames.ContextChildAgentIntelligenceInvestigation,
             PromptFileNames.ContextChildAgentEvidenceProgressExpanded,
             PromptFileNames.ContextChildAgentEvidenceProgressPayloadOnly,
             PromptFileNames.ContextChildAgentEvidenceProgressNoProgress,
@@ -1442,6 +1468,11 @@ public static class PromptAssetCatalog
 
         string ResolveOwner(string fileName)
         {
+            if (fileName is PromptFileNames.ContextRepositoryIntelligenceCollection or PromptFileNames.ContextRepositoryIntelligenceHistory or PromptFileNames.ContextRepositoryIntelligenceCoverage or PromptFileNames.ContextRepositoryArcheology)
+            {
+                return "Threadsmith.RepositoryIntelligence";
+            }
+
             if (contextAssets.Contains(fileName))
             {
                 return "Threadsmith.Context";
@@ -1593,6 +1624,8 @@ public static class PromptAssetCatalog
                         "RejectedQuery"),
                     [PromptFileNames.CorrectionGitDiffMissingRevision] = Set("FieldName", "ModeDescription"),
                     [PromptFileNames.CorrectionGitLogInvalidRevision] = Set("FieldName"),
+                    [PromptFileNames.ContextRepositoryIntelligenceHistory] = Set("HistoryJson"),
+                    [PromptFileNames.ContextRepositoryIntelligenceCoverage] = Set("CoverageJson"),
                     [PromptFileNames.CorrectionGitBlameInvalidRevision] = Set("FieldName"),
                     [PromptFileNames.CorrectionSearchBounds] = Set("MaximumMatches", "MaximumQueryCharacters"),
                     [PromptFileNames.ToolSearchDescription] = Set("MaximumQueryCharacters"),

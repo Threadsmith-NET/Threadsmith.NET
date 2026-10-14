@@ -70,6 +70,7 @@ public static class AgentToolPolicy
 
         return parent with
         {
+            IsChildAgent = true,
             RepositoryPath = Path.GetFullPath(repositoryPath),
             TrustLevel = trust,
             ApprovedRoots = approvedRoots,

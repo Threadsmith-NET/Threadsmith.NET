@@ -492,6 +492,10 @@ public sealed class AnthropicRequestMapperTests
             Assert.True(await iterator.MoveNextAsync());
             Assert.Equal("partial", iterator.Current.Text);
         }
+        else if (failure == "eof")
+        {
+            await Assert.ThrowsAsync<TransientModelException>(() => TestAnthropic.CollectAsync(provider, continuation));
+        }
         else
         {
             await Assert.ThrowsAsync<MalformedModelOutputException>(() => TestAnthropic.CollectAsync(provider, continuation));

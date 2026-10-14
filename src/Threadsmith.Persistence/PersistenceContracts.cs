@@ -24,6 +24,7 @@ public interface IArtifactStore
     Task<string?> ReadAsync(string contentHash, CancellationToken cancellationToken = default);
 
     /// <summary>Deletes an artifact's metadata and persisted body by content hash.</summary>
+    /// <remarks>Missing bodies are already deleted. Other body deletion failures preserve metadata for retry.</remarks>
     /// <param name="contentHash">The SHA-256 content hash.</param>
     /// <param name="cancellationToken">A token that cancels the deletion.</param>
     /// <returns><see langword="true"/> when artifact metadata existed and was removed.</returns>

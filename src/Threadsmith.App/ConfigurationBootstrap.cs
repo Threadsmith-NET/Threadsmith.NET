@@ -113,31 +113,33 @@ internal static class ConfigurationBootstrap
     }
 
     /// <summary>Creates the user configuration from the shipped documented example on first launch.</summary>
-    internal static void ScaffoldUserConfigurationIfMissing(string userConfigurationPath)
+    internal static async Task ScaffoldUserConfigurationIfMissingAsync(string userConfigurationPath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(userConfigurationPath);
-        if (File.Exists(userConfigurationPath))
+        try
         {
-            return;
-        }
+            await RepositorySettingsCoordinator.UpdateAsync(
+                userConfigurationPath,
+                async token =>
+                {
+                    if (File.Exists(userConfigurationPath))
+                    {
+                        return null;
+                    }
 
-        var directory = Path.GetDirectoryName(userConfigurationPath);
-        if (!string.IsNullOrEmpty(directory))
+                    // User configuration is strict JSON; preserve string literals while stripping example comments.
+                    var examplePath = Path.Combine(AppContext.BaseDirectory, "config.example");
+                    var content = File.Exists(examplePath)
+                        ? StripJsonComments(await File.ReadAllTextAsync(examplePath, token))
+                        : "{}\n";
+                    return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(content)) { Overwrite = false };
+                },
+                cancellationToken: cancellationToken);
+        }
+        catch (IOException) when (File.Exists(userConfigurationPath))
         {
-            Directory.CreateDirectory(directory);
+            // Another process completed first-launch scaffolding; preserve its configuration.
         }
-
-        // The example is copied beside App and contains comments for humans. User configuration is strict JSON,
-        // so comments are stripped without changing string literals before the first-launch write.
-        var examplePath = Path.Combine(AppContext.BaseDirectory, "config.example");
-        if (!File.Exists(examplePath))
-        {
-            // Packaged builds missing the content item still receive a valid placeholder; compiled defaults apply.
-            File.WriteAllText(userConfigurationPath, "{}\n");
-            return;
-        }
-
-        File.WriteAllText(userConfigurationPath, StripJsonComments(File.ReadAllText(examplePath)));
     }
 
     /// <summary>Returns all compiled defaults used before normal configuration providers apply overrides.</summary>

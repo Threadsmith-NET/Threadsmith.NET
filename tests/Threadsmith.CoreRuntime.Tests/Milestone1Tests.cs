@@ -2044,6 +2044,7 @@ public static partial class Milestone1Tests
             "/fetch-authorize <url> [redirect ...]",
             "/help",
             "/hooks [list|inspect|enable|disable|test|approve|revoke|audit]",
+            "/intelligence [onboard [depth]|refresh|archeology <question>|enable|disable|reset|status]",
             "/mcp [list|inspect|connect|disconnect|reconnect|capabilities|capability|enable|disable|resource read|prompt get|auth|logout|revoke|switch-account|diagnose]",
             "/memory [remember|list|inspect|update|forget]",
             "/models",
@@ -2838,6 +2839,23 @@ public static partial class Milestone1Tests
         Assert.Contains("Current mutation policy: AlwaysTrustRepo", surface.Output, StringComparison.Ordinal);
         Assert.Contains("persists across restarts", surface.Output, StringComparison.Ordinal);
         Assert.Contains("Unknown mutation policy 'missing'", surface.Output, StringComparison.Ordinal);
+    }
+
+    /// <summary>Intelligence status is separated from the preceding model answer in either terminal frontend.</summary>
+    [Theory]
+    [InlineData("intelligence.onboarding.checkpoint")]
+    [InlineData("intelligence.onboarding.completed")]
+    [InlineData("intelligence.monitor.failed")]
+    public static void InteractionEventSegments_IntelligenceDiagnostic_HasLeadingSpace(string code)
+    {
+        var segments = new List<PresentationTextSegment>();
+        InteractionEventSegments.Append(
+            segments,
+            new DiagnosticObserved(SessionId.New(), DateTimeOffset.UtcNow, code, "Progress saved."),
+            string.Empty);
+        Assert.Equal(
+            Environment.NewLine + $"[{code}] Progress saved." + Environment.NewLine,
+            string.Concat(segments.Select(segment => segment.Text)));
     }
 
     /// <summary>Mixed event output retains exact text while assigning tool, link, validation, and diff roles.</summary>
@@ -5682,6 +5700,22 @@ public static partial class Milestone1Tests
         return
         [
             new SessionCreated(sessionId, occurredAt, "test"),
+            new MemoriesIncluded(
+                sessionId,
+                occurredAt,
+                RunId.New(),
+                [
+                    new RepositoryMemoryContextItemProjection
+                    {
+                        Id = RepositoryMemoryId.New(),
+                        Text = "Architectural assertion",
+                        Ownership = RepositoryMemoryOwnership.Intelligence,
+                        Included = true,
+                        Rationale = "Selected for this request",
+                        EstimatedTokens = 8,
+                        Supports = [new RepositoryMemorySupport { Path = "src/Service.cs", ContentHash = "hash", ObservedAt = occurredAt, IsDirty = true }],
+                    },
+                ]),
             new RepositoryOpened(sessionId, occurredAt, "repo"),
             new SolutionLoaded(sessionId, occurredAt, "solution"),
             new TaskIntentRecorded(sessionId, occurredAt, "intent"),
@@ -6240,6 +6274,7 @@ public static partial class Milestone1Tests
                     "C:\\repo",
                     DateTimeOffset.UtcNow,
                     []),
+                TakeRepositoryIntelligenceRefreshCommand => (object)false,
                 SubmitRequestCommand => ObserveUnexpectedSubmitRequest(),
                 WaitForRunCommand => (object)true,
                 _ => throw new InvalidOperationException($"Unexpected command {command.GetType().Name}."),

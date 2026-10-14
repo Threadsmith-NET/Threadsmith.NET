@@ -16,6 +16,7 @@
     <PackageReference Include="Microsoft.Extensions.Logging" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
     <ProjectReference Include="..\Threadsmith.Core\Threadsmith.Core.csproj" />
+    <ProjectReference Include="..\Threadsmith.RepositoryIntelligence\Threadsmith.RepositoryIntelligence.csproj" />
     <ProjectReference Include="..\Threadsmith.Embeddings.Local\Threadsmith.Embeddings.Local.csproj" />
     <ProjectReference Include="..\Threadsmith.Reranking.Local\Threadsmith.Reranking.Local.csproj" />
     <ProjectReference Include="..\Threadsmith.Telemetry\Threadsmith.Telemetry.csproj" />
@@ -59,6 +60,7 @@
 
   <ItemGroup>
     <ThreadsmithPromptAsset Include="..\Threadsmith.Context\Prompts\*.md" />
+    <ThreadsmithPromptAsset Include="..\Threadsmith.RepositoryIntelligence\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.Execution\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.Tools\Prompts\*.md" />
     <ThreadsmithPromptAsset Include="..\Threadsmith.DotNet\Prompts\*.md" />

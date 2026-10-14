@@ -807,3 +807,13 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 3. Verify trusted role configuration overrides parent inheritance, while the parent report reflects persisted repository selection rather than a generic reasoning override.
 
 **Verifies:** reproducible startup routing, shared selection authority, and pre-dispatch assertion failure.
+
+## Scenario BA - Repository intelligence as memory
+
+1. Start with intelligence disabled. Enable without onboarding and verify no exploration or collection. Explicitly onboard and re-onboard through ordinary execution; cancellation preserves prior assertions and ordinary preferences remain unchanged.
+2. Recall ordinary and intelligence memories together with independent limits and shared context admission. Inspect actual content, categories and support warnings with memory output enabled and disabled. Dirty/unknown evidence remains advisory; subsequent requests reflect changed warnings and disable/fault eligibility.
+3. Refresh affected assertions and discover new ones from changed paths. Verify only covered work through the collection checkpoint clears; later commits and edits remain pending. Exercise cross-partition same-text assertions and reconciliation without ordinary-memory mutation or eviction.
+4. Enable commit refresh and create external standard-reflog commits, including linked worktrees. Observe one coalesced idle run; checkout/reset/reference maintenance do not refresh. Disable and verify monitoring/automatic inference stops while manual inspection and ordinary memories remain available.
+5. Investigate architecture with current source and relevant Git history through read-only archeology. Surface apparent conflicts for user clarification rather than treating guidance as authority.
+
+**Verifies:** shared ownership and execution, explicit activation, transactional collection, advisory provenance, independent category settings, commit/checkpoint ordering, complete inspection and safe rendering. See MTP-278 for the executable procedure and commit-detection limitations.

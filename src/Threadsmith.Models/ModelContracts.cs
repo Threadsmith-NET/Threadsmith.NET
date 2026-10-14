@@ -178,6 +178,9 @@ public sealed record ModelUsage(
     bool IsEstimate = false,
     ModelCacheUsage? Cache = null)
 {
+    /// <summary>Largest individual attempt output when this report aggregates retries; null means OutputTokens describes one attempt.</summary>
+    public long? MaximumAttemptOutputTokens { get; init; }
+
     /// <summary>Gets provider-reported reasoning tokens included in OutputTokens, or null when unavailable.</summary>
     public long? ReasoningTokens { get; init; }
 }

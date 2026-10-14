@@ -243,7 +243,7 @@ internal sealed class ToolConflictPlanner
     {
         try
         {
-            var current = _registry.GetRegistration(request.Invocation.ToolId);
+            var current = _registry.GetRegistration(request.Invocation.ToolId, request.Invocation.Context);
             var expected = request.Invocation.ExpectedRegistration;
             if (expected is not null && !ToolRegistrationIdentity.Matches(current, expected))
             {

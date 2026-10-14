@@ -24,6 +24,7 @@ internal sealed class ChoiceModal : Modal
     private readonly CachedTextRun _titleRun = new();
     private readonly string _title;
     private readonly Choice[] _options;
+    private readonly int _contentWidth;
     private Choice[] _matches;
     private string _filterHint = "Filter:  | F2 details; Esc cancels";
     private string _selectionMarker = ">";
@@ -44,6 +45,12 @@ internal sealed class ChoiceModal : Modal
         _title = title;
         _options = [.. options];
         _matches = _options;
+        if (_options.Length <= 2)
+        {
+            _contentWidth = Math.Max(
+                UnicodeWidth.GetWidth(TranscriptView.Safe(title)),
+                _options.Select(option => UnicodeWidth.GetWidth(TranscriptView.Safe(option.Label))).DefaultIfEmpty(0).Max());
+        }
     }
 
     /// <summary>Gets or sets the explicit clipboard request callback.</summary>
@@ -190,7 +197,10 @@ internal sealed class ChoiceModal : Modal
     {
         // Leave the shared status row visible even when the modal needs the full width.
         _fits = ModalFrame.Fits(surface.Size);
-        var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default));
+        Size? preferredSize = !_details && _options.Length <= 2
+            ? new Size(Math.Min(90, Math.Max(_contentWidth + Math.Max(2, _selectionPrefixWidth), UnicodeWidth.GetWidth(_filterHint)) + 4), _options.Length + 7)
+            : null;
+        var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default), preferredSize: preferredSize);
         if (frame is null)
         {
             return;

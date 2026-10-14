@@ -232,17 +232,10 @@ internal sealed class McpToolApprovalStore
             throw new InvalidOperationException("The MCP tool approval store exceeds its host-owned entry bound.");
         }
 
-        await RepositorySettingsCoordinator.ExecuteWriteAsync(
+        await RepositorySettingsCoordinator.UpdateAsync(
             path,
-            async token =>
+            _ =>
             {
-                var directory = Path.GetDirectoryName(path);
-                if (string.IsNullOrWhiteSpace(directory))
-                {
-                    throw new InvalidOperationException("The MCP tool approval store has no parent directory.");
-                }
-
-                Directory.CreateDirectory(directory);
                 var root = new JsonObject
                 {
                     ["schemaVersion"] = CurrentSchemaVersion,
@@ -256,36 +249,19 @@ internal sealed class McpToolApprovalStore
                     throw new InvalidOperationException("The MCP tool approval store exceeds its configured byte limit.");
                 }
 
-                var temporaryPath = $"{path}.{Guid.NewGuid():N}.tmp";
-                try
-                {
-                    await using (var stream = CreatePrivateFile(temporaryPath))
-                    {
-                        await stream.WriteAsync(content, token);
-                        await stream.FlushAsync(token);
-                    }
-
-                    File.Move(temporaryPath, path, overwrite: true);
-                    if (OperatingSystem.IsWindows())
-                    {
-                        var security = new FileInfo(path).GetAccessControl(
-                            AccessControlSections.Access | AccessControlSections.Owner);
-                        if (!HasSafeWindowsPermissions(security))
-                        {
-                            throw new UnauthorizedAccessException(
-                                "The MCP tool approval store permissions are unsafe.");
-                        }
-                    }
-                }
-                finally
-                {
-                    if (File.Exists(temporaryPath))
-                    {
-                        File.Delete(temporaryPath);
-                    }
-                }
+                return Task.FromResult<RepositorySettingsUpdate?>(new(content));
             },
-            cancellationToken);
+            createPrivateFile: CreatePrivateFile,
+            cancellationToken: cancellationToken);
+        if (OperatingSystem.IsWindows())
+        {
+            var security = new FileInfo(path).GetAccessControl(
+                AccessControlSections.Access | AccessControlSections.Owner);
+            if (!HasSafeWindowsPermissions(security))
+            {
+                throw new UnauthorizedAccessException("The MCP tool approval store permissions are unsafe.");
+            }
+        }
     }
 
     private static FileStream CreatePrivateFile(string path)

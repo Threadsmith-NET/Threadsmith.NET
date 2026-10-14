@@ -41,7 +41,14 @@ public sealed record CreateSessionCommand(string Name) : ICommand<SessionId>;
 public sealed record SubmitRequestCommand(
     SessionId SessionId,
     string Request,
-    IReadOnlyList<AcceptanceCriterion>? AcceptanceCriteria = null) : ICommand<RunId>;
+    IReadOnlyList<AcceptanceCriterion>? AcceptanceCriteria = null) : ICommand<RunId>
+{
+    /// <summary>Explicit user or host-scheduled intelligence action under restricted tool authority.</summary>
+    public RepositoryIntelligenceOperation IntelligenceOperation { get; init; }
+
+    /// <summary>Optional maximum newest commits for explicitly requested onboarding.</summary>
+    public int? IntelligenceHistoryDepth { get; init; }
+}
 
 /// <summary>Waits for a previously started run to reach a terminal state.</summary>
 public sealed record WaitForRunCommand(RunId RunId) : ICommand<bool>;

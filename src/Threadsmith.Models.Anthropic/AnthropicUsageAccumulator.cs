@@ -88,6 +88,45 @@ internal sealed class AnthropicUsageAccumulator
         return usage with { EstimatedCost = cost };
     }
 
+    /// <summary>Combines distinct attempts into the cumulative snapshot expected by request accounting.</summary>
+    internal static ModelUsage CombineAttempts(ModelUsage? previous, ModelUsage current)
+    {
+        if (previous is null)
+        {
+            return current;
+        }
+
+        checked
+        {
+            var reads = AddReported(previous.Cache?.CacheReadTokens, current.Cache?.CacheReadTokens);
+            var writes = AddReported(previous.Cache?.CacheWriteTokens, current.Cache?.CacheWriteTokens);
+            return new ModelUsage(
+                previous.InputTokens + current.InputTokens,
+                previous.OutputTokens + current.OutputTokens,
+                previous.EstimatedCost + current.EstimatedCost,
+                previous.IsEstimate || current.IsEstimate,
+                new ModelCacheUsage
+                {
+                    Availability = reads.HasValue || writes.HasValue ? CacheUsageAvailability.Reported : CacheUsageAvailability.Unavailable,
+                    CacheReadTokens = reads,
+                    CacheWriteTokens = writes,
+                    ReadInputSemantics = CacheReadInputSemantics.IncludedInInput,
+                    Provenance = "anthropic.messages.usage",
+                })
+            {
+                ReasoningTokens = previous.ReasoningTokens + current.ReasoningTokens,
+                MaximumAttemptOutputTokens = Math.Max(
+                    previous.MaximumAttemptOutputTokens ?? previous.OutputTokens,
+                    current.MaximumAttemptOutputTokens ?? current.OutputTokens),
+            };
+        }
+    }
+
+    private static long? AddReported(long? previous, long? current)
+    {
+        return previous.HasValue || current.HasValue ? checked(previous.GetValueOrDefault() + current.GetValueOrDefault()) : null;
+    }
+
     private static void UpdateCounter(JsonElement usage, string name, ref long? current)
     {
         if (!usage.TryGetProperty(name, out var value) || value.ValueKind == JsonValueKind.Null)

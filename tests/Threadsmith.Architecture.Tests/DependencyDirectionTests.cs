@@ -58,6 +58,7 @@ public static class DependencyDirectionTests
         "Threadsmith.Telemetry",
         "Threadsmith.Embeddings.Local",
         "Threadsmith.Reranking.Local",
+        "Threadsmith.RepositoryIntelligence",
         "Threadsmith.Persistence",
         "Threadsmith.Models",
         "Threadsmith.Models.OpenAiCompatible",
@@ -343,6 +344,7 @@ public static class DependencyDirectionTests
             ["Threadsmith.Telemetry"] = ["Threadsmith.Core"],
             ["Threadsmith.Embeddings.Local"] = ["Threadsmith.Core"],
             ["Threadsmith.Reranking.Local"] = ["Threadsmith.Core"],
+            ["Threadsmith.RepositoryIntelligence"] = ["Threadsmith.Core"],
             ["Threadsmith.Persistence"] = ["Threadsmith.Core", "Threadsmith.Telemetry"],
             ["Threadsmith.Models"] = ["Threadsmith.Core"],
             ["Threadsmith.Models.OpenAiCompatible"] = ["Threadsmith.Core", "Threadsmith.Models"],
@@ -373,7 +375,7 @@ public static class DependencyDirectionTests
             "Threadsmith.DotNet", "Threadsmith.Workspaces", "Threadsmith.Validation",
             "Threadsmith.Execution", "Threadsmith.Skills", "Threadsmith.Hooks", "Threadsmith.Extensions.Runtime", "Threadsmith.Interaction",
             "Threadsmith.Tui.TuiKit", "Threadsmith.Cli", "Threadsmith.Mcp",
-            "Threadsmith.Scripting.Worker",
+            "Threadsmith.Scripting.Worker", "Threadsmith.RepositoryIntelligence",
         ];
         return graph;
     }
@@ -385,6 +387,7 @@ public static class DependencyDirectionTests
         var graph = new Dictionary<string, HashSet<string>>
         {
             ["Threadsmith.Core"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "System.Net.Http"],
+            ["Threadsmith.RepositoryIntelligence"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite", "LibGit2Sharp"],
             // Provider SDKs and concrete protocol packages stay in dedicated provider projects.
             ["Threadsmith.Models"] = ["OpenAI"],
             ["Threadsmith.Skills"] = ["TUIKit", "Terminal.Gui", "PrettyPrompt", "Spectre.Console", "Microsoft.CodeAnalysis", "OpenAI", "Microsoft.Data.Sqlite"],

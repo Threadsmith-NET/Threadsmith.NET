@@ -61,68 +61,61 @@ internal sealed class AnthropicModelProvider : IModelProvider
             }
 
             var parameters = AnthropicRequestMapper.Create(request, _profile, _compatibility);
+            ModelUsage? interruptedUsage = null;
             for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
             {
-                using var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, _profile.Timeout, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes);
                 var adapter = new AnthropicStreamAdapter(request, _profile, _compatibility, _providerId, _apiKey, _limits);
-                await using var events = client.Messages.CreateStreaming(parameters, deadline.Token).GetAsyncEnumerator(deadline.Token);
-                var observed = false;
+                var deliveredOutput = false;
+                var deliveredReasoning = false;
                 Failure? failure = null;
-                while (true)
+                using (var client = AnthropicSdkClientFactory.Create(_httpClient, _apiKey, _profile.Timeout, _profile.MaximumStreamedBytes, submissionObserver: request.SubmissionObserver, maximumSseFrameBytes: _limits.MaximumSseFrameBytes))
+                await using (var events = client.Messages.CreateStreaming(parameters, deadline.Token).GetAsyncEnumerator(deadline.Token))
                 {
-                    IReadOnlyList<ModelChunk> chunks = [];
-                    var more = false;
-                    try
+                    while (true)
                     {
-                        more = await events.MoveNextAsync();
-                        if (more)
+                        IReadOnlyList<ModelChunk> chunks = [];
+                        var more = false;
+                        try
                         {
-                            observed = true;
-                            chunks = adapter.Accept(events.Current);
+                            more = await events.MoveNextAsync();
+                            if (more)
+                            {
+                                chunks = adapter.Accept(events.Current);
+                            }
+                            else
+                            {
+                                chunks = adapter.Complete();
+                            }
                         }
-                        else
+                        catch (Exception exception) when (IsProviderFailure(exception))
                         {
-                            chunks = adapter.Complete();
-                        }
-                    }
-                    catch (Exception exception) when (IsProviderFailure(exception))
-                    {
-                        failure = Classify(exception, deadline, cancellationToken);
-                    }
-
-                    if (failure is not null)
-                    {
-                        break;
-                    }
-
-                    foreach (var chunk in chunks)
-                    {
-                        if (chunk.ResponseEnvelope is { } envelope)
-                        {
-                            offeredEnvelopes.Add(envelope);
+                            failure = Classify(exception, deadline, cancellationToken);
                         }
 
-                        yield return chunk;
-                    }
+                        if (failure is not null)
+                        {
+                            break;
+                        }
 
-                    if (!more)
-                    {
-                        yield break;
-                    }
-                }
+                        foreach (var chunk in chunks)
+                        {
+                            if (chunk.ResponseEnvelope is { } envelope)
+                            {
+                                offeredEnvelopes.Add(envelope);
+                            }
 
-                if (failure is { Retry: true } && !observed && attempt < _profile.RetryPolicy.MaxAttempts)
-                {
-                    try
-                    {
-                        await Task.Delay(failure.Delay ?? _profile.RetryPolicy.Delay, deadline.Token);
-                    }
-                    catch (OperationCanceledException exception)
-                    {
-                        throw Classify(exception, deadline, cancellationToken).Exception;
-                    }
+                            deliveredOutput |= !ModelStreamRetry.IsReasoningOnly(chunk);
+                            deliveredReasoning |= chunk.Reasoning is not null;
+                            yield return chunk.Usage is { } usage
+                                ? chunk with { Usage = AnthropicUsageAccumulator.CombineAttempts(interruptedUsage, usage) }
+                                : chunk;
+                        }
 
-                    continue;
+                        if (!more)
+                        {
+                            yield break;
+                        }
+                    }
                 }
 
                 ModelUsage? partial = null;
@@ -137,7 +130,27 @@ internal sealed class AnthropicModelProvider : IModelProvider
 
                 if (partial is not null)
                 {
-                    yield return new ModelChunk { Usage = partial };
+                    interruptedUsage = AnthropicUsageAccumulator.CombineAttempts(interruptedUsage, partial);
+                    yield return new ModelChunk { Usage = interruptedUsage };
+                }
+
+                if (failure is { Retry: true } && !deliveredOutput && attempt < _profile.RetryPolicy.MaxAttempts)
+                {
+                    if (deliveredReasoning)
+                    {
+                        yield return ModelStreamRetry.ReasoningBoundary();
+                    }
+
+                    try
+                    {
+                        await Task.Delay(failure.Delay ?? _profile.RetryPolicy.Delay, deadline.Token);
+                    }
+                    catch (OperationCanceledException exception)
+                    {
+                        throw Classify(exception, deadline, cancellationToken).Exception;
+                    }
+
+                    continue;
                 }
 
                 throw failure?.Exception ?? new ModelProviderException("Anthropic request failed without a terminal result.");
@@ -155,7 +168,7 @@ internal sealed class AnthropicModelProvider : IModelProvider
     private static bool IsProviderFailure(Exception exception)
     {
         return exception is AnthropicException or AnthropicHttpFailureException
-        or HttpRequestException or IOException or OperationCanceledException or JsonException or ModelProviderException
+        or HttpRequestException or IOException or OperationCanceledException or JsonException or ModelProviderException or TransientModelException
         or MalformedModelOutputException or InvalidOperationException or ArgumentException or OverflowException or KeyNotFoundException;
     }
 
@@ -186,7 +199,12 @@ internal sealed class AnthropicModelProvider : IModelProvider
 
             if (current is HttpRequestException or IOException)
             {
-                return new Failure(new TransientModelException("Anthropic connection failed."), true, null);
+                return new Failure(new TransientModelException($"Anthropic connection failed ({TransportFailureKind(current)})."), true, null);
+            }
+
+            if (current is TransientModelException)
+            {
+                return new Failure(current, true, null);
             }
 
             if (current is ModelProviderException or MalformedModelOutputException)
@@ -200,6 +218,16 @@ internal sealed class AnthropicModelProvider : IModelProvider
             HttpRequestException or IOException => new Failure(new TransientModelException("Anthropic connection failed."), true, null),
             JsonException or KeyNotFoundException => new Failure(new MalformedModelOutputException("Anthropic returned malformed or incomplete protocol JSON."), false, null),
             _ => new Failure(new ModelProviderException("Anthropic returned an invalid or unsupported response."), false, null),
+        };
+    }
+
+    private static string TransportFailureKind(Exception exception)
+    {
+        return exception switch
+        {
+            HttpIOException io => $"HTTP {io.HttpRequestError}",
+            HttpRequestException http => $"HTTP {http.HttpRequestError}",
+            _ => "I/O failure",
         };
     }
 

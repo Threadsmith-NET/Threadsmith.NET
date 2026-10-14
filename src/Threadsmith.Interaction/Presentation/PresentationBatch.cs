@@ -14,6 +14,9 @@ public sealed record PresentationUserInputItem(string Prompt, string Text) : Pre
 /// <param name="Segments">Ordered terminal-neutral segments.</param>
 public sealed record PresentationTextItem(IReadOnlyList<PresentationTextSegment> Segments) : PresentationItem
 {
+    /// <summary>Requests an empty ordinary composer to yield for pending host work without discarding drafts.</summary>
+    public bool WakeIdleInput { get; init; }
+
     /// <summary>Gets an optional transient echo for notification-capable frontends; the segments remain the output record.</summary>
     public PresentationNotification? Notification { get; init; }
 }

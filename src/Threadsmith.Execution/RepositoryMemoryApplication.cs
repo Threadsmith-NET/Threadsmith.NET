@@ -51,10 +51,9 @@ public sealed class RepositoryMemoryApplication :
     }
 
     /// <inheritdoc />
-    public async Task<RepositoryMemoryEntry?> HandleAsync(InspectRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
+    public Task<RepositoryMemoryEntry?> HandleAsync(InspectRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
     {
-        var snapshot = await _memories.GetSnapshotAsync(command.RepositoryIdentity, cancellationToken);
-        return snapshot.Entries.FirstOrDefault(item => item.Id == command.MemoryId);
+        return _memories.GetEntryAsync(command.RepositoryIdentity, command.MemoryId, cancellationToken);
     }
 
     /// <inheritdoc />

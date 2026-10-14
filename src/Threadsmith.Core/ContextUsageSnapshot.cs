@@ -15,6 +15,9 @@ public sealed record ContextUsageComponent(
 /// <summary>Detached, transient accounting for an actual primary request.</summary>
 public sealed record ContextUsageSnapshot
 {
+    /// <summary>Memory content captured with this actual request, regardless of output display settings.</summary>
+    public IReadOnlyList<RepositoryMemoryContextItemProjection> Memories { get; init; } = [];
+
     /// <summary>Owning run.</summary>
     public required RunId RunId { get; init; }
 

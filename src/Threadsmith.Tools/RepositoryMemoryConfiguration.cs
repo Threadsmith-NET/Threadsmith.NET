@@ -1,5 +1,8 @@
 namespace Threadsmith.Tools;
 
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 
@@ -26,6 +29,38 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
     public RepositoryMemoryOptions CaptureCurrent()
     {
         return Volatile.Read(ref _current).Options;
+    }
+
+    /// <summary>Persists explicit intelligence activation through the shared repository settings boundary.</summary>
+    public async Task SetIntelligenceEnabledAsync(string repositoryPath, bool enabled, CancellationToken cancellationToken = default)
+    {
+        var identity = RepositoryIdentity.Create(repositoryPath);
+        var current = Capture(identity);
+        var path = Path.Combine(repositoryPath, ".threadsmith", "config.json");
+        await RepositorySettingsCoordinator.UpdateAsync(
+            path,
+            async token =>
+            {
+                var root = File.Exists(path)
+                    ? JsonNode.Parse(await File.ReadAllTextAsync(path, token), new JsonNodeOptions { PropertyNameCaseInsensitive = true }, RepositorySettingsCoordinator.DocumentOptions) as JsonObject
+                        ?? throw new InvalidOperationException("Repository configuration must contain a JSON object.")
+                    : new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });
+                var section = root;
+                foreach (var key in (SectionName + ":Intelligence").Split(':'))
+                {
+                    if (section[key] is null)
+                    {
+                        section[key] = new JsonObject(new JsonNodeOptions { PropertyNameCaseInsensitive = true });
+                    }
+
+                    section = section[key] as JsonObject ?? throw new InvalidOperationException("Memory configuration sections must be JSON objects.");
+                }
+
+                section["Enabled"] = enabled;
+                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine));
+            },
+            cancellationToken: cancellationToken);
+        BindRepository(repositoryPath, current with { Intelligence = current.Intelligence with { Enabled = enabled } });
     }
 
     /// <inheritdoc />
@@ -79,6 +114,16 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
         var reconciliationLexical = ReadLexical(configuration, "Reconciliation", fallback.ReconciliationLexical);
         var options = new RepositoryMemoryOptions
         {
+            ShowMemoryOutput = configuration.GetValue($"{SectionName}:ShowMemoryOutput", fallback.ShowMemoryOutput),
+            Intelligence = new RepositoryIntelligenceOptions
+            {
+                Enabled = configuration.GetValue($"{SectionName}:Intelligence:Enabled", fallback.Intelligence.Enabled),
+                RefreshOnCommit = configuration.GetValue($"{SectionName}:Intelligence:RefreshOnCommit", fallback.Intelligence.RefreshOnCommit),
+                MaximumStoredMemories = configuration.GetValue($"{SectionName}:Intelligence:MaximumStoredMemories", fallback.Intelligence.MaximumStoredMemories),
+                Recall = ReadSearch(configuration, "Intelligence:Recall", fallback.Intelligence.Recall),
+                ReconciliationEnabled = configuration.GetValue($"{SectionName}:Intelligence:Reconciliation:Enabled", fallback.Intelligence.ReconciliationEnabled),
+                Reconciliation = ReadSearch(configuration, "Intelligence:Reconciliation", fallback.Intelligence.Reconciliation),
+            },
             Lexical = recallLexical,
             ReconciliationLexical = reconciliationLexical,
             ReconciliationRerankerEnabled = configuration.GetValue($"{SectionName}:Reconciliation:RerankerEnabled", fallback.ReconciliationRerankerEnabled),
@@ -120,6 +165,23 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
             FuzzyMaximumDistance = configuration.GetValue($"{SectionName}:{scenario}:Fuzzy:MaximumDistance", fallback.FuzzyMaximumDistance),
             MaximumExpansionsPerTerm = configuration.GetValue($"{SectionName}:{scenario}:Lexical:MaximumExpansionsPerTerm", fallback.MaximumExpansionsPerTerm),
             MaximumExpansions = configuration.GetValue($"{SectionName}:{scenario}:Lexical:MaximumExpansions", fallback.MaximumExpansions),
+        };
+    }
+
+    private static RepositoryMemorySearchOptions ReadSearch(IConfiguration configuration, string scenario, RepositoryMemorySearchOptions fallback)
+    {
+        var lexical = ReadLexical(configuration, scenario, fallback.Lexical);
+        return fallback with
+        {
+            Lexical = lexical,
+            SemanticMinimum = configuration.GetValue($"{SectionName}:{scenario}:SemanticMinimum", fallback.SemanticMinimum),
+            MaximumResults = configuration.GetValue($"{SectionName}:{scenario}:MaximumResults", fallback.MaximumResults),
+            RerankerEnabled = configuration.GetValue($"{SectionName}:{scenario}:RerankerEnabled", fallback.RerankerEnabled),
+            RerankerCandidateLimit = configuration.GetValue($"{SectionName}:{scenario}:RerankerCandidateLimit", fallback.RerankerCandidateLimit),
+            ConceptRecallEnabled = configuration.GetValue($"{SectionName}:{scenario}:Concepts:Enabled", fallback.ConceptRecallEnabled),
+            ConceptCandidateLimit = configuration.GetValue($"{SectionName}:{scenario}:Concepts:CandidateLimit", fallback.ConceptCandidateLimit),
+            ConceptFuzzyEnabled = lexical.FuzzyEnabled,
+            ConceptFuzzyMaximumDistance = lexical.FuzzyMaximumDistance,
         };
     }
 

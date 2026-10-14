@@ -231,7 +231,7 @@ internal sealed class ChildAgentPrompt
             _prompts,
             PromptFileNames.ContextChildAgentTask,
             Tokens(
-                ("BaselineIdentity", context.BaselineIdentity),
+                ("BaselineIdentity", context.BaselineIdentity ?? string.Empty),
                 ("Objective", SecurityElement.Escape(context.Objective)),
                 ("SuppliedContext", SecurityElement.Escape(context.InitialContext)),
                 ("Tasks", tasks.ToString())));

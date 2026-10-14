@@ -95,7 +95,7 @@ public static class Program
 
         // Resolve every configuration path once so all later phases share one normalized repository identity.
         var paths = ConfigurationBootstrap.ResolvePaths(commandLine.RequestedRepository);
-        ScaffoldUserConfigurationIfMissing(paths.UserConfiguration);
+        await ScaffoldUserConfigurationIfMissingAsync(paths.UserConfiguration, CancellationToken.None);
 
         // Build the effective configuration only after bounding untrusted repository-owned files.
         IConfigurationRoot configuration;
@@ -248,6 +248,7 @@ public static class Program
                     SemanticEngines = foundation.SemanticEngines,
                     SemanticMutations = foundation.SemanticMutations,
                     SemanticRefreshCoordinator = foundation.SemanticRefreshCoordinator,
+                    RepositoryFileObserver = foundation.RepositoryFileObserver,
                     SemanticRefreshPublicationGate = foundation.SemanticRefreshPublicationGate,
                 },
                 Integration = new IntegrationCompositionInputs
@@ -380,9 +381,10 @@ public static class Program
     /// the dedicated configuration bootstrap phase.
     /// </summary>
     /// <param name="userConfigPath">The absolute user configuration file path.</param>
-    internal static void ScaffoldUserConfigurationIfMissing(string userConfigPath)
+    /// <param name="cancellationToken">Cancellation token.</param>
+    internal static Task ScaffoldUserConfigurationIfMissingAsync(string userConfigPath, CancellationToken cancellationToken = default)
     {
-        ConfigurationBootstrap.ScaffoldUserConfigurationIfMissing(userConfigPath);
+        return ConfigurationBootstrap.ScaffoldUserConfigurationIfMissingAsync(userConfigPath, cancellationToken);
     }
 
     private static async Task<HookHandlerResult> InvokeCapabilityHookAsync(

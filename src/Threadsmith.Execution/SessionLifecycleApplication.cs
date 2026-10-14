@@ -20,6 +20,7 @@ public sealed class SessionLifecycleApplication :
     private readonly ISessionLifecycleStore _lifecycleStore;
     private readonly JsonlModelExchangeLog? _modelExchangeLog;
     private readonly Func<CancellationToken, Task<IReadOnlyList<string>>>? _prepareNewSession;
+    private readonly Action<SessionCatalogEntry>? _sessionActivated;
     private readonly InMemoryProjectionStore _projections;
     private readonly ISessionRestorer _restorer;
     private readonly IExecutionCheckpointStore? _executionCheckpoints;
@@ -46,7 +47,8 @@ public sealed class SessionLifecycleApplication :
         TimeProvider? timeProvider = null,
         JsonlModelExchangeLog? modelExchangeLog = null,
         Func<CancellationToken, Task<IReadOnlyList<string>>>? prepareNewSession = null,
-        IExecutionCheckpointStore? executionCheckpoints = null)
+        IExecutionCheckpointStore? executionCheckpoints = null,
+        Action<SessionCatalogEntry>? sessionActivated = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryPath);
         ArgumentNullException.ThrowIfNull(lifecycleStore);
@@ -62,6 +64,7 @@ public sealed class SessionLifecycleApplication :
         _lifecycleStore = lifecycleStore;
         _modelExchangeLog = modelExchangeLog;
         _prepareNewSession = prepareNewSession;
+        _sessionActivated = sessionActivated;
         _restorer = restorer;
         _executionCheckpoints = executionCheckpoints;
         _sessions = sessions;
@@ -314,7 +317,7 @@ public sealed class SessionLifecycleApplication :
                         cancellationToken);
                 }
 
-                return kind switch
+                var result = kind switch
                 {
                     SessionTransitionKind.New => await CreateNewAsync(source, cancellationToken),
                     SessionTransitionKind.Resume => await ResumeAsync(
@@ -326,6 +329,8 @@ public sealed class SessionLifecycleApplication :
                         cancellationToken),
                     _ => throw new ArgumentOutOfRangeException(nameof(kind)),
                 };
+                _sessionActivated?.Invoke(result.ActiveSession);
+                return result;
             }
             catch
             {

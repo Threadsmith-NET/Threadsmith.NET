@@ -36,6 +36,8 @@ public sealed partial class SessionApplication :
     private readonly IConversationStore? _conversationStore;
     private readonly IManagedRepositoryMemoryService? _repositoryMemories;
     private readonly IRepositoryMemoryOptionsProvider? _repositoryMemoryOptions;
+    private readonly IRepositoryIntelligenceStatusProvider? _repositoryIntelligence;
+    private readonly IRepositoryIntelligenceOperations? _intelligenceOperations;
     private readonly IConversationToolSnapshotStore? _conversationToolSnapshots;
     private readonly CorrectiveMessageFactory _correctiveMessages;
     private readonly IPromptLoader _prompts;
@@ -156,7 +158,9 @@ public sealed partial class SessionApplication :
         ISemanticRefreshCoordinator? semanticRefreshCoordinator = null,
         IManagedRepositoryMemoryService? repositoryMemories = null,
         IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null,
-        SourceEditApplication? sourceEdits = null)
+        SourceEditApplication? sourceEdits = null,
+        IRepositoryIntelligenceStatusProvider? repositoryIntelligence = null,
+        IRepositoryIntelligenceOperations? intelligenceOperations = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -201,6 +205,8 @@ public sealed partial class SessionApplication :
         _conversationStore = conversationStore;
         _repositoryMemories = repositoryMemories;
         _repositoryMemoryOptions = repositoryMemoryOptions;
+        _repositoryIntelligence = repositoryIntelligence;
+        _intelligenceOperations = intelligenceOperations;
         _conversationToolSnapshots = conversationToolSnapshots;
         _steering = steering ?? new RunSteeringCoordinator(_limits);
         _correctiveMessages = correctiveMessages;
@@ -516,6 +522,8 @@ public sealed partial class SessionApplication :
             _sanitizer.Sanitize(command.Request),
             criteria);
         registration = CreateRunRegistration(command.SessionId, runId, workspaceId, task, RunPhase.Intake, cancellationToken);
+        registration.IntelligenceOperation = command.IntelligenceOperation;
+        registration.IntelligenceHistoryDepth = command.IntelligenceHistoryDepth;
         if (!_runs.TryAdd(runId, registration))
         {
             registration.Cancellation.Dispose();
@@ -551,7 +559,11 @@ public sealed partial class SessionApplication :
         RunId runId,
         RunRegistration registration)
     {
-        var stopwatch = Stopwatch.StartNew();
+        var stopwatch = registration.RunStopwatch;
+        stopwatch.Start();
+        Exception? failure = null;
+        var cancelled = false;
+        var succeeded = false;
         try
         {
             var userMessage = await ArchiveVisibleMessageAsync(
@@ -616,9 +628,24 @@ public sealed partial class SessionApplication :
                 registration.Machine.Phase,
                 registration.Cancellation.Token);
             stopwatch.Stop();
-            AccrueUnchargedWallClockOrThrow(registration, stopwatch.Elapsed);
+
+            // Admission limits stop further work; final accounting must not discard completed results.
+            _ = AccrueUnchargedWallClock(registration, stopwatch.Elapsed);
 
             registration.Cancellation.Token.ThrowIfCancellationRequested();
+
+            if (registration.IntelligenceRun is { } intelligenceRun)
+            {
+                if (registration.IntelligenceOperation is RepositoryIntelligenceOperation.Onboard or RepositoryIntelligenceOperation.Refresh)
+                {
+                    var completionContext = await CreateToolInvocationContextAsync(registration, registration.Cancellation.Token)
+                        ?? throw new InvalidOperationException("Repository intelligence execution is unavailable.");
+                    ValidateIntelligenceCollectionTools(registration.IntelligenceOperation, ConversationToolAvailability.CreateSnapshot(
+                        _toolPipeline, _toolRegistry, registration.SessionId, runId, completionContext, toolsWithheld: false));
+                }
+
+                await intelligenceRun.CompleteAsync(registration.Cancellation.Token);
+            }
 
             // Once the terminal state commits, publish its outcome and release waiters even
             // if cancellation arrives while subscribers are processing that final publication.
@@ -630,7 +657,7 @@ public sealed partial class SessionApplication :
             await _events.PublishAsync(
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, editSucceeded),
                 CancellationToken.None);
-            registration.Completion.TrySetResult(editSucceeded);
+            succeeded = editSucceeded;
         }
         catch (OperationCanceledException)
         {
@@ -647,7 +674,7 @@ public sealed partial class SessionApplication :
             await _events.PublishAsync(
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, false),
                 CancellationToken.None);
-            registration.Completion.TrySetCanceled(registration.Cancellation.Token);
+            cancelled = true;
         }
         catch (Exception exception)
         {
@@ -674,12 +701,38 @@ public sealed partial class SessionApplication :
             await _events.PublishAsync(
                 new RunCompleted(command.SessionId, DateTimeOffset.UtcNow, runId, false),
                 CancellationToken.None);
-            registration.Completion.TrySetException(exception);
+            failure = exception;
         }
         finally
         {
             _sourceEdits?.CompleteRun(runId);
             _steering.CompleteRun(command.SessionId, runId);
+            try
+            {
+                if (registration.IntelligenceRun is { } intelligenceRun)
+                {
+                    await intelligenceRun.DisposeAsync();
+                }
+            }
+            catch (Exception exception)
+            {
+                failure ??= exception;
+                _logger.LogError(exception, "Intelligence run cleanup failed for {RunId}", runId.Value);
+                await _events.PublishAsync(new DiagnosticObserved(command.SessionId, DateTimeOffset.UtcNow, "intelligence.cleanup.failed", "Repository intelligence cleanup failed; the run did not complete cleanly."), CancellationToken.None);
+            }
+
+            if (failure is not null)
+            {
+                registration.Completion.TrySetException(failure);
+            }
+            else if (cancelled)
+            {
+                registration.Completion.TrySetCanceled(registration.Cancellation.Token);
+            }
+            else
+            {
+                registration.Completion.TrySetResult(succeeded);
+            }
         }
     }
 
@@ -735,7 +788,7 @@ public sealed partial class SessionApplication :
         }
     }
 
-    private static void AccrueUnchargedWallClockOrThrow(
+    private static BudgetStatus AccrueUnchargedWallClock(
         RunRegistration registration,
         TimeSpan elapsed)
     {
@@ -747,17 +800,24 @@ public sealed partial class SessionApplication :
             chargedModelWallClock = TimeSpan.Zero;
         }
 
-        var unchargedWallClock = elapsed > chargedModelWallClock
-            ? elapsed - chargedModelWallClock
+        var unsettledWallClock = elapsed - registration.RunWallClockSettled;
+        var unchargedWallClock = unsettledWallClock > chargedModelWallClock
+            ? unsettledWallClock - chargedModelWallClock
             : TimeSpan.Zero;
+        registration.RunWallClockSettled = elapsed;
         registration.ModelRequestWallClockSettled = registration.ModelRequestWallClockAccrued;
-        var elapsedStatus = registration.Budget.Accrue(new BudgetDimensions(
+        return registration.Budget.Accrue(new BudgetDimensions(
             0,
             0,
             unchargedWallClock));
-        if (elapsedStatus.IsExhausted)
+    }
+
+    private static void CheckRunWallClockBudget(RunRegistration registration)
+    {
+        var status = AccrueUnchargedWallClock(registration, registration.RunStopwatch.Elapsed);
+        if (status.IsExhausted)
         {
-            throw new BudgetExceededException(elapsedStatus.Reason ?? "Execution budget exhausted.");
+            throw new BudgetExceededException(status.Reason ?? "Execution budget exhausted before further work.");
         }
     }
 
@@ -1041,9 +1101,21 @@ public sealed partial class SessionApplication :
 
         public TimeSpan ModelRequestWallClockSettled { get; set; }
 
+        public TimeSpan RunWallClockSettled { get; set; }
+
+        public Stopwatch RunStopwatch { get; } = new();
+
         public string? RepositoryIdentity { get; set; }
 
         public RepositoryMemoryOptions? MemoryOptions { get; set; }
+
+        public bool IntelligenceEnabled { get; set; }
+
+        public RepositoryIntelligenceOperation IntelligenceOperation { get; set; }
+
+        public int? IntelligenceHistoryDepth { get; set; }
+
+        public IRepositoryIntelligenceRun? IntelligenceRun { get; set; }
 
         public string? MemoryCurrentInstruction { get; set; }
 

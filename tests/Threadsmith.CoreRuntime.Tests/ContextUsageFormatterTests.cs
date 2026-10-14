@@ -37,7 +37,7 @@ public static class ContextUsageFormatterTests
 
         Assert.Contains("first\nsecond λ\\u009Dtitle\\u009C\\u001B[2J", output, StringComparison.Ordinal);
         Assert.Contains("selected\\u009B31m", output, StringComparison.Ordinal);
-        Assert.Contains("source: src/\\u009B2J.cs (changed since collection) (observation gap; current state uncertain)", output, StringComparison.Ordinal);
+        Assert.Contains("- src/\\u009B2J.cs (changed since collection) (observation gap; current state uncertain)", output, StringComparison.Ordinal);
         Assert.DoesNotContain("\\u000D", output, StringComparison.Ordinal);
         Assert.DoesNotContain(output, character => character is < ' ' and not '\n' and not '\t' or >= '\u007f' and <= '\u009f');
         Assert.Equal("first\r\nsecond λ\u009dtitle\u009c\u001b[2J", item.Text);

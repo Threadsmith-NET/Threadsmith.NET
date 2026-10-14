@@ -110,7 +110,7 @@ public sealed class AnthropicStreamFixtureTests
     {
         using var client = new HttpClient(new TestAnthropicHandler(TestAnthropic.ToolStream(messageStop: false)));
         var chunks = new List<ModelChunk>();
-        await Assert.ThrowsAsync<MalformedModelOutputException>(async () =>
+        await Assert.ThrowsAsync<TransientModelException>(async () =>
         {
             await foreach (var chunk in Provider(client).StreamAsync(TestAnthropic.Request() with { Tools = [TestAnthropic.Tool()] }))
             {

@@ -205,7 +205,10 @@ public static class OpenAiCompatibleTimeoutTests
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
-    public static async Task InterruptedBody_UsesRemainingAttemptsUnlessOutputDelivered(bool exhaustRetries, bool partialOutput)
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    public static async Task InterruptedBody_UsesRemainingAttemptsUnlessOutputDelivered(bool exhaustRetries, bool partialOutput, bool reasoningOnly = false)
     {
         var attempts = 0;
         var submissions = 0;
@@ -223,6 +226,11 @@ public static class OpenAiCompatibleTimeoutTests
                 var prefix = partialOutput
                     ? "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"
                     : "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\n\n";
+                if (reasoningOnly)
+                {
+                    prefix = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"partial reasoning\"}}]}\n\n" + prefix;
+                }
+
                 var stream = new ControlledStream(
                     prefix,
                     (_, _) => throw new HttpIOException(HttpRequestError.ResponseEnded, "private detail"));
@@ -256,6 +264,7 @@ public static class OpenAiCompatibleTimeoutTests
             Assert.Equal("answer", string.Concat(chunks.Select(chunk => chunk.Text)));
         }
 
+        Assert.Equal(reasoningOnly && !partialOutput ? 1 : 0, chunks.Count(chunk => chunk.Reasoning == ModelStreamRetry.ReasoningBoundary().Reasoning));
         Assert.Equal(partialOutput ? 2 : 3, attempts);
         Assert.Equal(attempts, submissions);
         Assert.All(streams, stream => Assert.True(stream.IsDisposed));

@@ -971,7 +971,10 @@ public sealed class Plan50OpenAiCodexTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Provider_InterruptedBeforeOutput_UsesBoundedRetry(bool exhaustRetries, bool cleanEof)
+    [InlineData(false, false, true)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    public async Task Provider_InterruptedBeforeOutput_UsesBoundedRetry(bool exhaustRetries, bool cleanEof, bool reasoningOnly = false)
     {
         var attempts = 0;
         var submissions = 0;
@@ -984,7 +987,9 @@ public sealed class Plan50OpenAiCodexTests
 
             if (attempts == 2 || exhaustRetries)
             {
-                const string prefix = "data: {\"type\":\"response.created\"}\n\n";
+                var prefix = reasoningOnly
+                    ? "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"partial reasoning\"}\n\n"
+                    : "data: {\"type\":\"response.created\"}\n\n";
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = cleanEof ? new StringContent(prefix)
@@ -1011,7 +1016,8 @@ public sealed class Plan50OpenAiCodexTests
         else
         {
             var chunks = await provider.StreamAsync(request, TestContext.Current.CancellationToken).ToListAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ModelFinishReason.Stop, Assert.Single(chunks).FinishReason);
+            Assert.Equal(ModelFinishReason.Stop, Assert.Single(chunks, chunk => chunk.FinishReason is not null).FinishReason);
+            Assert.Equal(reasoningOnly ? 1 : 0, chunks.Count(chunk => chunk.Reasoning == ModelStreamRetry.ReasoningBoundary().Reasoning));
         }
 
         Assert.Equal(3, attempts);
@@ -1024,7 +1030,7 @@ public sealed class Plan50OpenAiCodexTests
     [InlineData(true)]
     public async Task Provider_IncompleteResponse_IsTransientWithoutReplayingPartialOutput(bool transportThrows)
     {
-        const string partial = "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"partial proposal\"}\n\n"
+        const string partial = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial proposal\"}\n\n"
             + "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"name\":\"inspect_file\",\"arguments\":\"{}\"}}\n\n";
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -1042,7 +1048,7 @@ public sealed class Plan50OpenAiCodexTests
             }
         });
 
-        Assert.Equal("partial proposal", Assert.Single(observed).Reasoning);
+        Assert.Equal("partial proposal", Assert.Single(observed).Text);
         Assert.DoesNotContain(observed, chunk => chunk.Output is not null || chunk.FinishReason is not null);
         Assert.Equal(RetryClassification.TransientProvider, ModelFailureClassifier.Classify(exception));
         if (transportThrows)

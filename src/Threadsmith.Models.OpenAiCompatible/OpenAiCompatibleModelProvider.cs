@@ -253,6 +253,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             if (response.IsSuccessStatusCode)
             {
                 var deliveredOutput = false;
+                var deliveredReasoning = false;
                 using (response)
                 {
                     await using var chunks = ReadResponseAsync(
@@ -294,10 +295,16 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                             yield break;
                         }
 
-                        // A delivered chunk can already have caused visible output or tool execution.
-                        deliveredOutput = true;
+                        // Answer, tool, usage and replay data commit this attempt; preliminary reasoning does not.
+                        deliveredOutput |= !ModelStreamRetry.IsReasoningOnly(chunks.Current);
+                        deliveredReasoning |= chunks.Current.Reasoning is not null;
                         yield return chunks.Current;
                     }
+                }
+
+                if (deliveredReasoning)
+                {
+                    yield return ModelStreamRetry.ReasoningBoundary();
                 }
 
                 await DelayBeforeRetryAsync(requestCancellation.Token, cancellationToken);

@@ -15,11 +15,16 @@ public static class ContextUsageFormatter
         var category = item.Ownership == RepositoryMemoryOwnership.Intelligence ? "intelligence" : item.MemoryType.ToString();
         var output = new StringBuilder()
             .Append("  ").Append(item.Included ? "included " : "omitted ").Append(category)
-            .Append(' ').Append(item.Id.Value.ToString("D")).Append(": ").Append(item.Rationale).Append('\n')
+            .Append(" memory: ").Append(item.Rationale).Append('\n')
             .Append(item.Text).Append('\n');
+        if (item.Supports.Count > 0)
+        {
+            output.Append("  Supporting files:\n");
+        }
+
         foreach (var support in item.Supports)
         {
-            output.Append("    source: ").Append(support.Path);
+            output.Append("    - ").Append(support.Path);
             if (support.IsDirty)
             {
                 output.Append(" (changed since collection)");
@@ -33,6 +38,7 @@ public static class ContextUsageFormatter
             output.Append('\n');
         }
 
+        output.Append('\n');
         return TerminalControlEncoder.Encode(output.ToString()
             .Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'));
     }

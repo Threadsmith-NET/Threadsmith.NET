@@ -169,6 +169,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                     await using var chunks = ReadResponseAsync(
                         response, toolNameMap, profileOutputLimit, timeout.Token).GetAsyncEnumerator(timeout.Token);
                     var deliveredOutput = false;
+                    var deliveredReasoning = false;
                     var retry = false;
                     while (true)
                     {
@@ -192,14 +193,20 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                             break;
                         }
 
-                        // Once any chunk reaches the caller, replay could duplicate visible output or tool work.
-                        deliveredOutput = true;
+                        // Answer, tool, usage and replay data commit this attempt; preliminary reasoning does not.
+                        deliveredOutput |= !ModelStreamRetry.IsReasoningOnly(chunks.Current);
+                        deliveredReasoning |= chunks.Current.Reasoning is not null;
                         yield return chunks.Current;
                     }
 
                     if (!retry)
                     {
                         yield break;
+                    }
+
+                    if (deliveredReasoning)
+                    {
+                        yield return ModelStreamRetry.ReasoningBoundary();
                     }
                 }
                 else if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden

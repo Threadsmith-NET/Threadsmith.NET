@@ -15,7 +15,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task FullRefreshUsesStartupReadinessAndWarmsRemainingProjects()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<IDomainEvent>();
         await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -212,7 +213,8 @@ public static class SemanticCompilationCoordinatorTests
     [InlineData(false, true)]
     public static async Task BindingRequiresSuccessfulInitialPublicationBeforeWarming(bool publicationSucceeded, bool refreshBeforePublication)
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<IDomainEvent>();
         await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -393,7 +395,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task WarmPublicationFailurePreservesCompilationAndReportsRecovery()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var diagnostic = Signal();
         var completions = 0;
@@ -429,7 +432,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task WarmConfidenceFansOutToSharedWorkspaceSessions()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<SemanticConfidenceChanged>();
         await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -462,8 +466,9 @@ public static class SemanticCompilationCoordinatorTests
     [InlineData(true)]
     public static async Task ReusedLifecyclePublicationIsOrderedWithWarming(bool warmBeforeReuse)
     {
+        using var fixture = new TestSemanticSolution();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         await using var refresh = new SemanticRefreshCoordinator(registry, events, NullLogger<SemanticRefreshCoordinator>.Instance);
@@ -540,7 +545,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task LastOwnerUnbindStopsPreparationAndCannotPromoteReboundSession()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<SemanticConfidenceChanged>();
         await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -575,7 +581,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task DiagnosticOverlayCannotDetachBackgroundPreparation()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
@@ -594,7 +601,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task InvalidationRejectsPreviouslyPreparedReceipt()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), TestContext.Current.CancellationToken);
@@ -613,7 +621,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task CancelledInvalidationWaitPreservesPendingPathsAndWarmOwner()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var publishing = Signal();
         var release = Signal();
@@ -691,7 +700,8 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task InvalidIncrementalInputPreservesPreparationOwner()
     {
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
@@ -709,8 +719,9 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task IncrementalRefreshPublishesTextWithoutCompilingAffectedProjects()
     {
+        using var fixture = new TestSemanticSolution();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
         var request = new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild);
@@ -741,8 +752,9 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task IncrementalRefreshDiscardsNoncooperativeMutationResult()
     {
+        using var fixture = new TestSemanticSolution();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
         await engine.LoadAsync(
@@ -788,8 +800,9 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task DisposalRetainsWorkspaceUntilAbandonedOperationActuallyCompletes()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var disposed = new TaskCompletionSource<Workspace>(TaskCreationOptions.RunContinuationsAsynchronously);
         await using var engine = new SemanticEngine(
@@ -814,6 +827,7 @@ public static class SemanticCompilationCoordinatorTests
                 return 42;
             },
             ct);
+        Exception? primaryFailure = null;
         try
         {
             await started.Task.WaitAsync(ct);
@@ -825,9 +839,23 @@ public static class SemanticCompilationCoordinatorTests
             release.TrySetResult();
             Assert.Same(snapshot.Solution.Workspace, await disposed.Task.WaitAsync(ct));
         }
+        catch (Exception failure)
+        {
+            primaryFailure = failure;
+            throw;
+        }
         finally
         {
             release.TrySetResult();
+            try
+            {
+                await engine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+                await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (Exception cleanupFailure) when (primaryFailure is not null)
+            {
+                primaryFailure.Data["WorkspaceCleanupFailure"] = cleanupFailure;
+            }
         }
     }
 
@@ -835,8 +863,9 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task QueryDeadlinePreservesCompletedPartialResult()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
@@ -876,8 +905,9 @@ public static class SemanticCompilationCoordinatorTests
     [InlineData(true)]
     public static async Task CompilerCancellationCallbacksRetainResourcesWithoutBlockingCaller(bool throws)
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var disposed = Signal();
         await using var engine = new SemanticEngine(
@@ -913,6 +943,7 @@ public static class SemanticCompilationCoordinatorTests
                 return 0;
             },
             caller.Token);
+        Exception? primaryFailure = null;
         try
         {
             await started.Task.WaitAsync(ct);
@@ -924,9 +955,23 @@ public static class SemanticCompilationCoordinatorTests
             await engine.DisposeAsync();
             Assert.False(disposed.Task.IsCompleted);
         }
+        catch (Exception failure)
+        {
+            primaryFailure = failure;
+            throw;
+        }
         finally
         {
             release.Set();
+            try
+            {
+                await engine.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+                await disposed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch (Exception cleanupFailure) when (primaryFailure is not null)
+            {
+                primaryFailure.Data["WorkspaceCleanupFailure"] = cleanupFailure;
+            }
         }
 
         await disposed.Task.WaitAsync(ct);
@@ -973,8 +1018,9 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task SaturationThenReleaseAllowsFreshPreparation()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
         await engine.LoadAsync(new(SessionId.New(), WorkspaceId.New(), root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
@@ -1024,8 +1070,9 @@ public static class SemanticCompilationCoordinatorTests
     [Fact]
     public static async Task DisposalInvalidatesCapturedSemanticInputs()
     {
+        using var fixture = new TestSemanticSolution();
         var cancellationToken = TestContext.Current.CancellationToken;
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         await engine.LoadAsync(

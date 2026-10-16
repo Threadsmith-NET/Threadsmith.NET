@@ -542,7 +542,7 @@ public static partial class Plan56SessionLifecycleTests
 
     /// <summary>Duplicate destination creation fails without making a partial clone selectable.</summary>
     [Fact]
-    public static async Task Clone_failure_rolls_back_copied_conversation()
+    public static async Task Clone_rejects_existing_destination()
     {
         await using var fixture = await SessionLifecycleFixture.CreateAsync();
         var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
@@ -561,6 +561,53 @@ public static partial class Plan56SessionLifecycleTests
             EmptyUsage()));
         var destinationState = await fixture.Conversations.GetSnapshotAsync(destination.SessionId);
         Assert.Empty(destinationState.Messages);
+    }
+
+    /// <summary>A late catalog failure rolls back copied messages and preserves source artifacts.</summary>
+    [Fact]
+    public static async Task Clone_failure_rolls_back_copied_conversation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await SessionLifecycleFixture.CreateAsync();
+        var catalog = new SqliteSessionLifecycleStore(fixture.ConnectionString);
+        var source = CreateEntry(SessionId.New(), "repo-a", DateTimeOffset.UtcNow);
+        var destination = source with { SessionId = SessionId.New(), CloneSourceSessionId = source.SessionId };
+        await catalog.CreateAsync(source, EmptyUsage(), ct);
+        var artifacts = new ArtifactStore(fixture.ConnectionString, Path.Combine(fixture.DirectoryPath, "artifacts"), new SecretOutputSanitizer());
+        var artifact = await artifacts.StoreAsync("Source artifact survives rollback", "conversation", source.SessionId, ct);
+        await fixture.Conversations.ArchiveMessageAsync(
+            new ConversationMessage
+        {
+            Id = ConversationMessageId.New(), SessionId = source.SessionId, RunId = RunId.New(),
+            Sequence = 0, Role = ConversationRole.User, ArtifactId = artifact.ContentHash,
+            Content = "Source transcript survives rollback",
+            ContentHash = artifact.ContentHash, EstimatedTokens = 5, OccurredAt = source.CreatedAt,
+        }, ct);
+        var sourceCatalog = await catalog.GetAsync(source.SessionId, ct);
+        var before = await fixture.Conversations.GetSnapshotAsync(source.SessionId, cancellationToken: ct);
+        Assert.Equal("Source transcript survives rollback", Assert.Single(before.Messages).Content);
+        await using var connection = new SqliteConnection(fixture.ConnectionString);
+        await connection.OpenAsync(ct);
+        await using var trigger = connection.CreateCommand();
+        trigger.CommandText = """
+            CREATE TRIGGER fail_clone_catalog BEFORE INSERT ON session_catalog
+            WHEN NEW.clone_source_session_id IS NOT NULL
+            BEGIN SELECT RAISE(ABORT, 'injected late clone failure'); END;
+            """;
+        await trigger.ExecuteNonQueryAsync(ct);
+
+        var failure = await Assert.ThrowsAsync<SqliteException>(() => catalog.CloneAsync(source.SessionId, destination, EmptyUsage(), ct));
+        Assert.Contains("injected late clone failure", failure.Message, StringComparison.Ordinal);
+        Assert.Null(await catalog.GetAsync(destination.SessionId, ct));
+        Assert.Equal(sourceCatalog, await catalog.GetAsync(source.SessionId, ct));
+        Assert.Empty((await fixture.Conversations.GetSnapshotAsync(destination.SessionId, cancellationToken: ct)).Messages);
+        Assert.Equivalent(before, await fixture.Conversations.GetSnapshotAsync(source.SessionId, cancellationToken: ct), strict: true);
+        Assert.Equal("Source artifact survives rollback", await artifacts.ReadAsync(artifact.ContentHash, ct));
+        Assert.Equal(artifact.ContentHash, Assert.Single(await artifacts.ListAsync(null, ct)).ContentHash);
+        await using var rows = connection.CreateCommand();
+        rows.CommandText = "SELECT count(*) FROM conversation_sessions WHERE session_id = $destination;";
+        rows.Parameters.AddWithValue("$destination", destination.SessionId.Value.ToString("D"));
+        Assert.Equal(0L, await rows.ExecuteScalarAsync(ct));
     }
 
     /// <summary>Historical automatic-memory corruption cannot reappear in current snapshots or prevent transcript cloning.</summary>

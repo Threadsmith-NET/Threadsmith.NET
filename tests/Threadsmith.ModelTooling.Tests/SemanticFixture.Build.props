@@ -1,0 +1,9 @@
+<Project>
+  <!-- Standalone semantic inputs must not depend on the consuming checkout's build policy. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseSharedCompilation>false</UseSharedCompilation>
+  </PropertyGroup>
+</Project>

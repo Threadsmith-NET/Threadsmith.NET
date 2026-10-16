@@ -374,13 +374,30 @@ public sealed class WebFetchTests
             new Uri("https://example.com"),
             WebFetchSourceKind.DirectUrl,
             new HashSet<string>(StringComparer.Ordinal));
-        await transport.Started.WaitAsync(TimeSpan.FromSeconds(2));
+        await transport.Started.WaitAsync(TestContext.Current.CancellationToken);
         var exception = await Assert.ThrowsAsync<WebFetchException>(() =>
-            fetch.WaitAsync(TimeSpan.FromSeconds(2)));
+            fetch.WaitAsync(TestContext.Current.CancellationToken));
 
         // Assert
         Assert.Equal(WebFetchFailureKind.Timeout, exception.Kind);
-        await transport.CancellationObserved.WaitAsync(TimeSpan.FromSeconds(2));
+        await transport.CancellationObserved.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.True(transport.ReturnedResponse);
+    }
+
+    /// <summary>Cancellation during transport is normalized to the operation deadline.</summary>
+    [Fact]
+    public async Task FetchAsync_DeadlineExpiresDuringTransport_ReturnsTimeoutAsync()
+    {
+        var transport = new DeadlineExpiringTransport { ReturnAfterDeadline = false };
+        var fetcher = new WebContentFetcher(transport, new WebFetchOptions { Timeout = TimeSpan.FromMilliseconds(5) }, TestPromptLoader.Instance);
+        var exception = await Assert.ThrowsAsync<WebFetchException>(() => fetcher.FetchAsync(
+            new Uri("https://example.com"),
+            WebFetchSourceKind.DirectUrl,
+            new HashSet<string>(StringComparer.Ordinal),
+            TestContext.Current.CancellationToken));
+        Assert.Equal(WebFetchFailureKind.Timeout, exception.Kind);
+        Assert.True(transport.CancellationObserved.IsCompletedSuccessfully);
+        Assert.False(transport.ReturnedResponse);
     }
 
     /// <summary>Allowlisted bodies that agree with their declared media shape remain fetchable.</summary>
@@ -886,6 +903,27 @@ public sealed class WebFetchTests
         // Assert
         Assert.Equal(CurrentUserUrlRecognizer.MaximumCandidates, references.Count);
         Assert.All(references, reference => Assert.InRange(reference.Ordinal, 1, CurrentUserUrlRecognizer.MaximumCandidates));
+    }
+
+    /// <summary>Invalid candidates are rejected before the candidate cap can hide them.</summary>
+    [Theory]
+    [InlineData("http://plain.example")]
+    [InlineData("https://user:secret@credential.example")]
+    [InlineData("https://port.example:8443/docs")]
+    [InlineData("https://long.example/", true)]
+    public void CurrentUserRecognizer_InvalidCandidate_CreatesNoAuthority(string candidate, bool oversized = false)
+    {
+        using var fixture = new TemporaryDirectory();
+        var context = CreateContext(fixture.Path);
+        var authority = new WebFetchAuthorizationAuthority(new WebFetchOptions { MaximumUrlCharacters = 128 });
+        var references = authority.IssueCurrentUserMessageUrls(
+            fixture.Path,
+            context.SessionId,
+            context.RunId,
+            ConversationMessageId.New(),
+            oversized ? candidate + new string('x', 256) : candidate,
+            context.Invocation);
+        Assert.Empty(references);
     }
 
     /// <summary>A URL continuing past the scan boundary creates no authority for its truncated prefix.</summary>
@@ -1600,6 +1638,10 @@ public sealed class WebFetchTests
 
         public Task Started => _started.Task;
 
+        public bool ReturnedResponse { get; private set; }
+
+        public bool ReturnAfterDeadline { get; init; } = true;
+
         public async Task<WebFetchTransportResponse> GetAsync(
             Uri uri,
             WebFetchSourceKind sourceKind,
@@ -1616,7 +1658,16 @@ public sealed class WebFetchTests
             catch (OperationCanceledException)
             {
                 _cancellationObserved.TrySetResult();
-                throw;
+                if (!ReturnAfterDeadline)
+                {
+                    throw;
+                }
+
+                // Return after cancellation to exercise the fetcher's post-transport boundary.
+                // A bad signature proves timeout is checked before decoding/extraction.
+                ReturnedResponse = true;
+                var body = Encoding.UTF8.GetBytes("%PDF-1.7 invalid textual content");
+                return new WebFetchTransportResponse(uri, uri, HttpStatusCode.OK, "text/plain", "utf-8", null, body, body.Length, []);
             }
         }
     }

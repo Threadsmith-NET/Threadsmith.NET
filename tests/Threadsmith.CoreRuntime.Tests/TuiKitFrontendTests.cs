@@ -114,15 +114,29 @@ public static class TuiKitFrontendTests
         Assert.Equal(styles.Resolve(PresentationTextRole.Error).Attributes, cells.Get(11, 0).Style.Attributes);
     }
 
-    /// <summary>Both frontends project the same Markdown content and semantic roles.</summary>
+    /// <summary>Broad Markdown fixtures retain their content and semantic roles at both widths.</summary>
     [Theory]
     [InlineData(40)]
     [InlineData(120)]
-    public static void MarkdownMatchesExistingFrontend(int width)
+    public static void MarkdownPreservesContentAndSemanticRoles(int width)
     {
         const string source = "# Title\n\n**bold** *italic* ~~strike~~ `code` [link](https://example.com)\n\n> quote\n\n- [x] checked\n- plain\n\n1. ordered\n\n---\n\n```cs\nvar value = 1;\n```\n\n| Name | Value |\n|---|---|\n| first | detail |\n";
         var document = Assert.IsType<MarkdownDocument>(new MarkdownParser().Parse(source).Document);
-        Assert.Equal(Threadsmith.Tui.TuiKit.TuiMarkdownLayout.Format(document, width), TuiMarkdownLayout.Format(document, width));
+        var segments = TuiMarkdownLayout.Format(document, width);
+        Assert.NotEmpty(segments);
+        var visible = string.Concat(segments.Select(segment => segment.Text));
+        foreach (var text in new[] { "Title", "bold", "italic", "strike", "code", "link", "quote", "checked", "plain", "ordered", "var value = 1;", "Name", "Value", "first", "detail" })
+        {
+            Assert.Contains(text, visible, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(segments, segment => segment.Text == "Title" && segment.Role == PresentationTextRole.MarkdownHeading);
+        Assert.Contains(segments, segment => segment.Text == "bold" && segment.Role == PresentationTextRole.MarkdownStrong);
+        Assert.Contains(segments, segment => segment.Text == "italic" && segment.Role == PresentationTextRole.MarkdownEmphasis);
+        Assert.Contains(segments, segment => segment.Text == "strike" && segment.Role == PresentationTextRole.MarkdownStrikethrough);
+        Assert.Contains(segments, segment => segment.Text == "code" && segment.Role == PresentationTextRole.MarkdownCode);
+        Assert.Contains(segments, segment => segment.Text == "link" && segment.Role == PresentationTextRole.Hyperlink);
+        Assert.Contains("https://example.com/", visible, StringComparison.Ordinal);
     }
 
     /// <summary>Grapheme edits and undo preserve exact Unicode and multiline paste.</summary>

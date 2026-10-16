@@ -41,14 +41,29 @@ public static class CommandHelpModalTests
         Assert.Contains("/a", alpha, StringComparison.Ordinal);
         Assert.Contains("/longer", beta, StringComparison.Ordinal);
 
+        modal.HandleKey(KeyEvent.Special(KeyCode.End));
+        modal.Render(surface);
+        var finalPage = TUIKit.Testing.Snapshot.ToText(cells);
+        modal.HandleKey(KeyEvent.Special(KeyCode.Home));
+        modal.Render(surface);
+        Assert.Equal(first, TUIKit.Testing.Snapshot.ToText(cells));
+
         var snapshots = new List<string> { first };
+        var reachedEnd = false;
         for (var page = 0; page < 100; page++)
         {
             modal.HandleKey(KeyEvent.Special(KeyCode.PageDown));
             modal.Render(surface);
-            snapshots.Add(TUIKit.Testing.Snapshot.ToText(cells));
+            var current = TUIKit.Testing.Snapshot.ToText(cells);
+            snapshots.Add(current);
+            if (string.Equals(current, finalPage, StringComparison.Ordinal))
+            {
+                reachedEnd = true;
+                break;
+            }
         }
 
+        Assert.True(reachedEnd, "Help scrolling did not reach a known final page within the traversal bound.");
         var all = string.Join('\n', snapshots);
         Assert.Contains("USAGETAIL", all, StringComparison.Ordinal);
         Assert.Contains("HELPTAIL", all, StringComparison.Ordinal);

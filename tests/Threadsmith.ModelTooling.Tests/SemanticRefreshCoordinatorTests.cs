@@ -2268,25 +2268,8 @@ public static class SemanticRefreshCoordinatorTests
             await File.WriteAllTextAsync(customConfig, "root = true", TestContext.Current.CancellationToken);
             var externalAdditional = Path.Combine(container, "outside.json");
             var externalConfig = Path.Combine(container, ".editorconfig");
-            var externalDirectory = Path.Combine(container, "external");
-            var linkedDirectory = Path.Combine(repositoryPath, "linked");
-            var linkedAdditional = Path.Combine(linkedDirectory, "linked.json");
             var prohibitedAdditional = Path.Combine(prohibitedPath, "hidden.json");
             var prohibitedConfig = Path.Combine(prohibitedPath, ".editorconfig");
-            Directory.CreateDirectory(externalDirectory);
-            await File.WriteAllTextAsync(Path.Combine(externalDirectory, "linked.json"), "linked");
-            var linkCreated = false;
-            try
-            {
-                Directory.CreateSymbolicLink(linkedDirectory, externalDirectory);
-                linkCreated = true;
-            }
-            catch (Exception exception) when (exception is IOException
-                or UnauthorizedAccessException
-                or NotSupportedException)
-            {
-                // Symlink creation is privilege- and platform-dependent; confinement remains covered above.
-            }
 
             await File.WriteAllTextAsync(projectPath, """
                 <Project Sdk="Microsoft.NET.Sdk">
@@ -2295,7 +2278,6 @@ public static class SemanticRefreshCoordinatorTests
                     <AdditionalFiles Include="visible.json" />
                     <AdditionalFiles Include="..\outside.json" />
                     <AdditionalFiles Include="secret\hidden.json" />
-                    <AdditionalFiles Include="linked\linked.json" />
                     <EditorConfigFiles Include=".editorconfig" />
                     <EditorConfigFiles Include="obj/App.GeneratedMSBuildEditorConfig.editorconfig" />
                     <EditorConfigFiles Include="obj/custom.editorconfig" />
@@ -2338,11 +2320,6 @@ public static class SemanticRefreshCoordinatorTests
             Assert.DoesNotContain(externalConfig, inventory.AnalyzerConfigDocuments);
             Assert.DoesNotContain(prohibitedAdditional, inventory.AdditionalDocuments);
             Assert.DoesNotContain(prohibitedConfig, inventory.AnalyzerConfigDocuments);
-            if (linkCreated)
-            {
-                Assert.DoesNotContain(linkedAdditional, inventory.AdditionalDocuments);
-            }
-
             Assert.DoesNotContain(loaded, document => document.Path.StartsWith(
                 container,
                 StringComparison.OrdinalIgnoreCase)
@@ -2354,6 +2331,65 @@ public static class SemanticRefreshCoordinatorTests
         finally
         {
             Directory.Delete(container, recursive: true);
+        }
+    }
+
+    /// <summary>Refresh inventory rejects an additional file reached through an external directory link.</summary>
+    [Fact]
+    public static async Task SemanticEngine_SemanticRefreshInventoryRejectsLinkedDirectory()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var container = Directory.CreateTempSubdirectory("threadsmith-semantic-linked-");
+        try
+        {
+            var repository = Directory.CreateDirectory(Path.Combine(container.FullName, "repository")).FullName;
+            var external = Directory.CreateDirectory(Path.Combine(container.FullName, "external")).FullName;
+            await File.WriteAllTextAsync(Path.Combine(external, "linked.json"), "outside", cancellationToken);
+            var link = Path.Combine(repository, "linked");
+            try
+            {
+                Directory.CreateSymbolicLink(link, external);
+            }
+            catch (Exception exception) when (OperatingSystem.IsWindows()
+                && (exception is PlatformNotSupportedException
+                    || (exception.HResult & 0xffff) is 1 or 50 or 1314))
+            {
+                Assert.Skip($"Windows symbolic-link capability is unavailable: {exception.GetType().Name} (0x{exception.HResult:X8}).");
+            }
+
+            var linkedFile = Path.Combine(link, "linked.json");
+            Assert.True(File.Exists(linkedFile));
+            var visibleFile = Path.Combine(repository, "visible.json");
+            await File.WriteAllTextAsync(visibleFile, "visible", cancellationToken);
+            var project = Path.Combine(repository, "App.csproj");
+            await File.WriteAllTextAsync(
+                project,
+                """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+                  <ItemGroup>
+                    <AdditionalFiles Include="visible.json" />
+                    <AdditionalFiles Include="linked/linked.json" />
+                  </ItemGroup>
+                </Project>
+                """,
+                cancellationToken);
+            await File.WriteAllTextAsync(Path.Combine(repository, "Source.cs"), "public class Source { }", cancellationToken);
+            await using var events = new DomainEventStream();
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+            await engine.LoadAsync(
+                new SemanticLoadRequest(SessionId.New(), WorkspaceId.New(), repository, project, RepositoryTrustLevel.TrustedBuild),
+                cancellationToken);
+
+            var inventory = engine.GetRefreshInventory();
+            Assert.Contains(visibleFile, inventory.AdditionalDocuments);
+            Assert.DoesNotContain(linkedFile, inventory.AdditionalDocuments);
+            Assert.DoesNotContain(await engine.GetLoadedDocumentsAsync(cancellationToken), document => document.Path == linkedFile);
+            Assert.Equal("outside", await File.ReadAllTextAsync(Path.Combine(external, "linked.json"), cancellationToken));
+        }
+        finally
+        {
+            container.Delete(recursive: true);
         }
     }
 

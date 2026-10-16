@@ -26,8 +26,10 @@ public static class MigrationSafetyTests
             await store.InitializeAsync();
 
             var sessionId = SessionId.New();
-            await store.AppendAsync(new SessionCreated(sessionId, DateTimeOffset.UtcNow, "pre-migration"));
+            var priorEvent = new SessionCreated(sessionId, DateTimeOffset.UtcNow, "pre-migration");
+            await store.AppendAsync(priorEvent);
 
+            var priorVersion = await new MigrationRunner(fixture.ConnectionString, [new InitialSchemaMigration()]).ReadCurrentVersionAsync();
             var migrations = new IDatabaseMigration[]
             {
                 new InitialSchemaMigration(),
@@ -38,7 +40,13 @@ public static class MigrationSafetyTests
 
             var events = await store.ReadAsync(sessionId);
             Assert.Single(events);
-            Assert.IsType<SessionCreated>(events[0]);
+            Assert.Equal(priorEvent, Assert.IsType<SessionCreated>(events[0]));
+            Assert.Equal(priorVersion, await runner.ReadCurrentVersionAsync());
+            await using var connection = new SqliteConnection(fixture.ConnectionString);
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await using var canary = connection.CreateCommand();
+            canary.CommandText = "SELECT count(*) FROM sqlite_master WHERE name = 'failed_migration_canary';";
+            Assert.Equal(0L, await canary.ExecuteScalarAsync(TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -69,8 +77,11 @@ public static class MigrationSafetyTests
     {
         public int Version => 1;
         public string Name => "Failing";
-        public Task ApplyAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
+        public async Task ApplyAsync(SqliteConnection connection, CancellationToken cancellationToken = default)
         {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE failed_migration_canary(value TEXT); INSERT INTO failed_migration_canary VALUES('partial write');";
+            await command.ExecuteNonQueryAsync(cancellationToken);
             throw new NotImplementedException("Simulated migration failure.");
         }
     }
@@ -429,16 +440,23 @@ public static class RetentionTests
             var session = SessionId.New();
             await store.AppendAsync(new SessionCreated(session, DateTimeOffset.UtcNow.AddDays(-90), "kept"));
 
-            var artifactStore = new ArtifactStore(fixture.ConnectionString, dir.Path, new SecretOutputSanitizer());
+            var artifactStore = new ArtifactStore(fixture.ConnectionString, dir.Path, new SecretOutputSanitizer(), new FixedTimeProvider(DateTimeOffset.UtcNow.AddDays(-90)));
             await artifactStore.InitializeAsync();
+            const string content = "Retain this artifact";
+            var artifact = await artifactStore.StoreAsync(content, "processOutput", session, TestContext.Current.CancellationToken);
             var retention = new RetentionService(
                 store,
                 artifactStore,
-                new RetentionOptions { Enabled = false },
+                new RetentionOptions { Enabled = false, SessionAge = TimeSpan.FromDays(30), RetainProcessLogs = false },
                 NullLogger<RetentionService>.Instance);
 
             var outcome = await retention.RunAsync();
             Assert.Equal(0, outcome.RemovedSessions);
+            Assert.Equal(0, outcome.RemovedArtifacts);
+            var retained = Assert.IsType<SessionCreated>(Assert.Single(await store.ReadAsync(session)));
+            Assert.Equal("kept", retained.Name);
+            Assert.Equal(content, await artifactStore.ReadAsync(artifact.ContentHash));
+            Assert.Equal(artifact.ContentHash, Assert.Single(await artifactStore.ListAsync(session)).ContentHash);
         }
         finally
         {

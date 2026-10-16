@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Coordination;
+using Threadsmith.Telemetry;
 using Threadsmith.Tools;
 using Threadsmith.Validation;
 using Xunit;
@@ -1220,6 +1221,73 @@ public sealed class Milestone6Tests
         }
     }
 
+    /// <summary>A failed restore preserves diagnostics and removes the partially constructed fixture.</summary>
+    [Fact]
+    public async Task BuildFixture_FailedRestore_RemovesOwnedRoot()
+    {
+        var processes = new ScriptedProcessManager(new ProcessExecutionResult(1, 7, "restore-output", "restore-error", false, false, false, TimeSpan.Zero));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => CreateBuildableBaselineAsync(false, processes));
+
+        Assert.Contains("restore-output", error.Message, StringComparison.Ordinal);
+        Assert.Contains("restore-error", error.Message, StringComparison.Ordinal);
+        var root = Assert.Single(processes.Requests).WorkingDirectory;
+        try
+        {
+            Assert.False(Directory.Exists(root), $"Partial fixture survived failed restore: {root}");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                await DeleteBuildFixtureAsync(root);
+            }
+        }
+    }
+
+    /// <summary>Cancellation during restore remains cancellation after the partial fixture is removed.</summary>
+    [Fact]
+    public async Task BuildFixture_CancelledRestore_RemovesOwnedRoot()
+    {
+        var processes = new BlockingProcessManager();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var setup = CreateBuildableBaselineAsync(false, processes, cancellation.Token);
+        Exception? completionFailure = null;
+        try
+        {
+            await Task.WhenAny(processes.Entered.Task, setup).WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(processes.Entered.Task.IsCompletedSuccessfully, "Fixture setup ended before restore started.");
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            try
+            {
+                await setup.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                completionFailure = exception;
+            }
+        }
+
+        Assert.IsAssignableFrom<OperationCanceledException>(completionFailure);
+
+        Assert.NotNull(processes.Request);
+        var root = processes.Request.WorkingDirectory;
+        try
+        {
+            Assert.False(Directory.Exists(root), $"Partial fixture survived cancelled restore: {root}");
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                await DeleteBuildFixtureAsync(root);
+            }
+        }
+    }
+
     /// <summary>Structured diagnostic events flow into the host projection and diagnostics TUI view.</summary>
     [Fact]
     public async Task DiagnosticObserved_StructuredPayload_RendersInTui()
@@ -1570,15 +1638,34 @@ public sealed class Milestone6Tests
                 },
             ],
         };
-        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => runner.RunAsync(
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var run = runner.RunAsync(
             new SessionId(Guid.NewGuid()),
             new RunId(Guid.NewGuid()),
             baseline,
             selection,
             TimeSpan.FromMinutes(1),
-            cancellation.Token));
+            cancellation.Token);
+        Exception? completionFailure = null;
+        try
+        {
+            await Task.WhenAny(processes.Entered.Task, run).WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(processes.Entered.Task.IsCompletedSuccessfully, "Test run ended before process invocation.");
+        }
+        finally
+        {
+            await cancellation.CancelAsync();
+            try
+            {
+                await run.WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                completionFailure = exception;
+            }
+        }
+
+        Assert.IsAssignableFrom<OperationCanceledException>(completionFailure);
 
         Assert.True(processes.WasInvoked);
     }
@@ -1799,6 +1886,14 @@ public sealed class Milestone6Tests
 
     private static async Task DeleteBuildFixtureAsync(string path)
     {
+        var root = Path.GetFullPath(path);
+        var expectedParent = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
+        if (Path.GetDirectoryName(root) != expectedParent
+            || !Path.GetFileName(root).StartsWith("threadsmith-build-", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Refusing to delete an unowned build fixture.");
+        }
+
         // Windows can report the terminated process as exited before its directory
         // handle is released. Retry only fixture cleanup; lifecycle assertions run first.
         var cleanup = Stopwatch.StartNew();
@@ -1811,65 +1906,93 @@ public sealed class Milestone6Tests
             }
             catch (IOException) when (cleanup.Elapsed < TimeSpan.FromSeconds(5))
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(25), TestContext.Current.CancellationToken);
+                await Task.Delay(TimeSpan.FromMilliseconds(25), CancellationToken.None);
             }
         }
     }
 
-    private static async Task<WorkspaceBaseline> CreateBuildableBaselineAsync(bool includeDelay)
+    private static async Task<WorkspaceBaseline> CreateBuildableBaselineAsync(
+        bool includeDelay,
+        IProcessManager? processManager = null,
+        CancellationToken cancellationToken = default)
     {
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, cancellationToken);
+        var ct = cancellation.Token;
         var root = Path.Combine(Path.GetTempPath(), $"threadsmith-build-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
-        var windowsDelayCommand = OperatingSystem.IsWindows() ? CreateWindowsDelayCommand() : string.Empty;
-        var delayProperties = includeDelay
-            ? """
+        try
+        {
+            var windowsDelayCommand = OperatingSystem.IsWindows() ? CreateWindowsDelayCommand() : string.Empty;
+            var delayProperties = includeDelay
+                ? """
+                      <PropertyGroup>
+                        <DelayCommand Condition="'$(OS)' == 'Windows_NT'">{{WindowsDelayCommand}}</DelayCommand>
+                        <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; sleep 30'</DelayCommand>
+                      </PropertyGroup>
+                      <Target Name="DelayBuild" BeforeTargets="BeforeBuild">
+                        <Exec Command="$(DelayCommand)" />
+                      </Target>
+                  """
+                    .Replace("{{WindowsDelayCommand}}", SecurityElement.Escape(windowsDelayCommand), StringComparison.Ordinal)
+                : string.Empty;
+            var projectPath = Path.Combine(root, "ValidationTarget.csproj");
+            await File.WriteAllTextAsync(
+                projectPath,
+                $"""
+                <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
-                    <DelayCommand Condition="'$(OS)' == 'Windows_NT'">{{WindowsDelayCommand}}</DelayCommand>
-                    <DelayCommand Condition="'$(OS)' != 'Windows_NT'">sh -c 'echo $$ > "$(MSBuildProjectDirectory)/child.pid.tmp"; mv "$(MSBuildProjectDirectory)/child.pid.tmp" "$(MSBuildProjectDirectory)/child.pid"; sleep 30'</DelayCommand>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net10.0</TargetFramework>
                   </PropertyGroup>
-                  <Target Name="DelayBuild" BeforeTargets="BeforeBuild">
-                    <Exec Command="$(DelayCommand)" />
-                  </Target>
-              """
-                .Replace("{{WindowsDelayCommand}}", SecurityElement.Escape(windowsDelayCommand), StringComparison.Ordinal)
-            : string.Empty;
-        var projectPath = Path.Combine(root, "ValidationTarget.csproj");
-        await File.WriteAllTextAsync(
-            projectPath,
-            $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <OutputType>Exe</OutputType>
-                <TargetFramework>net10.0</TargetFramework>
-              </PropertyGroup>
-            {delayProperties}
-            </Project>
-            """);
-        await File.WriteAllTextAsync(Path.Combine(root, "Program.cs"), "System.Console.WriteLine(\"ok\");");
-        using var restore = Process.Start(new ProcessStartInfo("dotnet")
-        {
-            WorkingDirectory = root,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            ArgumentList = { "restore", projectPath, "--nologo" },
-        }) ?? throw new InvalidOperationException("Could not start fixture restore.");
-        var output = await restore.StandardOutput.ReadToEndAsync();
-        var error = await restore.StandardError.ReadToEndAsync();
-        await restore.WaitForExitAsync();
-        if (restore.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"Fixture restore failed: {output}{Environment.NewLine}{error}");
-        }
+                {delayProperties}
+                </Project>
+                """,
+                ct);
+            await File.WriteAllTextAsync(Path.Combine(root, "Program.cs"), "System.Console.WriteLine(\"ok\");", ct);
+            processManager ??= new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
+            var restore = await processManager.RunAsync(
+                new ProcessExecutionRequest
+                {
+                    ToolInvocationId = ToolInvocationId.New(),
+                    RunId = RunId.New(),
+                    FileName = "dotnet",
+                    Arguments = ["restore", projectPath, "--nologo"],
+                    WorkingDirectory = root,
+                    Origin = ProcessRequestOrigin.Host,
+                    Timeout = TimeSpan.FromMinutes(5),
+                },
+                ct);
+            if (restore.TimedOut)
+            {
+                throw new TimeoutException($"Fixture restore timed out: {restore.StandardOutput}{Environment.NewLine}{restore.StandardError}");
+            }
 
-        return new WorkspaceBaseline(
-            new WorkspaceId(Guid.NewGuid()),
-            root,
-            DateTimeOffset.UtcNow,
-            [],
-            SelectedSolutionPath: projectPath,
-            TrustLevel: RepositoryTrustLevel.TrustedBuild);
+            if (restore.ExitCode != 0)
+            {
+                throw new InvalidOperationException($"Fixture restore failed: {restore.StandardOutput}{Environment.NewLine}{restore.StandardError}");
+            }
+
+            return new WorkspaceBaseline(
+                new WorkspaceId(Guid.NewGuid()),
+                root,
+                DateTimeOffset.UtcNow,
+                [],
+                SelectedSolutionPath: projectPath,
+                TrustLevel: RepositoryTrustLevel.TrustedBuild);
+        }
+        catch (Exception setupFailure)
+        {
+            try
+            {
+                await DeleteBuildFixtureAsync(root);
+            }
+            catch (Exception cleanupFailure)
+            {
+                setupFailure.Data["FixtureCleanupFailure"] = cleanupFailure;
+            }
+
+            throw;
+        }
     }
 
     private static string CreateWindowsDelayCommand()
@@ -2002,11 +2125,17 @@ public sealed class Milestone6Tests
 
         public bool WasInvoked { get; private set; }
 
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public ProcessExecutionRequest? Request { get; private set; }
+
         public async Task<ProcessExecutionResult> RunAsync(
             ProcessExecutionRequest request,
             CancellationToken cancellationToken = default)
         {
             WasInvoked = true;
+            Request = request;
+            Entered.TrySetResult();
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             throw new InvalidOperationException("The cancelled process should not complete.");
         }

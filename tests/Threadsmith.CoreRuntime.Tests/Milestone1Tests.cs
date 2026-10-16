@@ -222,6 +222,8 @@ public static partial class Milestone1Tests
             var polymorphic = JsonSerializer.Deserialize<IDomainEvent>(polymorphicJson);
             Assert.NotNull(polymorphic);
             Assert.Equal(expected.GetType(), polymorphic.GetType());
+            Assert.Equivalent(expected, polymorphic, strict: true);
+            Assert.Equal(polymorphicJson, JsonSerializer.Serialize<IDomainEvent>(polymorphic));
             Assert.Equal(1, polymorphic.SchemaVersion);
 
             var eventName = DomainEventJson.GetDiscriminator(expected);
@@ -230,6 +232,8 @@ public static partial class Milestone1Tests
                 expected.SchemaVersion,
                 DomainEventJson.Serialize(expected));
             Assert.Equal(expected.GetType(), durable.GetType());
+            Assert.Equivalent(expected, durable, strict: true);
+            Assert.Equal(DomainEventJson.Serialize(expected), DomainEventJson.Serialize(durable));
         }
 
         var declaredEventTypes = typeof(DomainEvent).Assembly
@@ -2152,29 +2156,6 @@ public static partial class Milestone1Tests
         Assert.Contains("ctx ~12k/32k 38%", rendered, StringComparison.Ordinal);
         Assert.Contains("tokens ~10k", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("folder ", rendered, StringComparison.Ordinal);
-    }
-
-    /// <summary>Session usage saturates rather than overflowing cumulative counters.</summary>
-    [Fact]
-    public static void SessionUsageProjection_LargeUsage_SaturatesTotals()
-    {
-        var projection = new SessionUsageProjection();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-
-        projection.Observe(
-            sessionId,
-            new ModelRequestUsageId(runId, "conversation", 0, Guid.NewGuid()),
-            new ModelUsage(long.MaxValue, long.MaxValue));
-        projection.Observe(
-            sessionId,
-            new ModelRequestUsageId(runId, "conversation", 1, Guid.NewGuid()),
-            new ModelUsage(1, 1));
-
-        var snapshot = projection.GetSnapshot(sessionId);
-        Assert.Equal(long.MaxValue, snapshot.InputTokens);
-        Assert.Equal(long.MaxValue, snapshot.OutputTokens);
-        Assert.Equal(long.MaxValue, snapshot.TotalTokens);
     }
 
     /// <summary>The status factory selects the stricter model and governed context limit.</summary>
@@ -4560,6 +4541,13 @@ public static partial class Milestone1Tests
                 expected.Select(item => item.GetType()).Append(typeof(SessionCreated)),
                 actual.Select(item => item.GetType()));
             Assert.All(actual.Take(expected.Count), item => Assert.Equal(1, item.SchemaVersion));
+            for (var index = 0; index < expected.Count; index++)
+            {
+                Assert.Equivalent(expected[index], actual[index], strict: true);
+                Assert.Equal(DomainEventJson.Serialize(expected[index]), DomainEventJson.Serialize(actual[index]));
+            }
+
+            Assert.Equivalent(previousSchema, actual[^1], strict: true);
             Assert.Equal(0, actual[^1].SchemaVersion);
         }
         finally

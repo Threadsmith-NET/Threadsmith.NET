@@ -69,6 +69,17 @@ public static class ToolActivityRenderingTests
             .Select(line => line[(line.IndexOfAny(['│', '└']) + 1)..])
             .Select(line => line.StartsWith(' ') ? line[1..] : line));
 
+        Assert.Contains("Output:", text, StringComparison.Ordinal);
+        if (maximum > 1)
+        {
+            Assert.NotEmpty(output);
+            Assert.Contains("[code_explore", output, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Empty(output);
+        }
+
         Assert.InRange(output.Length, 0, maximum);
         Assert.DoesNotContain('\u001b', output);
     }

@@ -34,6 +34,12 @@
     <None Include="..\fixtures\model\plan46-pi-reasoning-v1.json"
           Link="fixtures\model\%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Update="SemanticFixture.Build.props"
+          Link="fixtures\semantic\SmallDotNetSolution\Directory.Build.props"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\global.json"
+          Link="fixtures\semantic\SmallDotNetSolution\global.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\fixtures\semantic\**\*"
           Link="fixtures\semantic\%(RecursiveDir)%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />

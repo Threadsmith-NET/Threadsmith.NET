@@ -237,14 +237,9 @@ public sealed class SdkStdioTransportTests
 
     private static string GetServerAssemblyPath()
     {
-        return Path.Combine(
-                FindRepositoryRoot(),
-                "tests",
-                "Threadsmith.Mcp.TestServer",
-                "bin",
-                "Debug",
-                "net10.0",
-                "Threadsmith.Mcp.TestServer.dll");
+        var path = Path.Combine(AppContext.BaseDirectory, "fixtures", "mcp-server", "Threadsmith.Mcp.TestServer.dll");
+        Assert.True(File.Exists(path), $"The build-declared MCP server fixture is missing: {path}");
+        return path;
     }
 
     private static string FindRepositoryRoot()

@@ -1,6 +1,7 @@
 namespace Threadsmith.ModelTooling.Tests;
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text;
@@ -41,11 +42,12 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_LoadDiscoversProjectsTargetFrameworksGeneratedAndLinkedFiles()
     {
-        var root = SmallSemanticSolutionFixture.Root;
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
 
-        var loaded = await engine.LoadAsync(SmallSemanticSolutionFixture.CreateLoadRequest());
+        var loaded = await engine.LoadAsync(TestSemanticSolution.CreateLoadRequest(root));
         var generated = await engine.FindSymbolsAsync("GeneratedMarker");
         var linked = await engine.FindSymbolsAsync("LinkedMarker");
 
@@ -62,10 +64,11 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_SymbolQueriesAndToolsProjectStableSemanticResults()
     {
-        var root = SmallSemanticSolutionFixture.Root;
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
-        var request = SmallSemanticSolutionFixture.CreateLoadRequest();
+        var request = TestSemanticSolution.CreateLoadRequest(root);
         await engine.LoadAsync(request);
 
         var symbols = await engine.FindSymbolsAsync("IService");
@@ -115,7 +118,8 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticEngine_InvalidationPromotionAndDirectProjectReloadRemainConfidenceAware()
     {
-        var root = SmallSemanticSolutionFixture.Root;
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         var observed = new List<IDomainEvent>();
         await using var subscription = events.Subscribe((domainEvent, _) =>
@@ -128,7 +132,7 @@ public static class Milestone3Tests
             NullLogger<SemanticEngine>.Instance,
             TestPromptLoader.Instance,
             TimeSpan.FromMilliseconds(100));
-        var request = SmallSemanticSolutionFixture.CreateLoadRequest();
+        var request = TestSemanticSolution.CreateLoadRequest(root);
         await engine.LoadAsync(request);
 
         engine.QueueInvalidation(Path.Combine(root, "Contracts", "Contracts.csproj"));
@@ -158,11 +162,11 @@ public static class Milestone3Tests
     public static async Task SemanticEngine_DegradedLoadsReportProjectAndSolutionFailures()
     {
         await using var events = new DomainEventStream();
-        await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
-        var request = SmallSemanticSolutionFixture.CreateLoadRequest();
-        var brokenRoot = SmallSemanticSolutionFixture.CopyToTemporaryRoot("threadsmith-broken");
+        var brokenRoot = TestSemanticSolution.CopyToTemporaryRoot("threadsmith-broken");
+        var request = TestSemanticSolution.CreateLoadRequest(brokenRoot);
         try
         {
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
             File.Delete(Path.Combine(brokenRoot, "Contracts", "Contracts.csproj"));
 
             var broken = await engine.LoadAsync(request with
@@ -184,6 +188,7 @@ public static class Milestone3Tests
         Directory.CreateDirectory(invalidRoot);
         try
         {
+            await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
             var invalidSolution = Path.Combine(invalidRoot, "Invalid.sln");
             await File.WriteAllTextAsync(invalidSolution, "not a solution");
 
@@ -227,6 +232,13 @@ public static class Milestone3Tests
                 projectPath,
                 RepositoryTrustLevel.TrustedBuild);
             await engine.LoadAsync(request);
+            var initial = await engine.GetDiagnosticsAsync([projectPath], ["Caller.cs"], TestContext.Current.CancellationToken);
+            Assert.Contains(initial, diagnostic => diagnostic is
+            {
+                Code: "CS0246",
+                Severity: DiagnosticSeverity.Error,
+                File: "Caller.cs",
+            });
 
             await File.WriteAllTextAsync(
                 Path.Combine(root, "Service.cs"),
@@ -271,6 +283,13 @@ public static class Milestone3Tests
                 projectPath,
                 RepositoryTrustLevel.TrustedBuild);
             await engine.LoadAsync(request);
+            var initial = await engine.GetDiagnosticsAsync([projectPath], ["Caller.cs"], TestContext.Current.CancellationToken);
+            Assert.Contains(initial, diagnostic => diagnostic is
+            {
+                Code: "CS0103",
+                Severity: DiagnosticSeverity.Error,
+                File: "Caller.cs",
+            });
 
             await File.WriteAllTextAsync(
                 callerPath,
@@ -343,11 +362,8 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticLifecycle_QueuesLoadOutsideEventSubscription()
     {
-        var root = Path.Combine(
-            AppContext.BaseDirectory,
-            "fixtures",
-            "semantic",
-            "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         var sessionId = SessionId.New();
         var workspaceId = WorkspaceId.New();
         await using var events = new DomainEventStream();
@@ -463,11 +479,9 @@ public static class Milestone3Tests
     [Fact]
     public static async Task SemanticRegistry_IsolatesWorkspaceState()
     {
-        var root = Path.Combine(
-            AppContext.BaseDirectory,
-            "fixtures",
-            "semantic",
-            "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var root = fixture.Root;
         var solutionPath = Path.Combine(root, "SmallDotNetSolution.sln");
         var compiledWorkspace = WorkspaceId.New();
         var textWorkspace = WorkspaceId.New();
@@ -478,36 +492,72 @@ public static class Milestone3Tests
             TestPromptLoader.Instance,
             TimeSpan.FromMilliseconds(100));
 
-        await engines.LoadAsync(new SemanticLoadRequest(
-            SessionId.New(),
-            compiledWorkspace,
-            root,
-            solutionPath,
-            RepositoryTrustLevel.TrustedBuild));
-        await engines.LoadAsync(new SemanticLoadRequest(
-            SessionId.New(),
-            textWorkspace,
-            root,
-            solutionPath,
-            RepositoryTrustLevel.TrustedRead));
+        var compiledLoad = await engines.LoadAsync(
+            new SemanticLoadRequest(
+                SessionId.New(),
+                compiledWorkspace,
+                root,
+                solutionPath,
+                RepositoryTrustLevel.TrustedBuild),
+            cancellationToken);
+        await engines.LoadAsync(
+            new SemanticLoadRequest(
+                SessionId.New(),
+                textWorkspace,
+                root,
+                solutionPath,
+                RepositoryTrustLevel.TrustedRead),
+            cancellationToken);
 
-        await engines.GetEngine(compiledWorkspace).WaitForWarmAsync(TestContext.Current.CancellationToken);
+        await engines.GetEngine(compiledWorkspace).WaitForWarmAsync(cancellationToken);
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"Compiled workspace load diagnostics: {string.Join(Environment.NewLine, compiledLoad.Diagnostics)}");
+        TestContext.Current.TestOutputHelper?.WriteLine(
+            $"Compiled workspace project confidence: {string.Join(", ", engines.GetProjects(compiledWorkspace).Select(project => $"{project.Name}: {project.Confidence}"))}");
         Assert.Equal(SemanticConfidenceLevel.FullSemantic, engines.GetConfidence(compiledWorkspace));
         Assert.Equal(SemanticConfidenceLevel.TextOnly, engines.GetConfidence(textWorkspace));
-        Assert.NotEmpty(await engines.FindSymbolsAsync(compiledWorkspace, "IService"));
+        Assert.NotEmpty(await engines.FindSymbolsAsync(compiledWorkspace, "IService", cancellationToken));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            engines.FindSymbolsAsync(textWorkspace, "IService"));
+            engines.FindSymbolsAsync(textWorkspace, "IService", cancellationToken));
+    }
+
+    /// <summary>An MSBuild output locked by one owner cannot degrade another owner's semantic load.</summary>
+    [Fact]
+    public static async Task SemanticFixtures_BuildOutputLocksRemainLocalToOwner()
+    {
+        var copyStarted = Stopwatch.GetTimestamp();
+        using var firstFixture = new TestSemanticSolution();
+        using var secondFixture = new TestSemanticSolution();
+        TestContext.Current.TestOutputHelper?.WriteLine($"Two independent fixture copies: {Stopwatch.GetElapsedTime(copyStarted).TotalMilliseconds:F2} ms");
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        await using var firstEngine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        await firstEngine.LoadAsync(TestSemanticSolution.CreateLoadRequest(firstFixture.Root), cancellationToken);
+        await firstEngine.WaitForWarmAsync(cancellationToken);
+        Assert.Equal(SemanticConfidenceLevel.FullSemantic, firstEngine.Confidence);
+
+        var generatedConfiguration = Path.Combine(
+            firstFixture.Root,
+            "Contracts",
+            "obj",
+            "Debug",
+            "net10.0",
+            "Contracts.GeneratedMSBuildEditorConfig.editorconfig");
+        using var lockedOutput = new FileStream(generatedConfiguration, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        await using var secondEngine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
+        var secondLoad = await secondEngine.LoadAsync(TestSemanticSolution.CreateLoadRequest(secondFixture.Root), cancellationToken);
+        await secondEngine.WaitForWarmAsync(cancellationToken);
+        Assert.DoesNotContain(secondLoad.Diagnostics, diagnostic => diagnostic.StartsWith("Failure:", StringComparison.Ordinal));
+        Assert.Equal(SemanticConfidenceLevel.FullSemantic, secondEngine.Confidence);
+        Assert.NotEmpty(await secondEngine.FindSymbolsAsync("IService", cancellationToken));
     }
 
     /// <summary>Trusted-read discovery remains useful but rejects unsupported semantic references.</summary>
     [Fact]
     public static async Task SemanticEngine_TextOnly_EnforcesToolAvailabilityAndFallbackCarriage()
     {
-        var root = Path.Combine(
-            AppContext.BaseDirectory,
-            "fixtures",
-            "semantic",
-            "SmallDotNetSolution");
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
         var request = new SemanticLoadRequest(
@@ -2593,82 +2643,6 @@ public static class Milestone3Tests
         Assert.True(item.GetProperty("line").GetInt32() > 0);
         Assert.DoesNotContain("semanticConfidence", content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("targetFramework", content, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static class SmallSemanticSolutionFixture
-    {
-        private static readonly string[] _requiredFiles =
-        [
-            "SmallDotNetSolution.sln",
-            Path.Combine("App", "App.csproj"),
-            Path.Combine("App", "Program.cs"),
-            Path.Combine("Contracts", "Contracts.csproj"),
-            Path.Combine("Contracts", "GeneratedMarker.g.cs"),
-            Path.Combine("Contracts", "ModernSyntax.cs"),
-            Path.Combine("Contracts", "Services.cs"),
-            Path.Combine("Analyzers", "Threadsmith.SemanticFixtures.Roslyn59.dll"),
-            Path.Combine("Shared", "Linked.cs"),
-        ];
-
-        internal static string Root => Path.Combine(
-            AppContext.BaseDirectory,
-            "fixtures",
-            "semantic",
-            "SmallDotNetSolution");
-
-        internal static SemanticLoadRequest CreateLoadRequest()
-        {
-            return new SemanticLoadRequest(
-                SessionId.New(),
-                WorkspaceId.New(),
-                Root,
-                Path.Combine(Root, "SmallDotNetSolution.sln"),
-                RepositoryTrustLevel.TrustedBuild);
-        }
-
-        internal static string CopyToTemporaryRoot(string prefix)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
-            if (!string.Equals(prefix, Path.GetFileName(prefix), StringComparison.Ordinal)
-                || Path.IsPathRooted(prefix))
-            {
-                throw new ArgumentException("The fixture prefix must be one path segment.", nameof(prefix));
-            }
-
-            var fixtureId = Guid.NewGuid();
-            var temporaryParent = Path.GetFullPath(Path.GetTempPath());
-            var expectedName = $"{prefix}-{fixtureId:N}";
-            var destinationRoot = Path.GetFullPath(Path.Combine(temporaryParent, expectedName));
-            var destinationParent = Path.GetDirectoryName(destinationRoot);
-            var pathComparison = OperatingSystem.IsWindows()
-                ? StringComparison.OrdinalIgnoreCase
-                : StringComparison.Ordinal;
-            if (!string.Equals(destinationParent, Path.TrimEndingDirectorySeparator(temporaryParent), pathComparison)
-                || !string.Equals(Path.GetFileName(destinationRoot), expectedName, pathComparison))
-            {
-                throw new InvalidOperationException("The fixture root is not the exact owned temporary child.");
-            }
-
-            Directory.CreateDirectory(destinationRoot);
-            try
-            {
-                foreach (var relativePath in _requiredFiles)
-                {
-                    var destinationPath = Path.Combine(destinationRoot, relativePath);
-                    Directory.CreateDirectory(
-                        Path.GetDirectoryName(destinationPath)
-                            ?? throw new InvalidOperationException("Fixture destination has no parent."));
-                    File.Copy(Path.Combine(Root, relativePath), destinationPath);
-                }
-
-                return destinationRoot;
-            }
-            catch
-            {
-                Directory.Delete(destinationRoot, recursive: true);
-                throw;
-            }
-        }
     }
 
     private static string CreateMinimalProjectText()

@@ -396,13 +396,17 @@ public sealed class DeployedPromptLoaderTests
     [Fact]
     public async Task LoadAsync_CaseInsensitivePhysicalCollision_FailsSafely()
     {
-        if (OperatingSystem.IsWindows() || OperatingSystem.IsMacOS())
-        {
-            Assert.Skip("The host filesystem does not support distinct case-only names.");
-        }
-
         var definition = PromptAssetCatalog.Get(PromptFileNames.SystemSystemPrompt);
         using var catalog = TemporaryPromptCatalog.Create(definition);
+        var probePath = Path.Combine(catalog.PromptRoot, "case-probe");
+        await File.WriteAllTextAsync(probePath, "probe", TestContext.Current.CancellationToken);
+        var isCaseSensitive = !File.Exists(Path.Combine(catalog.PromptRoot, "CASE-PROBE"));
+        File.Delete(probePath);
+        if (!isCaseSensitive)
+        {
+            Assert.Skip("The owned fixture filesystem does not support distinct case-only names.");
+        }
+
         catalog.WriteText(definition.FileName.ToUpperInvariant(), "collision");
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>

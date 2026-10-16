@@ -4,6 +4,8 @@
 // redaction across persisted paths, and bundle size limits.
 namespace Threadsmith.PersistenceMcpHardening.Tests;
 
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
 using Threadsmith.Persistence;
@@ -123,7 +125,10 @@ public static class RedactionAuditTests
             var rawStore = new ArtifactStore(fixture.ConnectionString, dir.Path, new PassThroughSanitizer());
             await rawStore.InitializeAsync();
             var session = SessionId.New();
-            await rawStore.StoreAsync("token=sk-leaked-secret-1234567890", "processOutput", session, CancellationToken.None);
+            const string planted = "Useful output\ntoken=sk-leaked-secret-1234567890";
+            var artifact = await rawStore.StoreAsync(planted, "processOutput", session, CancellationToken.None);
+            Assert.Equal(planted, await rawStore.ReadAsync(artifact.ContentHash));
+            Assert.Equal(planted, await File.ReadAllTextAsync(Path.Combine(dir.Path, artifact.RelativePath), TestContext.Current.CancellationToken));
 
             var audit = new RedactionAudit(
                 store,
@@ -135,6 +140,8 @@ public static class RedactionAuditTests
 
             Assert.True(outcome.Findings >= 1);
             Assert.Equal(0, outcome.RepairedArtifacts);
+            Assert.Equal(planted, await rawStore.ReadAsync(artifact.ContentHash));
+            Assert.Equal(planted, await File.ReadAllTextAsync(Path.Combine(dir.Path, artifact.RelativePath), TestContext.Current.CancellationToken));
         }
         finally
         {
@@ -156,7 +163,10 @@ public static class RedactionAuditTests
             var rawStore = new ArtifactStore(fixture.ConnectionString, dir.Path, new PassThroughSanitizer());
             await rawStore.InitializeAsync();
             var session = SessionId.New();
-            await rawStore.StoreAsync("token=sk-leaked-secret-1234567890", "processOutput", session, CancellationToken.None);
+            const string planted = "Useful output\ntoken=sk-leaked-secret-1234567890";
+            var artifact = await rawStore.StoreAsync(planted, "processOutput", session, CancellationToken.None);
+            Assert.Equal(planted, await rawStore.ReadAsync(artifact.ContentHash));
+            Assert.Equal(planted, await File.ReadAllTextAsync(Path.Combine(dir.Path, artifact.RelativePath), TestContext.Current.CancellationToken));
 
             var audit = new RedactionAudit(
                 store,
@@ -168,6 +178,24 @@ public static class RedactionAuditTests
 
             Assert.True(outcome.Findings >= 1);
             Assert.Equal(1, outcome.RepairedArtifacts);
+            Assert.Null(await rawStore.ReadAsync(artifact.ContentHash));
+            var repairedMetadata = Assert.Single(await rawStore.ListAsync(session));
+            Assert.NotEqual(artifact.ContentHash, repairedMetadata.ContentHash);
+            Assert.Equal(artifact.Kind, repairedMetadata.Kind);
+            Assert.Equal(artifact.SessionId, repairedMetadata.SessionId);
+            Assert.False(File.Exists(Path.Combine(dir.Path, artifact.RelativePath)));
+            var repaired = await rawStore.ReadAsync(repairedMetadata.ContentHash);
+            Assert.Equal(new SecretOutputSanitizer().Sanitize(planted), repaired);
+            Assert.NotNull(repaired);
+            var repairedBytes = Encoding.UTF8.GetBytes(repaired);
+            Assert.Equal(Convert.ToHexStringLower(SHA256.HashData(repairedBytes)), repairedMetadata.ContentHash);
+            Assert.Equal(repairedBytes.Length, repairedMetadata.Length);
+            Assert.Equal(repaired, await File.ReadAllTextAsync(Path.Combine(dir.Path, repairedMetadata.RelativePath), TestContext.Current.CancellationToken));
+            Assert.Contains("Useful output", repaired, StringComparison.Ordinal);
+            Assert.DoesNotContain("sk-leaked-secret-1234567890", repaired, StringComparison.Ordinal);
+            var repeated = await audit.RunAsync();
+            Assert.Equal(0, repeated.Findings);
+            Assert.Equal(0, repeated.RepairedArtifacts);
         }
         finally
         {

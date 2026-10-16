@@ -18,13 +18,27 @@ public sealed class ExtensionRuntimeTests
     public async Task LoadAsync_loads_sample_extension_and_collects_capabilities()
     {
         var (host, sessionId) = await LoadSampleAsync();
-        _ = sessionId;
+        var events = Assert.IsType<RecordingEventStream>(host.Events);
         var generation = Assert.Single(host.Generations);
         Assert.Equal(ExtensionLifecycleState.Active, generation.State);
         Assert.Equal("threadsmith.sample.minimal-tool", generation.Descriptor.Id);
         Assert.Single(generation.Tools);
         Assert.Equal("sample_echo", generation.Tools[0].Definition.Id);
         Assert.Single(generation.ModelPreferenceContributors);
+        Assert.Collection(
+            events.Published,
+            item =>
+            {
+                var discovered = Assert.IsType<ExtensionDiscovered>(item);
+                Assert.Equal(sessionId, discovered.SessionId);
+                Assert.Equal(generation.ExtensionId, discovered.ExtensionId);
+            },
+            item =>
+            {
+                var activated = Assert.IsType<ExtensionActivated>(item);
+                Assert.Equal(sessionId, activated.SessionId);
+                Assert.Equal(generation.ExtensionId, activated.ExtensionId);
+            });
     }
 
     /// <summary>Loads two generations of the same extension and asserts they occupy independent collectible load contexts.</summary>
@@ -146,24 +160,6 @@ public sealed class ExtensionRuntimeTests
         lifecycle.TransitionTo(ExtensionLifecycleState.Activating);
         lifecycle.TransitionTo(ExtensionLifecycleState.Active);
         Assert.Equal(ExtensionLifecycleState.Active, lifecycle.State);
-    }
-
-    /// <summary>Asserts that loading publishes ExtensionDiscovered and ExtensionActivated events.</summary>
-    [Fact]
-    public async Task LoadAsync_publishes_discovered_and_activated_events()
-    {
-        var stagingRoot = NewStagingRoot();
-        var events = new RecordingEventStream();
-        var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        await host.LoadAsync(new ExtensionLoadRequest
-        {
-            ExtensionDirectory = ResolveSampleOutputDirectory(),
-            EffectiveTrust = RepositoryTrustLevel.TrustedRead,
-            SessionId = SessionId.New(),
-            ShadowStagingRoot = Path.Combine(stagingRoot, "sample"),
-        });
-        Assert.Contains(events.Published, e => e is ExtensionDiscovered);
-        Assert.Contains(events.Published, e => e is ExtensionActivated);
     }
 
     private static async Task<(ExtensionHost host, SessionId sessionId)> LoadSampleAsync()

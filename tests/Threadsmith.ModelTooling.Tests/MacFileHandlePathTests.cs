@@ -12,6 +12,7 @@ public sealed class MacFileHandlePathTests
     {
         if (!OperatingSystem.IsMacOS())
         {
+            Assert.Skip("Held-descriptor native path lookup is a macOS contract.");
             return;
         }
 

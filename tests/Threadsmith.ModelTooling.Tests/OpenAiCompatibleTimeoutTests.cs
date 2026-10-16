@@ -71,10 +71,13 @@ public static class OpenAiCompatibleTimeoutTests
     [Fact]
     public static async Task ProfileDeadline_DuringRetryBackoff_StopsFurtherAttempts()
     {
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var clock = new RetryClock();
         var attempts = 0;
-        using var client = new HttpClient(new RecordingHandler((_, _) =>
+        using var client = new HttpClient(new RecordingHandler((_, token) =>
         {
             attempts++;
+            Assert.False(token.IsCancellationRequested);
             throw new TaskCanceledException("Handler timeout.");
         }))
         { Timeout = Timeout.InfiniteTimeSpan };
@@ -83,14 +86,32 @@ public static class OpenAiCompatibleTimeoutTests
             Timeout = TimeSpan.FromMilliseconds(50),
             RetryPolicy = new ModelRetryPolicy { MaxAttempts = 3, Delay = TimeSpan.FromMinutes(1) },
         };
-        var provider = new OpenAiCompatibleModelProvider(client, profile);
+        var provider = new OpenAiCompatibleModelProvider(client, profile, timeProvider: clock);
+        var pending = provider.StreamAsync(Request(), caller.Token).ToListAsync(caller.Token).AsTask();
+        try
+        {
+            await Task.WhenAny(clock.BackoffEntered.Task, pending).WaitAsync(TestContext.Current.CancellationToken);
+            Assert.True(clock.BackoffEntered.Task.IsCompletedSuccessfully, "The request ended before entering retry backoff.");
+            Assert.Equal(1, attempts);
+            Assert.True(clock.DeadlineRegistered);
+            clock.Advance(TimeSpan.FromMilliseconds(49));
+            Assert.False(pending.IsCompleted);
 
-        var exception = await Assert.ThrowsAsync<ModelProviderTimeoutException>(async () =>
-            await provider.StreamAsync(Request(), TestContext.Current.CancellationToken)
-                .ToListAsync(TestContext.Current.CancellationToken));
+            clock.Advance(TimeSpan.FromMilliseconds(1));
 
-        Assert.Equal(1, attempts);
-        Assert.Contains("00:00:00.0500000", exception.Message, StringComparison.Ordinal);
+            Assert.False(caller.IsCancellationRequested);
+            var exception = await Assert.ThrowsAsync<ModelProviderTimeoutException>(
+                () => pending.WaitAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(1, attempts);
+            Assert.Contains("00:00:00.0500000", exception.Message, StringComparison.Ordinal);
+            Assert.IsAssignableFrom<OperationCanceledException>(exception.InnerException);
+        }
+        finally
+        {
+            await caller.CancelAsync();
+            // Cleanup has an independent backstop even when the runner cancellation already fired.
+            await Record.ExceptionAsync(() => pending.WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None));
+        }
     }
 
     /// <summary>A user cancellation before headers remains cancellation and cannot trigger retries.</summary>
@@ -322,6 +343,98 @@ public static class OpenAiCompatibleTimeoutTests
         {
             Content = new StringContent(text, Encoding.UTF8, "text/event-stream"),
         };
+    }
+
+    private sealed class RetryClock : TimeProvider
+    {
+        private readonly Lock _gate = new();
+        private readonly List<RetryTimer> _timers = [];
+        private long _ticks;
+
+        public TaskCompletionSource BackoffEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public bool DeadlineRegistered { get; private set; }
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            lock (_gate)
+            {
+                var timer = new RetryTimer(this, callback, state);
+                _timers.Add(timer);
+                timer.Change(dueTime, period);
+                DeadlineRegistered |= dueTime == TimeSpan.FromMilliseconds(50);
+                if (dueTime == TimeSpan.FromMinutes(1))
+                {
+                    BackoffEntered.TrySetResult();
+                }
+
+                return timer;
+            }
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            RetryTimer[] due;
+            lock (_gate)
+            {
+                _ticks += elapsed.Ticks;
+                due = [.. _timers.Where(timer => timer.Due <= _ticks)];
+                foreach (var timer in due)
+                {
+                    timer.Due = long.MaxValue;
+                }
+            }
+
+            foreach (var timer in due)
+            {
+                timer.Fire();
+            }
+        }
+
+        private sealed class RetryTimer : ITimer
+        {
+            private readonly RetryClock _clock;
+            private readonly TimerCallback _callback;
+            private readonly object? _state;
+
+            public RetryTimer(RetryClock clock, TimerCallback callback, object? state)
+            {
+                _clock = clock;
+                _callback = callback;
+                _state = state;
+            }
+
+            public long Due { get; set; }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                Assert.Equal(Timeout.InfiniteTimeSpan, period);
+                lock (_clock._gate)
+                {
+                    Due = dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : _clock._ticks + dueTime.Ticks;
+                    return true;
+                }
+            }
+
+            public void Fire()
+            {
+                _callback(_state);
+            }
+
+            public void Dispose()
+            {
+                lock (_clock._gate)
+                {
+                    _clock._timers.Remove(this);
+                }
+            }
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed class RecordingHandler : HttpMessageHandler

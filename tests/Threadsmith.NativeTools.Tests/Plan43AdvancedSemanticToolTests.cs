@@ -259,12 +259,12 @@ public sealed class Plan43AdvancedSemanticToolTests
 
         Assert.True(truncated.Traversal.NodeLimitReached);
         Assert.Empty(truncated.Edges);
-        Assert.All(truncated.Edges, edge =>
-        {
-            Assert.Contains(truncated.Nodes, node => node.Symbol.Id == edge.CallerSymbolId);
-            Assert.Contains(truncated.Nodes, node => node.Symbol.Id == edge.CalleeSymbolId);
-        });
         Assert.NotEmpty(incoming.Edges);
+        Assert.All(incoming.Edges, edge =>
+        {
+            Assert.Contains(incoming.Nodes, node => node.Symbol.Id == edge.CallerSymbolId);
+            Assert.Contains(incoming.Nodes, node => node.Symbol.Id == edge.CalleeSymbolId);
+        });
         Assert.All(incoming.Edges, edge => Assert.False(edge.ClosesCycle));
     }
 

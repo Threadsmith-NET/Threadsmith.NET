@@ -525,6 +525,9 @@ public static class MemoriesToolTests
             }
 
             Assert.Equal(denied || explicitList ? 0 : 1, memory.Receipts);
+            var eligibleSubmissions = model.Requests.Count(request => request.MemorySubmission is { Inclusions.Count: > 0 });
+            Assert.Equal(eligibleSubmissions, memory.InclusionCalls.Count);
+            Assert.All(memory.InclusionCalls, calledRun => Assert.Equal(run, calledRun));
             Assert.Equal(!denied && !explicitList, model.Requests[0].Messages.Any(message => message.SectionId == "repository-memory"));
             Assert.Equal(!denied && !remove && !explicitList, model.Requests[^1].Messages.Any(message => message.SectionId == "repository-memory"));
             Assert.Equal(!denied, model.Requests[0].Tools.Any(definition => definition.Name == "memories"));
@@ -700,6 +703,8 @@ public static class MemoriesToolTests
 
         public int Receipts => _runs.Count;
 
+        public List<RunId> InclusionCalls { get; } = [];
+
         public RepositoryMemoryOperationRequest? LastOperation { get; private set; }
 
         public List<string> Actions { get; } = [];
@@ -732,6 +737,7 @@ public static class MemoriesToolTests
 
         public Task RecordInclusionsAsync(string repositoryIdentity, RunId runId, IReadOnlyList<RepositoryMemoryInclusion> inclusions, CancellationToken cancellationToken = default)
         {
+            InclusionCalls.Add(runId);
             _runs.Add(runId);
             return FailAccounting ? Task.FromException(new IOException("simulated receipt failure")) : Task.CompletedTask;
         }
@@ -773,6 +779,8 @@ public static class MemoriesToolTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             Requests.Add(request);
+            request.SubmissionObserver?.Invoke();
+            request.SubmissionObserver?.Invoke();
             await Task.Yield();
             if (_verifyRemoval && Requests.Count <= 3)
             {

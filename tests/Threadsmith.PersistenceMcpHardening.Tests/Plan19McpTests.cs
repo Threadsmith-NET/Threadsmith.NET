@@ -4,9 +4,11 @@
 // (gap #6, §5.8), per-server secret scope (gap #6, §21.3), and resource/prompt policy gating (gap #6).
 namespace Threadsmith.PersistenceMcpHardening.Tests;
 
+using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Threadsmith.Core;
+using Threadsmith.Execution;
 using Threadsmith.Mcp;
 using Threadsmith.Telemetry;
 using Threadsmith.Tools;
@@ -63,10 +65,15 @@ public static class McpAdapterTests
             Description = "Echoes arguments",
             InputSchemaJson = "{}",
         });
-        transport.InvokeHandler = args => new McpTransportInvocation
+        var calls = 0;
+        transport.InvokeHandler = args =>
         {
-            Succeeded = true,
-            ResultJson = "{\"echo\":" + args + "}",
+            calls++;
+            return new McpTransportInvocation
+            {
+                Succeeded = true,
+                ResultJson = "{\"echo\":" + args + "}",
+            };
         };
 
         var secretStore = new StaticSecretStore();
@@ -91,13 +98,43 @@ public static class McpAdapterTests
         var tool = result.Tools[0];
         Assert.Equal("mcp_echo", tool.Definition.Id);
 
-        // The imported tool must execute through the host-owned pipeline's typed ExecuteAsync path.
-        var input = tool.DeserializeInput("{\"message\":\"hi\"}");
-        var envelope = await tool.ExecuteAsync(
-            input,
-            new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), NewContext()),
-            CancellationToken.None);
-        Assert.NotNull(envelope.Value);
+        var ct = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var observed = new List<IDomainEvent>();
+        await using var subscription = events.Subscribe((item, _) =>
+        {
+            observed.Add(item);
+            return Task.CompletedTask;
+        });
+        var registry = new ToolRegistry(result.Tools);
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(),
+            events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var request = new ToolInvocationRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = "mcp_echo",
+            ArgumentsJson = "{\"message\":\"hi\"}",
+            Context = NewContext() with { TrustLevel = RepositoryTrustLevel.TrustedBuild },
+        };
+        var invoked = await pipeline.InvokeAsync(request, ct);
+        Assert.True(invoked.Succeeded, invoked.Error);
+        Assert.Equal(1, calls);
+        using var echoed = JsonDocument.Parse(Assert.IsType<string>(invoked.ResultJson));
+        Assert.Equal("hi", echoed.RootElement.GetProperty("echo").GetProperty("message").GetString());
+        Assert.Single(observed.OfType<ToolInvocationStarted>());
+        Assert.True(Assert.Single(observed.OfType<ToolInvocationCompleted>()).Succeeded);
+
+        observed.Clear();
+        var denied = await pipeline.InvokeAsync(
+            request with
+        {
+            Context = request.Context with { DeniedToolIds = ["mcp_echo"] },
+        }, ct);
+        Assert.False(denied.Succeeded);
+        Assert.Equal(ToolErrorClassification.PolicyDenied, denied.ErrorClassification);
+        Assert.Equal(1, calls);
+        Assert.False(Assert.Single(observed.OfType<ToolInvocationCompleted>()).Succeeded);
     }
 
     /// <summary>An untrusted MCP connection profile is rejected before connection.</summary>

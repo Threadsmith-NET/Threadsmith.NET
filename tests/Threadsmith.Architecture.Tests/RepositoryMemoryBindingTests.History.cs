@@ -13,6 +13,33 @@ using Xunit;
 
 public static partial class RepositoryMemoryBindingTests
 {
+    /// <summary>Fixture commits remain reproducible despite configured signing and commit hooks.</summary>
+    [Fact]
+    public static async Task History_fixture_suppresses_signing_and_hooks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await BindingFixture.CreateAsync(false);
+        await HistoryGitAsync(fixture.InitialRoot, ct, "init");
+        var hooks = Directory.CreateDirectory(Path.Combine(fixture.InitialRoot, "fixture-hooks")).FullName;
+        var hook = Path.Combine(hooks, "pre-commit");
+        await File.WriteAllTextAsync(hook, "#!/bin/sh\nexit 1\n", ct);
+        if (!OperatingSystem.IsWindows())
+        {
+            File.SetUnixFileMode(hook, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        await HistoryGitAsync(fixture.InitialRoot, ct, "config", "core.hooksPath", hooks);
+        await HistoryGitAsync(fixture.InitialRoot, ct, "config", "commit.gpgsign", "true");
+        await HistoryGitAsync(fixture.InitialRoot, ct, "config", "gpg.program", "threadsmith-nonexistent-signing-program");
+        await File.WriteAllTextAsync(Path.Combine(fixture.InitialRoot, "history.txt"), "fixture history", ct);
+        await HistoryGitAsync(fixture.InitialRoot, ct, "add", "history.txt");
+
+        await HistoryGitAsync(fixture.InitialRoot, ct, "commit", "-m", "isolated fixture");
+
+        Assert.Equal("isolated fixture", (await HistoryGitAsync(fixture.InitialRoot, ct, "log", "-1", "--format=%s")).Trim());
+        Assert.Equal("fixture history", await HistoryGitAsync(fixture.InitialRoot, ct, "show", "HEAD:history.txt"));
+    }
+
     /// <summary>Host paging crosses normal tool events and preserves prior collection on mid-history failure.</summary>
     [Theory]
     [InlineData(false, false)]
@@ -339,15 +366,68 @@ public static partial class RepositoryMemoryBindingTests
         {
             StartInfo = new ProcessStartInfo("git") { WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true },
         };
-        foreach (var argument in new[] { "-c", "user.name=History Test", "-c", "user.email=history@example.invalid" }.Concat(arguments))
+        // Fixture history must not inherit signing, hooks, templates or Git directory overrides.
+        foreach (var key in process.StartInfo.Environment.Keys.Where(key => key.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase)).ToArray())
+        {
+            process.StartInfo.Environment.Remove(key);
+        }
+
+        process.StartInfo.Environment["GIT_CONFIG_NOSYSTEM"] = "1";
+        process.StartInfo.Environment["GIT_CONFIG_GLOBAL"] = OperatingSystem.IsWindows() ? "NUL" : "/dev/null";
+        process.StartInfo.Environment["GIT_TERMINAL_PROMPT"] = "0";
+        foreach (var argument in new[]
+        {
+            "-c", "user.name=History Test", "-c", "user.email=history@example.invalid",
+            "-c", "commit.gpgsign=false", "-c", "core.autocrlf=false",
+            "-c", "core.hooksPath=" + Path.Combine(root, ".threadsmith", "no-hooks"),
+            "-c", "init.templateDir=",
+        }.Concat(arguments))
         {
             process.StartInfo.ArgumentList.Add(argument);
         }
 
         process.Start();
-        var output = process.StandardOutput.ReadToEndAsync(ct);
-        var error = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
+        await using var registration = ct.Register(() =>
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between the cancellation check and termination.
+            }
+        });
+        var output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var error = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        try
+        {
+            await process.WaitForExitAsync(ct);
+            await Task.WhenAll(output, error).WaitAsync(ct);
+        }
+        catch
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited while termination was being requested.
+            }
+
+            // Join the terminated process and drain its pipes before fixture disposal.
+            await Task.WhenAll(process.WaitForExitAsync(CancellationToken.None), output, error)
+                .WaitAsync(TimeSpan.FromSeconds(10), CancellationToken.None);
+            throw;
+        }
+
         Assert.True(process.ExitCode == 0, await error);
         return await output;
     }

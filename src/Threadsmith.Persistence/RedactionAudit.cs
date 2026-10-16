@@ -131,6 +131,12 @@ public sealed class RedactionAudit
                     var sanitized = _sanitizer.Sanitize(content);
                     if (!string.Equals(sanitized, content, StringComparison.Ordinal))
                     {
+                        await _artifactStore.StoreAsync(sanitized, artifact.Kind, artifact.SessionId, cancellationToken);
+                        if (!await _artifactStore.DeleteAsync(artifact.ContentHash, cancellationToken))
+                        {
+                            continue;
+                        }
+
                         repaired++;
                         _logger.LogWarning(
                             "Redaction audit repaired artifact {Hash} ({Kind}).",
@@ -158,12 +164,9 @@ public sealed class RedactionAudit
         };
     }
 
-    private static bool ContainsUnredactedSecret(string payload)
+    private bool ContainsUnredactedSecret(string payload)
     {
         // Re-sanitize and compare: if the sanitizer changes the payload, the original contained a secret.
-        return payload.Contains("sk-", StringComparison.Ordinal)
-            || payload.Contains("api_key=", StringComparison.OrdinalIgnoreCase)
-            || payload.Contains("password=", StringComparison.OrdinalIgnoreCase)
-            || payload.Contains("token=", StringComparison.OrdinalIgnoreCase);
+        return !string.Equals(payload, _sanitizer.Sanitize(payload), StringComparison.Ordinal);
     }
 }

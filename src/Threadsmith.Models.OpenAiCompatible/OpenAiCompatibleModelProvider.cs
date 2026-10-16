@@ -26,6 +26,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     private readonly ModelProfile _profile;
     private readonly bool _promptCacheKeyEnabled;
     private readonly OpenAiReasoningCompatibilityConfiguration? _reasoningCompatibility;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>Initializes a new instance of the <see cref="OpenAiCompatibleModelProvider"/> class.</summary>
     /// <remarks>The API key is resolved by the composition root and is never persisted by this type.</remarks>
@@ -36,7 +37,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         IReadOnlyDictionary<string, string>? headers = null,
         OpenAiReasoningCompatibilityConfiguration? reasoningCompatibility = null,
         int? maximumStreamedCharacters = null,
-        bool promptCacheKeyEnabled = false)
+        bool promptCacheKeyEnabled = false,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(profile);
@@ -56,6 +58,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         _headers = headers ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _reasoningCompatibility = reasoningCompatibility;
         _promptCacheKeyEnabled = promptCacheKeyEnabled;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <inheritdoc />
@@ -109,11 +112,12 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     {
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
-        using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        if (_profile.Timeout > TimeSpan.Zero)
-        {
-            requestCancellation.CancelAfter(_profile.Timeout);
-        }
+        using var deadlineCancellation = _profile.Timeout > TimeSpan.Zero
+            ? new CancellationTokenSource(_profile.Timeout, _timeProvider)
+            : null;
+        using var requestCancellation = deadlineCancellation is null
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
+            : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineCancellation.Token);
 
         HttpResponseMessage? response = null;
         for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
@@ -904,7 +908,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
     {
         try
         {
-            await Task.Delay(_profile.RetryPolicy.Delay, requestCancellationToken);
+            await Task.Delay(_profile.RetryPolicy.Delay, _timeProvider, requestCancellationToken);
         }
         catch (OperationCanceledException exception) when (!callerCancellationToken.IsCancellationRequested)
         {

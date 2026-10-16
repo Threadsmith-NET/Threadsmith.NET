@@ -65,112 +65,131 @@ public sealed partial class Plan91DelegationToolTests
     [Fact]
     public async Task IntelligenceInvestigators_AreNarrowAndCannotSupplyParentReceipts()
     {
-        var memory = new MetadataTool("memories", ToolCategory.Workflow, ToolSideEffect.ReadOnly);
-        var registry = new ToolRegistry([
-            new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
-            memory,
-            new MetadataTool("run_process", ToolCategory.ProcessExecution, ToolSideEffect.ReadOnly),
-            new MetadataTool("delegate_agents", ToolCategory.Workflow, ToolSideEffect.ReadOnly, subagentAvailable: false),
-        ]);
-        var snapshots = new ConversationToolSnapshotStore();
-        var workspace = WorkspaceId.New();
-        var context = CreateExecutionContext(workspace, ConversationSensitivity.None, registry, snapshots);
-        await using var intelligence = new InvestigatorIntelligenceRun();
-        context = context with { Invocation = context.Invocation with { IntelligenceRun = intelligence } };
-        var factory = CreateIntelligencePlanFactory(workspace, snapshots);
-        var input = new DelegateAgentsInput { Agents = [InvestigationRequest(), InvestigationRequest()] };
-        var plan = factory.Create(input, context);
-        Assert.Equal(2, plan.Assignments.Count);
-        var assignment = plan.Assignments[0];
-        Assert.False(assignment.Policy.IncludeParentEvidence);
-        Assert.Equal(["read_file"], assignment.Policy.AllowedToolIds);
-        var child = AgentToolPolicy.Scope(context.Invocation, plan, assignment, context.Invocation.RepositoryPath) with { RequestedBy = "model" };
-        Assert.Same(intelligence, child.IntelligenceRun);
-        Assert.Null(child.IntelligenceSourceObserver);
-        Assert.Same(intelligence, context.Invocation.IntelligenceSourceObserver);
+        var ct = TestContext.Current.CancellationToken;
+        var sourceDirectory = Directory.CreateTempSubdirectory("threadsmith-investigator-").FullName;
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(sourceDirectory, "InvestigationSource.cs"), "// investigator fixture", ct);
+            var memory = new MetadataTool("memories", ToolCategory.Workflow, ToolSideEffect.ReadOnly);
+            var registry = new ToolRegistry([
+                new ReadFileTool(TestPromptLoader.Instance, new SecretOutputSanitizer()),
+                memory,
+                new MetadataTool("run_process", ToolCategory.ProcessExecution, ToolSideEffect.ReadOnly),
+                new MetadataTool("delegate_agents", ToolCategory.Workflow, ToolSideEffect.ReadOnly, subagentAvailable: false),
+            ]);
+            var snapshots = new ConversationToolSnapshotStore();
+            var workspace = WorkspaceId.New();
+            var context = CreateExecutionContext(workspace, ConversationSensitivity.None, registry, snapshots);
+            await using var intelligence = new InvestigatorIntelligenceRun();
+            context = context with { Invocation = context.Invocation with { IntelligenceRun = intelligence } };
+            var factory = CreateIntelligencePlanFactory(workspace, snapshots);
+            var input = new DelegateAgentsInput { Agents = [InvestigationRequest(), InvestigationRequest()] };
+            var plan = factory.Create(input, context);
+            Assert.Equal(2, plan.Assignments.Count);
+            var assignment = plan.Assignments[0];
+            Assert.False(assignment.Policy.IncludeParentEvidence);
+            Assert.Equal(["read_file"], assignment.Policy.AllowedToolIds);
+            var child = AgentToolPolicy.Scope(context.Invocation, plan, assignment, context.Invocation.RepositoryPath) with { RequestedBy = "model" };
+            Assert.Same(intelligence, child.IntelligenceRun);
+            Assert.Null(child.IntelligenceSourceObserver);
+            Assert.Same(intelligence, context.Invocation.IntelligenceSourceObserver);
 
-        await using var events = new DomainEventStream();
-        var pipeline = new ToolInvocationPipeline(
-            registry,
-            new DefaultPolicyEngine(),
-            new DenyApprovalPolicy(),
-            events,
-            new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
-        var request = new ToolInvocationRequest
-        {
-            SessionId = context.SessionId,
-            RunId = assignment.ChildRunId,
-            ToolId = "read_file",
-            ArgumentsJson = "{\"path\":\"TestPromptLoader.cs\",\"startLine\":1,\"maximumLines\":5}",
-            Context = child,
-            Phase = RunPhase.EvidenceCollection,
-        };
-        // Read a real fixture source using the ordinary tool path, in the test project's directory.
-        var sourceDirectory = Path.GetDirectoryName(FindTestSource())!;
-        request = request with { Context = child with { RepositoryPath = sourceDirectory } };
-        var childRead = await pipeline.InvokeAsync(request);
-        Assert.True(childRead.Succeeded, childRead.Error);
-        Assert.Equal(0, intelligence.SourceObservations);
-        var parentRead = await pipeline.InvokeAsync(request with
-        {
-            RunId = context.RunId,
-            Context = context.Invocation with { RepositoryPath = sourceDirectory },
-        });
-        Assert.True(parentRead.Succeeded, parentRead.Error);
-        Assert.Equal(1, intelligence.SourceObservations);
-        var deniedMemory = await pipeline.InvokeAsync(request with
-        {
-            ToolId = "memories",
-            ArgumentsJson = "{}",
-            Context = child with { AllowedToolIds = [] },
-        });
-        Assert.False(deniedMemory.Succeeded);
-        Assert.Equal(0, memory.Executions);
+            await using var events = new DomainEventStream();
+            var pipeline = new ToolInvocationPipeline(
+                registry,
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                new SecretOutputSanitizer(),
+                NullLogger<ToolInvocationPipeline>.Instance);
+            var request = new ToolInvocationRequest
+            {
+                SessionId = context.SessionId,
+                RunId = assignment.ChildRunId,
+                ToolId = "read_file",
+                ArgumentsJson = "{\"path\":\"InvestigationSource.cs\",\"startLine\":1,\"maximumLines\":5}",
+                Context = child,
+                Phase = RunPhase.EvidenceCollection,
+            };
+            // Read independently owned source through the ordinary tool pipeline.
+            request = request with { Context = child with { RepositoryPath = sourceDirectory } };
+            var childRead = await pipeline.InvokeAsync(request, ct);
+            Assert.True(childRead.Succeeded, childRead.Error);
+            Assert.Contains("investigator fixture", childRead.ResultJson, StringComparison.Ordinal);
+            Assert.Equal(0, intelligence.SourceObservations);
+            var parentRead = await pipeline.InvokeAsync(
+                request with
+                {
+                    RunId = context.RunId,
+                    Context = context.Invocation with { RepositoryPath = sourceDirectory },
+                },
+                ct);
+            Assert.True(parentRead.Succeeded, parentRead.Error);
+            Assert.Contains("investigator fixture", parentRead.ResultJson, StringComparison.Ordinal);
+            Assert.Equal(1, intelligence.SourceObservations);
+            var deniedMemory = await pipeline.InvokeAsync(
+                request with
+                {
+                    ToolId = "memories",
+                    ArgumentsJson = "{}",
+                    Context = child with { AllowedToolIds = [] },
+                },
+                ct);
+            Assert.False(deniedMemory.Succeeded);
+            Assert.Equal(0, memory.Executions);
 
-        var evidence = new EvidenceStore(events, new SecretOutputSanitizer());
-        var evidenceId = EvidenceId.New();
-        await evidence.AddAsync(new Evidence
-        {
-            EvidenceId = evidenceId,
-            SessionId = context.SessionId,
-            RunId = assignment.ChildRunId,
-            Kind = EvidenceKind.ToolResult,
-            Content = "Previously read implementation details",
-            Provenance = new EvidenceProvenance { Source = "read_file" },
-            CollectedAt = DateTimeOffset.UtcNow,
-        });
-        var recoveryTool = new ChildAgentEvidenceTool(
-            evidence,
-            context.SessionId,
-            assignment.ChildRunId,
-            new HashSet<EvidenceId> { evidenceId },
-            TestPromptLoader.Instance);
-        var recoveryPipeline = new ToolInvocationPipeline(
-            new ToolRegistry([recoveryTool]),
-            new DefaultPolicyEngine(),
-            new DenyApprovalPolicy(),
-            events,
-            new SecretOutputSanitizer(),
-            NullLogger<ToolInvocationPipeline>.Instance);
-        var recovery = request with
-        {
-            ToolId = ChildAgentEvidenceTool.ToolId,
-            ArgumentsJson = System.Text.Json.JsonSerializer.Serialize(new { evidenceId = evidenceId.Value }),
-            Context = child with { AllowedToolIds = [ChildAgentEvidenceTool.ToolId] },
-        };
-        var recovered = await recoveryPipeline.InvokeAsync(recovery);
-        Assert.True(recovered.Succeeded, recovered.Error);
-        Assert.Contains("Previously read implementation details", recovered.ResultJson, StringComparison.Ordinal);
-        Assert.False((await recoveryPipeline.InvokeAsync(recovery with { RunId = RunId.New() })).Succeeded);
-        Assert.False((await recoveryPipeline.InvokeAsync(recovery with
-        {
-            ArgumentsJson = System.Text.Json.JsonSerializer.Serialize(new { evidenceId = Guid.NewGuid() }),
-        })).Succeeded);
+            var evidence = new EvidenceStore(events, new SecretOutputSanitizer());
+            var evidenceId = EvidenceId.New();
+            await evidence.AddAsync(
+                new Evidence
+                {
+                    EvidenceId = evidenceId,
+                    SessionId = context.SessionId,
+                    RunId = assignment.ChildRunId,
+                    Kind = EvidenceKind.ToolResult,
+                    Content = "Previously read implementation details",
+                    Provenance = new EvidenceProvenance { Source = "read_file" },
+                    CollectedAt = DateTimeOffset.UtcNow,
+                },
+                ct);
+            var recoveryTool = new ChildAgentEvidenceTool(
+                evidence,
+                context.SessionId,
+                assignment.ChildRunId,
+                new HashSet<EvidenceId> { evidenceId },
+                TestPromptLoader.Instance);
+            var recoveryPipeline = new ToolInvocationPipeline(
+                new ToolRegistry([recoveryTool]),
+                new DefaultPolicyEngine(),
+                new DenyApprovalPolicy(),
+                events,
+                new SecretOutputSanitizer(),
+                NullLogger<ToolInvocationPipeline>.Instance);
+            var recovery = request with
+            {
+                ToolId = ChildAgentEvidenceTool.ToolId,
+                ArgumentsJson = System.Text.Json.JsonSerializer.Serialize(new { evidenceId = evidenceId.Value }),
+                Context = child with { AllowedToolIds = [ChildAgentEvidenceTool.ToolId] },
+            };
+            var recovered = await recoveryPipeline.InvokeAsync(recovery, ct);
+            Assert.True(recovered.Succeeded, recovered.Error);
+            Assert.Contains("Previously read implementation details", recovered.ResultJson, StringComparison.Ordinal);
+            Assert.False((await recoveryPipeline.InvokeAsync(recovery with { RunId = RunId.New() }, ct)).Succeeded);
+            Assert.False((await recoveryPipeline.InvokeAsync(
+                recovery with
+                {
+                    ArgumentsJson = System.Text.Json.JsonSerializer.Serialize(new { evidenceId = Guid.NewGuid() }),
+                },
+                ct)).Succeeded);
 
-        Assert.Throws<ArgumentException>(() => factory.Create(input with { Agents = [InvestigationRequest(), InvestigationRequest(), InvestigationRequest()] }, context));
-        Assert.Throws<ArgumentException>(() => factory.Create(input with { Agents = [InvestigationRequest() with { ToolAccess = DelegateAgentToolAccess.Inherit }] }, context));
-        Assert.Throws<ArgumentException>(() => factory.Create(input with { Agents = [InvestigationRequest() with { Context = new string('x', 8193) }] }, context));
+            Assert.Throws<ArgumentException>(() => factory.Create(input with { Agents = [InvestigationRequest(), InvestigationRequest(), InvestigationRequest()] }, context));
+            Assert.Throws<ArgumentException>(() => factory.Create(input with { Agents = [InvestigationRequest() with { ToolAccess = DelegateAgentToolAccess.Inherit }] }, context));
+            Assert.Throws<ArgumentException>(() => factory.Create(input with { Agents = [InvestigationRequest() with { Context = new string('x', 8193) }] }, context));
+        }
+        finally
+        {
+            Directory.Delete(sourceDirectory, recursive: true);
+        }
     }
 
     /// <summary>Read-only investigation does not capture or retain unrelated repository contents.</summary>
@@ -286,9 +305,6 @@ public sealed partial class Plan91DelegationToolTests
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
-
-    private static string FindTestSource([System.Runtime.CompilerServices.CallerFilePath] string source = "") =>
-        Path.Combine(Path.GetDirectoryName(source)!, "TestPromptLoader.cs");
 
     private static DelegateAgentRequest InvestigationRequest() => new()
     {

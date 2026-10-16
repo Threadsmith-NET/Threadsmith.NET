@@ -91,7 +91,9 @@ public sealed partial class SessionConversationTests
         var count = memory.Requests.Count;
         var next = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Explain another topic"), ct);
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(next), ct));
-        Assert.All(memory.Requests.Skip(count), request =>
+        var subsequent = memory.Requests.Skip(count).ToArray();
+        Assert.NotEmpty(subsequent);
+        Assert.All(subsequent, request =>
         {
             Assert.Empty(request.Concepts);
             Assert.Empty(request.RetainedMemories);

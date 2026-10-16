@@ -190,6 +190,7 @@ public static class TuiMarkdownRenderingTests
 
         var visible = string.Concat(TuiMarkdownLayout.Format(new MarkdownDocument([table]), 20).Select(segment => segment.Text));
 
+        Assert.Equal(50, visible.Count(character => character == 'x'));
         Assert.All(
             visible.Split('\n', StringSplitOptions.RemoveEmptyEntries),
             line => Assert.True(line.Length <= 20, $"Table line exceeded the layout width: '{line}'."));

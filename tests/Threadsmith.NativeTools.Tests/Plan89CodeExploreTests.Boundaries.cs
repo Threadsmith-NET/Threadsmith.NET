@@ -39,7 +39,9 @@ public sealed partial class Plan89CodeExploreTests
         var result = (await fixture.Tool.ExecuteAsync(request, fixture.Context, TestContext.Current.CancellationToken)).Value;
         var large = Assert.Single(result.FileSections, section => section.FilePath == "Large.cs");
         Assert.Equal(CodeExploreSourceCompleteness.Partial, large.Source.Completeness);
-        Assert.All(result.Allocation?.Files ?? [], file => Assert.True(file.SpentCharacters <= 1000));
+        Assert.NotNull(result.Allocation);
+        Assert.NotEmpty(result.Allocation.Files);
+        Assert.All(result.Allocation.Files, file => Assert.True(file.SpentCharacters <= 1000));
         Assert.Contains(result.ContinuationTargets, target => target.FilePath == "Large.cs" && target.StartLine == large.Source.Range.EndLine + 1);
     }
 

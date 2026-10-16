@@ -222,6 +222,8 @@ public static partial class Milestone1Tests
             var polymorphic = JsonSerializer.Deserialize<IDomainEvent>(polymorphicJson);
             Assert.NotNull(polymorphic);
             Assert.Equal(expected.GetType(), polymorphic.GetType());
+            Assert.Equivalent(expected, polymorphic, strict: true);
+            Assert.Equal(polymorphicJson, JsonSerializer.Serialize<IDomainEvent>(polymorphic));
             Assert.Equal(1, polymorphic.SchemaVersion);
 
             var eventName = DomainEventJson.GetDiscriminator(expected);
@@ -230,6 +232,8 @@ public static partial class Milestone1Tests
                 expected.SchemaVersion,
                 DomainEventJson.Serialize(expected));
             Assert.Equal(expected.GetType(), durable.GetType());
+            Assert.Equivalent(expected, durable, strict: true);
+            Assert.Equal(DomainEventJson.Serialize(expected), DomainEventJson.Serialize(durable));
         }
 
         var declaredEventTypes = typeof(DomainEvent).Assembly
@@ -4560,6 +4564,13 @@ public static partial class Milestone1Tests
                 expected.Select(item => item.GetType()).Append(typeof(SessionCreated)),
                 actual.Select(item => item.GetType()));
             Assert.All(actual.Take(expected.Count), item => Assert.Equal(1, item.SchemaVersion));
+            for (var index = 0; index < expected.Count; index++)
+            {
+                Assert.Equivalent(expected[index], actual[index], strict: true);
+                Assert.Equal(DomainEventJson.Serialize(expected[index]), DomainEventJson.Serialize(actual[index]));
+            }
+
+            Assert.Equivalent(previousSchema, actual[^1], strict: true);
             Assert.Equal(0, actual[^1].SchemaVersion);
         }
         finally

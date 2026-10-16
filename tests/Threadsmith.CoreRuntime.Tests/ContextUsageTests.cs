@@ -192,7 +192,25 @@ public static class ContextUsageTests
     [InlineData(20, 6)]
     public static void NativeModalHandlesInventoryResizeAndSafeLabels(int width, int height)
     {
-        var text = RenderInventory(width, height, messageCount: 16, toolCount: 4);
+        var (initial, text) = RenderInventory(width, height, messageCount: 16, toolCount: 4);
+
+        Assert.DoesNotContain('\u001b', initial);
+        if (width < 40 || height < 12)
+        {
+            Assert.True(string.IsNullOrWhiteSpace(initial));
+        }
+        else
+        {
+            Assert.Contains("Context usage", initial, StringComparison.Ordinal);
+            if (height == 12)
+            {
+                Assert.Contains("Enlarge terminal", initial, StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.Contains(initial, character => character is >= '\u2580' and <= '\u258f');
+            }
+        }
 
         Assert.Contains("Categories", text, StringComparison.Ordinal);
         Assert.Contains("Estimated", text, StringComparison.Ordinal);
@@ -358,7 +376,7 @@ public static class ContextUsageTests
         };
     }
 
-    private static string RenderInventory(
+    private static (string Initial, string Resized) RenderInventory(
         int width,
         int height,
         int messageCount,
@@ -387,12 +405,13 @@ public static class ContextUsageTests
         var modal = new ContextUsageModal(snapshot, _ => CellStyle.Default, () => { }, () => { });
         var buffer = new CellBuffer(width, height);
         modal.Render(new BufferSurface(buffer));
+        var initial = Read(buffer);
         modal.HandleKey(new KeyEvent(KeyCode.End, 0, KeyModifiers.None));
         modal.Render(new BufferSurface(buffer));
         modal.HandleKey(new KeyEvent(KeyCode.Tab, 0, KeyModifiers.None));
         buffer.Resize(160, 50);
         modal.Render(new BufferSurface(buffer));
-        return Read(buffer);
+        return (initial, Read(buffer));
     }
 
     private static string Read(CellBuffer buffer)

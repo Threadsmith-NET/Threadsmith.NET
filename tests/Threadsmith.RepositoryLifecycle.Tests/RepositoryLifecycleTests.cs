@@ -143,6 +143,7 @@ public static class RepositoryLifecycleTests
     {
         if (!OperatingSystem.IsWindows())
         {
+            Assert.Skip("Reserved device-name entries are a Windows contract.");
             return;
         }
 

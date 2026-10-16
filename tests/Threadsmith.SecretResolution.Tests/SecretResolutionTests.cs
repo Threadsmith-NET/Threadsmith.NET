@@ -238,10 +238,7 @@ public sealed class SecretResolutionTests
             outsidePath,
             $"{{\"secrets\":{{\"tests\":{{\"{fixture.Id}\":\"outside-secret\"}}}}}}",
             new UTF8Encoding(false));
-        if (!TryCreateFileSymbolicLink(probePath, outsidePath))
-        {
-            return;
-        }
+        CreateFileSymbolicLinkOrSkip(probePath, outsidePath);
 
         File.Delete(probePath);
         var provider = new ReplacingFileSecretProvider(storePath, outsidePath);
@@ -259,6 +256,7 @@ public sealed class SecretResolutionTests
     {
         if (OperatingSystem.IsWindows())
         {
+            Assert.Skip("This contract requires Unix filesystem semantics.");
             return;
         }
 
@@ -305,6 +303,7 @@ public sealed class SecretResolutionTests
     {
         if (!OperatingSystem.IsWindows())
         {
+            Assert.Skip("This contract requires Windows access-control semantics.");
             return;
         }
 
@@ -329,6 +328,7 @@ public sealed class SecretResolutionTests
     {
         if (!OperatingSystem.IsWindows())
         {
+            Assert.Skip("This contract requires Windows access-control semantics.");
             return;
         }
 
@@ -351,6 +351,7 @@ public sealed class SecretResolutionTests
     {
         if (OperatingSystem.IsWindows())
         {
+            Assert.Skip("This contract requires Unix filesystem semantics.");
             return;
         }
 
@@ -469,6 +470,7 @@ public sealed class SecretResolutionTests
     {
         if (OperatingSystem.IsWindows())
         {
+            Assert.Skip("This contract requires Unix filesystem semantics.");
             return;
         }
 
@@ -502,16 +504,17 @@ public sealed class SecretResolutionTests
             () => resolver.ResolveAsync(request, cancellation.Token));
     }
 
-    private static bool TryCreateFileSymbolicLink(string linkPath, string targetPath)
+    private static void CreateFileSymbolicLinkOrSkip(string linkPath, string targetPath)
     {
         try
         {
             File.CreateSymbolicLink(linkPath, targetPath);
-            return true;
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        catch (Exception exception) when (OperatingSystem.IsWindows()
+            && (exception is PlatformNotSupportedException
+                || (exception.HResult & 0xffff) is 1 or 50 or 1314))
         {
-            return false;
+            Assert.Skip($"Windows symbolic-link capability is unavailable: {exception.GetType().Name} (0x{exception.HResult:X8}).");
         }
     }
 

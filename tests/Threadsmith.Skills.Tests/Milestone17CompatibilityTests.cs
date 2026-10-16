@@ -115,9 +115,11 @@ public sealed class Milestone17CompatibilityTests
         {
             _ = Directory.CreateSymbolicLink(linkPath, external.Path);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (OperatingSystem.IsWindows()
+            && (exception is PlatformNotSupportedException
+                || (exception.HResult & 0xffff) is 1 or 50 or 1314))
         {
-            return;
+            Assert.Skip($"Windows symbolic-link capability is unavailable: {exception.GetType().Name} (0x{exception.HResult:X8}).");
         }
 
         var catalog = CreateClaudeCatalog(directory.Path);
@@ -141,9 +143,11 @@ public sealed class Milestone17CompatibilityTests
         {
             _ = File.CreateSymbolicLink(Path.Combine(skillRoot, "reference.txt"), externalPath);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (OperatingSystem.IsWindows()
+            && (exception is PlatformNotSupportedException
+                || (exception.HResult & 0xffff) is 1 or 50 or 1314))
         {
-            return;
+            Assert.Skip($"Windows symbolic-link capability is unavailable: {exception.GetType().Name} (0x{exception.HResult:X8}).");
         }
 
         var catalog = CreateClaudeCatalog(directory.Path);
@@ -370,9 +374,11 @@ public sealed class Milestone17CompatibilityTests
         {
             _ = Directory.CreateSymbolicLink(Path.Combine(repository.Path, ".threadsmith"), external.Path);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (OperatingSystem.IsWindows()
+            && (exception is PlatformNotSupportedException
+                || (exception.HResult & 0xffff) is 1 or 50 or 1314))
         {
-            return;
+            Assert.Skip($"Windows symbolic-link capability is unavailable: {exception.GetType().Name} (0x{exception.HResult:X8}).");
         }
 
         ModelProfileId firstId = new(Guid.Parse("11111111-1111-1111-1111-111111111111"));

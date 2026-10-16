@@ -773,6 +773,7 @@ public sealed class McpOAuthFlowTests
     {
         if (OperatingSystem.IsWindows())
         {
+            Assert.Skip("Unix permission bits are unavailable on Windows.");
             return;
         }
 

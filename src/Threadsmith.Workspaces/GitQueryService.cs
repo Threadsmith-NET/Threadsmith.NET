@@ -416,13 +416,30 @@ public sealed partial class GitQueryService : IGitQueryService
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        if (!topLevel.Equals(root, comparison))
+
+        // Git reports the physical worktree root (for example /private/var on macOS).
+        // Compare physical identities without replacing the caller's logical execution root.
+        if (!ResolveDirectoryIdentity(topLevel).Equals(ResolveDirectoryIdentity(root), comparison))
         {
             throw new UnauthorizedAccessException(
                 "The opened directory must be the root of its Git worktree.");
         }
 
         return root;
+    }
+
+    private static string ResolveDirectoryIdentity(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var resolved = Path.GetPathRoot(fullPath)
+            ?? throw new ArgumentException("Repository directory must have a filesystem root.", nameof(path));
+        foreach (var segment in fullPath[resolved.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var directory = new DirectoryInfo(Path.Combine(resolved, segment));
+            resolved = directory.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? directory.FullName;
+        }
+
+        return Path.TrimEndingDirectorySeparator(resolved);
     }
 
     private static string? ValidatePath(string repositoryRoot, string? path)

@@ -3538,7 +3538,7 @@ public sealed partial class InteractionCoordinator
                     : string.Empty)
                 + string.Concat(inspection.ConversationItems.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} {item.Kind} {item.Id}: {item.Rationale}\n"))
-                + string.Concat(inspection.RepositoryMemoryItems.Select(ContextUsageFormatter.FormatMemoryContext))
+                + ContextUsageFormatter.FormatMemoryContext(inspection.RepositoryMemoryItems)
                 + string.Concat(inspection.Reductions.Select(reduction => $"  reduced: {reduction}\n"));
             await _surface.WriteAsync(output, PresentationTextRole.Status, cancellationToken);
             return;

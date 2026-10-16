@@ -892,7 +892,7 @@ public class InteractionPresenter
                 + string.Concat(state.ContextInspection.Evidence.Select(item =>
                         $"  {(item.Included ? "included" : "omitted")} "
                         + $"{item.Kind}: {item.Rationale}\n"))
-                + string.Concat(state.ContextInspection.RepositoryMemoryItems.Select(ContextUsageFormatter.FormatMemoryContext))
+                + ContextUsageFormatter.FormatMemoryContext(state.ContextInspection.RepositoryMemoryItems)
                 + string.Concat(state.ContextInspection.PromptAssets.Select(asset =>
                         $"  prompt {asset.Position}: {asset.Id}@{asset.Version}\n"))
                 + string.Concat(state.ContextInspection.ModelRationale.Select(reason =>

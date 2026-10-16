@@ -113,7 +113,7 @@ internal sealed class ConversationTranscript
                 _lastVisibleWasLifecycleBlock = false;
                 return true;
             case MemoriesIncluded memories:
-                AppendLifecycleBlock(string.Concat(memories.Items.Select(ContextUsageFormatter.FormatMemoryContext)));
+                AppendLifecycleBlock(ContextUsageFormatter.FormatMemoryContext(memories.Items));
                 return true;
             case ToolInvocationStarted started:
                 _reasoningActive = false;

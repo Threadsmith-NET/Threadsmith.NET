@@ -8,39 +8,55 @@ using Threadsmith.Interaction.Markdown;
 /// <summary>Shared size-only labels, percentages and category accounting for both frontends.</summary>
 public static class ContextUsageFormatter
 {
-    /// <summary>Formats the captured memory content and provenance for every context inspection surface.</summary>
-    public static string FormatMemoryContext(RepositoryMemoryContextItemProjection item)
+    /// <summary>Formats captured memories as grouped Markdown for every memory presentation surface.</summary>
+    public static string FormatMemoryContext(IEnumerable<RepositoryMemoryContextItemProjection> items)
     {
-        ArgumentNullException.ThrowIfNull(item);
-        var category = item.Ownership == RepositoryMemoryOwnership.Intelligence ? "intelligence" : item.MemoryType.ToString();
-        var output = new StringBuilder()
-            .Append("  ").Append(item.Included ? "included " : "omitted ").Append(category)
-            .Append(" memory: ").Append(item.Rationale).Append('\n')
-            .Append(item.Text).Append('\n');
-        if (item.Supports.Count > 0)
+        ArgumentNullException.ThrowIfNull(items);
+        var output = new StringBuilder();
+        foreach (var group in items.GroupBy(item => (item.Included, item.Ownership, item.MemoryType)))
         {
-            output.Append("  Supporting files:\n");
-        }
-
-        foreach (var support in item.Supports)
-        {
-            output.Append("    - ").Append(support.Path);
-            if (support.IsDirty)
+            var heading = group.Key.Ownership == RepositoryMemoryOwnership.Intelligence
+                ? "Repository Intelligence that may be useful to guide exploration and/or implementation:"
+                : group.Key.MemoryType == RepositoryMemoryType.StandingPreference
+                    ? "Repository standing preferences to guide exploration and/or implementation:"
+                    : "Situational memories that may be useful to guide exploration and/or implementation:";
+            if (!group.Key.Included)
             {
-                output.Append(" (changed since collection)");
+                heading = group.Key.Ownership == RepositoryMemoryOwnership.Intelligence
+                    ? "Repository Intelligence omitted from this request:"
+                    : "Repository memories omitted from this request:";
             }
 
-            if (support.IsUnknown)
+            output.Append(heading).Append("\n\n");
+            foreach (var item in group)
             {
-                output.Append(" (observation gap; current state uncertain)");
-            }
+                output.Append("- ").Append(item.Text.ReplaceLineEndings("\n").Replace("\n", "\n  ", StringComparison.Ordinal)).Append('\n');
+                if (item.Supports.Count > 0)
+                {
+                    output.Append("\n  Supporting files:\n\n");
+                }
 
-            output.Append('\n');
+                foreach (var support in item.Supports)
+                {
+                    output.Append("  - ").Append(support.Path);
+                    if (support.IsDirty)
+                    {
+                        output.Append(" (changed since collection)");
+                    }
+
+                    if (support.IsUnknown)
+                    {
+                        output.Append(" (observation gap; current state uncertain)");
+                    }
+
+                    output.Append('\n');
+                }
+
+                output.Append('\n');
+            }
         }
 
-        output.Append('\n');
-        return TerminalControlEncoder.Encode(output.ToString()
-            .Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'));
+        return TerminalControlEncoder.Encode(output.ToString());
     }
 
     /// <summary>Formats all memory content from a frozen request for the shared context viewer.</summary>
@@ -49,7 +65,7 @@ public static class ContextUsageFormatter
         ArgumentNullException.ThrowIfNull(snapshot);
         return snapshot.Memories.Count == 0
             ? "No memory content was included in this request."
-            : string.Concat(snapshot.Memories.Select(ContextUsageFormatter.FormatMemoryContext));
+            : FormatMemoryContext(snapshot.Memories);
     }
 
     /// <summary>Explains why no actual request can yet be inspected.</summary>

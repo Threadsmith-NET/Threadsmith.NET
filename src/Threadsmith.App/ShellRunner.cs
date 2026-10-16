@@ -230,7 +230,7 @@ internal static class ShellRunner
             if (domainEvent is MemoriesIncluded memories)
             {
                 await output.WriteLineAsync("Memory:".AsMemory(), cancellationToken);
-                await output.WriteAsync(string.Concat(memories.Items.Select(ContextUsageFormatter.FormatMemoryContext)).AsMemory(), cancellationToken);
+                await output.WriteAsync(ContextUsageFormatter.FormatMemoryContext(memories.Items).AsMemory(), cancellationToken);
                 return;
             }
 

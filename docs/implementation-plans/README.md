@@ -199,6 +199,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-semantic-startup-progress.md](maintenance-semantic-startup-progress.md) | Early startup presentation and timed semantic initialization status |
 | Maintenance | [maintenance-resumed-conversation-output.md](maintenance-resumed-conversation-output.md) | Replace resumed output with saved conversation at the latest exchange |
 | Implementation | [repository-intelligence-as-memory.md](repository-intelligence-as-memory.md) | Repository intelligence through shared memory recall and reconciliation |
+| Maintenance | [maintenance-test-audit-ci-infrastructure.md](maintenance-test-audit-ci-infrastructure.md) | Test audit source fixtures and CI evidence |
 
 ## Update discipline
 

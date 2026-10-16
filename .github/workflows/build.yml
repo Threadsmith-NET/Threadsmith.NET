@@ -33,6 +33,17 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Record test environment
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force TestResults/ci | Out-Null
+          git rev-parse HEAD | Set-Content TestResults/ci/revision.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet --info | Set-Content TestResults/ci/dotnet-info.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet msbuild tests/Threadsmith.ParallelAgents.Tests/Threadsmith.ParallelAgents.Tests.csproj -getProperty:ContinuousIntegrationBuild,Configuration,TargetFramework,Deterministic | Set-Content TestResults/ci/build-properties.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Verify packaged documentation
         shell: pwsh
         run: ./eng/release/Test-SourceDocumentation.ps1
@@ -47,7 +58,17 @@ jobs:
         shell: pwsh
         run: |
           $parallelModules = if ($env:RUNNER_OS -eq 'macOS') { 1 } else { 4 }
-          dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules $parallelModules
+          $resultsDirectory = Join-Path $PWD "TestResults/run-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
+          if (Test-Path -LiteralPath $resultsDirectory) { throw "Test evidence directory must be fresh: $resultsDirectory" }
+          dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules $parallelModules --list-tests | Tee-Object TestResults/ci/discovered-tests.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules $parallelModules --report-xunit --report-ctrf --results-directory $resultsDirectory --diagnostic --diagnostic-verbosity Warning --output Detailed | Tee-Object TestResults/ci/test.log
+          exit $LASTEXITCODE
+
+      - name: Verify required platform cases executed
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./eng/Test-CiRequiredCases.ps1 -RunnerOS $env:RUNNER_OS -ResultsDirectory "TestResults/run-$($env:GITHUB_RUN_ID)-$($env:GITHUB_RUN_ATTEMPT)"
 
       - name: Report macOS native test crashes
         if: ${{ failure() && runner.os == 'macOS' }}
@@ -55,9 +76,12 @@ jobs:
         run: |
           python3 - <<'PY'
           import json
+          import shutil
           from pathlib import Path
 
           decoder = json.JSONDecoder()
+          artifact_root = Path("TestResults/ci/native-crashes")
+          artifact_root.mkdir(parents=True, exist_ok=True)
           report_roots = [
               Path.home() / "Library/Logs/DiagnosticReports",
               Path("/Library/Logs/DiagnosticReports"),
@@ -68,6 +92,7 @@ jobs:
                   if not any(name in path.name.lower() for name in ("dotnet", "threadsmith", "testhost")):
                       continue
                   try:
+                      shutil.copy2(path, artifact_root / f"{count}-{path.name}")
                       raw = path.read_text()
                       header, offset = decoder.raw_decode(raw)
                       report = json.loads(raw[offset:].strip()) if raw[offset:].strip() else header
@@ -88,3 +113,13 @@ jobs:
                       print(f"Could not read {path.name}: {error}")
           print(f"Native crash reports found: {count}")
           PY
+
+      - name: Upload test evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-${{ matrix.os }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            TestResults/**
+            tests/**/TestResults/**
+          if-no-files-found: warn

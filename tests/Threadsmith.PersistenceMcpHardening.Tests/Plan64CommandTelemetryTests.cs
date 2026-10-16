@@ -5,6 +5,7 @@
 // and canary non-disclosure across log state and activity tags.
 namespace Threadsmith.PersistenceMcpHardening.Tests;
 
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
@@ -214,7 +215,11 @@ public static class Plan64CommandTelemetryTests
         const string canaryProperty = "CANARY-PROPERTY-abc123";
         const string canaryResponse = "CANARY-RESPONSE-def456";
         var command = new CanaryCommand(canaryProperty, canaryResponse);
-        var capturedActivities = new List<Activity>();
+        using var trace = new Activity("command-telemetry-test")
+            .SetIdFormat(ActivityIdFormat.W3C)
+            .SetParentId(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom())
+            .Start();
+        var capturedActivities = new ConcurrentQueue<Activity>();
 
         using var listener = new ActivityListener
         {
@@ -222,8 +227,15 @@ public static class Plan64CommandTelemetryTests
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             SampleUsingParentId = (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
         };
-        listener.ActivityStopped += capturedActivities.Add;
+        listener.ActivityStopped = activity =>
+        {
+            if (activity.TraceId == trace.TraceId)
+            {
+                capturedActivities.Enqueue(activity);
+            }
+        };
         ActivitySource.AddActivityListener(listener);
+        await EmitUnrelatedCommandAsync();
 
         var response = await middleware.InvokeAsync(
             command,
@@ -255,7 +267,11 @@ public static class Plan64CommandTelemetryTests
     {
         var logger = new RecordingLogger<CommandTelemetryMiddleware>();
         var middleware = new CommandTelemetryMiddleware(logger);
-        var capturedActivities = new List<Activity>();
+        using var trace = new Activity("command-telemetry-test")
+            .SetIdFormat(ActivityIdFormat.W3C)
+            .SetParentId(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom())
+            .Start();
+        var capturedActivities = new ConcurrentQueue<Activity>();
 
         using var listener = new ActivityListener
         {
@@ -263,8 +279,15 @@ public static class Plan64CommandTelemetryTests
             Sample = (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllDataAndRecorded,
             SampleUsingParentId = (ref ActivityCreationOptions<string> _) => ActivitySamplingResult.AllDataAndRecorded,
         };
-        listener.ActivityStopped += capturedActivities.Add;
+        listener.ActivityStopped = activity =>
+        {
+            if (activity.TraceId == trace.TraceId)
+            {
+                capturedActivities.Enqueue(activity);
+            }
+        };
         ActivitySource.AddActivityListener(listener);
+        await EmitUnrelatedCommandAsync();
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             middleware.InvokeAsync(
@@ -311,6 +334,16 @@ public static class Plan64CommandTelemetryTests
             middleware.InvokeAsync(null!, _ => Task.FromResult("x"), CancellationToken.None));
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             middleware.InvokeAsync(new CanaryCommand("a", "b"), null!, CancellationToken.None));
+    }
+
+    private static async Task EmitUnrelatedCommandAsync()
+    {
+        using var unrelated = new Activity("unrelated-test")
+            .SetIdFormat(ActivityIdFormat.W3C)
+            .SetParentId(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom())
+            .Start();
+        var middleware = new CommandTelemetryMiddleware(Microsoft.Extensions.Logging.Abstractions.NullLogger<CommandTelemetryMiddleware>.Instance);
+        await middleware.InvokeAsync(new CanaryCommand("unrelated", "response"), _ => Task.FromResult("unrelated"), TestContext.Current.CancellationToken);
     }
 
     private static string? GetTag(Activity activity, string key)

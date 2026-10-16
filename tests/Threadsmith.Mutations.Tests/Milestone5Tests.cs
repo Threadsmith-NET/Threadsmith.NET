@@ -1,7 +1,6 @@
 namespace Threadsmith.Mutations.Tests;
 
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -11,6 +10,8 @@ using Threadsmith.Core;
 using Threadsmith.DotNet;
 using Threadsmith.Execution;
 using Threadsmith.Interaction.Coordination;
+using Threadsmith.Telemetry;
+using Threadsmith.Tools;
 using Threadsmith.Workspaces;
 using Xunit;
 
@@ -907,33 +908,30 @@ public static partial class Milestone5Tests
 
     private static async Task<string> RunGitAsync(
         string workingDirectory,
-        IReadOnlyList<string> arguments)
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken = default)
     {
-        using var process = new Process
-        {
-            StartInfo = new ProcessStartInfo
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken, cancellationToken);
+        var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
+        var result = await processes.RunAsync(
+            new ProcessExecutionRequest
             {
+                ToolInvocationId = ToolInvocationId.New(),
+                RunId = RunId.New(),
                 FileName = "git",
+                Arguments = arguments,
                 WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
+                Origin = ProcessRequestOrigin.Host,
+                Timeout = TimeSpan.FromMinutes(5),
             },
-        };
-        foreach (var argument in arguments)
+            cancellation.Token);
+        if (result.TimedOut)
         {
-            process.StartInfo.ArgumentList.Add(argument);
+            throw new TimeoutException($"Fixture Git command timed out: {result.StandardOutput}{Environment.NewLine}{result.StandardError}");
         }
 
-        Assert.True(process.Start());
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-        var output = await outputTask;
-        var error = await errorTask;
-        Assert.True(process.ExitCode == 0, error);
-        return output;
+        Assert.True(result.ExitCode == 0, result.StandardError);
+        return result.StandardOutput;
     }
 
     private sealed class RecordingSemanticHostMutationAttribution : ISemanticHostMutationAttribution

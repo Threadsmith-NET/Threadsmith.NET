@@ -226,35 +226,58 @@ public sealed class Plan82CodeExploreFlowTests
     [Fact]
     public async Task CodeExploreTool_PathPolicy_ConfinesFlowBranchAndBlastEvidence()
     {
-        await using var fixture = await CodeExploreFlowFixture.CreateAsync();
-        var context = fixture.CreateToolExecutionContext("src/CoreFlow/Dispatch.cs");
+        var ct = TestContext.Current.CancellationToken;
+        var root = Directory.CreateTempSubdirectory("threadsmith-flow-policy-").FullName;
+        try
+        {
+            var source = Directory.CreateDirectory(Path.Combine(root, "src", "CoreFlow")).FullName;
+            await File.WriteAllTextAsync(Path.Combine(source, "EntryPoint.cs"), "// allowed source", ct);
+            await File.WriteAllTextAsync(Path.Combine(source, "Dispatch.cs"), "// prohibited source", ct);
+            var context = new ToolExecutionContext(
+                ToolInvocationId.New(),
+                SessionId.New(),
+                RunId.New(),
+                new ToolInvocationContext
+                {
+                    RepositoryPath = root,
+                    WorkspaceId = WorkspaceId.New(),
+                    TrustLevel = RepositoryTrustLevel.TrustedBuild,
+                    ApprovedRoots = ["."],
+                    ProhibitedPaths = ["src/CoreFlow/Dispatch.cs"],
+                    RequestedBy = "plan-82-tests",
+                });
 
-        var execution = await new CodeExploreTool(
-            new StubCodeExploreService(CreatePolicyConfineResult()),
-            TestPromptLoader.Instance).ExecuteAsync(
-            new CodeExploreRequest
-            {
-                Query = "StartInterface to ConcreteProcessor.Process",
-                Mode = CodeExploreMode.Flow,
-                ExactSymbolAnchors = ["FlowSample.EntryPoint.StartInterface", "FlowSample.ConcreteProcessor.Process"],
-                Limits = CreateWideLimits(),
-            },
-            context,
-            TestContext.Current.CancellationToken);
+            var execution = await new CodeExploreTool(
+                new StubCodeExploreService(CreatePolicyConfineResult()),
+                TestPromptLoader.Instance).ExecuteAsync(
+                new CodeExploreRequest
+                {
+                    Query = "StartInterface to ConcreteProcessor.Process",
+                    Mode = CodeExploreMode.Flow,
+                    ExactSymbolAnchors = ["FlowSample.EntryPoint.StartInterface", "FlowSample.ConcreteProcessor.Process"],
+                    Limits = CreateWideLimits(),
+                },
+                context,
+                TestContext.Current.CancellationToken);
 
-        Assert.Single(execution.Value.FileSections);
-        Assert.Equal(CodeExploreResolutionOutcome.Omitted, execution.Value.ResolvedAnchors[1].Outcome);
-        var flow = RequireFlow(execution.Value);
-        Assert.Empty(flow.Edges);
-        Assert.False(Assert.Single(flow.Paths).IsComplete);
-        var branch = Assert.Single(flow.DispatchBranches);
-        Assert.Empty(branch.Implementations);
-        Assert.Equal(0, branch.ReturnedCount);
-        var blastRadius = execution.Value.BlastRadius ?? throw new InvalidOperationException("Expected blast-radius evidence.");
-        Assert.Empty(blastRadius.Items);
-        Assert.Contains(execution.Value.Omissions, omission => omission.Contains("path policy", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(flow.Traversal.Omissions, omission => omission.Contains("path policy", StringComparison.OrdinalIgnoreCase));
-        Assert.True(execution.IsTruncated);
+            Assert.Single(execution.Value.FileSections);
+            Assert.Equal(CodeExploreResolutionOutcome.Omitted, execution.Value.ResolvedAnchors[1].Outcome);
+            var flow = RequireFlow(execution.Value);
+            Assert.Empty(flow.Edges);
+            Assert.False(Assert.Single(flow.Paths).IsComplete);
+            var branch = Assert.Single(flow.DispatchBranches);
+            Assert.Empty(branch.Implementations);
+            Assert.Equal(0, branch.ReturnedCount);
+            var blastRadius = execution.Value.BlastRadius ?? throw new InvalidOperationException("Expected blast-radius evidence.");
+            Assert.Empty(blastRadius.Items);
+            Assert.Contains(execution.Value.Omissions, omission => omission.Contains("path policy", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(flow.Traversal.Omissions, omission => omission.Contains("path policy", StringComparison.OrdinalIgnoreCase));
+            Assert.True(execution.IsTruncated);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     private static CodeExploreResult CreatePolicyConfineResult()
@@ -584,15 +607,6 @@ public sealed class Plan82CodeExploreFlowTests
         public TestCodeExploreSourceReader CreateSourceReader(params string[] prohibitedPaths)
         {
             return new TestCodeExploreSourceReader(CreateInvocationContext(prohibitedPaths));
-        }
-
-        public ToolExecutionContext CreateToolExecutionContext(params string[] prohibitedPaths)
-        {
-            return new ToolExecutionContext(
-                ToolInvocationId.New(),
-                SessionId.New(),
-                RunId.New(),
-                CreateInvocationContext(prohibitedPaths));
         }
 
         public async ValueTask DisposeAsync()

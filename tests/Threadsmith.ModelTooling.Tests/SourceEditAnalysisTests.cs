@@ -15,10 +15,11 @@ public static class SourceEditAnalysisTests
     [Fact]
     public static async Task CandidatePromotionRetainsOriginAndReusesDiagnostics()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         var run = RunId.New();
@@ -91,10 +92,11 @@ public static class SourceEditAnalysisTests
     [Fact]
     public static async Task ExtraRefreshInputPreventsCandidatePromotion()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
@@ -117,10 +119,11 @@ public static class SourceEditAnalysisTests
     [Fact]
     public static async Task PendingCandidateContinuesAfterMatchingPublication()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance, cancellationBackstop: TimeSpan.FromMilliseconds(1));
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
@@ -177,10 +180,11 @@ public static class SourceEditAnalysisTests
     [Fact]
     public static async Task MixedMembershipCandidateRetainsNewFileSyntaxErrors()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         var command = Command(SessionId.New(), RunId.New(), WorkspaceId.New());
         await engine.LoadAsync(new(command.SessionId, command.WorkspaceId, root, Path.Combine(root, "SmallDotNetSolution.sln"), RepositoryTrustLevel.TrustedBuild), ct);
         await engine.WaitForWarmAsync(ct);
@@ -244,10 +248,11 @@ public static class SourceEditAnalysisTests
     [Fact]
     public static async Task UnregisteredEndpointsSkipDiagnosticsAndPreserveSourceCandidate()
     {
+        using var fixture = new TestSemanticSolution();
         var ct = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
-        var root = Path.Combine(AppContext.BaseDirectory, "fixtures", "semantic", "SmallDotNetSolution");
+        var root = fixture.Root;
         var session = SessionId.New();
         var workspace = WorkspaceId.New();
         var run = RunId.New();

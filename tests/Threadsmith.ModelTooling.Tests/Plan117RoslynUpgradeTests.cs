@@ -20,7 +20,8 @@ public static class Plan117RoslynUpgradeTests
     [Fact]
     public static async Task SemanticEngine_Roslyn59_LoadsModernSyntaxAndGeneratedSymbols()
     {
-        var root = FixtureRoot;
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         var request = CreateLoadRequest(root);
         await using var events = new DomainEventStream();
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
@@ -96,7 +97,8 @@ public static class Plan117RoslynUpgradeTests
         int perFileBudget,
         int totalBudget)
     {
-        var root = FixtureRoot;
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         var request = CreateLoadRequest(root);
         await using var events = new DomainEventStream();
         await using var registry = new SemanticEngineRegistry(events, NullLoggerFactory.Instance, TestPromptLoader.Instance);
@@ -306,7 +308,8 @@ public static class Plan117RoslynUpgradeTests
     [Fact]
     public static async Task SemanticEngine_LoadMeasurement_IsAggregateAndPathFree()
     {
-        var root = FixtureRoot;
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         var logger = new RecordingLogger<SemanticEngine>();
         await using var events = new DomainEventStream();
         await using var engine = new SemanticEngine(events, logger, TestPromptLoader.Instance);
@@ -339,7 +342,8 @@ public static class Plan117RoslynUpgradeTests
     [Fact]
     public static async Task SemanticEngine_LoadMeasurement_ClassifiesTextOnlyAndCancellation()
     {
-        var root = FixtureRoot;
+        using var fixture = new TestSemanticSolution();
+        var root = fixture.Root;
         var textLogger = new RecordingLogger<SemanticEngine>();
         await using (var events = new DomainEventStream())
         await using (var engine = new SemanticEngine(events, textLogger, TestPromptLoader.Instance))
@@ -374,6 +378,7 @@ public static class Plan117RoslynUpgradeTests
     [Fact]
     public static async Task SemanticEngine_PostCommitPublicationFailure_RetainsUsableState()
     {
+        using var fixture = new TestSemanticSolution();
         await using var events = new DomainEventStream();
         await using var subscription = events.Subscribe((domainEvent, _) =>
             domainEvent is SemanticConfidenceChanged
@@ -382,7 +387,7 @@ public static class Plan117RoslynUpgradeTests
         await using var engine = new SemanticEngine(events, NullLogger<SemanticEngine>.Instance, TestPromptLoader.Instance);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            engine.LoadAsync(CreateLoadRequest(FixtureRoot), TestContext.Current.CancellationToken));
+            engine.LoadAsync(CreateLoadRequest(fixture.Root), TestContext.Current.CancellationToken));
 
         Assert.Equal(SemanticConfidenceLevel.PartialCompilation, engine.Confidence);
         Assert.NotEmpty(engine.CaptureAdvancedSnapshot().CompiledProjects);
@@ -637,9 +642,9 @@ public static class Plan117RoslynUpgradeTests
         }
 
         var normalizedRepositoryRoot = Path.GetFullPath(repositoryRoot);
-        var temporaryRoot = target is "generator" or "broken" ? CopyFixtureToTemporaryRoot() : null;
+        var temporaryRoot = target is "fixture" or "generator" or "broken" ? CopyFixtureToTemporaryRoot() : null;
         using var temporaryInputs = temporaryRoot is null ? null : new OwnedMeasurementInputs(temporaryRoot);
-        if (temporaryRoot is not null)
+        if (temporaryRoot is not null && target is "generator" or "broken")
         {
             SetFixtureAnalyzerPath(temporaryRoot, target == "broken"
                 ? Path.Combine(temporaryRoot, "MissingGenerator.dll")
@@ -652,10 +657,9 @@ public static class Plan117RoslynUpgradeTests
 
         (var loadRoot, var selection) = target switch
         {
-            "fixture" => (FixtureRoot, Path.Combine(FixtureRoot, "SmallDotNetSolution.sln")),
             "app" => (normalizedRepositoryRoot, Path.Combine(normalizedRepositoryRoot, "src", "Threadsmith.App", "Threadsmith.App.csproj")),
             "solution" => (normalizedRepositoryRoot, Path.Combine(normalizedRepositoryRoot, "src", "Threadsmith.sln")),
-            "generator" or "broken" => (temporaryRoot ?? throw new InvalidOperationException("Missing measurement inputs."), Path.Combine(temporaryRoot ?? string.Empty, "SmallDotNetSolution.sln")),
+            "fixture" or "generator" or "broken" => (temporaryRoot ?? throw new InvalidOperationException("Missing measurement inputs."), Path.Combine(temporaryRoot ?? string.Empty, "SmallDotNetSolution.sln")),
             _ => throw new InvalidOperationException("Unknown Plan 117 performance target."),
         };
 
@@ -771,7 +775,8 @@ public static class Plan117RoslynUpgradeTests
             Assert.Skip("Set the Plan 118 query performance target and repository root for first-query evidence.");
         }
 
-        var root = target == "fixture" ? FixtureRoot : Path.GetFullPath(repositoryRoot);
+        using var fixture = target == "fixture" ? new TestSemanticSolution() : null;
+        var root = fixture?.Root ?? Path.GetFullPath(repositoryRoot);
         var selection = target switch
         {
             "fixture" => Path.Combine(root, "SmallDotNetSolution.sln"),
@@ -820,11 +825,7 @@ public static class Plan117RoslynUpgradeTests
         }
     }
 
-    private static string FixtureRoot => Path.Combine(
-        AppContext.BaseDirectory,
-        "fixtures",
-        "semantic",
-        "SmallDotNetSolution");
+    private static string FixtureRoot => TestSemanticSolution.SourceRoot;
 
     private static void AddGeneratorMeasurementProjects(string root)
     {
@@ -860,41 +861,20 @@ public static class Plan117RoslynUpgradeTests
 
     private static string CopyFixtureToTemporaryRoot()
     {
-        var temporaryParent = Path.GetFullPath(Path.GetTempPath()).TrimEnd(Path.DirectorySeparatorChar);
-        var destination = Path.Combine(temporaryParent, $"threadsmith-plan117-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(destination);
-        foreach (var sourcePath in Directory.EnumerateFiles(FixtureRoot, "*", SearchOption.AllDirectories))
-        {
-            var relativePath = Path.GetRelativePath(FixtureRoot, sourcePath);
-            var destinationPath = Path.Combine(destination, relativePath);
-            Directory.CreateDirectory(
-                Path.GetDirectoryName(destinationPath)
-                    ?? throw new InvalidOperationException("Fixture destination has no parent."));
-            File.Copy(sourcePath, destinationPath);
-        }
-
-        return destination;
+        return TestSemanticSolution.CopyToTemporaryRoot("threadsmith-plan117");
     }
 
     private static async Task RemoveFixtureAnalyzerReferenceAsync(string root)
     {
         var contractsProject = Path.Combine(root, "Contracts", "Contracts.csproj");
-        var contractsProjectText = await File.ReadAllTextAsync(
-            contractsProject,
-            TestContext.Current.CancellationToken);
-        const string analyzerReference = "    <Analyzer Include=\"..\\Analyzers\\Threadsmith.SemanticFixtures.Roslyn59.dll\" />";
-        var withoutAnalyzer = contractsProjectText
-            .Replace(analyzerReference + "\r\n", string.Empty, StringComparison.Ordinal)
-            .Replace(analyzerReference + "\n", string.Empty, StringComparison.Ordinal);
-        if (string.Equals(withoutAnalyzer, contractsProjectText, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("The Plan 117 fixture analyzer reference was not found.");
-        }
-
-        await File.WriteAllTextAsync(
-            contractsProject,
-            withoutAnalyzer,
-            TestContext.Current.CancellationToken);
+        var projectText = await File.ReadAllTextAsync(contractsProject, TestContext.Current.CancellationToken);
+        var project = XDocument.Parse(projectText);
+        var analyzer = project.Descendants("Analyzer").Single(element =>
+            element.Attribute("Include")?.Value.EndsWith(
+                "Threadsmith.SemanticFixtures.Roslyn59.dll",
+                StringComparison.OrdinalIgnoreCase) == true);
+        analyzer.Remove();
+        await File.WriteAllTextAsync(contractsProject, project.ToString(), TestContext.Current.CancellationToken);
     }
 
     private static void SetFixtureAnalyzerPath(string root, string analyzerPath)

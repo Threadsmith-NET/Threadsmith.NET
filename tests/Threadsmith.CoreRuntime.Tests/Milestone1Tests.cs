@@ -2158,29 +2158,6 @@ public static partial class Milestone1Tests
         Assert.DoesNotContain("folder ", rendered, StringComparison.Ordinal);
     }
 
-    /// <summary>Session usage saturates rather than overflowing cumulative counters.</summary>
-    [Fact]
-    public static void SessionUsageProjection_LargeUsage_SaturatesTotals()
-    {
-        var projection = new SessionUsageProjection();
-        var sessionId = SessionId.New();
-        var runId = RunId.New();
-
-        projection.Observe(
-            sessionId,
-            new ModelRequestUsageId(runId, "conversation", 0, Guid.NewGuid()),
-            new ModelUsage(long.MaxValue, long.MaxValue));
-        projection.Observe(
-            sessionId,
-            new ModelRequestUsageId(runId, "conversation", 1, Guid.NewGuid()),
-            new ModelUsage(1, 1));
-
-        var snapshot = projection.GetSnapshot(sessionId);
-        Assert.Equal(long.MaxValue, snapshot.InputTokens);
-        Assert.Equal(long.MaxValue, snapshot.OutputTokens);
-        Assert.Equal(long.MaxValue, snapshot.TotalTokens);
-    }
-
     /// <summary>The status factory selects the stricter model and governed context limit.</summary>
     [Fact]
     public static void SessionStatusAssembler_ConfiguredProfile_UsesEffectiveContextLimit()

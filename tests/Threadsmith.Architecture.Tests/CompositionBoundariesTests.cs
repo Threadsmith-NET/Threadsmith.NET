@@ -37,19 +37,6 @@ public static class CompositionBoundariesTests
             p => Assert.True(IsInitOnly(p), $"{p.Name} must be init-only."));
     }
 
-    /// <summary>The five sub-records preserve all 39 host dependencies and captured configuration inputs.</summary>
-    [Fact]
-    public static void SubRecords_PreserveCompositionInputs()
-    {
-        var total = SubRecordPropertyCount<HostCompositionInputs>()
-            + SubRecordPropertyCount<PersistenceCompositionInputs>()
-            + SubRecordPropertyCount<ToolPolicyCompositionInputs>()
-            + SubRecordPropertyCount<SemanticCompositionInputs>()
-            + SubRecordPropertyCount<IntegrationCompositionInputs>();
-
-        Assert.Equal(39, total);
-    }
-
     /// <summary>Each sub-record has one clear responsibility with the expected dependency distribution.</summary>
     [Theory]
     [InlineData(typeof(HostCompositionInputs), 13)]
@@ -158,11 +145,6 @@ public static class CompositionBoundariesTests
 
         var modifiers = setter.ReturnParameter.GetRequiredCustomModifiers();
         return Array.Exists(modifiers, type => type.Name == "IsExternalInit");
-    }
-
-    private static int SubRecordPropertyCount<T>()
-    {
-        return SubRecordPropertyCount(typeof(T));
     }
 
     private static int SubRecordPropertyCount(Type subRecord)

@@ -20,51 +20,108 @@ public sealed class UnloadTests
         // Use a dedicated fixture never invoked by other tests so its ALC is not JIT-rooted by the
         // plan-16 invocation tests (a known ALC-unload testing hazard, §17.19).
         var (host, generation) = await LoadCleanUnloadAsync();
+        var events = Assert.IsType<RecordingEventStream>(host.Events);
+        var firstUnloadEvent = events.Published.Count;
+        var sessionId = SessionId.New();
         var alcRef = generation.LoadContextWeakReference;
         Assert.NotNull(alcRef);
 
-        var result = await host.UnloadAsync(generation, SessionId.New());
+        var result = await host.UnloadAsync(generation, sessionId, TestContext.Current.CancellationToken);
 
         Assert.Equal(UnloadOutcome.Unloaded, result.Outcome);
+        Assert.Equal(generation.GenerationId, result.GenerationId);
         Assert.Null(result.Blockers);
         Assert.Equal(ExtensionLifecycleState.Unloaded, generation.State);
         Assert.False(alcRef.IsAlive);
         Assert.DoesNotContain(generation, host.Generations);
+        Assert.Collection(
+            events.Published.Skip(firstUnloadEvent),
+            item =>
+            {
+                var draining = Assert.IsType<ExtensionDraining>(item);
+                Assert.Equal(sessionId, draining.SessionId);
+                Assert.Equal(generation.ExtensionId, draining.ExtensionId);
+            },
+            item =>
+            {
+                var unloaded = Assert.IsType<ExtensionUnloaded>(item);
+                Assert.Equal(sessionId, unloaded.SessionId);
+                Assert.Equal(generation.ExtensionId, unloaded.ExtensionId);
+            });
     }
 
     /// <summary>Asserts the deliberately-leaking extension is diagnosed as UnloadBlocked, the host stays functional, and the §26.5 false-success detector fires.</summary>
     [Fact]
     public async Task Leaking_extension_is_diagnosed_as_UnloadBlocked_and_host_remains_functional()
     {
+        var ct = TestContext.Current.CancellationToken;
+
         // Mandatory leak fixture (§26.5): the extension subscribes a handler to AppDomain.ProcessExit
         // and never detaches, retaining the collectible ALC. Verification must report UnloadBlocked,
         // not a false success.
         var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        var generation = await host.LoadAsync(new ExtensionLoadRequest
-        {
-            ExtensionDirectory = ResolveFixtureOutputDirectory("LeakingExtension"),
-            EffectiveTrust = RepositoryTrustLevel.TrustedRead,
-            SessionId = SessionId.New(),
-            ShadowStagingRoot = Path.Combine(stagingRoot, "leaking"),
-        });
+        var generation = await host.LoadAsync(
+            new ExtensionLoadRequest
+            {
+                ExtensionDirectory = ResolveFixtureOutputDirectory("LeakingExtension"),
+                EffectiveTrust = RepositoryTrustLevel.TrustedRead,
+                SessionId = SessionId.New(),
+                ShadowStagingRoot = Path.Combine(stagingRoot, "leaking"),
+            },
+            ct);
         var alcRef = generation.LoadContextWeakReference!;
+        var firstUnloadEvent = events.Published.Count;
+        var unloadSession = SessionId.New();
 
-        var result = await host.UnloadAsync(generation, SessionId.New());
+        var result = await host.UnloadAsync(generation, unloadSession, ct);
 
         Assert.Equal(UnloadOutcome.UnloadBlocked, result.Outcome);
+        Assert.Equal(generation.GenerationId, result.GenerationId);
         Assert.NotNull(result.Blockers);
         Assert.True(result.Blockers.HasBlockers);
         Assert.Equal(ExtensionLifecycleState.UnloadBlocked, generation.State);
         // The ALC survived (the leak is real). This is the §26.5 false-success detector: if the ALC
         // were dead here, the fixture would be broken.
         Assert.True(alcRef.IsAlive);
+        Assert.Collection(
+            events.Published.Skip(firstUnloadEvent),
+            item =>
+            {
+                var draining = Assert.IsType<ExtensionDraining>(item);
+                Assert.Equal(unloadSession, draining.SessionId);
+                Assert.Equal(generation.ExtensionId, draining.ExtensionId);
+            },
+            item =>
+            {
+                var failed = Assert.IsType<ExtensionUnloadFailed>(item);
+                Assert.Equal(unloadSession, failed.SessionId);
+                Assert.Equal(generation.ExtensionId, failed.ExtensionId);
+                Assert.NotEmpty(failed.Reason);
+            });
 
         // The host remains functional: a subsequent clean load + unload succeeds.
-        var (cleanHost, clean) = await LoadCleanUnloadAsync();
-        var cleanResult = await cleanHost.UnloadAsync(clean, SessionId.New());
+        var clean = await host.LoadAsync(
+            new ExtensionLoadRequest
+            {
+                ExtensionDirectory = ResolveFixtureOutputDirectory("CleanUnloadExtension"),
+                EffectiveTrust = RepositoryTrustLevel.TrustedRead,
+                SessionId = SessionId.New(),
+                ShadowStagingRoot = Path.Combine(stagingRoot, "clean-recovery"),
+            },
+            ct);
+        Assert.Equal(ExtensionLifecycleState.Active, clean.State);
+        Assert.NotEqual(generation.GenerationId, clean.GenerationId);
+        Assert.Contains(clean, host.Generations);
+        var cleanAlcRef = clean.LoadContextWeakReference!;
+        var cleanResult = await host.UnloadAsync(clean, SessionId.New(), ct);
         Assert.Equal(UnloadOutcome.Unloaded, cleanResult.Outcome);
+        Assert.Equal(clean.GenerationId, cleanResult.GenerationId);
+        Assert.Equal(ExtensionLifecycleState.Unloaded, clean.State);
+        Assert.False(cleanAlcRef.IsAlive);
+        Assert.Same(generation, Assert.Single(host.Generations));
+        Assert.True(alcRef.IsAlive);
     }
 
     /// <summary>Asserts hot replacement loads a new generation, atomically switches the registry, and drains+unloads the old generation.</summary>
@@ -110,47 +167,19 @@ public sealed class UnloadTests
         Assert.False(oldAlcRef.IsAlive);
     }
 
-    /// <summary>Asserts unload publishes ExtensionDraining then ExtensionUnloaded for a clean extension.</summary>
-    [Fact]
-    public async Task Unload_publishes_draining_unloaded_events()
-    {
-        var (host, generation) = await LoadCleanUnloadAsync();
-        var events = (RecordingEventStream)host.Events;
-        await host.UnloadAsync(generation, SessionId.New());
-        Assert.Contains(events.Published, e => e is ExtensionDraining);
-        Assert.Contains(events.Published, e => e is ExtensionUnloaded);
-    }
-
-    /// <summary>Asserts an unload that survives verification publishes ExtensionUnloadFailed.</summary>
-    [Fact]
-    public async Task Unload_of_a_blocked_generation_publishes_UnloadFailed_event()
-    {
-        var stagingRoot = NewStagingRoot();
-        var events = new RecordingEventStream();
-        var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        var generation = await host.LoadAsync(new ExtensionLoadRequest
-        {
-            ExtensionDirectory = ResolveFixtureOutputDirectory("LeakingExtension"),
-            EffectiveTrust = RepositoryTrustLevel.TrustedRead,
-            SessionId = SessionId.New(),
-            ShadowStagingRoot = Path.Combine(stagingRoot, "leaking-events"),
-        });
-        await host.UnloadAsync(generation, SessionId.New());
-        Assert.Contains(events.Published, e => e is ExtensionUnloadFailed);
-    }
-
     private static async Task<(ExtensionHost host, ExtensionGeneration generation)> LoadCleanUnloadAsync()
     {
         var stagingRoot = NewStagingRoot();
         var events = new RecordingEventStream();
         var host = new ExtensionHost(events, NullLogger<ExtensionHost>.Instance);
-        var generation = await host.LoadAsync(new ExtensionLoadRequest
-        {
-            ExtensionDirectory = ResolveFixtureOutputDirectory("CleanUnloadExtension"),
-            EffectiveTrust = RepositoryTrustLevel.TrustedRead,
-            SessionId = SessionId.New(),
-            ShadowStagingRoot = Path.Combine(stagingRoot, "clean-unload"),
-        });
+        var generation = await host.LoadAsync(
+            new ExtensionLoadRequest
+            {
+                ExtensionDirectory = ResolveFixtureOutputDirectory("CleanUnloadExtension"),
+                EffectiveTrust = RepositoryTrustLevel.TrustedRead,
+                SessionId = SessionId.New(),
+                ShadowStagingRoot = Path.Combine(stagingRoot, "clean-unload"),
+            });
         return (host, generation);
     }
 

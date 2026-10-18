@@ -135,6 +135,11 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
                 detail: evidence.StaleReason ?? "The historical evidence was invalidated."));
         }
 
+        if (evidence.Images.Count > 0 && (input.StartLine != 1 || input.StartColumn != 1 || input.EndLine is not null))
+        {
+            throw new ToolArgumentValidationException("Image evidence must be recovered without text range options.");
+        }
+
         var maximumCharacters = TextEvidenceDocument.GetMaximumReadCharacters(
             MaximumOutputBytes,
             envelopeBytes: 512);
@@ -155,7 +160,8 @@ public sealed class ActiveTurnEvidenceTool : Tool<ActiveTurnEvidenceInput, Activ
         return Task.FromResult(new ToolExecution<ActiveTurnEvidenceOutput>(
             output,
             [new ToolProvenanceSource("evidence", input.EvidenceId.ToString("D"))],
-            IsTruncated: read.NextLine is not null));
+            IsTruncated: read.NextLine is not null,
+            Images: evidence.Images));
     }
 
     /// <inheritdoc />

@@ -12,6 +12,9 @@ internal static class TuiKitInput
         {
             9 => KeyEvent.Special(KeyCode.Tab, key.Modifiers),
             13 => KeyEvent.Special(KeyCode.Enter, key.Modifiers),
+
+            // Legacy terminals encode Ctrl+Alt+V as ESC followed by the Ctrl+V control byte.
+            22 when key.Modifiers == KeyModifiers.Alt => KeyEvent.Char('v', KeyModifiers.Ctrl | KeyModifiers.Alt),
             27 => KeyEvent.Special(KeyCode.Escape, key.Modifiers),
             127 => KeyEvent.Special(KeyCode.Backspace, key.Modifiers),
             _ => key,

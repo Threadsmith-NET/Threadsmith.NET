@@ -9,6 +9,10 @@ using Threadsmith.Interaction.Sessions;
 internal sealed class InteractionSessionSurface
 {
     private readonly IInteractionSurface _surface;
+
+    /// <summary>Current session owning the composer draft.</summary>
+    internal Threadsmith.Core.SessionId? SessionId { get; set; }
+
     private string _prompt = "threadsmith > ";
 
     /// <summary>Initializes a new instance of the <see cref="InteractionSessionSurface" /> class.</summary>
@@ -41,7 +45,7 @@ internal sealed class InteractionSessionSurface
         ComposerPurpose purpose,
         CancellationToken cancellationToken = default)
     {
-        return _surface.ReadComposerAsync(new ComposerRequest(_prompt, purpose), cancellationToken);
+        return _surface.ReadComposerAsync(new ComposerRequest(_prompt, purpose) { SessionId = SessionId }, cancellationToken);
     }
 
     /// <summary>Begins active-run input when supported.</summary>

@@ -909,6 +909,7 @@ public sealed partial class InteractionCoordinator
                         }
                     }
 
+                    _surface.SessionId = controller.SessionId;
                     input = await _surface.ReadAsync(lifetime.Token);
                 }
                 catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
@@ -944,6 +945,18 @@ public sealed partial class InteractionCoordinator
 
                 var submittedText = input.Text;
                 var commandText = submittedText.Trim();
+                if (string.Equals(commandText, "/quit", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                if (input.Images.Count > 0 && commandText.StartsWith('/'))
+                {
+                    await _surface.Surface.RestoreSubmissionAsync(input, lifetime.Token);
+                    await _surface.WriteAsync("Images belong to conversation messages. Remove attachments before running a slash command.\n", PresentationTextRole.Error, lifetime.Token);
+                    continue;
+                }
+
                 var thinkingCommand = input.Kind == InteractionInputKind.ToggleThinking
                     || (commandText.StartsWith("/thinking", StringComparison.OrdinalIgnoreCase)
                         && (commandText.Length == 9 || char.IsWhiteSpace(commandText[9])));
@@ -982,14 +995,9 @@ public sealed partial class InteractionCoordinator
                     continue;
                 }
 
-                if (string.IsNullOrEmpty(commandText))
+                if (string.IsNullOrEmpty(commandText) && input.Images.Count == 0)
                 {
                     continue;
-                }
-
-                if (string.Equals(commandText, "/quit", StringComparison.OrdinalIgnoreCase))
-                {
-                    break;
                 }
 
                 if (string.Equals(commandText, "/help", StringComparison.OrdinalIgnoreCase))
@@ -1638,7 +1646,7 @@ public sealed partial class InteractionCoordinator
                     renderedRunCompletion = new TaskCompletionSource<string?>(
                         TaskCreationOptions.RunContinuationsAsynchronously);
                     runCompletionQueued = false;
-                    _ = await controller.SubmitAsync(submittedText, intelligenceOperation, intelligenceDepth, operation.Token);
+                    _ = await controller.SubmitAsync(submittedText, intelligenceOperation, intelligenceDepth, input.Images, operation.Token);
                     waitTask = controller.WaitForActiveRunAsync(operation.Token);
                     var awaitingMutationReview = false;
                     var activeInput = _surface.BeginActiveRunInput(_timeProvider);
@@ -1901,6 +1909,7 @@ public sealed partial class InteractionCoordinator
                 }
                 catch (OperationCanceledException) when (operation.IsCancellationRequested)
                 {
+                    await _surface.Surface.RestoreSubmissionAsync(input, CancellationToken.None);
                     _ = await controller.CancelActiveRunAsync(CancellationToken.None);
                     if (renderedRunCompletion is not null)
                     {
@@ -1922,6 +1931,7 @@ public sealed partial class InteractionCoordinator
                 }
                 catch (Exception exception) when (!drainTask.IsFaulted)
                 {
+                    await _surface.Surface.RestoreSubmissionAsync(input, lifetime.Token);
                     string? renderedDiagnostic = null;
                     if (waitTask?.IsFaulted == true
                         && runCompletionQueued

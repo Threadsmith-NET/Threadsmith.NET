@@ -78,6 +78,7 @@ public static class ModelRequestPreparation
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(request);
+        ModelImages.Validate(request, definition.Profile);
         if (definition.Registration is not IModelRequestPreparation preparer)
         {
             return request;

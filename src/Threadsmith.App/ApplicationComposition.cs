@@ -473,7 +473,8 @@ internal static class ApplicationComposition
             repositoryMemoryOptions: memoryOptions,
             sourceEdits: sourceEdits,
             repositoryIntelligence: intelligence,
-            intelligenceOperations: intelligenceOperations);
+            intelligenceOperations: intelligenceOperations,
+            imageArtifacts: persistence.ArtifactStore);
 
         // The foundation-owned coordinator may prepare work before session composition, but publication
         // delegates to this sole run-lifetime authority once it exists.

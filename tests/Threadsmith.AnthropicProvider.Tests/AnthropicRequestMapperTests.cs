@@ -9,6 +9,44 @@ using Threadsmith.Models.Anthropic;
 /// <summary>Exercises native request preparation, authority, schemas, and exact private replay.</summary>
 public sealed class AnthropicRequestMapperTests
 {
+    /// <summary>Images reach native user and tool_result content blocks as real encoded pixels.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ImageInputPreservesPixelsAndToolCorrelation(bool tool)
+    {
+        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==");
+        var image = new ImageArtifact { Id = Guid.NewGuid().ToString("N"), ContentHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)), MediaType = "image/png", Width = 2, Height = 2, ByteLength = bytes.Length, Source = "fixture" };
+        var handler = new TestAnthropicHandler(TestAnthropic.TextStream());
+        using var client = new HttpClient(handler);
+        var profile = TestAnthropic.Profile() with { SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image, SensitiveDataPolicy = ModelSensitiveDataPolicy.Allowed };
+        var provider = new AnthropicModelProvider(client, profile, "secret", TestAnthropic.Compatibility(), "provider");
+        var message = TestAnthropic.Message(tool ? ModelMessageRole.Tool : ModelMessageRole.User, "image", "pixels", tool ? "call-image" : null, tool ? "lookup" : null) with
+        {
+            Content = ModelImages.Append([new ModelContentPart { Content = "pixels" }, new ModelContentPart { Kind = ModelContentPartKind.Json, Content = JsonSerializer.Serialize(new { attachments = new[] { new { artifactId = image.Id } } }) }], [image]),
+        };
+        var request = TestAnthropic.Request() with
+        {
+            Tools = [TestAnthropic.Tool()],
+            Messages = tool ? [TestAnthropic.Message(ModelMessageRole.User, "question", "inspect"), TestAnthropic.Message(ModelMessageRole.Assistant, "call", "{}", "call-image", "lookup"), message] : [message],
+            ResolveImageAsync = (_, _) => Task.FromResult<ReadOnlyMemory<byte>>(bytes),
+        };
+        await TestAnthropic.CollectAsync(provider, request);
+        var body = Assert.Single(handler.Requests);
+        Assert.Contains(Convert.ToBase64String(bytes), body.GetRawText(), StringComparison.Ordinal);
+        var content = body.GetProperty("messages")[tool ? 2 : 0].GetProperty("content");
+        if (tool)
+        {
+            Assert.Equal("call-image", content[0].GetProperty("tool_use_id").GetString());
+            content = content[0].GetProperty("content");
+        }
+
+        using var metadata = JsonDocument.Parse(content[1].GetProperty("text").GetString()!);
+        Assert.Equal(image.Id, metadata.RootElement.GetProperty("attachments")[0].GetProperty("artifactId").GetString());
+        Assert.Equal("image", content[2].GetProperty("type").GetString());
+        Assert.Equal(Convert.ToBase64String(bytes), content[2].GetProperty("source").GetProperty("data").GetString());
+    }
+
     /// <summary>Changing request context cannot rewrite native system blocks or the preceding conversation prefix.</summary>
     [Fact]
     public async Task StreamAsync_RequestContext_LeavesReusableNativePrefixUnchanged()

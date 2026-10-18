@@ -31,6 +31,8 @@ public static class AnthropicRepositoryModelOverrides
                 || requested.MaximumOutputTokens != original.MaximumOutputTokens
                 || requested.Temperature != original.Temperature
                 || !Equivalent(requested.Cost, original.Cost)
+                || (requested.SupportedInputContentTypes & ~original.SupportedInputContentTypes) != 0
+                || requested.SupportedOutputContentTypes != original.SupportedOutputContentTypes
                 || !Equivalent(requested.Capabilities, original.Capabilities)
                 || !Equivalent(requested.Compatibility, original.Compatibility)
                 || !Equivalent(requested.SupportedReasoningLevels, original.SupportedReasoningLevels)

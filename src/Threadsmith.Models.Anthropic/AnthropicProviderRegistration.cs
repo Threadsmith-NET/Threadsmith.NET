@@ -30,6 +30,8 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
         }
 
         AnthropicCatalogHydrator.ValidateDescriptor(configured);
+        ModelImages.ValidateConfiguration(configured);
+
         ArgumentException.ThrowIfNullOrWhiteSpace(configured.Id);
         ArgumentException.ThrowIfNullOrWhiteSpace(configured.Name);
         if (configured.SecretKeyReference is null
@@ -97,6 +99,8 @@ public sealed class AnthropicProviderRegistration : IModelProviderRegistration, 
                 MaximumOutputTokens = model.MaximumOutputTokens,
                 RequestOutputTokenReserve = model.RequestOutputTokenReserve,
                 Capabilities = model.Capabilities,
+                SupportedInputContentTypes = model.SupportedInputContentTypes,
+                SupportedOutputContentTypes = model.SupportedOutputContentTypes,
                 Cost = model.Cost,
                 SensitiveDataPolicy = model.SensitiveDataPolicy,
                 IntendedWorkloadClasses = model.IntendedWorkloadClasses,

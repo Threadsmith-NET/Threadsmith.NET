@@ -19,8 +19,9 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
     [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, true)]
     [InlineData(AgentRole.Implementer, WorkloadClass.CodeEdit, 12_000, false, true)]
     [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, false, true)]
+    [InlineData(AgentRole.Explorer, WorkloadClass.General, 12_000, false, false, false, true)]
     public async Task RunAsync_CompactionAndEvidenceRead_PreservesTaskAndAccountsForSummary(
-        AgentRole role, WorkloadClass workload, int contentCharacters, bool inheritEvidence, bool useCompactionProfile, bool onboarding = false)
+        AgentRole role, WorkloadClass workload, int contentCharacters, bool inheritEvidence, bool useCompactionProfile, bool onboarding = false, bool images = false)
     {
         await using var events = new DomainEventStream();
         var sanitizer = new SecretOutputSanitizer();
@@ -28,9 +29,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
         var paths = Enumerable.Range(0, 3).Select(index => new ToolProvenanceSource("file", $"src/File{index}.cs"))
             .Append(new ToolProvenanceSource("file", "src/password=private-provenance-value/File.cs")).ToArray();
         var content = new string('x', contentCharacters);
-        var tool = new InspectMetadataTool(content, Math.Max(64_000, contentCharacters * 4), paths);
+        var image = new ImageArtifact
+        {
+            Id = "child-image", ContentHash = new string('a', 64), MediaType = "image/png",
+            ByteLength = 100, Width = 2, Height = 2, Source = "fixture",
+        };
+        var tool = new InspectMetadataTool(content, Math.Max(64_000, contentCharacters * 4), paths) { Images = images ? [image] : [] };
         var registry = new ToolRegistry([tool]);
-        var profile = CreateProfile() with { ContextWindow = Math.Max(64_000, contentCharacters * 2), IntendedWorkloadClasses = [workload] };
+        var profile = CreateProfile() with { ContextWindow = Math.Max(64_000, contentCharacters * 2), IntendedWorkloadClasses = [workload], SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image };
         var provider = new CompactingProvider(tool.Definition.Id, profile);
         var summaryProfile = CreateProfile() with
         {
@@ -150,6 +156,14 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         var retrieved = Assert.Single(requests[3].Messages, message => message.Role == ModelMessageRole.Tool && message.ToolName == ChildAgentEvidenceTool.ToolId);
         Assert.Equal(content, retrieved.GetModelVisibleContent());
+        if (images)
+        {
+            Assert.Equal(image, Assert.Single(retrieved.Content, part => part.Kind == ModelContentPartKind.Image).Image);
+            var retained = Assert.Single(evidence.Snapshot(plan.Provenance.SessionId), item => item.EvidenceId == provider.FirstEvidenceId);
+            Assert.Equal(image, Assert.Single(retained.Images));
+            Assert.True(retained.EstimatedTokens >= ModelImages.EstimateTokens(image));
+        }
+
         Assert.Contains(evidence.Snapshot(plan.Provenance.SessionId), item => item.EvidenceId == provider.FirstEvidenceId);
         if (contentCharacters > 262_144)
         {

@@ -5,7 +5,7 @@ The built-in tool registry includes:
 | Tool | Minimum trust | Approval | Purpose |
 |---|---|---|---|
 | `list_files` | `UntrustedInspection` | None | Bounded repository file inventory. |
-| `read_file` | `TrustedRead` | None | Bounded file range read (default input-file limit 1 MiB). |
+| `read_file` | `TrustedRead` | None | Bounded text, image and PDF read (default input-file limit 5 MiB). |
 | `memories` | `TrustedRead` | None | Explicit add/update/remove/list for local repository notes; bounded complete-input embeddings and best-effort recall. |
 | `edit_source` | `TrustedMutation` | Exact mutation policy/review | Ordered source changes with exact anchors, shared transactional writes, durable receipts and advisory compiler feedback. Parent conversation only. |
 | `write_file` | `TrustedRead` | None | Direct UTF-8 report/data output inside `tools.writeFile.allowedFolders` (default `.inbox`); default content limit 1 MiB. |
@@ -104,3 +104,15 @@ Tool/service output and runtime limits are configurable. See [Resource limits](r
 During explicit onboarding or refresh, the same `memories` tool accepts `supportingPaths` for intelligence adds/updates after primary sources were read in that collection. `action:"changes"` pages pending paths with `afterPath`; `action:"coverChanges"` prepares acknowledgments using `coveredPaths`. These actions and intelligence write authority are scoped to the host-authorized collection. Normal model calls cannot select intelligence ownership, onboard, or replace a collection. A successful run publishes prepared changes; cancellation/failure preserves committed data.
 
 Ordinary model `list` excludes intelligence when disabled or ineffective. Manual `/memory list` and `/memory inspect <id>` retain access to preserved entries. Archeology is read-only. See [repository intelligence operations](conversation-context.md#repository-intelligence) for lifecycle, separate capacities, warnings, and commit detection limits.
+
+### Raster image artifacts
+
+`read_file.mode` is `auto` (default), `text`, `image`, or `pdf`. Signature/structure-validated PNG/JPEG reads use the same path/trust/budget/tool pipeline and return typed pixels with metadata and a scoped artifact ID. Image input rejects text range/snapshot options. Existing BOM-aware text reads remain available. Both the configured input-file limit and fixed image bounds apply; see [Working with images](../user-guide.md#working-with-images).
+
+PDF reads render selectable text, scans and diagrams as ordinary image artifacts. `startPage` is one-based (default 1); `maximumPages` defaults to 1 and accepts 1–4. The result's `Pdf` contains total/selected pages, ordered page-image metadata and `NextStartPage`. Pages render through the bundled PDFium renderer at up to `tools:readFile:pdfRenderDpi` (default 144), capped at `tools:readFile:pdfRenderMaxDimension` pixels on the longest edge (default 1600; valid range 1–8192). DPI must be a positive integer. Increase both settings for dense drawings or tables; dimensions are reduced proportionally to stay within 16,777,216 pixels per page. The 5 MiB encoded-image limit still applies, so very detailed pages can fail that bound. Failed multi-page reads release any pages already admitted by that invocation. No standalone PDF reader installation is needed. The configured original-file byte limit and existing image/context limits apply. Text range/snapshot options and password-protected PDFs are rejected. PDF source bytes are not sent to providers; page images require Image capability and the existing sensitive-content policy.
+
+While a read runs, activity shows its path. Completion shows actual delivered line ranges for text and original bytes read for images/PDFs. The durable result carries `BytesRead`, so replay uses the same display. Unsupported binary formats fail without claiming a line range or bytes successfully read.
+
+`write_file.artifactId` exports an authorized PNG/JPEG artifact through the existing allowed-folder/temp-file path. It is exclusive with `content` and `useLastResponse`, requires a MIME-matching image extension, retains explicit overwrite policy and verifies exact-byte integrity. It neither accepts arbitrary digests as authority nor downloads model-provided URLs. Child export checks the current assignment's admitted reference set.
+
+Current and retained historical user messages include an ordered `attachments` metadata array beside their image parts. Each entry provides `artifactId`, `mediaType`, `width`, `height`, and `byteLength`, allowing `write_file.artifactId` to save a pasted image without a separate lookup or another file read. Text-only messages retain their existing content.

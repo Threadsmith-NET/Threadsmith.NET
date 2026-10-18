@@ -808,6 +808,22 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 
 **Verifies:** reproducible startup routing, shared selection authority, and pre-dispatch assertion failure.
 
+## Scenario BB — Multimodal conversation and file artifacts
+
+1. Configure text-only and Text/Image input models. Submit the same image to each; the capable model receives image content, while incompatible submission fails visibly without erasing the draft. Output capability is independent of input capability.
+2. Describe or name a repository image. The agent locates candidates with ordinary exploration and loads the selected image through `read_file`; its next request includes the image with tool provenance and normal activity. Unsupported binary files and prohibited paths are rejected.
+3. Paste a clipboard image, inspect/remove attachments, and submit both an image-only and a mixed text/image message. Output immediately shows "Attaching image ..." during capture/import; repeat image paste requests are ignored until it finishes, and success or failure permits another paste. Clipboard failure, stale capture, cancellation and limits preserve the draft and do not attach content to another session or prompt. `/quit` exits with pending or failed image attachments, releasing unsubmitted ownership without creating model work; other slash commands still require attachment removal.
+4. Repeat image input across each supported provider. Confirm ordering, correlated tool results, truthful context accounting and image-aware cache identity. Resume/clone preserve authorized artifacts; model changes and unavailable bytes cannot silently remove required images. Children receive only assignment-admitted content.
+5. Produce an image through an output-capable provider or deterministic provider fixture, then ask the model to save the artifact through `write_file`. The saved bytes match the validated artifact. Denied paths, overwrite refusal, malformed/partial output and cancellation produce no successful file or false completion claim.
+
+6. Read a PDF containing selectable text, scanned pages and diagrams. The selected pages reach the model as ordinary image evidence with explicit coverage and continuation. Image/PDF completion shows original bytes read; text completion retains actual line ranges. Invalid PDF ranges, incompatible text options and encrypted/malformed files fail visibly.
+
+7. Complete an eight-image turn, then submit another image or read one through a tool. Historical pixels yield oldest first before request validation, with explicit omission receipts and retained text/artifact IDs. Current attachments remain selected; count and byte limits still reject an oversized required request. With eight current attachments or a full current byte budget, image-returning tools provide explicit pixel-omission receipts and artifact metadata instead of aborting the run. Available capacity admits a subset of multipage results in order; child evidence retains admitted image references for rereads after compaction.
+
+8. Configure image storage capacity and PDF render resolution. Admission honors the budget; removing unarchived attachments restores capacity while shared/archive ownership is preserved. Unowned bodies are reclaimed under quota pressure even with retention disabled. Failed multipage reads leave no invisible owned pages. Higher PDF resolution respects image dimension/pixel limits.
+
+**Verifies:** shared conversation/tool execution, independently declared input/output capabilities, image provenance, bounded admission, recoverable composer input, scoped durable artifacts and exact-byte governed export. See MTP-279 for provider/platform verification and evidence limits.
+
 ## Scenario BA - Repository intelligence as memory
 
 1. Start with intelligence disabled. Enable without onboarding and verify no exploration or collection. Explicitly onboard and re-onboard through ordinary execution; cancellation preserves prior assertions and ordinary preferences remain unchanged.

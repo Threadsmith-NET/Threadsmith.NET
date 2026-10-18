@@ -183,6 +183,9 @@ public sealed class OpenAiCodexCatalogClient
             Enabled = true,
             ContextWindow = contextWindow,
             MaximumOutputTokens = contextWindow,
+            SupportedInputContentTypes = element.TryGetProperty("input_modalities", out var modalities)
+                && modalities.ValueKind == JsonValueKind.Array && modalities.EnumerateArray().Any(value => value.ValueKind == JsonValueKind.String && value.GetString() == "image")
+                    ? ModelContentTypes.Text | ModelContentTypes.Image : ModelContentTypes.Text,
             RequestOutputTokenReserve = reserve,
             Capabilities = new ModelCapabilitySet
             {

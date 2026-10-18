@@ -31,6 +31,7 @@ internal static class AnthropicRequestPreparer
     /// <summary>Provides the bounded native protocol operation or metadata for this adapter.</summary>
     internal static ModelRequestPreparationResult Prepare(ModelStreamRequest request, ModelProfile profile, AnthropicModelCompatibility compatibility, string providerId)
     {
+        request = request with { ImageData = new Dictionary<string, ReadOnlyMemory<byte>>() };
         AnthropicReplayIdentity.Validate(request, profile, compatibility, providerId);
         var capabilities = new ModelCacheCapabilities
         {
@@ -88,7 +89,9 @@ internal static class AnthropicRequestPreparer
         var bytes = JsonSerializer.SerializeToUtf8Bytes(body);
         try
         {
-            var framing = FramingAllowanceTokens + (request.ResponseFormat is null ? 0 : StructuredOutputAllowanceTokens);
+            var imageTokens = request.Messages.SelectMany(message => message.Content).Where(part => part.IsModelVisible && part.Image is not null)
+                .Sum(part => ModelImages.EstimateTokens(part.Image ?? throw new ModelProviderException("Missing image metadata.")));
+            var framing = imageTokens + FramingAllowanceTokens + (request.ResponseFormat is null ? 0 : StructuredOutputAllowanceTokens);
             var retained = request.TransientState?.RetainedOutputTokens ?? 0;
             var total = Math.Min(int.MaxValue, (long)bytes.Length + framing + retained);
             var attributionResult = Attribute(body, bytes, attribution, request, framing, retained, total);

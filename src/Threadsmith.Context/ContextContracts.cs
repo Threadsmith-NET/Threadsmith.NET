@@ -99,6 +99,9 @@ public sealed record Evidence
     /// <summary>Sanitized, bounded content supplied to governed context.</summary>
     public required string Content { get; init; }
 
+    /// <summary>Admitted raster references accompanying this evidence, without binary payloads.</summary>
+    public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+
     /// <summary>Source and confidence metadata.</summary>
     public required EvidenceProvenance Provenance { get; init; }
 
@@ -253,6 +256,9 @@ public sealed record ContextAssemblyRequest
 
     /// <summary>Request-local host-owned model messages appended to the assembled request.</summary>
     public IReadOnlyList<ModelMessage> AdditionalMessages { get; init; } = [];
+
+    /// <summary>Images appended by the active turn after frozen context; reserve capacity without duplicating their messages.</summary>
+    public IReadOnlyList<ImageArtifact> ContinuationImages { get; init; } = [];
 
     /// <summary>Evidence already represented by this turn's continuation groups or successfully compacted summaries.</summary>
     public IReadOnlyList<EvidenceId> ActiveTurnEvidenceIds { get; init; } = [];

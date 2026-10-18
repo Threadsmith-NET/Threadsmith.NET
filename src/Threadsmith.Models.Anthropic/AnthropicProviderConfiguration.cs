@@ -40,6 +40,9 @@ public sealed record AnthropicModelOverrideConfiguration
     /// <summary>Optional reviewed compatibility policy. Omission requires a compiled exact-ID policy record.</summary>
     public AnthropicModelCompatibility? Compatibility { get; init; }
 
+    /// <summary>Optional trusted input restriction; omission uses explicit discovered capabilities.</summary>
+    public ModelContentTypes? SupportedInputContentTypes { get; init; }
+
     /// <summary>Optional exact-model request defaults replacing the provider defaults.</summary>
     public AnthropicModelDefaults? Defaults { get; init; }
 }

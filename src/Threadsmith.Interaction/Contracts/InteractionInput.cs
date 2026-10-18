@@ -1,5 +1,7 @@
 namespace Threadsmith.Interaction.Contracts;
 
+using Threadsmith.Core;
+
 /// <summary>Identifies why a composer interaction completed.</summary>
 public enum InteractionInputKind
 {
@@ -32,7 +34,11 @@ public enum ComposerPurpose
 /// <summary>Requests one semantic composer interaction.</summary>
 /// <param name="Prompt">Bounded prompt label.</param>
 /// <param name="Purpose">Purpose of the read.</param>
-public sealed record ComposerRequest(string Prompt, ComposerPurpose Purpose = ComposerPurpose.Conversation);
+public sealed record ComposerRequest(string Prompt, ComposerPurpose Purpose = ComposerPurpose.Conversation)
+{
+    /// <summary>Session owning ordinary conversation draft attachments.</summary>
+    public SessionId? SessionId { get; init; }
+}
 
 /// <summary>Represents one completed or cancelled composer interaction.</summary>
 /// <param name="IsSubmitted">Whether the user submitted input.</param>
@@ -43,4 +49,8 @@ public sealed record InteractionInput(
     bool IsSubmitted,
     string Text,
     CancellationToken OperationCancellationToken,
-    InteractionInputKind Kind = InteractionInputKind.Submission);
+    InteractionInputKind Kind = InteractionInputKind.Submission)
+{
+    /// <summary>Admitted image references submitted with the text.</summary>
+    public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+}

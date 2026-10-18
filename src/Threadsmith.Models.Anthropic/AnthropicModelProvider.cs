@@ -60,6 +60,7 @@ internal sealed class AnthropicModelProvider : IModelProvider
                 throw Classify(new OperationCanceledException(), deadline, cancellationToken).Exception;
             }
 
+            request = await ModelImages.ResolveAsync(request, _profile, deadline.Token);
             var parameters = AnthropicRequestMapper.Create(request, _profile, _compatibility);
             ModelUsage? interruptedUsage = null;
             for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)

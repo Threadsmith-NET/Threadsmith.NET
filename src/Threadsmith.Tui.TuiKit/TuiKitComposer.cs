@@ -59,8 +59,11 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
     /// <summary>Gets or sets the clipboard writer; false leaves cut text intact.</summary>
     internal Func<string, bool>? CopyRequested { get; set; }
 
-    /// <summary>Gets or sets the explicit clipboard request callback.</summary>
+    /// <summary>Gets or sets the explicit text clipboard request callback.</summary>
     internal Action? PasteRequested { get; set; }
+
+    /// <summary>Gets or sets the explicit image clipboard request callback.</summary>
+    internal Action? ImagePasteRequested { get; set; }
 
     /// <summary>Gets the viewport-relative caret after the most recent render.</summary>
     internal (int X, int Y) VisibleCaret
@@ -181,6 +184,9 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
                         }
                     }
 
+                    break;
+                case 'v' when alt:
+                    ImagePasteRequested?.Invoke();
                     break;
                 case 'v':
                     PasteRequested?.Invoke();

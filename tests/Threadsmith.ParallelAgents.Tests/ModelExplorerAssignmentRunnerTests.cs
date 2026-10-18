@@ -1530,6 +1530,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
 
         public Exception? Failure { get; init; }
 
+        public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+
         public override ToolDefinition Definition { get; } = new()
         {
             Id = "inspect_metadata",
@@ -1566,7 +1568,8 @@ public sealed partial class ModelExplorerAssignmentRunnerTests
             return Task.FromResult(new ToolExecution<string>(
                 "metadata",
                 _sources,
-                ModelResultContent: _modelResultContent));
+                ModelResultContent: _modelResultContent,
+                Images: Images));
         }
 
         protected override void ValidateInput(InspectMetadataInput input)

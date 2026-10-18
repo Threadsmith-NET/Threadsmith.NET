@@ -25,7 +25,7 @@ internal static class InteractiveFrontendRunner
 
     private static async Task RunTuiKitAsync(ShellRunContext context, SessionThemePreferences themes, TuiDisplayOptions display, CancellationTokenSource processCancellation)
     {
-        await using var surface = new TuiKitSurface(themes.ActiveTheme, processCancellation.Cancel, limits: display.Limits);
+        await using var surface = new TuiKitSurface(themes.ActiveTheme, processCancellation.Cancel, limits: display.Limits, images: context.ImageArtifacts);
         var coordinator = CreateCoordinator(context, themes, display, surface, surface.SetThemeAsync);
         await surface.RunAsync(token => RunCoordinatorAsync(coordinator, context, token), processCancellation.Token);
     }

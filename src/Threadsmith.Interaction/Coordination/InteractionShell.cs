@@ -105,10 +105,13 @@ public class InteractionPresenter
     }
 
     /// <summary>Submits onboarding depth through the ordinary command boundary.</summary>
-    public Task<RunId> SubmitAsync(SessionId sessionId, string text, RepositoryIntelligenceOperation operation, int? historyDepth, CancellationToken cancellationToken = default)
+    public Task<RunId> SubmitAsync(SessionId sessionId, string text, RepositoryIntelligenceOperation operation, int? historyDepth, CancellationToken cancellationToken = default) => SubmitAsync(sessionId, text, operation, historyDepth, null, cancellationToken);
+
+    /// <summary>Submits image references through the same ordinary foreground lifetime.</summary>
+    public Task<RunId> SubmitAsync(SessionId sessionId, string text, RepositoryIntelligenceOperation operation, int? historyDepth, IReadOnlyList<ImageArtifact>? images, CancellationToken cancellationToken = default)
     {
         return _dispatcher.DispatchAsync(
-            new SubmitRequestCommand(sessionId, text) { IntelligenceOperation = operation, IntelligenceHistoryDepth = historyDepth },
+            new SubmitRequestCommand(sessionId, text) { IntelligenceOperation = operation, IntelligenceHistoryDepth = historyDepth, Images = images ?? [] },
             cancellationToken);
     }
 

@@ -70,7 +70,12 @@ internal sealed class ChildAgentPrompt
             CreateMessage(
                 ModelMessageRole.User,
                 "child-initial-evidence",
-                RenderEvidence(context.Evidence)),
+                RenderEvidence(context.Evidence)) with
+            {
+                Content = ModelImages.Append(
+                    [new ModelContentPart { Content = RenderEvidence(context.Evidence) }],
+                    context.Evidence.SelectMany(item => item.Images).DistinctBy(image => image.Id).ToArray()),
+            },
         ];
     }
 
@@ -110,7 +115,8 @@ internal sealed class ChildAgentPrompt
         string toolName,
         string content,
         int? modelRound = null,
-        bool? isError = null)
+        bool? isError = null,
+        IReadOnlyList<ImageArtifact>? images = null)
     {
         return new ModelMessage
         {
@@ -120,7 +126,7 @@ internal sealed class ChildAgentPrompt
             ToolName = toolName,
             ModelRound = modelRound,
             IsError = isError,
-            Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = content }],
+            Content = ModelImages.Append([new ModelContentPart { Kind = ModelContentPartKind.Json, Content = content }], images),
         };
     }
 

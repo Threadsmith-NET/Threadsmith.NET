@@ -54,6 +54,18 @@ public interface IModelProviderInstructionResolver
 /// <summary>Request passed to a host-owned model provider.</summary>
 public sealed record ModelStreamRequest
 {
+    /// <summary>Session whose scoped artifact references may be resolved for this request.</summary>
+    [JsonIgnore]
+    public SessionId? ImageSessionId { get; init; }
+
+    /// <summary>Host-only artifact resolution after policy and capacity admission.</summary>
+    [JsonIgnore]
+    public Func<ImageArtifact, CancellationToken, Task<ReadOnlyMemory<byte>>>? ResolveImageAsync { get; init; }
+
+    /// <summary>Ephemeral image transport bytes; excluded from logs, identity and durable replay.</summary>
+    [JsonIgnore]
+    public IReadOnlyDictionary<string, ReadOnlyMemory<byte>> ImageData { get; init; } = new Dictionary<string, ReadOnlyMemory<byte>>();
+
     /// <summary>Request correlation id.</summary>
     public required RunId RunId { get; init; }
 
@@ -204,6 +216,10 @@ public enum ModelFinishReason
 /// <summary>Provider-neutral streaming chunk.</summary>
 public sealed record ModelChunk
 {
+    /// <summary>Complete generated image bytes from a verified endpoint; never serialized or logged.</summary>
+    [JsonIgnore]
+    public GeneratedModelImage? GeneratedImage { get; init; }
+
     /// <summary>Text delta.</summary>
     public string? Text { get; init; }
 
@@ -229,6 +245,17 @@ public sealed record ModelChunk
     /// <summary>Excludes transient displayable reasoning from explicit raw exchange diagnostics.</summary>
     [JsonIgnore]
     public bool SuppressReasoningDiagnostics { get; init; }
+}
+
+/// <summary>One complete response-local image pending host validation and publication.</summary>
+public sealed record GeneratedModelImage
+{
+    /// <summary>Stable provider response and item identity for retry deduplication.</summary>
+    public required string ResponseItemId { get; init; }
+
+    /// <summary>Complete encoded PNG/JPEG bytes. Partial output must never use this contract.</summary>
+    [JsonIgnore]
+    public required ReadOnlyMemory<byte> Bytes { get; init; }
 }
 
 /// <summary>Host-owned model provider facade.</summary>

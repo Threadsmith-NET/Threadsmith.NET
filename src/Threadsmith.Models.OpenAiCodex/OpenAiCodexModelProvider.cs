@@ -122,6 +122,7 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
         // completed usage is checked against the separate profile maximum.
         var outputReserve = request.MaximumOutputTokens ?? _profile.EffectiveRequestOutputTokenReserve;
         ValidateCapacity(request, canonicalTools, outputReserve);
+        request = await ModelImages.ResolveAsync(request, _profile, cancellationToken);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         if (_profile.Timeout > TimeSpan.Zero)
@@ -458,7 +459,8 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
                 {
                     ["type"] = "function_call_output",
                     ["call_id"] = message.ToolCallId,
-                    ["output"] = content,
+                    ["output"] = message.Content.Any(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image)
+                        ? CreateContent(request, message, "input_text") : JsonValue.Create(content),
                 });
                 continue;
             }
@@ -479,14 +481,20 @@ internal sealed class OpenAiCodexModelProvider : IModelProvider
             input.Add(new JsonObject
             {
                 ["role"] = role,
-                ["content"] = new JsonArray
-                {
-                    new JsonObject { ["type"] = contentType, ["text"] = content },
-                },
+                ["content"] = message.Content.Any(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image)
+                    ? CreateContent(request, message, contentType)
+                    : new JsonArray { new JsonObject { ["type"] = contentType, ["text"] = content } },
             });
         }
 
         return input;
+    }
+
+    private static JsonArray CreateContent(ModelStreamRequest request, ModelMessage message, string textType)
+    {
+        return new JsonArray(message.Content.Where(part => part.IsModelVisible).Select(part => (JsonNode)(part.Image is { } image && part.Kind == ModelContentPartKind.Image
+            ? new JsonObject { ["type"] = "input_image", ["image_url"] = $"data:{image.MediaType};base64,{ModelImages.GetBase64(request, image)}", ["detail"] = "high" }
+            : new JsonObject { ["type"] = textType, ["text"] = part.Content })).ToArray());
     }
 
     private static async IAsyncEnumerable<ModelChunk> ReadEventsAsync(

@@ -237,7 +237,10 @@ public static class RepoConfigTests
         var config = LoadConfigExample();
         Assert.Equal(200, config.GetValue("tools:listFiles:defaultEntries", 0));
         Assert.Equal(2000, config.GetValue("tools:listFiles:maxEntries", 0));
-        Assert.Equal(1_048_576L, config.GetValue<long>("tools:readFile:maxBytes", 0));
+        Assert.Equal(5_242_880L, config.GetValue<long>("tools:readFile:maxBytes", 0));
+        Assert.Equal(144, config.GetValue("tools:readFile:pdfRenderDpi", 0));
+        Assert.Equal(1600, config.GetValue("tools:readFile:pdfRenderMaxDimension", 0));
+        Assert.Equal(536_870_912L, config.GetValue<long>("persistence:maximumRetainedImageBytes", 0));
         Assert.Equal(2000, config.GetValue("tools:readFile:defaultLines", 0));
         Assert.Equal(2000, config.GetValue("tools:readFile:maxLines", 0));
         Assert.Equal(51_200, config.GetValue("tools:readFile:maxContentBytes", 0));

@@ -1,0 +1,12 @@
+{
+  "id": "StbImageSharp",
+  "version": "2.30.15",
+  "scope": "bundled-package",
+  "provenance": "https://github.com/StbSharp/StbImageSharp/tree/6fd7aebe1dbf10e28d78745f42a0c095c61d1945",
+  "packageSha512": "7QqbupVhz2kcFUPTgMw4iHR9rYDHGundzzee19Mwmd1typ2Lnv8EVJcLJxlkeBM2+4ex0NwsMtdbGSJctp1XCQ==",
+  "licenseExpression": "custom-approved",
+  "licenseText": "legal/licenses/StbImageSharp-2.30.15.txt",
+  "noticeTreatment": "Preserve exact port public-domain declaration and upstream dual MIT/public-domain license; no native binaries or package dependencies.",
+  "reviewState": "approved",
+  "copyrightText": "StbImageSharpTeam; upstream Copyright (c) 2017 Sean Barrett"
+}

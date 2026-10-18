@@ -716,6 +716,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ModelResultContent = modelResultContent,
                 Concepts = observedConcepts,
                 Sources = execution.Sources,
+                Images = succeeded ? execution.Images ?? [] : [],
                 IsTruncated = isTruncated,
                 ErrorClassification = classification,
                 Error = error,

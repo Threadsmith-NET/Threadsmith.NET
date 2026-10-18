@@ -1,0 +1,26 @@
+LibGit2Sharp.NativeBinaries 2.0.324 — source and distribution treatment
+
+Threadsmith.NET uses the unmodified native libgit2 binaries from the pinned
+LibGit2Sharp.NativeBinaries NuGet package, linked by LibGit2Sharp. The native
+library is GPL version 2 with the linking exception reproduced in full in the
+accompanying license bundle. The bundle also retains upstream third-party
+notices and their license terms. The native packaging repository is MIT licensed.
+
+Native package and build scripts:
+https://www.nuget.org/packages/LibGit2Sharp.NativeBinaries/2.0.324
+https://github.com/libgit2/libgit2sharp.nativebinaries/tree/2b95030f15e55dfe70e9fdbb2b3d304a5c95ad23
+
+Exact libgit2 source (package libgit2_hash.txt and build repository submodule):
+https://github.com/libgit2/libgit2/tree/5853918c4c6a7b12f8becf4bd11ff4362ebb9020
+https://github.com/libgit2/libgit2/archive/5853918c4c6a7b12f8becf4bd11ff4362ebb9020.tar.gz
+
+The native build repository includes the platform build scripts and container
+definitions. Its libgit2 submodule must be checked out at the revision above;
+the build repository archive alone does not include submodule source.
+
+Managed wrapper source:
+https://github.com/libgit2/libgit2sharp/tree/eaa698d078941fd5e3cc82b59b885cd35d8cc0f8
+
+The release disposition covers this unmodified library/application combination
+under the linking exception. Modifying libgit2 or distributing it separately
+requires a new review of the applicable GPL source-distribution obligations.

@@ -1,5 +1,7 @@
 namespace Threadsmith.Tools;
 
+using Threadsmith.Core;
+
 /// <summary>
 /// Host-owned operational limits for the built-in tool suite, sourced from layered
 /// configuration (strategy §21.1). Bound once at the composition root and injected into
@@ -15,6 +17,9 @@ public sealed record ToolLimits
 {
     /// <summary>Maximum characters in a file-search query.</summary>
     public int SearchMaximumQueryCharacters { get; init; } = 500;
+
+    /// <summary>Default maximum input-file size for <c>read_file</c>: 5 MiB.</summary>
+    public const long DefaultReadFileByteLimit = 5L * 1024 * 1024;
 
     /// <summary>Default size for one <c>read_file</c> line window.</summary>
     public const int DefaultReadFileLineLimit = 2000;
@@ -32,8 +37,8 @@ public sealed record ToolLimits
 
     // ── read_file ────────────────────────────────────────────────────────
 
-    /// <summary>Maximum byte size of a single readable file. Historical default: 1 MiB.</summary>
-    public long ReadFileMaximumBytes { get; init; } = 1024 * 1024;
+    /// <summary>Maximum byte size of a single readable file. Default: 5 MiB.</summary>
+    public long ReadFileMaximumBytes { get; init; } = DefaultReadFileByteLimit;
 
     /// <summary>Default <c>maximumLines</c> when the model omits it.</summary>
     public int ReadFileDefaultLines { get; init; } = DefaultReadFileLineLimit;
@@ -45,6 +50,12 @@ public sealed record ToolLimits
     /// Configured textual-content bound for one result.
     /// </summary>
     public int ReadFileMaximumContentBytes { get; init; } = DefaultReadFileContentByteLimit;
+
+    /// <summary>PDF page render resolution in dots per inch; default 144. Pixel bounds also apply.</summary>
+    public int PdfRenderDpi { get; init; } = 144;
+
+    /// <summary>Maximum rendered PDF page edge in pixels; default 1600, at most the image admission dimension.</summary>
+    public int PdfRenderMaximumDimension { get; init; } = 1600;
 
     // ── search ───────────────────────────────────────────────────────────
 
@@ -98,6 +109,9 @@ public sealed record ToolLimits
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ListFilesDefaultEntries);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ListFilesMaxEntries);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileMaximumBytes);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PdfRenderDpi);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(PdfRenderMaximumDimension);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(PdfRenderMaximumDimension, ImageArtifactLimits.MaximumDimension);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileDefaultLines);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileMaxLines);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReadFileMaximumContentBytes);

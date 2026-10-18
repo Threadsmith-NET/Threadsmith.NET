@@ -1,13 +1,14 @@
 {
   "schemaVersion": 1,
   "policyVersion": "1.0",
-  "reviewedAtUtc": "2026-09-21T00:00:00Z",
+  "reviewedAtUtc": "2026-10-18T00:00:00Z",
   "reviewOwner": "Threadsmith.NET designated release owner",
   "approvedLicenseExpressions": [
     "MIT",
     "Apache-2.0",
     "BSD-2-Clause",
     "MIT OR Unlicense",
+    "GPL-2.0-only WITH GCC-exception-2.0",
     "custom-approved",
     "platform-terms-approved",
     "not-bundled",
@@ -56,6 +57,39 @@
       "noticeTreatment": "full license text",
       "reviewState": "approved",
       "copyrightText": "Copyright holders and contributors of Humanizer.Core (Mehdi Khalili, Claire Novotny)"
+    },
+    {
+      "id": "LibGit2Sharp",
+      "version": "0.32.0",
+      "scope": "bundled-package",
+      "provenance": "https://github.com/libgit2/libgit2sharp/tree/eaa698d078941fd5e3cc82b59b885cd35d8cc0f8",
+      "sourceRevision": "eaa698d078941fd5e3cc82b59b885cd35d8cc0f8",
+      "packageSha512": "BL3eMVRnkWWS9zbz6n0H+iDVJ9ZK7hDeiuASnHlsFvwZYTJtDuBFRRVIaH//s4VlF0baOGvCeenXbobE1JLLiQ==",
+      "licenseExpression": "MIT",
+      "licenseText": "legal/licenses/LibGit2Sharp-0.32.0.txt",
+      "noticeTreatment": "Preserve the exact package MIT license and contributor copyright. Native dependency has its own reviewed disposition.",
+      "reviewState": "approved",
+      "copyrightText": "Copyright (c) LibGit2Sharp contributors",
+      "reviewNotes": "Release owner authorized completing this disposition on 2026-10-16 after review of the MIT wrapper and native GPLv2 linking exception. Package license, repository revision and NuGet restore content hash verified."
+    },
+    {
+      "id": "LibGit2Sharp.NativeBinaries",
+      "version": "2.0.324",
+      "scope": "bundled-package",
+      "provenance": "https://github.com/libgit2/libgit2sharp.nativebinaries/tree/2b95030f15e55dfe70e9fdbb2b3d304a5c95ad23",
+      "sourceRevision": "2b95030f15e55dfe70e9fdbb2b3d304a5c95ad23",
+      "packageSha512": "5YZVGNuO9nYFQfzRQGPGY9fdpSsABwlF2jSaZ7ydxCfjvt5Krbj/eHbXkvvgAQzp4lkjvgDrlAuuI4KTmqhDlA==",
+      "licenseExpression": "GPL-2.0-only WITH GCC-exception-2.0",
+      "licenseConcluded": "NOASSERTION",
+      "licenseText": "legal/licenses/LibGit2Sharp.NativeBinaries-2.0.324.txt",
+      "additionalNotices": [
+        "legal/licenses/LibGit2Sharp-0.32.0.txt",
+        "legal/LibGit2Sharp.NativeBinaries-2.0.324-SOURCE.txt"
+      ],
+      "noticeTreatment": "Unmodified libgit2 linked with Threadsmith under GPLv2 with the exact upstream linking exception. Preserve the entire package license bundle, including embedded third-party terms, MIT packaging notice and pinned source/build provenance. The mixed native bundle is not relabeled MIT or plain GPLv2.",
+      "reviewState": "approved",
+      "copyrightText": "Copyright (C) the libgit2 contributors; LibGit2Sharp contributors and embedded component holders identified in the complete license bundle.",
+      "reviewNotes": "Release owner authorized completing this disposition on 2026-10-16. Verified NuGet restore content hash, package libgit2_hash.txt and native build submodule both pin 5853918c4c6a7b12f8becf4bd11ff4362ebb9020; bundled license matches that revision's COPYING. Approval covers the unmodified binaries distributed with Threadsmith, not standalone redistribution or modified libgit2."
     },
     {
       "id": "Markdig",
@@ -514,6 +548,18 @@
       "copyrightText": "Copyright holders and contributors of SQLitePCLRaw.provider.e_sqlite3 (Eric Sink)"
     },
     {
+      "id": "StbImageSharp",
+      "version": "2.30.15",
+      "scope": "bundled-package",
+      "provenance": "https://github.com/StbSharp/StbImageSharp/tree/6fd7aebe1dbf10e28d78745f42a0c095c61d1945",
+      "packageSha512": "7QqbupVhz2kcFUPTgMw4iHR9rYDHGundzzee19Mwmd1typ2Lnv8EVJcLJxlkeBM2+4ex0NwsMtdbGSJctp1XCQ==",
+      "licenseExpression": "custom-approved",
+      "licenseText": "legal/licenses/StbImageSharp-2.30.15.txt",
+      "noticeTreatment": "Preserve exact port public-domain declaration and upstream dual MIT/public-domain license; no native binaries or package dependencies.",
+      "reviewState": "approved",
+      "copyrightText": "StbImageSharpTeam; upstream Copyright (c) 2017 Sean Barrett"
+    },
+    {
       "id": "StyleCop.Analyzers.Unstable",
       "version": "1.2.0.556",
       "scope": "bundled-package",
@@ -813,6 +859,150 @@
       "additionalNotices": [
         "legal/System.Numerics.Tensors-9.0.0-NOTICES.txt"
       ]
+    },
+    {
+      "id": "PDFtoImage",
+      "version": "5.4.0",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/PDFtoImage/5.4.0",
+      "packageSha512": "2eb8rDolYj9B7O87RpuqRG6oA6jEHV7z5PcBHmIP2KD75HNwJDxR91sXIYEh5DCCuvNxtSXtN8Bllfmma3RWBg==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/PDFtoImage-5.4.0-LICENSE.txt",
+      "sourceRevision": "5948628cb2cf7d070c7fd28b1b4496db39e3afcd",
+      "copyrightText": "Copyright holders identified in the exact-source license and bundled notices.",
+      "packageArchiveSha512": "82ARAD8HcA2auhEN/jnwJBB7WbiYkKVPlR/Ac/Ei/sZERk/GKnwOoVl2NKMr5Nq262Ncer50mFcX8f8JHhKF6A==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp/4.150.1",
+      "packageSha512": "5v3T8X1N62Dp+AkPO70GNBNS/NRBPGMOTiN+Prg33sZAcm/Ug3YOAH+3RTj/jxJV8NGTJs2idGpC2Qdae2mGLQ==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "packageArchiveSha512": "7DRqkmsU+ChkQYxHlIZJScJyHOhmfJZZ9eHn0T4XmNvJi/XZuMnH5rtluS6nWU6+H0mkrRrJYnklEbxRngrsHA==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp.NativeAssets.Win32",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp.NativeAssets.Win32/4.150.1",
+      "packageSha512": "qrLSL8OonbkMJdSH8heK0Jl39Y2xxZGdd7Ru4cyBXk2ITdx+Fu1sCFLmvCKmnMaYs//mlN/YSpSpOurEXErcQw==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "additionalNotices": [
+        "legal/PdfReading/SkiaSharp.NativeAssets.Linux.NoDependencies-4.150.1-THIRD-PARTY-NOTICES.txt"
+      ],
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "licenseConcluded": "NOASSERTION",
+      "packageArchiveSha512": "HxdWI/48pmiBHi63G2uRsFAAgzKfj4+v6W+6asVulJR+9NU9ixtmP8nuaIPyl3xtwvfrZs+H/Iqc+s1AVXi0MA==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp.NativeAssets.macOS",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp.NativeAssets.macOS/4.150.1",
+      "packageSha512": "r755HVwaHZhyf1clWjrM2/RoOZYCzkQEmE9pu/mVsebPejWu52niNPUwtfyf112qoF0PIk6OndqVOUoITj6TwQ==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "additionalNotices": [
+        "legal/PdfReading/SkiaSharp.NativeAssets.Linux.NoDependencies-4.150.1-THIRD-PARTY-NOTICES.txt"
+      ],
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "licenseConcluded": "NOASSERTION",
+      "packageArchiveSha512": "81rxa35mayAO3zzhJlat850uQ9YzGotQogesWsVOpp3K8FyjFRcdU5t0IjNVrRKcWtFXNwEEFZ1yaME+eTAqNA==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp.NativeAssets.Linux.NoDependencies",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp.NativeAssets.Linux.NoDependencies/4.150.1",
+      "packageSha512": "2KVadgDky2xQw7lEMRT/u0ftX5K1u8X7MhCN47Em22Z6VM6JJg1c9cwfGuSPAt1oY6+GjGHH18vkeev+nqT9Kw==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "additionalNotices": [
+        "legal/PdfReading/SkiaSharp.NativeAssets.Linux.NoDependencies-4.150.1-THIRD-PARTY-NOTICES.txt"
+      ],
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "licenseConcluded": "NOASSERTION",
+      "packageArchiveSha512": "nIuCmhq8vXr4+GdlNOHafv1TmDCHXCPb4bk0yTtd/mkhK/jPhZR+mmFxKhFR6VBRvTBRRoUc3Bn3tuX58X4IIg==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "bblanchon.PDFium.Win32",
+      "version": "152.0.7961",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Win32/152.0.7961",
+      "packageSha512": "E6m7Y/OZ/eySQBy4drjDCF6pspBdp2PaF6vC04K1BgGbS8UtXOdL0SnReg3zE309hBZ6U/ZDMys9QE5VhBzDDQ==",
+      "licenseExpression": "Apache-2.0",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/licenses/Apache-2.0.txt",
+      "additionalNotices": [
+        "legal/PdfReading/PDFium-152.0.7961-win-arm64-NOTICES.txt"
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
+      "packageArchiveSha512": "pWyGOMwMdyYGtBGqXa77gdXLKZJ0mJL9jLP09tFEpmJd6QVqZoVYPufmVdaKN/3t3RC16O6dZPuttpV97JBAOw==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "bblanchon.PDFium.macOS",
+      "version": "152.0.7961",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.macOS/152.0.7961",
+      "packageSha512": "GaBNtpfoiYbXTi9WLeEWSxWi2zG9kJMfuDMF7AH4kK0zjXz3C/Qg9epKIZKN3nfPaS48Qy3uV2VM14QBI/iAGg==",
+      "licenseExpression": "Apache-2.0",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/licenses/Apache-2.0.txt",
+      "additionalNotices": [
+        "legal/PdfReading/PDFium-152.0.7961-osx-arm64-NOTICES.txt"
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
+      "packageArchiveSha512": "o84By5TiSCLoPb6Mr/veMqkJDWCS0keu3Rrp+OpWBKLNOVy/alHUIdNKZhyd9H4PbbFACtBGagRryWNnYUdD7Q==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "bblanchon.PDFium.Linux",
+      "version": "152.0.7961",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Linux/152.0.7961",
+      "packageSha512": "80m1PwszVp53avI/l+BCov8/6jl7B2FU+hQNTSrApMrkwKcCSRDHkXYYrGYsxpc8NAs/44tyrEQdCfX1yRzPhw==",
+      "licenseExpression": "Apache-2.0",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/licenses/Apache-2.0.txt",
+      "additionalNotices": [
+        "legal/PdfReading/PDFium-152.0.7961-linux-arm64-NOTICES.txt"
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
+      "packageArchiveSha512": "mHqxElmixmwmLHJNCghdxOFlrvwn4rc79DblFfD8fQswbw4Ahk6vFVOCb9zuDyNcM+Fj/QCiVMGyuwlPekJk+w==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
     }
   ]
 }

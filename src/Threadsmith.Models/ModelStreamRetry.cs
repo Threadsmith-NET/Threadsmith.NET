@@ -8,7 +8,7 @@ public static class ModelStreamRetry
     {
         ArgumentNullException.ThrowIfNull(chunk);
         return chunk.Reasoning is not null && chunk.Text is null && chunk.Output is null
-            && chunk.Usage is null && chunk.FinishReason is null && chunk.ResponseEnvelope is null;
+            && chunk.GeneratedImage is null && chunk.Usage is null && chunk.FinishReason is null && chunk.ResponseEnvelope is null;
     }
 
     /// <summary>Separates failed preliminary reasoning from a new attempt without contributing model usage.</summary>

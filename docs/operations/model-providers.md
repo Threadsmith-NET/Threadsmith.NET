@@ -304,3 +304,20 @@ Keep the response mode appropriate to your endpoint. Both effort-bearing templat
 In the interactive terminal, `/reasoning` reports the resolved model and whether control is selectable, always on, or unsupported. `/reasoning <level>` is accepted only for selectable models and only for a level advertised by that model's configuration. Always-on and unsupported models return an actionable non-selectable message. Switching profiles revalidates the shared preference and resets it to `none` when supported, or to the model's default level otherwise; switching back does not restore the former value.
 
 Provider-catalog validation bounds are configurable with trusted `model:catalogLimits` settings. Anthropic provider entries also accept `resourceLimits` for stream, replay, discovery, and metadata limits. See [Resource limits](resource-limits.md) for the complete defaults and example; external protocol and model capabilities remain authoritative.
+
+## Image input and output capabilities
+
+Every model has independent `supportedInputContentTypes` and `supportedOutputContentTypes`. Omission means `"Text"`; `"Text, Image"` enables both named input kinds. Numeric flags, unknown names, empty sets and sets without Text are rejected. Do not infer image capability from a model name. OpenAI-compatible entries declare these fields in their existing `models` array; Anthropic exact `modelOverrides` can set `supportedInputContentTypes` to restrict explicitly discovered capabilities. Codex discovery consumes `input_modalities`; an older cached catalog is refreshed once within the existing bounded startup deadline, retaining its text-only models if refresh fails. Trusted `model.openAiCodex.models.<exact-model-id>.supportedInputContentTypes` can explicitly configure a Codex model. Repository configuration cannot change that trusted override.
+
+```json
+{
+  "supportedInputContentTypes": "Text, Image",
+  "supportedOutputContentTypes": "Text"
+}
+```
+
+All three compiled endpoints currently require output `Text`: no verified native image-generation response is implemented. Requesting Image output fails configuration validation. The host's generated-image artifact/export contract is tested with a deterministic provider; it does not imply live generation support.
+
+Images use native high-detail Chat Completions image URLs containing transient data, Codex Responses `input_image` content (including correlated function outputs), and Anthropic base64 image blocks, including nested `tool_result` blocks. Chat endpoints that lack image-bearing tool results receive correlated textual tool results followed by an adjacent user-role evidence message. The host labels this as tool evidence. PNG/JPEG bytes are resolved only at provider submission; persisted messages, identities and logs contain descriptors. Image contents cannot be redacted as text, so the selected profile must permit sensitive input. Capability checks repeat on every prepared request, including continuations and model changes; unsupported images cause an actionable failure.
+
+Admission uses a deliberately conservative allowance: the greater of `2833 + 5667 × ceil(width/512) × ceil(height/512)` and `2048 + 3 × ceil(width/32) × ceil(height/32)`. This covers the documented 4o-mini high-detail tile schedule without assuming provider downscaling and patch-based accounting; it can reject large images earlier than an endpoint would. Base64 is transport data, never natural-language token input. The host separately caps encoded bytes/count; metadata/digests, dimensions, media type and ordering participate in request identity. Actual provider usage remains authoritative for reporting. Official protocol evidence and local validation limits are recorded in plan 120.

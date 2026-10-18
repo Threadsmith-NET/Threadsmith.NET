@@ -424,7 +424,10 @@
       "timeoutSeconds": 30
     },
     "readFile": {
-      "maxBytes": 1048576,
+      // PDF resolution is also bounded by 8192 pixels/edge and 16777216 pixels/page.
+      "pdfRenderDpi": 144,
+      "pdfRenderMaxDimension": 1600,
+      "maxBytes": 5242880,
       "defaultLines": 2000,
       "maxLines": 2000,
       "maxContentBytes": 51200
@@ -745,6 +748,8 @@
     // Directory holding content-addressed artifact files (process output, diffs,
     // build logs, etc.). Metadata lives in SQLite (§19.3).
     "artifactDirectory": ".threadsmith/artifacts",
+    // Positive store-wide image body budget; 512 MiB by default.
+    "maximumRetainedImageBytes": 536870912,
     "retention": {
       // Whether age-based retention cleanup is enabled (§19.6).
       "enabled": true,

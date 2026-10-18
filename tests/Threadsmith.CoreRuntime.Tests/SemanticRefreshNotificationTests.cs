@@ -203,7 +203,7 @@ public static class SemanticRefreshNotificationTests
             Assert.Equal("draft", (await read).Text);
             var copy = Assert.Single(backend.TakeOutput().Split("\u001b]52;c;").Skip(1));
             var copied = Encoding.UTF8.GetString(Convert.FromBase64String(copy[..copy.IndexOf('\u001b')]));
-            Assert.Equal(transcript.TrimEnd(), copied.TrimEnd());
+            Assert.Equal("Use Control-V to paste text; Control-Alt-V to paste an image\n" + transcript.TrimEnd(), copied.TrimEnd());
         },
             timeout.Token);
     }

@@ -1,5 +1,7 @@
 namespace Threadsmith.Models.OpenAiCompatible;
 
+using System.Buffers;
+using System.Buffers.Text;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
@@ -110,6 +112,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         int maximumOutputTokens,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        request = await ModelImages.ResolveAsync(request, _profile, cancellationToken);
         var canonicalTools = ModelToolCanonicalizer.Canonicalize(request.Tools);
         var toolNameMap = ModelToolWireNameMap.Create(canonicalTools);
         using var deadlineCancellation = _profile.Timeout > TimeSpan.Zero
@@ -119,6 +122,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)
             : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadlineCancellation.Token);
 
+        var requestContent = CreateRequestContent(request, maximumOutputTokens, canonicalTools, toolNameMap);
         HttpResponseMessage? response = null;
         for (var attempt = 1; attempt <= _profile.RetryPolicy.MaxAttempts; attempt++)
         {
@@ -133,85 +137,8 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                 message.Headers.TryAddWithoutValidation(name, value);
             }
 
-            var tools = new List<OpenAiTool>(canonicalTools.Count);
-            foreach (var definition in canonicalTools)
-            {
-                ArgumentException.ThrowIfNullOrWhiteSpace(definition.Name);
-                ArgumentException.ThrowIfNullOrWhiteSpace(definition.Description);
-                ArgumentException.ThrowIfNullOrWhiteSpace(definition.ArgumentsJsonSchema);
-                JsonDocument schema;
-                try
-                {
-                    schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
-                }
-                catch (JsonException exception)
-                {
-                    throw new InvalidOperationException(
-                        $"Tool '{definition.Name}' has an invalid JSON argument schema.",
-                        exception);
-                }
-
-                using (schema)
-                {
-                    if (schema.RootElement.ValueKind != JsonValueKind.Object)
-                    {
-                        throw new InvalidOperationException(
-                            $"Tool '{definition.Name}' argument schema must be a JSON object.");
-                    }
-
-                    var wireToolName = toolNameMap.ToWireName(definition.Name);
-                    var strictSchema = definition.PreferStrictArguments
-                        ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
-                            definition.Name,
-                            definition.ArgumentsJsonSchema)
-                        : null;
-                    using var providerSchema = strictSchema is null
-                        ? schema
-                        : JsonDocument.Parse(strictSchema);
-                    tools.Add(new OpenAiTool
-                    {
-                        Function = new OpenAiFunction
-                        {
-                            Name = wireToolName,
-                            Description = definition.Description,
-                            Parameters = providerSchema.RootElement.Clone(),
-                            Strict = strictSchema is null ? null : true,
-                        },
-                    });
-                }
-            }
-
-            var body = new OpenAiChatRequest
-            {
-                Model = _profile.ModelId,
-                PromptCacheKey = _promptCacheKeyEnabled
-                    ? (request.CacheAffinityId ?? request.RunId.Value).ToString("D")
-                    : null,
-                Messages = CreateMessages(request, toolNameMap),
-                Stream = true,
-                StreamOptions = new OpenAiStreamOptions { IncludeUsage = true },
-                MaximumOutputTokens = maximumOutputTokens,
-                Temperature = _profile.Temperature,
-                Seed = request.Seed,
-
-                // JSON-only grammars can prevent native tool-call emission.
-                ResponseFormat = request.RequiredCapabilities.StructuredOutput && tools.Count == 0
-                    ? new OpenAiResponseFormat { Type = "json_object" }
-                    : null,
-                ReasoningEffort = _reasoningCompatibility is null
-                    ? ResolveReasoningEffort(request)
-                    : null,
-                Tools = tools.Count == 0 ? null : tools,
-                ToolChoice = tools.Count == 0 ? null : "auto",
-                ParallelToolCalls = tools.Count == 0 ? null : request.AllowMultipleToolCalls,
-            };
-            var requestBody = JsonSerializer.SerializeToNode(body, _jsonOptions)?.AsObject()
-                ?? throw new InvalidOperationException("The model request could not be serialized.");
-            ApplyReasoningCompatibility(requestBody, request);
-            message.Content = new StringContent(
-                requestBody.ToJsonString(_jsonOptions),
-                Encoding.UTF8,
-                "application/json");
+            message.Content = new ReadOnlyMemoryContent(requestContent);
+            message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
             try
             {
                 requestCancellation.Token.ThrowIfCancellationRequested();
@@ -593,6 +520,97 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
     }
 
+    private ReadOnlyMemory<byte> CreateRequestContent(
+        ModelStreamRequest request,
+        int maximumOutputTokens,
+        IReadOnlyList<ModelToolDefinition> canonicalTools,
+        ModelToolWireNameMap toolNameMap)
+    {
+        var tools = new List<OpenAiTool>(canonicalTools.Count);
+        foreach (var definition in canonicalTools)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(definition.Name);
+            ArgumentException.ThrowIfNullOrWhiteSpace(definition.Description);
+            ArgumentException.ThrowIfNullOrWhiteSpace(definition.ArgumentsJsonSchema);
+            JsonDocument schema;
+            try
+            {
+                schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
+            }
+            catch (JsonException exception)
+            {
+                throw new InvalidOperationException(
+                    $"Tool '{definition.Name}' has an invalid JSON argument schema.",
+                    exception);
+            }
+
+            using (schema)
+            {
+                if (schema.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    throw new InvalidOperationException(
+                        $"Tool '{definition.Name}' argument schema must be a JSON object.");
+                }
+
+                var wireToolName = toolNameMap.ToWireName(definition.Name);
+                var strictSchema = definition.PreferStrictArguments
+                    ? ModelToolStrictSchemaProjector.TryCreateStrictFunctionSchema(
+                        definition.Name,
+                        definition.ArgumentsJsonSchema)
+                    : null;
+                using var providerSchema = strictSchema is null
+                    ? schema
+                    : JsonDocument.Parse(strictSchema);
+                tools.Add(new OpenAiTool
+                {
+                    Function = new OpenAiFunction
+                    {
+                        Name = wireToolName,
+                        Description = definition.Description,
+                        Parameters = providerSchema.RootElement.Clone(),
+                        Strict = strictSchema is null ? null : true,
+                    },
+                });
+            }
+        }
+
+        var compatibilityFields = new JsonObject();
+        ApplyReasoningCompatibility(compatibilityFields, request);
+        var body = new OpenAiChatRequest
+        {
+            Model = _profile.ModelId,
+            ReasoningCompatibility = compatibilityFields.Count == 0 ? null : compatibilityFields.ToDictionary(pair => pair.Key, pair => JsonSerializer.SerializeToElement(pair.Value)),
+            PromptCacheKey = _promptCacheKeyEnabled
+                ? (request.CacheAffinityId ?? request.RunId.Value).ToString("D")
+                : null,
+            Messages = CreateMessages(request, toolNameMap),
+            Stream = true,
+            StreamOptions = new OpenAiStreamOptions { IncludeUsage = true },
+            MaximumOutputTokens = maximumOutputTokens,
+            Temperature = _profile.Temperature,
+            Seed = request.Seed,
+
+            // JSON-only grammars can prevent native tool-call emission.
+            ResponseFormat = request.RequiredCapabilities.StructuredOutput && tools.Count == 0
+                ? new OpenAiResponseFormat { Type = "json_object" }
+                : null,
+            ReasoningEffort = _reasoningCompatibility is null
+                ? ResolveReasoningEffort(request)
+                : null,
+            Tools = tools.Count == 0 ? null : tools,
+            ToolChoice = tools.Count == 0 ? null : "auto",
+            ParallelToolCalls = tools.Count == 0 ? null : request.AllowMultipleToolCalls,
+        };
+        var imageBytes = request.Messages.SelectMany(message => message.Content)
+            .Where(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image)
+            .Sum(part => part.Image is { } image ? ((image.ByteLength + 2L) / 3) * 4 : 0);
+        var buffer = new ArrayBufferWriter<byte>(checked((int)imageBytes + 65536));
+        using var writer = new Utf8JsonWriter(buffer);
+        JsonSerializer.Serialize(writer, body, _jsonOptions);
+        writer.Flush();
+        return buffer.WrittenMemory;
+    }
+
     private static IReadOnlyList<OpenAiMessage> CreateMessages(
         ModelStreamRequest request,
         ModelToolWireNameMap toolNameMap)
@@ -603,8 +621,15 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         }
 
         var messages = new List<OpenAiMessage>(request.Messages.Count);
+        var pendingImages = new List<OpenAiMessage>();
         foreach (var message in request.Messages)
         {
+            if (message.Role != ModelMessageRole.Tool && pendingImages.Count > 0)
+            {
+                messages.AddRange(pendingImages);
+                pendingImages.Clear();
+            }
+
             var content = message.GetModelVisibleContent();
             switch (message.Role)
             {
@@ -618,7 +643,15 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         $"<threadsmith_host_context>\n{content}\n</threadsmith_host_context>");
                     break;
                 case ModelMessageRole.User:
-                    AddUserMessage(messages, content);
+                    if (message.Content.Any(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image))
+                    {
+                        messages.Add(new OpenAiMessage { Role = "user", Content = CreateImageContent(request, message) });
+                    }
+                    else
+                    {
+                        AddUserMessage(messages, content);
+                    }
+
                     break;
                 case ModelMessageRole.Assistant when message.ToolCallId is not null
                     && message.ToolName is not null:
@@ -644,6 +677,11 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
                         Content = content,
                         ToolCallId = message.ToolCallId,
                     });
+                    if (message.Content.Any(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image))
+                    {
+                        pendingImages.Add(new OpenAiMessage { Role = "user", Content = CreateImageContent(request, message) });
+                    }
+
                     break;
                 default:
                     throw new InvalidOperationException(
@@ -651,7 +689,77 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
             }
         }
 
+        messages.AddRange(pendingImages);
         return messages;
+    }
+
+    private static OpenAiImageContent CreateImageContent(ModelStreamRequest request, ModelMessage message)
+        => new(request, message);
+
+    [JsonConverter(typeof(OpenAiImageContentConverter))]
+    private sealed record OpenAiImageContent(ModelStreamRequest Request, ModelMessage Message);
+
+    private sealed class OpenAiImageContentConverter : JsonConverter<OpenAiImageContent>
+    {
+        public override OpenAiImageContent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+            => throw new NotSupportedException();
+
+        public override void Write(Utf8JsonWriter writer, OpenAiImageContent value, JsonSerializerOptions options)
+        {
+            writer.WriteStartArray();
+            if (value.Message.Role == ModelMessageRole.Tool)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("type", "text");
+                writer.WriteString("text", JsonSerializer.Serialize(new { tool_call_id = value.Message.ToolCallId, source = "tool_evidence" }));
+                writer.WriteEndObject();
+            }
+
+            foreach (var part in value.Message.Content.Where(part => part.IsModelVisible))
+            {
+                if (part.Image is { } image && part.Kind == ModelContentPartKind.Image)
+                {
+                    if (!value.Request.ImageData.TryGetValue(image.Id, out var bytes))
+                    {
+                        throw new ModelProviderException("Image bytes were not resolved before request serialization.");
+                    }
+
+                    writer.WriteStartObject();
+                    writer.WriteString("type", "image_url");
+                    writer.WriteStartObject("image_url");
+                    writer.WritePropertyName("url");
+
+                    // These fixed prefixes and base64 ASCII need no JSON escaping. Keep ordinary text
+                    // on the normal serializer encoder, and avoid expanding '+' into six UTF-8 bytes.
+                    var prefix = image.MediaType == "image/png" ? "\"data:image/png;base64,"u8 : "\"data:image/jpeg;base64,"u8;
+                    var encoded = ArrayPool<byte>.Shared.Rent(prefix.Length + Base64.GetMaxEncodedToUtf8Length(bytes.Length) + 1);
+                    try
+                    {
+                        prefix.CopyTo(encoded);
+                        Base64.EncodeToUtf8(bytes.Span, encoded.AsSpan(prefix.Length), out _, out var written);
+                        encoded[prefix.Length + written] = (byte)'"';
+                        writer.WriteRawValue(encoded.AsSpan(0, prefix.Length + written + 1), skipInputValidation: true);
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(encoded, clearArray: true);
+                    }
+
+                    writer.WriteString("detail", "high");
+                    writer.WriteEndObject();
+                    writer.WriteEndObject();
+                }
+                else if (value.Message.Role != ModelMessageRole.Tool)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("type", "text");
+                    writer.WriteString("text", part.Content);
+                    writer.WriteEndObject();
+                }
+            }
+
+            writer.WriteEndArray();
+        }
     }
 
     private static void AddSystemMessage(List<OpenAiMessage> messages, string content)
@@ -689,7 +797,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private static void AddUserMessage(List<OpenAiMessage> messages, string content)
     {
-        if (messages.Count > 0 && messages[^1].Role == "user")
+        if (messages.Count > 0 && messages[^1].Role == "user" && messages[^1].Content is string)
         {
             var previous = messages[^1];
             messages[^1] = previous with
@@ -1025,6 +1133,9 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
 
     private sealed record OpenAiChatRequest
     {
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? ReasoningCompatibility { get; init; }
+
         [JsonPropertyName("model")]
         public required string Model { get; init; }
 
@@ -1101,7 +1212,7 @@ internal sealed class OpenAiCompatibleModelProvider : IModelProvider
         public required string Role { get; init; }
 
         [JsonPropertyName("content")]
-        public string? Content { get; init; }
+        public object? Content { get; init; }
 
         [JsonPropertyName("tool_calls")]
         public IReadOnlyList<OpenAiMessageToolCall>? ToolCalls { get; init; }

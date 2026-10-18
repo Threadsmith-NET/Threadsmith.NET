@@ -55,6 +55,12 @@ public abstract record ModelConfiguration
     /// <summary>Gets the effective per-request output-token reserve.</summary>
     public int EffectiveRequestOutputTokenReserve => RequestOutputTokenReserve ?? MaximumOutputTokens;
 
+    /// <summary>Explicitly enabled input kinds; omitted catalogs retain text-only behavior.</summary>
+    public ModelContentTypes SupportedInputContentTypes { get; init; } = ModelContentTypes.Text;
+
+    /// <summary>Explicitly enabled output kinds, independent of input support.</summary>
+    public ModelContentTypes SupportedOutputContentTypes { get; init; } = ModelContentTypes.Text;
+
     /// <summary>Provider features available to the host.</summary>
     public ModelCapabilitySet Capabilities { get; init; } = new();
 
@@ -280,6 +286,7 @@ public sealed class ModelProviderRegistry
             PropertyNameCaseInsensitive = true,
             TypeInfoResolver = resolver,
         };
+        options.Converters.Add(new ModelContentTypesJsonConverter());
         options.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
         options.Converters.Add(new ModelProviderConfigurationLoader.ModelProfileIdJsonConverter());
         return options;

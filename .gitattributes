@@ -20,6 +20,7 @@
 
 # Preserve exact, hash-verified upstream license/header evidence.
 eng/release/legal/TUIKit-0.10.1-candidate/*.txt whitespace=-trailing-space
+eng/release/legal/PdfReading/*.txt whitespace=-trailing-space
 
 # Binary assets — never normalize.
 *.png   binary

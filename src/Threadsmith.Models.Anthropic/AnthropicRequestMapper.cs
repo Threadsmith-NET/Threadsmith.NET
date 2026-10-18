@@ -24,6 +24,7 @@ internal static class AnthropicRequestMapper
     internal static JsonObject CreateBody(ModelStreamRequest request, ModelProfile profile, AnthropicModelCompatibility compatibility, Dictionary<JsonNode, ModelMessage>? attribution = null)
     {
         ValidateRequest(request, profile, compatibility);
+        ModelImages.Validate(request, profile);
         var body = new JsonObject
         {
             ["model"] = profile.ModelId,
@@ -212,7 +213,7 @@ internal static class AnthropicRequestMapper
                         ?? throw new ModelProviderException("Anthropic private result correlation is missing.");
                 }
 
-                block = new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = content, ["is_error"] = message.IsError ?? false };
+                block = new JsonObject { ["type"] = "tool_result", ["tool_use_id"] = id, ["content"] = message.Content.Any(part => part.IsModelVisible && part.Image is not null) ? ImageContent(request, message) : JsonValue.Create(content), ["is_error"] = message.IsError ?? false };
             }
             else if (message.Role == ModelMessageRole.Assistant && message.ToolName is { } name)
             {
@@ -228,8 +229,15 @@ internal static class AnthropicRequestMapper
                     : content);
             }
 
-            messageBlocks[messageIndex] = block;
-            attribution?.Add(block, message);
+            var addedBlocks = message.Role == ModelMessageRole.User && message.Content.Any(part => part.IsModelVisible && part.Image is not null)
+                ? ImageContent(request, message).Select(node => (JsonObject)(node?.DeepClone() ?? throw new ModelProviderException("Missing image block."))).ToArray()
+                : [block];
+            messageBlocks[messageIndex] = addedBlocks[^1];
+            foreach (var added in addedBlocks)
+            {
+                attribution?.Add(added, message);
+            }
+
             if (messages.LastOrDefault() is JsonObject last && last["role"]?.GetValue<string>() == role)
             {
                 var blocks = last["content"] as JsonArray ?? throw new ModelProviderException("Invalid Anthropic message content.");
@@ -238,11 +246,14 @@ internal static class AnthropicRequestMapper
                     throw new ModelProviderException("Anthropic tool results must precede correction or steering text.");
                 }
 
-                blocks.Add(block);
+                foreach (var added in addedBlocks)
+                {
+                    blocks.Add(added);
+                }
             }
             else
             {
-                messages.Add(new JsonObject { ["role"] = role, ["content"] = new JsonArray(block) });
+                messages.Add(new JsonObject { ["role"] = role, ["content"] = new JsonArray(addedBlocks.Cast<JsonNode>().ToArray()) });
             }
         }
 
@@ -265,6 +276,13 @@ internal static class AnthropicRequestMapper
 
         ValidateToolChronology(messages, attribution);
         return messages;
+    }
+
+    private static JsonArray ImageContent(ModelStreamRequest request, ModelMessage message)
+    {
+        return new JsonArray(message.Content.Where(part => part.IsModelVisible).Select(part => (JsonNode)(part.Image is { } image && part.Kind == ModelContentPartKind.Image
+            ? new JsonObject { ["type"] = "image", ["source"] = new JsonObject { ["type"] = "base64", ["media_type"] = image.MediaType, ["data"] = ModelImages.GetBase64(request, image) } }
+            : Text(part.Content))).ToArray());
     }
 
     private static void ValidateToolChronology(JsonArray messages, Dictionary<JsonNode, ModelMessage>? attribution)

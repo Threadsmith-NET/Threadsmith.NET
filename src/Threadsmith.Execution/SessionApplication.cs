@@ -54,6 +54,7 @@ public sealed partial class SessionApplication :
     private readonly ILogger<SessionApplication> _logger;
     private readonly ExecutionLimits _limits;
     private readonly IModelProvider _model;
+    private readonly IImageArtifactStore? _imageArtifacts;
 
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
     private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
@@ -160,7 +161,8 @@ public sealed partial class SessionApplication :
         IRepositoryMemoryOptionsProvider? repositoryMemoryOptions = null,
         SourceEditApplication? sourceEdits = null,
         IRepositoryIntelligenceStatusProvider? repositoryIntelligence = null,
-        IRepositoryIntelligenceOperations? intelligenceOperations = null)
+        IRepositoryIntelligenceOperations? intelligenceOperations = null,
+        IImageArtifactStore? imageArtifacts = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -178,6 +180,7 @@ public sealed partial class SessionApplication :
 
         _events = events;
         _model = model;
+        _imageArtifacts = imageArtifacts;
         _budgetFactory = budgetFactory ?? budget switch
         {
             ExecutionBudget executionBudget => executionBudget.CreateScope,
@@ -248,7 +251,20 @@ public sealed partial class SessionApplication :
         SubmitRequestCommand command,
         CancellationToken cancellationToken = default)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(command.Request);
+        if (command.Images.Count == 0)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(command.Request);
+        }
+        else if (command.Images.Count > ImageArtifactLimits.MaximumCount)
+        {
+            throw new ArgumentException("A submission supports at most eight images.", nameof(command));
+        }
+
+        if (command.Images.Count > 0 && _contextAssembler is null)
+        {
+            throw new InvalidOperationException("Image submissions require the conversation context service.");
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         if (!_sessions.ContainsKey(command.SessionId))
         {
@@ -519,7 +535,9 @@ public sealed partial class SessionApplication :
             };
         }).ToArray() ?? [];
         var task = new TaskSpecification(
-            _sanitizer.Sanitize(command.Request),
+            string.IsNullOrWhiteSpace(command.Request) && command.Images.Count > 0
+                ? RequirePrompts().Get(PromptFileNames.ContextImageOnlyUserMessage)
+                : _sanitizer.Sanitize(command.Request),
             criteria);
         registration = CreateRunRegistration(command.SessionId, runId, workspaceId, task, RunPhase.Intake, cancellationToken);
         registration.IntelligenceOperation = command.IntelligenceOperation;
@@ -566,12 +584,15 @@ public sealed partial class SessionApplication :
         var succeeded = false;
         try
         {
+            using var imageLease = _imageArtifacts is null ? null
+                : await _imageArtifacts.PinSessionImagesAsync(command.SessionId, registration.Cancellation.Token);
             var userMessage = await ArchiveVisibleMessageAsync(
                 command.SessionId,
                 runId,
                 ConversationRole.User,
                 registration.Task.Intent,
-                registration.Cancellation.Token);
+                registration.Cancellation.Token,
+                command.Images);
             registration.CurrentMessageId = userMessage?.Id;
             registration.SourceMessage = userMessage;
             if (userMessage is not null && _userUrlIntake is not null)
@@ -929,7 +950,7 @@ public sealed partial class SessionApplication :
                 isTruncated = true,
                 preview = content[..previewCharacters],
             });
-        return original with { Content = [CreateJsonContentPart(reduced)] };
+        return original with { Content = [CreateJsonContentPart(reduced), .. original.Content.Where(part => part.Kind == ModelContentPartKind.Image)] };
     }
 
     private static ModelContentPart CreateJsonContentPart(string content, bool isModelVisible = true)
@@ -973,7 +994,8 @@ public sealed partial class SessionApplication :
         bool isJson,
         string? structuredContent,
         int? modelRound = null,
-        bool? isError = null)
+        bool? isError = null,
+        IReadOnlyList<ImageArtifact>? images = null)
     {
         List<ModelContentPart> contentParts = [isJson ? CreateJsonContentPart(content) : CreateTextContentPart(content)];
         if (!isJson && !string.IsNullOrWhiteSpace(structuredContent))
@@ -987,7 +1009,7 @@ public sealed partial class SessionApplication :
             SectionId = "tool-result",
             ToolCallId = toolCallId,
             ToolName = toolName,
-            Content = contentParts,
+            Content = ModelImages.Append(contentParts, images),
             ModelRound = modelRound,
             IsError = isError,
         };
@@ -1008,7 +1030,8 @@ public sealed partial class SessionApplication :
         RunId runId,
         ConversationRole role,
         string content,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<ImageArtifact>? images = null)
     {
         if (_conversationStore is null)
         {
@@ -1027,6 +1050,7 @@ public sealed partial class SessionApplication :
                 Sequence = 0,
                 Role = role,
                 Content = sanitized,
+                Images = images ?? [],
                 ContentHash = hash,
                 EstimatedTokens = Math.Max(1, (sanitized.Length + 3) / 4),
 

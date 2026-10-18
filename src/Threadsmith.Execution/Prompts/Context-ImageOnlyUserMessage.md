@@ -1,0 +1,1 @@
+[Image-only user message]

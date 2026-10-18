@@ -26,7 +26,7 @@ public static class MemoryToolActivityPresentationTests
         Assert.DoesNotContain(note[..240] + "...", transcript.Text, StringComparison.Ordinal);
     }
 
-    /// <summary>Legacy entries default to situational while typed entries and advisory warning remain visible.</summary>
+    /// <summary>Legacy entries remain visible while standing preference bodies are suppressed and outcomes remain visible.</summary>
     [Fact]
     public static void Transcript_ShowsLegacyTypeAndStandingPreferenceWarning()
     {
@@ -45,7 +45,9 @@ public static class MemoryToolActivityPresentationTests
             }));
 
         Assert.Contains("Memory legacy [situational]:", legacy.Text, StringComparison.Ordinal);
-        Assert.Contains("Memory preference [standingPreference]:", typed.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Memory preference [standingPreference]:", typed.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("always run tests", typed.Text, StringComparison.Ordinal);
+        Assert.Contains("Outcome: added", typed.Text, StringComparison.Ordinal);
         Assert.Contains("You now have 4 preference memories.", typed.Text, StringComparison.Ordinal);
     }
 

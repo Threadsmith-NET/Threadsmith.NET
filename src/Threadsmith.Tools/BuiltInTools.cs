@@ -161,6 +161,15 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
 /// <summary>Input for a bounded file-range read.</summary>
 public sealed record ReadFileInput : IConceptToolInput
 {
+    /// <summary>Read mode: auto, text, image, or pdf. Auto classifies a bounded file prefix.</summary>
+    public string Mode { get; init; } = "auto";
+
+    /// <summary>One-based first PDF page; null selects page 1. Only valid for PDFs.</summary>
+    public int? StartPage { get; init; }
+
+    /// <summary>PDF pages to render, from 1 through 4; null selects one page.</summary>
+    public int? MaximumPages { get; init; }
+
     /// <inheritdoc />
     public IReadOnlyList<string>? Concepts { get; init; }
 
@@ -205,6 +214,15 @@ public sealed record ReadFileOutput(
     int? NextStartLine,
     ReadFileTruncationReason? TruncationReason)
 {
+    /// <summary>Original binary file bytes read; absent for line-oriented text reads.</summary>
+    public long? BytesRead { get; init; }
+
+    /// <summary>Selected PDF pages and continuation, delivered through the image artifact pipeline.</summary>
+    public ReadPdfOutput? Pdf { get; init; }
+
+    /// <summary>Validated image metadata when this is an image read; no line receipt is implied.</summary>
+    public ImageArtifact? Image { get; init; }
+
     /// <summary>SHA256 of the original complete file bytes for exact snapshot identity.</summary>
     public string? FileSha256 { get; init; }
 
@@ -235,19 +253,21 @@ public sealed record ReadFileSourceReceipt(
     string RecoveryTool);
 
 /// <summary>Reads a bounded UTF-8 file range.</summary>
-public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
+public sealed partial class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
 {
+    private readonly IImageArtifactStore? _artifacts;
     private readonly ToolDefinition _definition;
     private readonly ToolLimits _limits;
     private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="ReadFileTool"/> class.</summary>
-    public ReadFileTool(IPromptLoader promptLoader, IOutputSanitizer sanitizer, ToolLimits? limits = null)
+    public ReadFileTool(IPromptLoader promptLoader, IOutputSanitizer sanitizer, ToolLimits? limits = null, IImageArtifactStore? artifacts = null)
     {
         ArgumentNullException.ThrowIfNull(promptLoader);
         _limits = limits ?? ToolLimits.Default;
         ArgumentNullException.ThrowIfNull(sanitizer);
         _sanitizer = sanitizer;
+        _artifacts = artifacts;
 
         // Keep the historical envelope and add worst-case JSON escaping and line-array overhead.
         var outputBytes = (384L * 1024)
@@ -301,6 +321,58 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
         {
             throw new InvalidOperationException(
                 $"The requested file exceeds the {_limits.ReadFileMaximumBytes}-byte read limit.");
+        }
+
+        if (input.Mode is not ("auto" or "text" or "image" or "pdf"))
+        {
+            throw new ToolArgumentValidationException("mode must be auto, text, image, or pdf.");
+        }
+
+        await using (var imageStream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 8192, FileOptions.Asynchronous))
+        {
+            var prefix = new byte[16];
+            var count = await imageStream.ReadAsync(prefix, cancellationToken);
+            var image = count >= 3 && ((prefix[0] == 137 && prefix[1] == 80 && prefix[2] == 78)
+                || (prefix[0] == 255 && prefix[1] == 216 && prefix[2] == 255));
+            var pdf = count >= 5 && prefix.AsSpan(0, 5).SequenceEqual("%PDF-"u8);
+            if (pdf || input.Mode == "pdf")
+            {
+                return await ReadPdfAsync(input, context, imageStream, path, cancellationToken);
+            }
+
+            if (input.StartPage is not null || input.MaximumPages is not null)
+            {
+                throw new ToolArgumentValidationException("Page options are only valid for PDF files.");
+            }
+
+            if (input.Mode == "image" || image)
+            {
+                if (input.Mode == "text" || input.Snapshot || input.SnapshotOffset != 0 || input.StartLine != 1 || input.MaximumLines != 0)
+                {
+                    throw new ToolArgumentValidationException("Images require auto/image mode without text range or snapshot options.");
+                }
+
+                var artifacts = _artifacts ?? throw new InvalidOperationException("Image artifact storage is unavailable.");
+                imageStream.Position = 0;
+                var relativeImage = GetDisplayPath(path, context.Invocation);
+                var artifact = await artifacts.StoreImageAsync(imageStream, context.SessionId, relativeImage, maximumBytes: _limits.ReadFileMaximumBytes, cancellationToken: cancellationToken);
+                var output = new ReadFileOutput(relativeImage, 0, null, 0, [], false, null, null)
+                {
+                    ContentDigest = artifact.ContentHash,
+                    Image = artifact,
+                    BytesRead = artifact.ByteLength,
+                };
+                return new ToolExecution<ReadFileOutput>(output, [new ToolProvenanceSource("file", ToolPathRules.IsWithinScratchpad(path, context.Invocation) ? path : relativeImage)], Images: [artifact]);
+            }
+
+            var textBom = (count >= 2 && ((prefix[0] == 255 && prefix[1] == 254) || (prefix[0] == 254 && prefix[1] == 255)))
+                || (count >= 4 && prefix[0] == 0 && prefix[1] == 0 && prefix[2] == 254 && prefix[3] == 255);
+            var unsupportedImage = (count >= 6 && (prefix.AsSpan(0, 6).SequenceEqual("GIF87a"u8) || prefix.AsSpan(0, 6).SequenceEqual("GIF89a"u8)))
+                || (count >= 12 && prefix.AsSpan(0, 4).SequenceEqual("RIFF"u8) && prefix.AsSpan(8, 4).SequenceEqual("WEBP"u8));
+            if (unsupportedImage || (!textBom && prefix.AsSpan(0, count).Contains((byte)0)))
+            {
+                throw new InvalidDataException("Unsupported binary file. Only text, PNG, JPEG and PDF can be read.");
+            }
         }
 
         if (input.Snapshot)
@@ -426,9 +498,7 @@ public sealed class ReadFileTool : Tool<ReadFileInput, ReadFileOutput>
     /// <inheritdoc />
     protected override string DescribeActivity(ReadFileInput input)
     {
-        var maximumLines = ResolveMaximumLines(input);
-        var endLine = (long)input.StartLine + maximumLines - 1;
-        return $"lines {input.StartLine}-{endLine}, {input.Path}";
+        return input.Path;
     }
 
     /// <inheritdoc />

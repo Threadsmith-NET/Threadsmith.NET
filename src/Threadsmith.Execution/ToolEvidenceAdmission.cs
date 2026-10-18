@@ -3,11 +3,63 @@ namespace Threadsmith.Execution;
 using System.Text.Json;
 using Threadsmith.Context;
 using Threadsmith.Core;
+using Threadsmith.Models;
 using Threadsmith.Tools;
 
 /// <summary>Admits tool results and source dependencies into the governed evidence store.</summary>
 internal static class ToolEvidenceAdmission
 {
+    /// <summary>Reserves tool pixels within the remaining request capacity and records explicit omissions.</summary>
+    public static ToolInvocationResult AdmitImages(ToolInvocationResult result, List<ImageArtifact> reservedImages)
+    {
+        if (result.Images.Count == 0)
+        {
+            return result;
+        }
+
+        var bytes = reservedImages.Sum(image => (long)image.ByteLength);
+        var admitted = new List<ImageArtifact>();
+        var omitted = new List<ImageArtifact>();
+        foreach (var image in result.Images)
+        {
+            if (reservedImages.Count >= ImageArtifactLimits.MaximumCount
+                || bytes + image.ByteLength > ImageArtifactLimits.MaximumRequestBytes)
+            {
+                omitted.Add(image);
+                continue;
+            }
+
+            admitted.Add(image);
+            reservedImages.Add(image);
+            bytes += image.ByteLength;
+        }
+
+        if (omitted.Count == 0)
+        {
+            return result;
+        }
+
+        var receipt = JsonSerializer.Serialize(new
+        {
+            omittedImagePixels = omitted.Select(image => new
+            {
+                artifactId = image.Id,
+                reason = "aggregate-image-limit",
+                image.ByteLength,
+                image.Width,
+                image.Height,
+            }),
+            maximumImages = ImageArtifactLimits.MaximumCount,
+            maximumImageBytes = ImageArtifactLimits.MaximumRequestBytes,
+        });
+        return result with
+        {
+            Images = admitted.ToArray(),
+            IsTruncated = true,
+            ModelResultContent = (result.ModelResultContent ?? result.ResultJson ?? result.Error ?? string.Empty) + "\n" + receipt,
+        };
+    }
+
     /// <summary>Admits tool output with every declared source dependency and available file digest.</summary>
     public static async Task<EvidenceId> AdmitEvidenceAsync(
         IEvidenceStore store, SessionId sessionId, RunId runId, string repositoryPath, ToolInvocationResult result, string content, CancellationToken cancellationToken)
@@ -24,6 +76,7 @@ internal static class ToolEvidenceAdmission
                 RunId = runId,
                 Kind = result.Succeeded ? EvidenceKind.ToolResult : EvidenceKind.Failure,
                 Content = content,
+                Images = result.Images.ToArray(),
                 Provenance = new EvidenceProvenance
                 {
                     RepositoryPath = repositoryPath,
@@ -36,7 +89,7 @@ internal static class ToolEvidenceAdmission
                 FileDependencies = dependencies,
                 CollectedAt = DateTimeOffset.UtcNow,
                 Relevance = result.Succeeded ? 0.8 : 1,
-                EstimatedTokens = Math.Max(1, (content.Length + 3) / 4),
+                EstimatedTokens = checked(Math.Max(1, (content.Length + 3) / 4) + result.Images.Sum(ModelImages.EstimateTokens)),
                 InvalidationKeys = IsSemanticEvidenceTool(result.ToolId) ? ["repository", "semantic"] : ["repository"],
             },
             cancellationToken);

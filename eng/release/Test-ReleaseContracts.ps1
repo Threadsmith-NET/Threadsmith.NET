@@ -37,6 +37,32 @@ Test-Contract 'workflow versions normalize once for manual and tag builds' {
 Test-Contract 'source prompt filename catalog is readable' {
     Get-CodeDeclaredPromptNames -SourceRoot (Get-RepositoryRoot) | Out-Null
 }
+Test-Contract 'application prompt assets satisfy the real release catalog' {
+    $root = Get-RepositoryRoot
+    $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath())
+    $payload = Join-Path $temporaryRoot "threadsmith-real-prompts-$([Guid]::NewGuid().ToString('N'))"
+    try {
+        $prompts = New-Item -ItemType Directory -Path (Join-Path $payload 'prompts') -Force
+        $appDirectory = Join-Path $root 'src/Threadsmith.App'
+        [xml] $project = Get-Content -LiteralPath (Join-Path $appDirectory 'Threadsmith.App.csproj') -Raw
+        foreach ($asset in $project.SelectNodes('/Project/ItemGroup/ThreadsmithPromptAsset')) {
+            $pattern = Join-Path $appDirectory $asset.Include.Replace('\', [IO.Path]::DirectorySeparatorChar)
+            Get-ChildItem -Path $pattern -File | Copy-Item -Destination $prompts.FullName
+        }
+        foreach ($rid in @('win-x64', 'win-arm64', 'linux-x64', 'linux-arm64', 'osx-x64', 'osx-arm64')) {
+            Assert-ReleasePromptPayload -PayloadDirectory $payload -RuntimeIdentifier $rid -SourceRoot $root
+        }
+    } finally {
+        if (Test-Path -LiteralPath $payload) {
+            $resolved = (Resolve-Path -LiteralPath $payload).Path
+            if ([IO.Path]::GetDirectoryName($resolved) -ne $temporaryRoot.TrimEnd([IO.Path]::DirectorySeparatorChar) -or
+                [IO.Path]::GetFileName($resolved) -notlike 'threadsmith-real-prompts-*') {
+                throw 'Refusing cleanup outside the prompt contract temporary directory.'
+            }
+            Remove-Item -LiteralPath $resolved -Recurse -Force
+        }
+    }
+}
 Test-Contract 'packaged source documentation has a complete local link closure' {
     & (Join-Path $PSScriptRoot 'Test-SourceDocumentation.ps1') | Out-Null
 }
@@ -47,6 +73,7 @@ Test-Contract 'prompt payload is complete, collision-free, byte-exact, and valid
     $promptDirectory = Join-Path $payload 'prompts'
     $ownerDirectories = @(
         'src/Threadsmith.Context/Prompts',
+        'src/Threadsmith.RepositoryIntelligence/Prompts',
         'src/Threadsmith.Execution/Prompts',
         'src/Threadsmith.Tools/Prompts',
         'src/Threadsmith.DotNet/Prompts',

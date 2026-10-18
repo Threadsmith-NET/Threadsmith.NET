@@ -158,6 +158,7 @@ function Assert-ReleasePromptPayload {
     $payload = (Resolve-Path -LiteralPath $PayloadDirectory).Path
     $ownerDirectories = @(
         'src/Threadsmith.Context/Prompts',
+        'src/Threadsmith.RepositoryIntelligence/Prompts',
         'src/Threadsmith.Execution/Prompts',
         'src/Threadsmith.Tools/Prompts',
         'src/Threadsmith.DotNet/Prompts',

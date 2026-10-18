@@ -95,6 +95,10 @@ internal sealed class ChildAgentModelLoop
         AgentModelSelection model,
         CancellationToken cancellationToken)
     {
+        childToolContext = childToolContext with
+        {
+            AdmittedImageIds = context.Evidence.SelectMany(item => item.Images).Select(image => image.Id).ToHashSet(StringComparer.Ordinal),
+        };
         _sessionUsage?.RegisterChild(plan.Provenance.SessionId, assignment.ChildRunId);
         var capturedRegistry = childToolContext.OperationScope?
             .GetOrCreate(PrEvidenceRegistry.ScopeKey, static () => new PrEvidenceRegistry());
@@ -167,6 +171,11 @@ internal sealed class ChildAgentModelLoop
                     }
                 }
 
+                childToolContext = childToolContext with
+                {
+                    AdmittedImageIds = childToolContext.AdmittedImageIds.Concat(messages.SelectMany(message => message.Content)
+                        .Where(part => part.Image is not null).Select(part => part.Image?.Id ?? string.Empty)).ToHashSet(StringComparer.Ordinal),
+                };
                 var summaryPolicy = _options.Compaction.Summary;
                 var provider = model.UsesTrustedCatalog ? _trustedModels ?? _models : _models;
                 var compactor = new ActiveTurnCompactor(
@@ -275,6 +284,7 @@ internal sealed class ChildAgentModelLoop
                                 assignment,
                                 model.ProfileId,
                                 response.ToolRequests,
+                                messages,
                                 childToolContext,
                                 registrationById,
                                 ledger,
@@ -406,6 +416,7 @@ internal sealed class ChildAgentModelLoop
             {
                 RunId = assignment.ChildRunId,
                 CacheAffinityId = cacheAffinityId,
+                ImageSessionId = new SessionId(cacheAffinityId),
                 Input = assignment.Objective,
                 Seed = HashCode.Combine(assignment.AssignmentId.Value, round),
                 ToolContinuationRound = round,
@@ -638,6 +649,7 @@ internal sealed class ChildAgentModelLoop
         AgentAssignment assignment,
         ModelProfileId modelProfileId,
         IReadOnlyList<ToolRequestModelOutput> requests,
+        IReadOnlyList<ModelMessage> currentMessages,
         ToolInvocationContext childContext,
         IReadOnlyDictionary<string, ToolRegistration> registrations,
         AgentBudgetLedger ledger,
@@ -753,8 +765,12 @@ internal sealed class ChildAgentModelLoop
         var coverageBefore = evidenceProgress.Capture();
         var messages = new List<ModelMessage>(results.Count * 2);
         var deliveredEvidenceIds = new List<EvidenceId>(results.Count);
-        foreach (var result in results.OrderBy(result => result.Ordinal))
+        var reservedImages = currentMessages.SelectMany(message => message.Content)
+            .Where(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image)
+            .Select(part => part.Image).OfType<ImageArtifact>().ToList();
+        foreach (var batchResult in results.OrderBy(result => result.Ordinal))
         {
+            var result = batchResult with { Result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages) };
             var request = requests[result.Ordinal];
             if (transientState.HasResponses)
             {
@@ -781,7 +797,8 @@ internal sealed class ChildAgentModelLoop
                 result.Result.ToolId,
                 evidence.Content,
                 round,
-                !result.Result.Succeeded));
+                !result.Result.Succeeded,
+                result.Result.Images));
         }
 
         if (transientState.HasResponses)
@@ -836,6 +853,7 @@ internal sealed class ChildAgentModelLoop
                 RunId = assignment.ChildRunId,
                 Kind = result.Succeeded ? EvidenceKind.ToolResult : EvidenceKind.Failure,
                 Content = content,
+                Images = result.Images.ToArray(),
                 Provenance = new EvidenceProvenance
                 {
                     RepositoryPath = repositoryPath,
@@ -850,7 +868,7 @@ internal sealed class ChildAgentModelLoop
                 FileDependencies = ToolEvidenceAdmission.GetFileDependencies(result, repositoryPath),
                 CollectedAt = DateTimeOffset.UtcNow,
                 Relevance = result.Succeeded ? 0.8 : 1,
-                EstimatedTokens = Math.Max(1, TokenEstimator.Estimate(content)),
+                EstimatedTokens = checked(Math.Max(1, TokenEstimator.Estimate(content)) + result.Images.Sum(ModelImages.EstimateTokens)),
                 Sensitivity = assignment.Policy.Sensitivity == ConversationSensitivity.Sensitive
                     ? EvidenceSensitivity.Sensitive
                     : EvidenceSensitivity.None,

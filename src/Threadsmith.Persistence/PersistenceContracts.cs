@@ -3,8 +3,12 @@ namespace Threadsmith.Persistence;
 using Threadsmith.Core;
 
 /// <summary>Stores large artifacts outside the main database (strategy §19.3).</summary>
-public interface IArtifactStore
+public interface IArtifactStore : IImageArtifactStore
 {
+    /// <summary>Releases expired unowned image references, preserving active session pins and retained conversation bodies.</summary>
+    Task<int> PruneImageReferencesAsync(DateTimeOffset cutoff, CancellationToken cancellationToken = default)
+        => Task.FromResult(0);
+
     /// <summary>Sanitizes and stores content, returning its metadata.</summary>
     /// <param name="content">The artifact content.</param>
     /// <param name="kind">The artifact kind (e.g. <c>processOutput</c>, <c>diff</c>).</param>

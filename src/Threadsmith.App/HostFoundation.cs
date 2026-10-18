@@ -538,6 +538,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 promptLoader,
                 codeExploreOptions,
                 persistence.ConversationStore,
+                persistence.ArtifactStore,
                 operationalLimits,
                 sanitizer,
                 jiraTool,
@@ -720,7 +721,7 @@ internal sealed class HostFoundation : IAsyncDisposable
     }
 
     /// <summary>Creates bounded tool limits from the effective configuration.</summary>
-    private static ToolLimits CreateToolLimits(IConfiguration configuration)
+    internal static ToolLimits CreateToolLimits(IConfiguration configuration)
     {
         var readFileMaxLines = configuration.GetValue(
             "tools:readFile:maxLines",
@@ -732,7 +733,9 @@ internal sealed class HostFoundation : IAsyncDisposable
         {
             ListFilesDefaultEntries = configuration.GetValue("tools:listFiles:defaultEntries", 200),
             ListFilesMaxEntries = configuration.GetValue("tools:listFiles:maxEntries", 2000),
-            ReadFileMaximumBytes = configuration.GetValue("tools:readFile:maxBytes", 1024L * 1024L),
+            ReadFileMaximumBytes = configuration.GetValue("tools:readFile:maxBytes", ToolLimits.DefaultReadFileByteLimit),
+            PdfRenderDpi = configuration.GetValue("tools:readFile:pdfRenderDpi", ToolLimits.Default.PdfRenderDpi),
+            PdfRenderMaximumDimension = configuration.GetValue("tools:readFile:pdfRenderMaxDimension", ToolLimits.Default.PdfRenderMaximumDimension),
             ReadFileDefaultLines = readFileDefaultLines,
             ReadFileMaxLines = readFileMaxLines,
             ReadFileMaximumContentBytes = configuration.GetValue(
@@ -792,7 +795,8 @@ internal sealed class HostFoundation : IAsyncDisposable
             $"Data Source={databasePath}",
             artifactDirectory,
             sanitizer,
-            TimeProvider.System);
+            TimeProvider.System,
+            maximumRetainedImageBytes: configuration.GetValue("persistence:maximumRetainedImageBytes", ArtifactStore.DefaultMaximumRetainedImageBytes));
         await artifactStore.InitializeAsync();
         await new RedactionAudit(
             eventStore,
@@ -996,6 +1000,7 @@ internal sealed class HostFoundation : IAsyncDisposable
         IPromptLoader promptLoader,
         CodeExploreOptions codeExploreOptions,
         IConversationStore conversationStore,
+        IImageArtifactStore imageArtifacts,
         OperationalLimits operationalLimits,
         IOutputSanitizer sanitizer,
         JiraTool? jiraTool,
@@ -1055,9 +1060,9 @@ internal sealed class HostFoundation : IAsyncDisposable
             .. jiraTool is null ? Array.Empty<ITool>() : [jiraTool],
             .. prFetchTool is null ? Array.Empty<ITool>() : [prFetchTool],
             new ListFilesTool(promptLoader, limits),
-            new ReadFileTool(promptLoader, sanitizer, limits),
+            new ReadFileTool(promptLoader, sanitizer, limits, imageArtifacts),
             new ActiveTurnEvidenceTool(evidenceStore, promptLoader),
-            new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader, limits),
+            new WriteFileTool(writeFileConfiguration, conversationStore, promptLoader, limits, imageArtifacts),
             new SearchTextTool(promptLoader, limits, processManager, ripgrepExecutable),
             new GitStatusTool(processManager, promptLoader),
             new GitDiffTool(gitQueries, promptLoader),

@@ -409,6 +409,14 @@ public sealed class ContextAssembler : IContextAssembler
                 IsStale: false));
         }
 
+        conversation.ReduceHistoricalImages(
+            additionalMessages.SelectMany(message => message.Content)
+                .Where(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image && part.Image is not null)
+                .Select(part => part.Image!)
+                .Concat(selected.SelectMany(item => item.Images))
+                .Concat(request.ContinuationImages));
+        tokensByCategory["recentTurns"] = TokenEstimator.Estimate(conversation.RecentTurnsContent);
+
         var constraints = request.ModelConstraints with
         {
             ContainsSensitiveData = request.ModelConstraints.ContainsSensitiveData
@@ -509,7 +517,8 @@ public sealed class ContextAssembler : IContextAssembler
                 currentEvidenceContent,
                 toolSchemas,
                 outputSchema,
-                additionalMessages);
+                additionalMessages,
+                selected);
             var stablePrefixCount = Math.Min(3, currentMessages.Count);
             var currentEstimate = ModelWireEstimator.Estimate(
                 currentMessages,
@@ -615,7 +624,8 @@ public sealed class ContextAssembler : IContextAssembler
             evidenceContent,
             toolSchemas,
             outputSchema,
-            additionalMessages);
+            additionalMessages,
+            selected);
         var stablePrefixMessageCount = Math.Min(3, messages.Count);
         var sourcePosition = 0;
         var instructionSources = instructionBundle.Sources.Select((source, index) =>
@@ -655,8 +665,15 @@ public sealed class ContextAssembler : IContextAssembler
                 _ => [source],
             }).ToArray()),
         } : message).ToArray();
+        var canonicalMessages = messages.Select(message =>
+        {
+            var content = message.Content.Any(part => part.IsModelVisible && part.Image is not null)
+                ? JsonSerializer.Serialize(message.Content.Where(part => part.IsModelVisible))
+                : message.GetModelVisibleContent();
+            return new CanonicalMessage(message.Role, message.SectionId, message.ToolCallId, message.ToolName, content);
+        }).ToArray();
         var stablePrefixDigest = ComputeMessageDigest(
-            messages.Take(stablePrefixMessageCount),
+            canonicalMessages.Take(stablePrefixMessageCount),
             providerInstructions);
         var cacheFamily = $"layout-v{ModelRequestLayout.CurrentVersion}:"
             + $"{stablePrefixDigest}:{instructionBundle.Digest}:{toolInventoryDigest}";
@@ -665,7 +682,7 @@ public sealed class ContextAssembler : IContextAssembler
             CacheFamily = cacheFamily,
             StablePrefixDigest = stablePrefixDigest,
             StablePrefixMessageCount = stablePrefixMessageCount,
-            Segments = CreateCanonicalSegments(messages, providerInstructions),
+            Segments = CreateCanonicalSegments(canonicalMessages, providerInstructions),
         };
         var wireEstimate = ModelWireEstimator.Estimate(
             messages,
@@ -958,7 +975,8 @@ public sealed class ContextAssembler : IContextAssembler
             mode,
             modeSource,
             currentContent,
-            current?.Sensitivity == ConversationSensitivity.Sensitive);
+            current?.Sensitivity == ConversationSensitivity.Sensitive)
+        { CurrentImages = current?.Images ?? [] };
         var recentCutoff = DateTimeOffset.UtcNow - _options.Conversation.RecentTurnMaximumAge;
         ConversationMessage[] allPriorMessages =
         [
@@ -1228,46 +1246,24 @@ public sealed class ContextAssembler : IContextAssembler
         return checked(TokenEstimator.Estimate(modelInput) + nativeToolTokens + framingTokens);
     }
 
+    private sealed record CanonicalMessage(ModelMessageRole Role, string SectionId, string? ToolCallId, string? ToolName, string Content);
+
     private static string ComputeMessageDigest(
-        IEnumerable<ModelMessage> messages,
+        IEnumerable<CanonicalMessage> messages,
         ModelProviderInstructions? providerInstructions)
     {
-        if (providerInstructions is null)
-        {
-            var messageEncoding = JsonSerializer.Serialize(messages.Select(message => new
+        var encoded = providerInstructions is null
+            ? JsonSerializer.SerializeToUtf8Bytes(messages)
+            : JsonSerializer.SerializeToUtf8Bytes(new
             {
-                message.Role,
-                message.SectionId,
-                message.ToolCallId,
-                message.ToolName,
-                Content = message.GetModelVisibleContent(),
-            }));
-            return "sha256:"
-                + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(messageEncoding)));
-        }
-
-        var encoded = JsonSerializer.Serialize(new
-        {
-            ProviderInstructions = new
-            {
-                providerInstructions.SectionId,
-                providerInstructions.Content,
-            },
-            Messages = messages.Select(message => new
-            {
-                message.Role,
-                message.SectionId,
-                message.ToolCallId,
-                message.ToolName,
-                Content = message.GetModelVisibleContent(),
-            }),
-        });
-        return "sha256:"
-            + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(encoded)));
+                ProviderInstructions = new { providerInstructions.SectionId, providerInstructions.Content },
+                Messages = messages,
+            });
+        return "sha256:" + Convert.ToHexStringLower(SHA256.HashData(encoded));
     }
 
     private static IReadOnlyList<CanonicalContextSegment> CreateCanonicalSegments(
-        IReadOnlyList<ModelMessage> messages,
+        IReadOnlyList<CanonicalMessage> messages,
         ModelProviderInstructions? providerInstructions)
     {
         var segments = new List<CanonicalContextSegment>();
@@ -1284,7 +1280,7 @@ public sealed class ContextAssembler : IContextAssembler
 
         segments.AddRange(messages.Select(message =>
         {
-            var content = message.GetModelVisibleContent();
+            var content = message.Content;
             var volatility = message.SectionId switch
             {
                 "host-policy" => ContextVolatilityClass.Process,
@@ -1315,7 +1311,8 @@ public sealed class ContextAssembler : IContextAssembler
         string evidenceContent,
         string toolSchemas,
         string outputSchema,
-        IReadOnlyList<ModelMessage> additionalMessages)
+        IReadOnlyList<ModelMessage> additionalMessages,
+        IReadOnlyList<Evidence> selectedEvidence)
     {
         var repositoryInstructions = string.IsNullOrWhiteSpace(appendContent)
             ? _prompts.Get(PromptFileNames.SystemRepositoryInstructionsNone)
@@ -1360,7 +1357,21 @@ public sealed class ContextAssembler : IContextAssembler
         messages.Add(CreateTextMessage(
             ModelMessageRole.User,
             "current-user",
-            conversation.CurrentTurnContent));
+            conversation.CurrentTurnContent) with
+        {
+            Content = CreateConversationContent(conversation.CurrentTurnContent, conversation.CurrentImages),
+        });
+        foreach (var evidence in selectedEvidence.Where(item => item.Images.Count > 0))
+        {
+            var metadata = JsonSerializer.Serialize(new { evidence.EvidenceId, evidence.Provenance });
+            messages.Add(new ModelMessage
+            {
+                Role = ModelMessageRole.User,
+                SectionId = "governed-image-evidence",
+                Content = ModelImages.Append([new ModelContentPart { Kind = ModelContentPartKind.Json, Content = metadata }], evidence.Images),
+            });
+        }
+
         messages.AddRange(additionalMessages.Skip(additionalPrefix.Length));
         return messages;
     }
@@ -1388,6 +1399,50 @@ public sealed class ContextAssembler : IContextAssembler
                 + Escape(message.GetModelVisibleContent())
                 + "</request_local_message>"));
     }
+
+    private static IReadOnlyList<ModelContentPart> CreateConversationContent(string text, IReadOnlyList<ImageArtifact> images, int omittedImageCount = 0)
+    {
+        List<ModelContentPart> content = [new() { Content = text }];
+        if (images.Count > 0)
+        {
+            content.Add(new ModelContentPart
+            {
+                Kind = ModelContentPartKind.Json,
+                Content = JsonSerializer.Serialize(new
+                {
+                    attachments = images.Select(image => new
+                    {
+                        artifactId = image.Id,
+                        mediaType = image.MediaType,
+                        width = image.Width,
+                        height = image.Height,
+                        byteLength = image.ByteLength,
+                    }),
+                }),
+            });
+        }
+
+        if (omittedImageCount > 0)
+        {
+            content.Add(new ModelContentPart
+            {
+                Kind = ModelContentPartKind.Json,
+                Content = CreateImageOmissionReceipt(images, omittedImageCount),
+            });
+        }
+
+        return ModelImages.Append(content, images.Skip(omittedImageCount).ToArray());
+    }
+
+    private static string CreateImageOmissionReceipt(IReadOnlyList<ImageArtifact> images, int count)
+        => JsonSerializer.Serialize(new
+        {
+            omittedImagePixels = images.Take(count).Select(image => new
+            {
+                artifactId = image.Id,
+                reason = "aggregate-image-limit",
+            }),
+        });
 
     private static ModelMessage CreateTextMessage(
         ModelMessageRole role,
@@ -1644,6 +1699,7 @@ public sealed class ContextAssembler : IContextAssembler
     {
         private readonly List<ConversationContextItemProjection> _excluded = [];
         private readonly List<IReadOnlyList<ConversationMessage>> _recentTurns = [];
+        private readonly Dictionary<ConversationMessageId, int> _omittedImageCounts = [];
 
         public ConversationAssemblyState(
             ConversationContextMode mode,
@@ -1661,6 +1717,8 @@ public sealed class ContextAssembler : IContextAssembler
 
         public string CurrentTurnContent { get; }
 
+        public IReadOnlyList<ImageArtifact> CurrentImages { get; init; } = [];
+
         public bool ContainsSensitiveData => CurrentTurnIsSensitive
             || _recentTurns.SelectMany(turn => turn).Any(message => message.Sensitivity == ConversationSensitivity.Sensitive);
 
@@ -1670,7 +1728,10 @@ public sealed class ContextAssembler : IContextAssembler
 
         public string RecentTurnsContent => string.Join('\n', _recentTurns.SelectMany(turn => turn).Select(message =>
             $"<conversation_message id=\"{message.Id.Value:D}\" role=\"{message.Role}\" untrusted=\"true\">"
-            + $"{Escape(message.Content ?? string.Empty)}</conversation_message>")) is { Length: > 0 } content
+            + Escape(message.Content ?? string.Empty)
+            + (_omittedImageCounts.TryGetValue(message.Id, out var count)
+                ? Escape(CreateImageOmissionReceipt(message.Images, count)) : string.Empty)
+            + "</conversation_message>")) is { Length: > 0 } content
             ? $"<recent_conversation>\n{content}\n</recent_conversation>" : string.Empty;
 
         public List<string> Reductions { get; } = [];
@@ -1688,12 +1749,49 @@ public sealed class ContextAssembler : IContextAssembler
             _recentTurns.Add(turn);
         }
 
+        public void ReduceHistoricalImages(IEnumerable<ImageArtifact> additionalImages)
+        {
+            var historical = _recentTurns.SelectMany(turn => turn)
+                .Where(message => message.Role == ConversationRole.User && message.Content is not null)
+                .OrderBy(message => message.Sequence).ToArray();
+            var images = CurrentImages.Concat(additionalImages).Concat(historical.SelectMany(message => message.Images)).ToArray();
+            var remainingCount = images.Length;
+            var remainingBytes = images.Sum(image => (long)image.ByteLength);
+            foreach (var message in historical)
+            {
+                var omitted = 0;
+                foreach (var image in message.Images)
+                {
+                    if (remainingCount <= ImageArtifactLimits.MaximumCount && remainingBytes <= ImageArtifactLimits.MaximumRequestBytes)
+                    {
+                        break;
+                    }
+
+                    omitted++;
+                    remainingCount--;
+                    remainingBytes -= image.ByteLength;
+                }
+
+                if (omitted > 0)
+                {
+                    _omittedImageCounts.Add(message.Id, omitted);
+                    Reductions.Add($"Omitted {omitted} historical image(s) from message {message.Id.Value:D} to satisfy aggregate image limits; text and attachment metadata retained.");
+                }
+            }
+        }
+
         public IReadOnlyList<ModelMessage> CreateRecentMessages()
         {
             return [.. _recentTurns.SelectMany(turn => turn).Select(message => CreateTextMessage(
                 message.Role == ConversationRole.User ? ModelMessageRole.User : ModelMessageRole.Assistant,
                 message.Role == ConversationRole.User ? "recent-user" : "recent-assistant",
-                message.Content ?? string.Empty))];
+                message.Content ?? string.Empty) with
+            {
+                Content = CreateConversationContent(
+                    message.Content ?? string.Empty,
+                    message.Role == ConversationRole.User && message.Content is not null ? message.Images : [],
+                    _omittedImageCounts.GetValueOrDefault(message.Id)),
+            })];
         }
 
         public IReadOnlyList<ConversationContextItemProjection> CreateProjections()
@@ -1727,7 +1825,7 @@ public sealed class ContextAssembler : IContextAssembler
 
         private bool CurrentTurnIsSensitive { get; }
 
-        private static ConversationContextItemProjection CreateMessageProjection(
+        private ConversationContextItemProjection CreateMessageProjection(
             ConversationMessage message, bool included, string rationale)
         {
             return new()
@@ -1737,6 +1835,14 @@ public sealed class ContextAssembler : IContextAssembler
                 Included = included,
                 Rationale = rationale,
                 EstimatedTokens = message.EstimatedTokens,
+                Images = message.Images,
+                ImageDisposition = message.Images.Count == 0 ? null
+                    : message.Content is null ? "unavailable after body retention"
+                    : included && message.Role == ConversationRole.User
+                        ? _omittedImageCounts.TryGetValue(message.Id, out var count)
+                            ? $"{message.Images.Count - count} image(s) selected; {count} omitted by aggregate image limits; metadata retained"
+                            : "pixels selected"
+                        : "metadata only; pixels omitted",
                 SourceMessageIds = [message.Id],
                 SourceRunIds = [message.RunId],
             };

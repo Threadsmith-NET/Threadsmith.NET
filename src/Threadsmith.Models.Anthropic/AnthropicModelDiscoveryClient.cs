@@ -163,6 +163,7 @@ public static class AnthropicModelDiscoveryClient
 
             return new AnthropicDiscoveredCapabilities
             {
+                ImageInput = GetSupported(value, "image_input"),
                 StructuredOutputs = GetSupported(value, "structured_outputs"),
                 Thinking = GetSupported(value, "thinking"),
                 AdaptiveThinking = GetSupported(types, "adaptive"),

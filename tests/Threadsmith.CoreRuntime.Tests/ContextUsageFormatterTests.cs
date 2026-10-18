@@ -19,13 +19,15 @@ public static class ContextUsageFormatterTests
             Text = "Follow the existing service.", Rationale = "Included by qualified hybrid retrieval and context budget.",
             Supports = [new RepositoryMemorySupport { Path = "src/Service.cs", ContentHash = "hash", ObservedAt = DateTimeOffset.UtcNow }],
         };
-        var output = ContextUsageFormatter.FormatMemoryContext([
+        RepositoryMemoryContextItemProjection[] items =
+        [
             first,
             first with { Id = RepositoryMemoryId.New(), Text = "Reuse the shared store.", Supports = [] },
             first with { Id = RepositoryMemoryId.New(), Ownership = RepositoryMemoryOwnership.Ordinary, Text = "Situational note.", Supports = [] },
             first with { Id = RepositoryMemoryId.New(), Ownership = RepositoryMemoryOwnership.Ordinary, MemoryType = RepositoryMemoryType.StandingPreference, Text = "Standing preference.", Supports = [] },
             first with { Id = RepositoryMemoryId.New(), Included = false, Text = "Omitted note.", Supports = [] },
-        ]);
+        ];
+        var output = ContextUsageFormatter.FormatMemoryContext(items);
 
         var expected = """
             Repository Intelligence that may be useful to guide exploration and/or implementation:
@@ -51,6 +53,13 @@ public static class ContextUsageFormatterTests
             - Omitted note.
             """.ReplaceLineEndings("\n") + "\n\n";
         Assert.Equal(expected, output);
+        var automatic = ContextUsageFormatter.FormatMemoryContext(items, includeStandingPreferences: false);
+        Assert.DoesNotContain("Standing preference.", automatic, StringComparison.Ordinal);
+        Assert.DoesNotContain("Repository standing preferences", automatic, StringComparison.Ordinal);
+        Assert.Contains("Situational note.", automatic, StringComparison.Ordinal);
+        Assert.Contains("Follow the existing service.", automatic, StringComparison.Ordinal);
+        Assert.Empty(ContextUsageFormatter.FormatMemoryContext(
+            items.Where(item => item.MemoryType == RepositoryMemoryType.StandingPreference), includeStandingPreferences: false));
         Assert.Empty(ContextUsageFormatter.FormatMemoryContext([]));
     }
 

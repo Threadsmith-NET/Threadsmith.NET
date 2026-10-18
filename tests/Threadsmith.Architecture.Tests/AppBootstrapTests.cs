@@ -15,6 +15,29 @@ using Xunit;
 /// <summary>Verifies the independently testable startup phases extracted from Program.Main.</summary>
 public static partial class AppBootstrapTests
 {
+    /// <summary>PDF configuration reaches the production tool limits and rejects invalid values.</summary>
+    [Theory]
+    [InlineData(300, 4096, true)]
+    [InlineData(0, 1600, false)]
+    [InlineData(144, 8193, false)]
+    public static void PdfRenderConfigurationBindsAndValidates(int dpi, int dimension, bool valid)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:readFile:pdfRenderDpi"] = dpi.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["tools:readFile:pdfRenderMaxDimension"] = dimension.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        }).Build();
+        if (!valid)
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => HostFoundation.CreateToolLimits(configuration));
+            return;
+        }
+
+        var limits = HostFoundation.CreateToolLimits(configuration);
+        Assert.Equal(dpi, limits.PdfRenderDpi);
+        Assert.Equal(dimension, limits.PdfRenderMaximumDimension);
+    }
+
     /// <summary>Invalid scenario settings are rejected before startup can create or migrate persistence.</summary>
     [Theory]
     [InlineData("Recall:MaximumResults", "-1")]

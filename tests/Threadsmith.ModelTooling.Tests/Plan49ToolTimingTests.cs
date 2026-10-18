@@ -184,7 +184,7 @@ public static class Plan49ToolTimingTests
             TestPromptLoader.Instance);
         var implementationsInput = implementationsTool.DeserializeInput("{\"symbolId\":\"T:Demo.IRetriever\"}");
 
-        Assert.Equal("lines 1-2000, src/Program.cs", readTool.GetActivityDetail(readInput));
+        Assert.Equal("src/Program.cs", readTool.GetActivityDetail(readInput));
         Assert.Equal("dotnet test src/Threadsmith.sln", processTool.GetActivityDetail(processInput));
         Assert.Equal(
             "resultScope in container/source/AI.Inference.Fusion",
@@ -194,11 +194,11 @@ public static class Plan49ToolTimingTests
         Assert.Equal("T:Demo.IRetriever", implementationsTool.GetActivityDetail(implementationsInput));
     }
 
-    /// <summary>File-read activity identifies the exact requested page.</summary>
+    /// <summary>File-read activity leaves classification to execution.</summary>
     [Theory]
-    [InlineData(201, 200, "lines 201-400, docs/implementation-plans/milestones.md")]
-    [InlineData(1001, 1000, "lines 1001-2000, docs/implementation-plans/milestones.md")]
-    public static void ReadFileTool_ActivityDetail_IncludesRequestedLineRange(
+    [InlineData(201, 200, "docs/implementation-plans/milestones.md")]
+    [InlineData(1001, 1000, "docs/implementation-plans/milestones.md")]
+    public static void ReadFileTool_ActivityDetail_DoesNotAssumeText(
         int startLine,
         int maximumLines,
         string expected)
@@ -214,9 +214,9 @@ public static class Plan49ToolTimingTests
         Assert.Equal(expected, readTool.GetActivityDetail(input));
     }
 
-    /// <summary>File-read activity preserves the requested page when a long path is truncated.</summary>
+    /// <summary>File-read activity bounds long paths before the file type is known.</summary>
     [Fact]
-    public static async Task ReadFileTool_LongPath_PublishesLineRangeBeforeTruncatedPath()
+    public static async Task ReadFileTool_LongPath_PublishesBoundedPath()
     {
         var timeProvider = new ManualTimeProvider();
         ITool readTool = new ReadFileTool(TestPromptLoader.Instance, new Threadsmith.Telemetry.SecretOutputSanitizer());
@@ -241,7 +241,7 @@ public static class Plan49ToolTimingTests
             JsonSerializer.Serialize(input)));
 
         var detail = Assert.IsType<string>(started?.ActivityDetail);
-        Assert.StartsWith("lines 201-400, docs/", detail, StringComparison.Ordinal);
+        Assert.StartsWith("docs/", detail, StringComparison.Ordinal);
         Assert.EndsWith("...", detail, StringComparison.Ordinal);
         Assert.InRange(detail.Length, 1, 240);
     }

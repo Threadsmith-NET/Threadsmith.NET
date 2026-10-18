@@ -649,6 +649,11 @@ internal static class InteractionPresentationFormatter
                     return null;
                 }
 
+                if (memoryType == "standingPreference")
+                {
+                    continue;
+                }
+
                 output.Append("Memory ").Append(id.GetString()).Append(" [")
                     .Append(memoryType).AppendLine("]:");
                 output.AppendLine(text.GetString());
@@ -947,6 +952,11 @@ internal static class InteractionPresentationFormatter
         var activityDetail = IsBuiltInMemoryTool(started, source)
             ? started.ActivityDetail
             : completed?.TransientActivityDetail ?? started.TransientActivityDetail ?? started.ActivityDetail;
+        if (completed is not null && GetBuiltInReadResultDetail(started, completed, source) is { } readDetail)
+        {
+            activityDetail = readDetail;
+        }
+
         var editDetail = completed is null ? null : GetBuiltInEditResultDetail(started, completed, source);
         var resultDetail = editDetail ?? (completed is null ? null : GetBuiltInSearchResultDetail(started, completed, source));
         if (resultDetail is not null)
@@ -971,6 +981,57 @@ internal static class InteractionPresentationFormatter
         return detail.Length == 0
             ? "no additional detail"
             : TruncateForDisplay(detail.ToString());
+    }
+
+    private static string? GetBuiltInReadResultDetail(
+        ToolInvocationStarted started,
+        ToolInvocationCompleted completed,
+        ToolActivitySource? source)
+    {
+        if (!completed.Succeeded || string.IsNullOrWhiteSpace(completed.ResultJson)
+            || started.ToolName != "read_file" || source is { Kind: not ToolActivitySourceKind.BuiltIn })
+        {
+            return null;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(completed.ResultJson);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("Path", out var path)
+                || path.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            if (root.TryGetProperty("BytesRead", out var bytes) && bytes.ValueKind == JsonValueKind.Number
+                && bytes.TryGetInt64(out var length) && length >= 0)
+            {
+                return $"{length:N0} bytes, {path.GetString()}";
+            }
+
+            // Older stored image results predate BytesRead; replay their validated metadata.
+            if (root.TryGetProperty("Image", out var image) && image.ValueKind == JsonValueKind.Object
+                && image.TryGetProperty("ByteLength", out bytes) && bytes.ValueKind == JsonValueKind.Number
+                && bytes.TryGetInt64(out length) && length >= 0)
+            {
+                return $"{length:N0} bytes, {path.GetString()}";
+            }
+
+            if (root.TryGetProperty("StartLine", out var start) && start.ValueKind == JsonValueKind.Number
+                && start.TryGetInt32(out var startLine) && startLine > 0
+                && root.TryGetProperty("EndLine", out var end) && end.ValueKind == JsonValueKind.Number
+                && end.TryGetInt32(out var endLine) && endLine >= startLine)
+            {
+                return $"lines {startLine}-{endLine}, {path.GetString()}";
+            }
+
+            return path.GetString();
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private static string? GetBuiltInEditResultDetail(

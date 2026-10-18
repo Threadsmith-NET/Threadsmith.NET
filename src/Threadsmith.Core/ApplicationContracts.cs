@@ -43,6 +43,9 @@ public sealed record SubmitRequestCommand(
     string Request,
     IReadOnlyList<AcceptanceCriterion>? AcceptanceCriteria = null) : ICommand<RunId>
 {
+    /// <summary>Validated draft image references submitted through the ordinary conversation path.</summary>
+    public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+
     /// <summary>Explicit user or host-scheduled intelligence action under restricted tool authority.</summary>
     public RepositoryIntelligenceOperation IntelligenceOperation { get; init; }
 

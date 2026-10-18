@@ -36,7 +36,8 @@ internal static class ModelComposition
         ISecretResolver secretResolver,
         ILoggerFactory loggerFactory,
         string? rawModelLogPath = null,
-        IConfiguration? trustedConfiguration = null)
+        IConfiguration? trustedConfiguration = null,
+        IImageArtifactStore? images = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(paths);
@@ -109,12 +110,26 @@ internal static class ModelComposition
             var codexConfiguration = codexAccessToken is null
                 ? null
                 : await codexCache.LoadAsync(codexStartupToken.Token).ConfigureAwait(false);
+            if (codexConfiguration is { RequiresCapabilityRefresh: true } && codexAccessToken is not null)
+            {
+                try
+                {
+                    var refreshed = await new OpenAiCodexCatalogClient(httpClient).DiscoverAsync(codexAccessToken, cancellationToken: codexStartupToken.Token).ConfigureAwait(false);
+                    await codexCache.SaveAsync(refreshed, codexStartupToken.Token).ConfigureAwait(false);
+                    codexConfiguration = refreshed;
+                }
+                catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException or IOException or JsonException or UnauthorizedAccessException)
+                {
+                    loggerFactory.CreateLogger("Threadsmith.Models.OpenAiCodex.Startup").LogWarning("Codex modality refresh unavailable; legacy cached models remain text-only.");
+                }
+            }
+
             if (codexConfiguration is not null)
             {
                 codexConfiguration = codexConfiguration with
                 {
                     Models = codexConfiguration.Models
-                        .Select(model => model with { TimeoutSeconds = codexTimeoutSeconds })
+                        .Select(model => ApplyCodexContentConfiguration(model, trustedConfiguration) with { TimeoutSeconds = codexTimeoutSeconds })
                         .ToArray(),
                 };
                 var enforceHttps = configuration.GetValue("model:enforceModelEndpointHttps", true);
@@ -188,7 +203,8 @@ internal static class ModelComposition
                                 ? await codexOAuth.RefreshAccessTokenAsync(
                                     rejectedSecret,
                                     cancellationToken).ConfigureAwait(false)
-                                : null);
+                                : null,
+                        images);
 
                 var provider = CreateOptionalLoggingProvider(
                     CreateConfiguredProvider(
@@ -565,6 +581,19 @@ internal static class ModelComposition
         }
 
         return seconds;
+    }
+
+    private static ModelConfiguration ApplyCodexContentConfiguration(ModelConfiguration model, IConfiguration configuration)
+    {
+        var codex = (OpenAiCodexModelConfiguration)model;
+        var section = configuration.GetSection("model:openAiCodex:models:" + codex.ModelId);
+        var input = section["supportedInputContentTypes"];
+        var output = section["supportedOutputContentTypes"];
+        return codex with
+        {
+            SupportedInputContentTypes = input is null ? model.SupportedInputContentTypes : JsonSerializer.Deserialize<ModelContentTypes>(JsonSerializer.Serialize(input)),
+            SupportedOutputContentTypes = output is null ? model.SupportedOutputContentTypes : JsonSerializer.Deserialize<ModelContentTypes>(JsonSerializer.Serialize(output)),
+        };
     }
 
     private static bool IsPathInsideDirectory(string directory, string path)

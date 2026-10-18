@@ -38,6 +38,9 @@ public enum ModelContentPartKind
 
     /// <summary>Host-normalized JSON payload.</summary>
     Json,
+
+    /// <summary>Validated raster image referenced through the host artifact store.</summary>
+    Image,
 }
 
 /// <summary>One immutable provider-neutral message content part.</summary>
@@ -47,7 +50,10 @@ public sealed record ModelContentPart
     public ModelContentPartKind Kind { get; init; } = ModelContentPartKind.Text;
 
     /// <summary>Sanitized content.</summary>
-    public required string Content { get; init; }
+    public string Content { get; init; } = string.Empty;
+
+    /// <summary>Image metadata; encoded bytes never live in message text.</summary>
+    public ImageArtifact? Image { get; init; }
 
     /// <summary>Whether the part is sent to the model provider.</summary>
     public bool IsModelVisible { get; init; } = true;
@@ -837,6 +843,7 @@ public static class ModelWireEstimator
             var message = messages[index];
             var tokens = checked(
                 EstimateCharacters(message.GetModelVisibleContentLength())
+                + message.Content.Where(part => part.IsModelVisible && part.Image is not null).Sum(part => ModelImages.EstimateTokens(part.Image ?? throw new InvalidOperationException("Missing image metadata.")))
                 + EstimateCharacters(message.ToolCallId?.Length ?? 0)
                 + EstimateCharacters(message.ToolName?.Length ?? 0));
             sections[message.SectionId] = sections.TryGetValue(message.SectionId, out var current)

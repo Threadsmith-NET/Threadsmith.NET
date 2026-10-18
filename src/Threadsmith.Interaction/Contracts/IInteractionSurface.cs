@@ -7,6 +7,9 @@ using Threadsmith.Interaction.Sessions;
 /// <summary>Provides frontend input and semantic presentation without exposing terminal libraries.</summary>
 public interface IInteractionSurface
 {
+    /// <summary>Restores an attachment-bearing submission after a recoverable failure.</summary>
+    Task RestoreSubmissionAsync(InteractionInput input, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
     /// <summary>Gets immutable optional behavior supported by this frontend.</summary>
     InteractionSurfaceCapabilities Capabilities { get; }
 

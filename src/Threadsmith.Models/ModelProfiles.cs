@@ -209,6 +209,12 @@ public sealed record ModelProfile
     /// <summary>Whether the provider enforces the request-specific output ceiling.</summary>
     public bool EnforcesRequestOutputTokenLimit { get; init; } = true;
 
+    /// <summary>Explicitly enabled input kinds; omitted catalogs retain text-only behavior.</summary>
+    public ModelContentTypes SupportedInputContentTypes { get; init; } = ModelContentTypes.Text;
+
+    /// <summary>Explicitly enabled output kinds, independent of input support.</summary>
+    public ModelContentTypes SupportedOutputContentTypes { get; init; } = ModelContentTypes.Text;
+
     /// <summary>Provider features available to the host.</summary>
     public ModelCapabilitySet Capabilities { get; init; } = new();
 
@@ -443,6 +449,7 @@ public sealed class ConfiguredModelCatalog
 /// <summary>Selects and creates a configured provider for each model request.</summary>
 public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPreparationResolver
 {
+    private readonly IImageArtifactStore? _images;
     private readonly ConfiguredModelCatalog _catalog;
     private readonly EffectiveModelProviderCatalog _effectiveCatalog;
     private readonly HttpClient _httpClient;
@@ -458,12 +465,14 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         EffectiveModelProviderCatalog catalog,
         Func<string, CancellationToken, Task<string?>> resolveSecretAsync,
         ModelProfileId? preferredProfileId = null,
-        Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null)
+        Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null,
+        IImageArtifactStore? images = null)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
         ArgumentNullException.ThrowIfNull(catalog);
         ArgumentNullException.ThrowIfNull(resolveSecretAsync);
         _httpClient = httpClient;
+        _images = images;
         _effectiveCatalog = catalog;
         _catalog = catalog.ModelCatalog;
         _resolveSecretAsync = resolveSecretAsync;
@@ -478,8 +487,9 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         EffectiveModelProviderCatalog catalog,
         Func<string, CancellationToken, Task<string?>> resolveSecretAsync,
         Func<ModelProfileId?> preferredProfileResolver,
-        Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null)
-        : this(httpClient, catalog, resolveSecretAsync, refreshSecretAsync: refreshSecretAsync)
+        Func<string, string, CancellationToken, Task<string?>>? refreshSecretAsync = null,
+        IImageArtifactStore? images = null)
+        : this(httpClient, catalog, resolveSecretAsync, refreshSecretAsync: refreshSecretAsync, images: images)
     {
         ArgumentNullException.ThrowIfNull(preferredProfileResolver);
         _preferredProfileResolver = preferredProfileResolver;
@@ -529,6 +539,11 @@ public sealed class ConfiguredModelProvider : IModelProvider, IModelRequestPrepa
         }
 
         var profile = _catalog.Get(selection.ProfileId);
+        if (_images is not null && request.ImageSessionId is { } imageSession)
+        {
+            request = request with { ResolveImageAsync = (image, token) => _images.ReadImageAsync(image, imageSession, token) };
+        }
+
         var admittedPreparation = request.Preparation;
         request = _effectiveCatalog.Prepare(request with { ResolvedProfileId = selection.ProfileId });
         if (admittedPreparation is not null && request.Preparation?.WireDigest != admittedPreparation.WireDigest)

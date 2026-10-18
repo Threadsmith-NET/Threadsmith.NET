@@ -4,7 +4,12 @@ using Threadsmith.Core;
 using Threadsmith.Models;
 
 /// <summary>Protected typed configuration for Threadsmith's native Codex provider.</summary>
-public sealed record OpenAiCodexProviderConfiguration : ModelProviderConfiguration;
+public sealed record OpenAiCodexProviderConfiguration : ModelProviderConfiguration
+{
+    /// <summary>Whether a legacy catalog needs explicit modality discovery before enabling image input.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool RequiresCapabilityRefresh { get; init; }
+}
 
 /// <summary>One model discovered from the authenticated Codex account.</summary>
 public sealed record OpenAiCodexModelConfiguration : ModelConfiguration
@@ -55,6 +60,8 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
             throw new ArgumentException("The provider configuration type does not match its registration.", nameof(provider));
         }
 
+        ModelImages.ValidateConfiguration(configured);
+
         if (!string.Equals(configured.SecretKeyReference, OAuthSecretReference, StringComparison.Ordinal))
         {
             throw new InvalidOperationException("The Codex provider requires the compiled Threadsmith OAuth reference.");
@@ -102,6 +109,8 @@ public sealed class OpenAiCodexProviderRegistration : IModelProviderRegistration
                 RequestOutputTokenReserve = model.RequestOutputTokenReserve,
                 EnforcesRequestOutputTokenLimit = false,
                 Capabilities = model.Capabilities,
+                SupportedInputContentTypes = model.SupportedInputContentTypes,
+                SupportedOutputContentTypes = model.SupportedOutputContentTypes,
                 Cost = model.Cost,
                 SensitiveDataPolicy = model.SensitiveDataPolicy,
                 IntendedWorkloadClasses = model.IntendedWorkloadClasses,

@@ -9,7 +9,7 @@ using Threadsmith.Interaction.Contracts;
 // Explicit user paste only. Never query the clipboard during rendering/startup.
 
 /// <summary>Reads the platform clipboard only on explicit user request with bounded size and time.</summary>
-internal static class ClipboardReader
+internal static partial class ClipboardReader
 {
     private static readonly UTF8Encoding _strictUtf8 = new(false, true);
 
@@ -66,6 +66,11 @@ internal static class ClipboardReader
     /// <summary>Decodes clipboard text within the configured draft limit.</summary>
     internal static async Task<string> ReadBoundedAsync(Stream stream, TuiResourceLimits limits, CancellationToken cancellationToken)
     {
+        return _strictUtf8.GetString(await ReadBoundedBytesAsync(stream, limits.MaximumDraftBytes, cancellationToken));
+    }
+
+    private static async Task<byte[]> ReadBoundedBytesAsync(Stream stream, long maximumBytes, CancellationToken cancellationToken)
+    {
         await using var content = new MemoryStream(4096);
         var bytes = ArrayPool<byte>.Shared.Rent(4096);
         try
@@ -75,10 +80,10 @@ internal static class ClipboardReader
                 var count = await stream.ReadAsync(bytes.AsMemory(0, 4096), cancellationToken);
                 if (count == 0)
                 {
-                    return _strictUtf8.GetString(content.GetBuffer(), 0, (int)content.Length);
+                    return content.ToArray();
                 }
 
-                if (content.Length + count > limits.MaximumDraftBytes)
+                if (content.Length + count > maximumBytes)
                 {
                     throw new InvalidDataException("Clipboard exceeds the configured input limit.");
                 }
@@ -116,6 +121,12 @@ internal static class ClipboardReader
 
     private static async Task<string?> ReadProcessAsync(string executable, string[] arguments, TuiResourceLimits limits, CancellationToken cancellationToken)
     {
+        var bytes = await ReadProcessBytesAsync(executable, arguments, limits.MaximumDraftBytes, cancellationToken);
+        return bytes is null ? null : _strictUtf8.GetString(bytes);
+    }
+
+    private static async Task<byte[]?> ReadProcessBytesAsync(string executable, string[] arguments, long maximumBytes, CancellationToken cancellationToken)
+    {
         var start = new ProcessStartInfo(executable)
         {
             UseShellExecute = false,
@@ -145,7 +156,7 @@ internal static class ClipboardReader
         var errors = process.StandardError.BaseStream.CopyToAsync(Stream.Null, cancellationToken);
         try
         {
-            var result = await ReadBoundedAsync(process.StandardOutput.BaseStream, limits, cancellationToken);
+            var result = await ReadBoundedBytesAsync(process.StandardOutput.BaseStream, maximumBytes, cancellationToken);
             await process.WaitForExitAsync(cancellationToken);
             await errors;
             return process.ExitCode == 0 ? result : null;

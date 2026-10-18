@@ -192,7 +192,7 @@ internal static class ConfigurationBootstrap
             ["tui:showOperationDurations"] = "true",
             ["tools:listFiles:defaultEntries"] = "200",
             ["tools:listFiles:maxEntries"] = "2000",
-            ["tools:readFile:maxBytes"] = (1024 * 1024).ToString(CultureInfo.InvariantCulture),
+            ["tools:readFile:maxBytes"] = ToolLimits.DefaultReadFileByteLimit.ToString(CultureInfo.InvariantCulture),
             ["tools:writeFile:allowedFolders:0"] = ".inbox",
             ["tools:readFile:defaultLines"] = ToolLimits.DefaultReadFileLineLimit.ToString(CultureInfo.InvariantCulture),
             ["tools:readFile:maxLines"] = ToolLimits.DefaultReadFileLineLimit.ToString(CultureInfo.InvariantCulture),

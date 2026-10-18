@@ -194,6 +194,9 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for the ContextActiveTurnSummaryHostFileLists prompt asset.</summary>
     public const string ContextActiveTurnSummaryHostFileLists = "Context-ActiveTurnSummary-HostFileLists.md";
 
+    /// <summary>Gets the text label for an admitted image-only user message.</summary>
+    public const string ContextImageOnlyUserMessage = "Context-ImageOnlyUserMessage.md";
+
     /// <summary>Gets the stable filename for the ContextActiveRunSteering prompt asset.</summary>
     public const string ContextActiveRunSteering = "Context-ActiveRun-Steering.md";
 
@@ -1021,6 +1024,7 @@ public static class PromptFileNames
         ContextActiveTurnCompactionOutputContract,
         ContextActiveTurnSummaryUntrustedWrapper,
         ContextActiveTurnSummaryHostFileLists,
+        ContextImageOnlyUserMessage,
         ContextActiveRunSteering,
         ContextSourceEditFeedback,
         ContextSourceEditMembershipRefresh,
@@ -1388,6 +1392,7 @@ public static class PromptAssetCatalog
             PromptFileNames.ToolDelegateAgentsDisagreement,
             PromptFileNames.ToolDelegateAgentsDelegationOmission,
             PromptFileNames.ToolDelegateAgentsSteering,
+            PromptFileNames.ContextImageOnlyUserMessage,
             PromptFileNames.ContextActiveRunSteering,
             PromptFileNames.ContextSourceEditFeedback,
             PromptFileNames.ContextRepositoryMemoryRefresh,

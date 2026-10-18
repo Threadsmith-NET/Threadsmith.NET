@@ -1095,6 +1095,29 @@ public static partial class Milestone1Tests
             segment => segment.Text.Contains("/help", StringComparison.Ordinal));
     }
 
+    /// <summary>Quit bypasses attachment rejection without creating model work; other slash commands remain guarded.</summary>
+    [Theory]
+    [InlineData("/quit", false)]
+    [InlineData(" /QUIT ", false)]
+    [InlineData("/help", true)]
+    public static async Task InteractionCoordinator_QuitAcceptsAttachedImages(string command, bool rejected)
+    {
+        await using var harness = await SessionHarness.CreateAsync(new ScriptedSession());
+        var surface = new RecordingInteractionSurface(rejected ? [command, "/quit"] : [command])
+        {
+            Images = [new ImageArtifact { Id = "image", ContentHash = new string('a', 64), MediaType = "image/png", Width = 2, Height = 2, ByteLength = 3, Source = "clipboard" }],
+        };
+        var coordinator = new InteractionCoordinator(
+            new InteractionPresenter(harness.Dispatcher, harness.Projections), harness.EventStream, surface);
+
+        await coordinator.RunAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(rejected ? 2 : 1, surface.ComposerRequests.Count);
+        var output = string.Concat(surface.Batches.SelectMany(batch => batch.Items).OfType<PresentationTextItem>().SelectMany(item => item.Segments).Select(segment => segment.Text));
+        Assert.Equal(rejected, output.Contains("Remove attachments before running a slash command", StringComparison.Ordinal));
+        Assert.Empty(harness.Events.OfType<TaskIntentRecorded>());
+    }
+
     /// <summary>The help command opens the retained column dialog without writing help into MAIN or invoking a model.</summary>
     [Fact]
     public static async Task InteractionCoordinator_TuiKitHelpUsesModalWithoutTranscriptOutput()
@@ -5607,6 +5630,8 @@ public static partial class Milestone1Tests
 
         public InteractionSurfaceCapabilities Capabilities { get; } = new();
 
+        internal IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+
         internal List<PresentationBatch> Batches { get; } = [];
 
         internal List<ComposerRequest> ComposerRequests { get; } = [];
@@ -5621,7 +5646,7 @@ public static partial class Milestone1Tests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ComposerRequests.Add(request);
-            return Task.FromResult(_inputs.Dequeue());
+            return Task.FromResult(_inputs.Dequeue() with { Images = Images });
         }
 
         public Task<InteractionSelectionResult> SelectAsync(

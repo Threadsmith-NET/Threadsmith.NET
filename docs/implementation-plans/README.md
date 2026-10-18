@@ -157,6 +157,14 @@ This table is navigation only. Each active document owns its status, delivery tr
 | 117 | [plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md](plan-117-roslyn-dotnet-semantic-toolchain-upgrade.md) | Roslyn 5.9 and .NET 10 semantic toolchain upgrade with compatibility, load measurement, and release gates |
 | 118 | [plan-118-staged-semantic-readiness-and-compilation-warming.md](plan-118-staged-semantic-readiness-and-compilation-warming.md) | Staged semantic readiness with demand-driven project preparation and bounded background warming |
 | 119 | [plan-119-in-process-tui-automation-api.md](plan-119-in-process-tui-automation-api.md) | In-process public API for read-only-composer TUI automation and final-answer streaming |
+| 120 | [plan-120-multimodal-input-and-file-output.md](plan-120-multimodal-input-and-file-output.md) | Multimodal model capabilities, image input and generated file export |
+| Maintenance | [maintenance-pdf-reading-and-binary-read-details.md](maintenance-pdf-reading-and-binary-read-details.md) | Bounded PDF page reading and binary byte-count presentation |
+| Maintenance | [maintenance-image-storage-and-pdf-resolution.md](maintenance-image-storage-and-pdf-resolution.md) | Image storage capacity and PDF render configuration |
+| Maintenance | [maintenance-image-pipeline-performance.md](maintenance-image-pipeline-performance.md) | Bounded image cleanup and UTF-8 request serialization |
+| Maintenance | [maintenance-attachment-progress.md](maintenance-attachment-progress.md) | Clipboard attachment progress and repeat-paste recovery |
+| Maintenance | [maintenance-quit-with-attachments.md](maintenance-quit-with-attachments.md) | Quit with pending image attachments |
+| Maintenance | [maintenance-tool-image-admission.md](maintenance-tool-image-admission.md) | Aggregate tool-image admission and recoverable omission receipts |
+| Maintenance | [maintenance-historical-image-admission.md](maintenance-historical-image-admission.md) | Historical image capacity and explicit omission receipts |
 | — | [threadsmith-memory-reconciliation-concept-recall-implementation-plan.md](threadsmith-memory-reconciliation-concept-recall-implementation-plan.md) | Repository memory reconciliation and concept-aware recall |
 | — | [threadsmith-repository-intelligence-and-archeology-implementation-plan.md](threadsmith-repository-intelligence-and-archeology-implementation-plan.md) | Repository Intelligence and Archeology incremental implementation tasks |
 | T01 | [t01-dormant-assembly-boundary.md](repository-intelligence-and-archeology/t01-dormant-assembly-boundary.md) | Establish the dormant assembly boundary |

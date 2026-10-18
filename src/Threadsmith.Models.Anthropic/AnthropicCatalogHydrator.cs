@@ -25,6 +25,9 @@ public sealed record AnthropicDiscoveredModel
 /// <summary>Detached capability facts understood by this adapter.</summary>
 public sealed record AnthropicDiscoveredCapabilities
 {
+    /// <summary>API image input support, when explicitly declared.</summary>
+    public bool? ImageInput { get; init; }
+
     /// <summary>API structured output support, when declared.</summary>
     public bool? StructuredOutputs { get; init; }
 
@@ -292,6 +295,8 @@ public static class AnthropicCatalogHydrator
             ContextWindow = input.Value,
             MaximumOutputTokens = output.Value,
             RequestOutputTokenReserve = requestOutputTokenReserve,
+            SupportedInputContentTypes = (modelOverride?.SupportedInputContentTypes ?? (ModelContentTypes.Text | ModelContentTypes.Image))
+                & (api?.ImageInput == true ? ModelContentTypes.Text | ModelContentTypes.Image : ModelContentTypes.Text),
             Capabilities = new ModelCapabilitySet { Streaming = policy.SupportsStreaming, ToolCalls = policy.SupportsToolCalls, StructuredOutput = policy.SupportsStrictSchemas },
             Cost = new ModelCostMetadata
             {

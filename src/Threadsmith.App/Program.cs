@@ -156,7 +156,8 @@ public static class Program
                 foundation.SecretResolver,
                 loggerFactory,
                 commandLine.RawModelLogPath,
-                trustedConfiguration);
+                trustedConfiguration,
+                foundation.ArtifactStore);
         }
         catch (InvalidOperationException exception) when (!string.IsNullOrWhiteSpace(commandLine.RawModelLogPath))
         {
@@ -279,6 +280,7 @@ public static class Program
         return await ShellRunner.RunAsync(
             new ShellRunContext
             {
+                ImageArtifacts = foundation.ArtifactStore,
                 SemanticStartupProgress = foundation.SemanticEngines.StartupProgress,
                 CommandLine = commandLine,
                 Paths = paths,

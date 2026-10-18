@@ -461,6 +461,26 @@ public sealed partial class SessionApplication
             loopState.ActiveTurnEvidenceReferences.Count > 0);
         var modelPreference = _sessionPreferences?.Capture();
         var context = loopState.FrozenContext;
+        var continuationImages = loopState.CreateModelVisibleContinuation().Messages
+            .SelectMany(message => message.Content)
+            .Where(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image && part.Image is not null)
+            .Select(part => part.Image!).ToArray();
+        if (loopState.RetainedContext?.Messages is { } frozenMessages && continuationImages.Length > 0
+            && frozenMessages.Any(message => message.SectionId == "recent-user"
+                && message.Content.Any(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image)))
+        {
+            var images = frozenMessages.SelectMany(message => message.Content)
+                .Where(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image && part.Image is not null)
+                .Select(part => part.Image!).Concat(continuationImages).ToArray();
+            if (images.Length > ImageArtifactLimits.MaximumCount
+                || images.Sum(image => (long)image.ByteLength) > ImageArtifactLimits.MaximumRequestBytes)
+            {
+                // Reuse context selection and the existing replay fence when historical pixels must yield.
+                loopState.ReleaseCompletedReplay();
+                loopState.InvalidateFrozenContext();
+                context = null;
+            }
+        }
 
         if (_contextAssembler is not null && context is null)
         {
@@ -482,6 +502,7 @@ public sealed partial class SessionApplication
                 RepositoryMemoryConcepts = registration.MemoryConcepts.ToArray(),
                 RetainedRepositoryMemories = registration.RetainedMemories,
                 ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
+                ContinuationImages = continuationImages,
             };
             context = await _contextAssembler.AssembleAsync(
                 assemblyRequest,
@@ -920,6 +941,47 @@ public sealed partial class SessionApplication
             loopState.CommitCurrentGroup(
                 round.ModelRound,
                 streamState.CurrentGroupPurgeAfterCorrection && !loopState.TransientState.HasResponses);
+            if (!streamState.CorrectiveTurnRequested && streamState.GeneratedImages.Count > 0)
+            {
+                if (!streamState.ImageCompletionConfirmed)
+                {
+                    throw new MalformedModelOutputException("Generated images require a successful complete response.");
+                }
+
+                var artifacts = _imageArtifacts ?? throw new ModelProviderException("Generated image storage is unavailable.");
+                var published = new List<ImageArtifact>();
+                string metadata;
+                try
+                {
+                    foreach (var generated in streamState.GeneratedImages)
+                    {
+                        using var imageStream = new MemoryStream(generated.Bytes.ToArray(), writable: false);
+                        published.Add(await artifacts.StoreImageAsync(imageStream, round.Registration.SessionId, "model-output", generated.ResponseItemId, cancellationToken: cancellationToken));
+                    }
+
+                    metadata = JsonSerializer.Serialize(new { generatedImages = published });
+                    await ArchiveVisibleMessageAsync(round.Registration.SessionId, round.RunId, ConversationRole.Assistant, metadata, cancellationToken, published);
+                }
+                catch
+                {
+                    foreach (var artifact in published)
+                    {
+                        await artifacts.ReleaseImageAsync(artifact.Id, round.Registration.SessionId, CancellationToken.None);
+                    }
+
+                    throw;
+                }
+
+                loopState.CommitStandaloneMessage(
+                    round.ModelRequest.ToolContinuationRound + 1,
+                    new ModelMessage { Role = ModelMessageRole.HostContext, SectionId = "generated-image-artifacts", Content = [new ModelContentPart { Kind = ModelContentPartKind.Json, Content = metadata }] },
+                    purgeAfterCorrection: false);
+                streamState.TextOutput.AppendLine(metadata);
+                await using var artifactOutput = new ModelOutputCoalescer(_events, round.Registration.SessionId, _limits, TimeProvider.System, cancellationToken);
+                await artifactOutput.AppendAsync(metadata, cancellationToken);
+                streamState.ToolInvoked |= streamState.ImageContinuationRequested;
+            }
+
             if (!streamState.CurrentGroupPurgeAfterCorrection && !loopState.TransientState.HasResponses)
             {
                 loopState.PurgeCorrectionGroups();
@@ -997,6 +1059,34 @@ public sealed partial class SessionApplication
                     DateTimeOffset.UtcNow,
                     _sanitizer.Sanitize(chunk.Reasoning)),
                 cancellationToken);
+        }
+
+        if (chunk.FinishReason is { } finishReason)
+        {
+            streamState.ImageCompletionConfirmed = finishReason is ModelFinishReason.Stop or ModelFinishReason.ToolCalls;
+            streamState.ImageContinuationRequested = finishReason == ModelFinishReason.ToolCalls;
+        }
+
+        if (chunk.GeneratedImage is { } generated)
+        {
+            var previous = streamState.GeneratedImages.FirstOrDefault(image => image.ResponseItemId == generated.ResponseItemId);
+            if (generated.Bytes.Length is <= 0 or > ImageArtifactLimits.MaximumBytes
+                || string.IsNullOrWhiteSpace(generated.ResponseItemId) || generated.ResponseItemId.Length > 256
+                || (previous is null && (streamState.GeneratedImages.Count >= ImageArtifactLimits.MaximumCount
+                    || streamState.GeneratedImages.Sum(image => (long)image.Bytes.Length) + generated.Bytes.Length > ImageArtifactLimits.MaximumRequestBytes)))
+            {
+                throw new MalformedModelOutputException("Generated image output exceeds host bounds.");
+            }
+
+            if (previous is not null && !previous.Bytes.Span.SequenceEqual(generated.Bytes.Span))
+            {
+                throw new MalformedModelOutputException("Generated image identity changed within a response.");
+            }
+
+            if (previous is null)
+            {
+                streamState.GeneratedImages.Add(generated with { Bytes = generated.Bytes.ToArray() });
+            }
         }
 
         if (chunk.Text is not null)
@@ -1291,9 +1381,16 @@ public sealed partial class SessionApplication
         }
 
         var batchResults = await _toolPipeline.InvokePreparedBatchAsync(preparation, cancellationToken);
+
+        // Historical user pixels can yield during context selection; current attachments and
+        // already delivered tool pixels keep their capacity. Each result reserves capacity for the next.
+        var reservedImages = round.ModelRequest.Messages.Where(message => message.SectionId != "recent-user")
+            .SelectMany(message => message.Content)
+            .Where(part => part.IsModelVisible && part.Kind == ModelContentPartKind.Image && part.Image is not null)
+            .Select(part => part.Image).OfType<ImageArtifact>().ToList();
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
-            var result = batchResult.Result;
+            var result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages);
             if (round.Registration.MemoryOptions?.ConceptRecallEnabled == true)
             {
                 foreach (var concept in result.Concepts)
@@ -1357,7 +1454,8 @@ public sealed partial class SessionApplication
                 result.ModelResultContent is null,
                 structuredContent,
                 round.ModelRequest.ToolContinuationRound,
-                !result.Succeeded));
+                !result.Succeeded,
+                result.Images));
         }
 
         return true;
@@ -2698,6 +2796,7 @@ public sealed partial class SessionApplication
         {
             RunId = runId,
             CacheAffinityId = registration.SessionId.Value,
+            ImageSessionId = registration.SessionId,
             MemorySubmission = context?.RepositoryMemoryInclusions is { Count: > 0 } inclusions && registration.RepositoryIdentity is { } repositoryPath
                 ? new RepositoryMemorySubmission(registration.SessionId, RepositoryIdentity.Create(repositoryPath), inclusions)
                 {
@@ -3047,6 +3146,8 @@ public sealed partial class SessionApplication
         public ActiveTurnCompactionCheckpoint? LastCheckpoint { get; private set; }
 
         public ContextAssemblyResult? FrozenContext { get; set; }
+
+        public ContextAssemblyResult? RetainedContext => FrozenContext ?? _contextBeforeRefresh;
 
         public bool RequiresChronologicalCorrections { get; set; }
 
@@ -3749,9 +3850,15 @@ public sealed partial class SessionApplication
 
         public bool ModelSucceeded { get; set; }
 
-        public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || PendingToolCalls.Count > 0;
+        public bool HasAcceptedOutput => HasNonWhiteSpaceText(TextOutput) || PendingToolCalls.Count > 0 || GeneratedImages.Count > 0;
 
         public List<PendingModelToolCall> PendingToolCalls { get; } = [];
+
+        public List<GeneratedModelImage> GeneratedImages { get; } = [];
+
+        public bool ImageCompletionConfirmed { get; set; }
+
+        public bool ImageContinuationRequested { get; set; }
 
         public ModelUsage? ReportedUsage { get; set; }
 
@@ -3768,6 +3875,7 @@ public sealed partial class SessionApplication
         public void MarkCorrectiveTurnRequested()
         {
             PendingToolCalls.Clear();
+            GeneratedImages.Clear();
             TextOutput.Clear();
             ToolInvoked = true;
             CorrectiveTurnRequested = true;

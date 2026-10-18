@@ -86,6 +86,7 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
         }
 
         TextEvidenceReadResult read;
+        IReadOnlyList<ImageArtifact> images = [];
         var evidenceId = new EvidenceId(input.EvidenceId);
         if (_capturedPullRequests.ContainsKey(evidenceId))
         {
@@ -111,6 +112,12 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
                 throw new InvalidOperationException("The requested evidence is missing or stale.");
             }
 
+            if (evidence.Images.Count > 0 && (input.StartLine is not (null or 1) || input.StartColumn is not (null or 1) || input.EndLine is not null))
+            {
+                throw new ToolArgumentValidationException("Image evidence must be recovered without text range options.");
+            }
+
+            images = evidence.Images;
             read = new TextEvidenceDocument(evidence.Content).Read(input.StartLine ?? 1, input.EndLine, input.StartColumn ?? 1);
         }
 
@@ -122,7 +129,8 @@ internal sealed class ChildAgentEvidenceTool : Tool<ChildAgentEvidenceInput, str
             content,
             [new ToolProvenanceSource("evidence", input.EvidenceId.ToString("D"))],
             IsTruncated: read.NextLine is not null,
-            ModelResultContent: content));
+            ModelResultContent: content,
+            Images: images));
     }
 
     /// <inheritdoc />

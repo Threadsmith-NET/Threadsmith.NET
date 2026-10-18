@@ -9,15 +9,21 @@ public sealed record WriteFileInput(
     [property: Description("Repository-relative or absolute destination inside an allowed folder.")] string Path,
     [property: Description("Exact text to write. Omit when useLastResponse is true.")] string? Content = null,
     [property: Description("Copy the latest archived assistant response from this session without regenerating it.")] bool UseLastResponse = false,
-    [property: Description("Replace an existing file only when the user requested replacement. Defaults to false.")] bool Overwrite = false);
+    [property: Description("Replace an existing file only when the user requested replacement. Defaults to false.")] bool Overwrite = false,
+    [property: Description("Opaque image artifact reference from this session. Mutually exclusive with content and useLastResponse.")] string? ArtifactId = null);
 
 /// <summary>Confirms the destination and UTF-8 byte count without echoing file contents.</summary>
-public sealed record WriteFileOutput(string Path, int BytesWritten, ConversationMessageId? SourceMessageId);
+public sealed record WriteFileOutput(string Path, int BytesWritten, ConversationMessageId? SourceMessageId)
+{
+    /// <summary>Image source metadata, including digest and provider response identity.</summary>
+    public ImageArtifact? Artifact { get; init; }
+}
 
 /// <summary>Writes bounded UTF-8 artifacts directly inside configured folders.</summary>
 public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
 {
     private readonly ToolLimits _limits;
+    private readonly IImageArtifactStore? _artifacts;
     private static readonly UTF8Encoding _encoding = new(false, true);
     private static readonly HashSet<string> _extensions = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -29,12 +35,13 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
     private readonly ToolDefinition _definition;
 
     /// <summary>Initializes a new instance of the <see cref="WriteFileTool"/> class.</summary>
-    public WriteFileTool(WriteFileConfiguration configuration, IConversationStore conversations, IPromptLoader promptLoader, ToolLimits? limits = null)
+    public WriteFileTool(WriteFileConfiguration configuration, IConversationStore conversations, IPromptLoader promptLoader, ToolLimits? limits = null, IImageArtifactStore? artifacts = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(conversations);
         ArgumentNullException.ThrowIfNull(promptLoader);
         _limits = limits ?? ToolLimits.Default;
+        _artifacts = artifacts;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_limits.WriteFileMaximumContentBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(_limits.WriteFileMaximumPathCharacters);
         _configuration = configuration;
@@ -86,8 +93,31 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             sourceMessageId = message?.Id;
         }
 
-        var bytes = _encoding.GetBytes(content ?? throw new InvalidOperationException("No file content was supplied."));
-        if (bytes.Length > _limits.WriteFileMaximumContentBytes)
+        ImageArtifact? artifact = null;
+        ReadOnlyMemory<byte> bytes;
+        if (input.ArtifactId is { } artifactId)
+        {
+            if (context.Invocation.IsChildAgent && !context.Invocation.AdmittedImageIds.Contains(artifactId))
+            {
+                throw new UnauthorizedAccessException("The image reference was not admitted to this child assignment. Read the source within the assigned scope first.");
+            }
+
+            var artifacts = _artifacts ?? throw new InvalidOperationException("Image artifact storage is unavailable.");
+            artifact = await artifacts.GetImageAsync(artifactId, context.SessionId, cancellationToken);
+            var extension = Path.GetExtension(destination).ToLowerInvariant();
+            if (artifact.MediaType == "image/png" ? extension != ".png" : extension is not (".jpg" or ".jpeg"))
+            {
+                throw new ToolArgumentValidationException("Destination extension must match the validated image MIME type.");
+            }
+
+            bytes = await artifacts.ReadImageAsync(artifact, context.SessionId, cancellationToken);
+        }
+        else
+        {
+            bytes = _encoding.GetBytes(content ?? throw new InvalidOperationException("No file content was supplied."));
+        }
+
+        if (artifact is null && bytes.Length > _limits.WriteFileMaximumContentBytes)
         {
             throw new ToolArgumentValidationException($"write_file content exceeds the configured {_limits.WriteFileMaximumContentBytes} UTF-8 byte limit.");
         }
@@ -114,7 +144,7 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             File.Delete(temporary);
         }
 
-        return new ToolExecution<WriteFileOutput>(new WriteFileOutput(destination, bytes.Length, sourceMessageId), [], false);
+        return new ToolExecution<WriteFileOutput>(new WriteFileOutput(destination, bytes.Length, sourceMessageId) { Artifact = artifact }, [], false);
     }
 
     /// <summary>Checks the compiled write capability's allowlist before pipeline admission and immediately before I/O.</summary>
@@ -196,14 +226,20 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
             throw new ToolArgumentValidationException("Use a repository-relative or fully qualified path.");
         }
 
-        if (!_extensions.Contains(Path.GetExtension(input.Path)))
+        if (input.ArtifactId is null && !_extensions.Contains(Path.GetExtension(input.Path)))
         {
             throw new ToolArgumentValidationException("write_file supports text artifacts: .txt, .md, .markdown, .json, .csv, .tsv, .yaml, .yml, .xml, .log, and .rst. Use the mutation workflow for source code.");
         }
 
-        if (input.UseLastResponse == (input.Content is not null))
+        if ((input.UseLastResponse ? 1 : 0) + (input.Content is not null ? 1 : 0) + (input.ArtifactId is not null ? 1 : 0) != 1)
         {
-            throw new ToolArgumentValidationException("Supply exactly one of content or useLastResponse=true.");
+            throw new ToolArgumentValidationException("Supply exactly one of content, useLastResponse=true, or artifactId.");
+        }
+
+        if (input.ArtifactId is not null && (!Guid.TryParseExact(input.ArtifactId, "N", out _)
+            || Path.GetExtension(input.Path).ToLowerInvariant() is not (".png" or ".jpg" or ".jpeg")))
+        {
+            throw new ToolArgumentValidationException("Image export requires an opaque artifact ID and a .png, .jpg or .jpeg destination.");
         }
 
         if (input.Content is { } content && (content.Length > _limits.WriteFileMaximumContentBytes || _encoding.GetByteCount(content) > _limits.WriteFileMaximumContentBytes))

@@ -4,6 +4,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Threadsmith.Core;
 
@@ -49,6 +50,19 @@ public sealed class SqliteConversationStore : IConversationStore
     {
         ArgumentNullException.ThrowIfNull(message);
         ValidateMessage(message);
+        if (message.Images.Count > ImageArtifactLimits.MaximumCount)
+        {
+            throw new InvalidDataException("Too many image attachments.");
+        }
+
+        foreach (var image in message.Images)
+        {
+            if (await _artifactStore.GetImageAsync(image.Id, message.SessionId, cancellationToken) != image)
+            {
+                throw new InvalidDataException("Image metadata does not match the admitted artifact.");
+            }
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         var sanitized = _sanitizer.Sanitize(message.Content ?? string.Empty);
         var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(sanitized)));
@@ -162,7 +176,10 @@ public sealed class SqliteConversationStore : IConversationStore
         {
             select.CommandText = """
                 SELECT DISTINCT artifact_id FROM conversation_messages
-                WHERE artifact_id IS NOT NULL AND occurred_at < $cutoff;
+                WHERE artifact_id IS NOT NULL AND occurred_at < $cutoff
+                UNION SELECT DISTINCT json_extract(i.value, '$.ContentHash')
+                FROM conversation_messages m, json_each(m.images_json) i
+                WHERE m.occurred_at < $cutoff;
                 """;
             select.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
             var candidates = new List<string>();
@@ -185,6 +202,8 @@ public sealed class SqliteConversationStore : IConversationStore
             command.Parameters.AddWithValue("$cutoff", cutoff.ToString("O"));
             removed = await command.ExecuteNonQueryAsync(cancellationToken);
         }
+
+        await _artifactStore.PruneImageReferencesAsync(cutoff, cancellationToken);
 
         foreach (var artifactId in artifactIds)
         {
@@ -233,9 +252,9 @@ public sealed class SqliteConversationStore : IConversationStore
                 INSERT INTO conversation_messages(
                     message_id, session_id, run_id, sequence, role, body, artifact_id,
                     content_hash, estimated_tokens, sensitivity, repository_revision,
-                    occurred_at, schema_version)
+                    occurred_at, schema_version, images_json)
                 VALUES($message, $session, $run, $sequence, $role, $body, $artifact,
-                    $hash, $tokens, $sensitivity, $revision, $occurredAt, $schemaVersion);
+                    $hash, $tokens, $sensitivity, $revision, $occurredAt, $schemaVersion, $images);
                 """;
             AddMessageParameters(command, archived);
             await command.ExecuteNonQueryAsync(cancellationToken);
@@ -275,6 +294,7 @@ public sealed class SqliteConversationStore : IConversationStore
         command.Parameters.AddWithValue("$revision", (object?)message.RepositoryRevision ?? DBNull.Value);
         command.Parameters.AddWithValue("$occurredAt", message.OccurredAt.ToString("O"));
         command.Parameters.AddWithValue("$schemaVersion", message.SchemaVersion);
+        command.Parameters.AddWithValue("$images", JsonSerializer.Serialize(message.Images));
     }
 
     private static void AddWarning(List<string> warnings, string warning)
@@ -357,7 +377,7 @@ public sealed class SqliteConversationStore : IConversationStore
         await using var command = connection.CreateCommand();
         command.CommandText = """
             SELECT message_id, run_id, sequence, role, body, artifact_id, content_hash,
-                   estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version
+                   estimated_tokens, sensitivity, repository_revision, occurred_at, schema_version, images_json
             FROM conversation_messages WHERE session_id = $session
             """ + (historyWindow is null ? " ORDER BY sequence;" : " ORDER BY sequence DESC LIMIT $limit;");
         command.Parameters.AddWithValue("$session", sessionId.Value.ToString("D"));
@@ -435,6 +455,7 @@ public sealed class SqliteConversationStore : IConversationStore
                 Sequence = reader.GetInt64(2),
                 Role = (ConversationRole)reader.GetInt32(3),
                 Content = body,
+                Images = JsonSerializer.Deserialize<ImageArtifact[]>(reader.GetString(12)) ?? [],
                 ArtifactId = artifactId,
                 ContentHash = reader.GetString(6),
                 EstimatedTokens = reader.GetInt32(7),

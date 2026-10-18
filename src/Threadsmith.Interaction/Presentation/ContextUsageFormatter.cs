@@ -8,12 +8,14 @@ using Threadsmith.Interaction.Markdown;
 /// <summary>Shared size-only labels, percentages and category accounting for both frontends.</summary>
 public static class ContextUsageFormatter
 {
-    /// <summary>Formats captured memories as grouped Markdown for every memory presentation surface.</summary>
-    public static string FormatMemoryContext(IEnumerable<RepositoryMemoryContextItemProjection> items)
+    /// <summary>Formats captured memories as grouped Markdown, optionally suppressing standing preferences in automatic output.</summary>
+    public static string FormatMemoryContext(IEnumerable<RepositoryMemoryContextItemProjection> items, bool includeStandingPreferences = true)
     {
         ArgumentNullException.ThrowIfNull(items);
         var output = new StringBuilder();
-        foreach (var group in items.GroupBy(item => (item.Included, item.Ownership, item.MemoryType)))
+        foreach (var group in items
+            .Where(item => includeStandingPreferences || item.Ownership == RepositoryMemoryOwnership.Intelligence || item.MemoryType != RepositoryMemoryType.StandingPreference)
+            .GroupBy(item => (item.Included, item.Ownership, item.MemoryType)))
         {
             var heading = group.Key.Ownership == RepositoryMemoryOwnership.Intelligence
                 ? "Repository Intelligence that may be useful to guide exploration and/or implementation:"

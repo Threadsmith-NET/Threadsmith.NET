@@ -1119,6 +1119,132 @@ public sealed class Plan50OpenAiCodexTests
         }
     }
 
+    /// <summary>Native Codex input preserves image bytes in user messages and correlated function outputs.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ImageInputPreservesPixelsAndToolCorrelation(bool tool)
+    {
+        var bytes = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==");
+        var image = new ImageArtifact { Id = Guid.NewGuid().ToString("N"), ContentHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)), MediaType = "image/png", Width = 2, Height = 2, ByteLength = bytes.Length, Source = "fixture" };
+        string? body = null;
+        var handler = new RecordingHandler(message =>
+        {
+            body = message.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n", Encoding.UTF8, "text/event-stream"),
+            };
+        });
+        var provider = await CreateProviderAsync(handler, "token", configureProfile: profile => profile with { SupportedInputContentTypes = ModelContentTypes.Text | ModelContentTypes.Image });
+        var message = new ModelMessage
+        {
+            Role = tool ? ModelMessageRole.Tool : ModelMessageRole.User,
+            SectionId = "image",
+            ToolCallId = tool ? "call-image" : null,
+            ToolName = tool ? "read_file" : null,
+            Content = ModelImages.Append([new ModelContentPart { Content = "pixels" }, new ModelContentPart { Kind = ModelContentPartKind.Json, Content = JsonSerializer.Serialize(new { attachments = new[] { new { artifactId = image.Id } } }) }], [image]),
+        };
+        var request = WithCapacity(CreateStreamRequest() with
+        {
+            Messages = tool ? [new ModelMessage { Role = ModelMessageRole.Assistant, SectionId = "call", ToolCallId = "call-image", ToolName = "read_file", Content = [new ModelContentPart { Content = "{}" }] }, message] : [message],
+            ResolveImageAsync = (_, _) => Task.FromResult<ReadOnlyMemory<byte>>(bytes),
+        });
+        await foreach (var chunk in provider.StreamAsync(request, TestContext.Current.CancellationToken))
+        {
+            Assert.Null(chunk.Output);
+        }
+
+        Assert.Contains(Convert.ToBase64String(bytes), body, StringComparison.Ordinal);
+        using var wire = JsonDocument.Parse(body!);
+        var item = wire.RootElement.GetProperty("input")[tool ? 1 : 0];
+        var content = item.GetProperty(tool ? "output" : "content");
+        using var metadata = JsonDocument.Parse(content[1].GetProperty("text").GetString()!);
+        Assert.Equal(image.Id, metadata.RootElement.GetProperty("attachments")[0].GetProperty("artifactId").GetString());
+        Assert.Equal("input_image", content[2].GetProperty("type").GetString());
+        if (tool)
+        {
+            Assert.Equal("call-image", item.GetProperty("call_id").GetString());
+        }
+    }
+
+    /// <summary>Opt-in pixel test against the actual OAuth endpoint, fixed to GPT-6.1-Sol Medium.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LiveMultimodalGpt61SolMedium(bool tool)
+    {
+        var path = Environment.GetEnvironmentVariable("THREADSMITH_MULTIMODAL_LIVE_IMAGE");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            Assert.Skip("Set THREADSMITH_MULTIMODAL_LIVE_IMAGE to the 420x320 M34 PNG/JPEG shape fixture to use live Codex credentials.");
+        }
+
+        var token = TestContext.Current.CancellationToken;
+        var bytes = await File.ReadAllBytesAsync(path, token);
+        Assert.InRange(bytes.Length, 1, ImageArtifactLimits.MaximumBytes);
+        using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(3) };
+        using var oauth = new OpenAiCodexOAuthManager(client);
+        var accessToken = await oauth.GetAccessTokenAsync(token);
+        Assert.False(string.IsNullOrWhiteSpace(accessToken));
+        var configuration = await new OpenAiCodexCatalogCache().LoadAsync(token);
+        Assert.NotNull(configuration);
+        var registration = new OpenAiCodexProviderRegistration();
+        var profile = Assert.Single(registration.CreateProfiles(configuration), item => item.ModelId == "gpt-6.1-sol");
+        Assert.True(profile.SupportedInputContentTypes.HasFlag(ModelContentTypes.Image));
+        var provider = registration.CreateProvider(new ModelProviderActivationContext
+        {
+            HttpClient = client,
+            Profile = profile,
+            ProviderConfiguration = configuration,
+            ModelConfiguration = configuration.Models.Single(model => model.Id == profile.Id),
+            ResolvedSecret = accessToken,
+        });
+        var image = new ImageArtifact
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            ContentHash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)),
+            MediaType = Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase) ? "image/png" : "image/jpeg",
+            Width = 420,
+            Height = 320,
+            ByteLength = bytes.Length,
+            Source = "live-fixture",
+        };
+        const string question = "Describe each shape, its color and position, and transcribe the four-character text from this image. Use only the actual pixels.";
+        var questionMessage = new ModelMessage { Role = ModelMessageRole.User, SectionId = "question", Content = [new ModelContentPart { Content = question }] };
+        var imageMessage = new ModelMessage
+        {
+            Role = tool ? ModelMessageRole.Tool : ModelMessageRole.User,
+            SectionId = "live-image",
+            ToolCallId = tool ? "call_live_image" : null,
+            ToolName = tool ? "read_file" : null,
+            Content = ModelImages.Append([new ModelContentPart { Content = tool ? "Image read successfully." : question }], [image]),
+        };
+        var request = WithCapacity(new ModelStreamRequest
+        {
+            RunId = RunId.New(),
+            CacheAffinityId = Guid.NewGuid(),
+            Input = question,
+            ReasoningLevel = ReasoningLevel.Medium,
+            ResolvedProfileId = profile.Id,
+            MaximumOutputTokens = 4096,
+            Messages = tool ? [questionMessage, new ModelMessage { Role = ModelMessageRole.Assistant, SectionId = "call", ToolCallId = "call_live_image", ToolName = "read_file", Content = [new ModelContentPart { Content = "{}" }] }, imageMessage] : [imageMessage],
+            ResolveImageAsync = (_, _) => Task.FromResult<ReadOnlyMemory<byte>>(bytes),
+        });
+        var answer = new StringBuilder();
+        await foreach (var chunk in provider.StreamAsync(request, token))
+        {
+            answer.Append(chunk.Text);
+        }
+
+        var observed = answer.ToString();
+        TestContext.Current.TestOutputHelper?.WriteLine(observed);
+        Assert.Contains("K7Q2", observed, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("red", observed, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("blue", observed, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("green", observed, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static async Task<IModelProvider> CreateProviderAsync(
         HttpMessageHandler handler,
         string accessToken,

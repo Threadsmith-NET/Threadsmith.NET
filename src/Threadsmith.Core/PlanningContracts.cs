@@ -155,6 +155,12 @@ public sealed record ConversationContextItemProjection
     /// <summary>Estimated tokens charged to the category.</summary>
     public required int EstimatedTokens { get; init; }
 
+    /// <summary>Available attachment descriptors; no encoded image bytes enter inspection.</summary>
+    public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+
+    /// <summary>Whether this projection includes pixels, omits them, or retains unavailable metadata only.</summary>
+    public string? ImageDisposition { get; init; }
+
     /// <summary>Originating message identifiers for governed memory.</summary>
     public IReadOnlyList<ConversationMessageId> SourceMessageIds { get; init; } = [];
 

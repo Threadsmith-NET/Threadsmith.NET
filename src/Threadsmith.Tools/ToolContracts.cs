@@ -291,6 +291,10 @@ public sealed record ToolInvocationContext
     [JsonIgnore]
     public bool IsChildAgent { get; init; }
 
+    /// <summary>Image references admitted to this immutable child assignment and its own tool results.</summary>
+    [JsonIgnore]
+    public IReadOnlySet<string> AdmittedImageIds { get; init; } = new HashSet<string>(StringComparer.Ordinal);
+
     /// <summary>Primary-reader receipts belong to the collecting parent, never its investigators.</summary>
     [JsonIgnore]
     public IRepositoryIntelligenceRun? IntelligenceSourceObserver =>
@@ -437,7 +441,8 @@ public sealed record ToolExecution<TOutput>(
     bool IsTruncated = false,
     string? ModelResultContent = null,
     [property: JsonIgnore] string? TransientActivityDetail = null,
-    ToolExecutionFailure? Failure = null);
+    ToolExecutionFailure? Failure = null,
+    IReadOnlyList<ImageArtifact>? Images = null);
 
 /// <summary>Typed attributable result for direct host invocation.</summary>
 public sealed record ToolResult<TOutput>
@@ -467,6 +472,9 @@ public sealed record ToolResult<TOutput>
 /// <summary>Provider-neutral dynamic result returned to the model execution layer.</summary>
 public sealed record ToolInvocationResult
 {
+    /// <summary>Admitted image evidence delivered alongside textual tool metadata.</summary>
+    public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+
     /// <summary>Normalized hints from an admitted native execution, absent from durable/wire result serialization.</summary>
     [JsonIgnore]
     public IReadOnlyList<string> Concepts { get; init; } = [];
@@ -587,7 +595,8 @@ public sealed record ToolExecutionEnvelope(
     long? AuthoritativeElapsedMilliseconds = null,
     string? ModelResultContent = null,
     [property: JsonIgnore] string? TransientActivityDetail = null,
-    ToolExecutionFailure? Failure = null);
+    ToolExecutionFailure? Failure = null,
+    IReadOnlyList<ImageArtifact>? Images = null);
 
 /// <summary>Supplies live-only display detail that must not enter serialized events or model output.</summary>
 internal interface ITransientToolActivityDetail
@@ -777,7 +786,8 @@ public abstract class Tool<TInput, TOutput> : ITool
             result.IsTruncated,
             ModelResultContent: result.ModelResultContent,
             TransientActivityDetail: result.TransientActivityDetail,
-            Failure: result.Failure);
+            Failure: result.Failure,
+            Images: result.Images);
     }
 
     /// <summary>Executes validated typed input.</summary>

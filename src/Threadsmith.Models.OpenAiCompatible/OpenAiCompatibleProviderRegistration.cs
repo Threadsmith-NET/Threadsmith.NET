@@ -82,6 +82,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
             throw new ArgumentException("The provider configuration type does not match its registration.", nameof(provider));
         }
 
+        ModelImages.ValidateConfiguration(configured);
+
         ArgumentException.ThrowIfNullOrWhiteSpace(configured.Id);
         ArgumentException.ThrowIfNullOrWhiteSpace(configured.Name);
         if (!configured.BaseUri.IsAbsoluteUri
@@ -207,6 +209,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 MaximumOutputTokens = model.MaximumOutputTokens,
                 RequestOutputTokenReserve = model.RequestOutputTokenReserve,
                 Capabilities = model.Capabilities,
+                SupportedInputContentTypes = model.SupportedInputContentTypes,
+                SupportedOutputContentTypes = model.SupportedOutputContentTypes,
                 Cost = model.Cost,
                 SensitiveDataPolicy = model.SensitiveDataPolicy,
                 IntendedWorkloadClasses = model.IntendedWorkloadClasses,
@@ -292,6 +296,8 @@ public sealed class OpenAiCompatibleProviderRegistration : IModelProviderRegistr
                 MaximumOutputTokens = profile.MaximumOutputTokens,
                 RequestOutputTokenReserve = profile.RequestOutputTokenReserve,
                 Capabilities = profile.Capabilities,
+                SupportedInputContentTypes = profile.SupportedInputContentTypes,
+                SupportedOutputContentTypes = profile.SupportedOutputContentTypes,
                 Cost = profile.Cost,
                 SensitiveDataPolicy = profile.SensitiveDataPolicy,
                 IntendedWorkloadClasses = profile.IntendedWorkloadClasses,

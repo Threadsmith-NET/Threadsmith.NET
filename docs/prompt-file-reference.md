@@ -40,13 +40,13 @@ Common editing rules:
 | Category | Files | Role |
 |---|---:|---|
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
-| Context prompts | 27 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
+| Context prompts | 28 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
 | Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **290** | Complete deployed catalog. |
+| **Total** | **291** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -162,6 +162,7 @@ Active-turn, summary, steering, incremental objective planning, and delegated-ch
 | `Context-ChildAgent-Steering.md` | Delegated-child context framing for `Steering`. | [`Sequence`](#placeholder-sequence), [`SubmittedAt`](#placeholder-submittedat), [`Text`](#placeholder-text) |
 | `Context-ChildAgent-StructuredFindingsTask.md` | Ordinary delegated-child task guidance; legacy filename retained. | `None` |
 | `Context-ChildAgent-IntelligenceInvestigation.md` | Focused read-only final-onboarding investigation; concise recipes and source locations for parent verification, with no memory or publication authority. | `None` |
+| `Context-ImageOnlyUserMessage.md` | Labels an image-only user turn when constructing task intent. | `None` |
 | `Context-ChildAgent-Task.md` | Delegated-child context framing for `Task`. | [`BaselineIdentity`](#placeholder-baselineidentity), [`Objective`](#placeholder-objective), [`SuppliedContext`](#placeholder-suppliedcontext), [`Tasks`](#placeholder-tasks) |
 
 #### `CurrentTurn` family
@@ -925,3 +926,9 @@ Repository-intelligence coverage admission: `Context-RepositoryIntelligenceColle
 Representative-change investigation: `Context-RepositoryIntelligenceCollection.md`, `Context-RepositoryIntelligenceHistory.md`, and `Context-RepositoryIntelligenceCoverage.md` organize discovery and publication review around repository-derived change scenarios, traced integration paths, and shared facilities or repeated conventions. `Tool-memories-Description.md` maps those findings to existing checklist fields; `Context-ChildAgent-IntelligenceInvestigation.md` applies the same bounded tracing method to one delegated question. Cross-consumer verification, canonical follow-ups, and brief memory signposts avoid both subsystem-only closure and exhaustive internal tracing. Schemas, tokens, publication gates, and delegation authority are unchanged.
 
 Scenario boundary verification: final coverage review starts with a distinct evidence check before further investigation. `Context-RepositoryIntelligenceCoverage.md` and `Context-RepositoryIntelligenceCollection.md` require the model to compare the original scenario question's promised boundaries with existing source evidence and accepted hints, record a compact account in the existing conclusion, and reopen specific gaps or required follow-ups. `Context-ChildAgent-IntelligenceInvestigation.md` supports a focused verification assignment. This adds no schema, autonomous reviewer, or host semantic-coverage gate; existing review delivery, checkpoints, and publication validation are reused.
+
+The multimodal `Tool-read_file-Description.md` additionally describes `mode` (`auto`, `text`, `image`, `pdf`), typed PNG/JPEG evidence, bounded rendered PDF pages with continuation, and the rejection of text ranges/snapshots for images and PDFs. `Tool-write_file-Description.md` additionally describes mutually exclusive `artifactId` export using existing allowed folders and matching image extensions. The two tool filenames and placeholder contracts are unchanged; `MaximumContentBytes` retains its text-byte meaning, while fixed image bounds remain code-owned. No asset can enable a provider capability or grant artifact access.
+
+`Context-ImageOnlyUserMessage.md` (Execution; no tokens) labels an admitted user turn containing images and no text when constructing task intent. It supplies wording only; attachment validation, identity, selection and authority remain code-owned.
+
+`Tool-write_file-Description.md` also identifies ordered user-message `attachments` metadata as the source of `artifactId` values for current and retained historical image attachments. The filename and placeholder contract are unchanged; context assembly owns metadata fields/order and artifact access remains code-enforced.

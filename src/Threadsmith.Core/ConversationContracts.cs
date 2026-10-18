@@ -92,6 +92,9 @@ public static class ConversationSchemaVersions
 /// <summary>One sanitized visible conversation message with stable provenance.</summary>
 public sealed record ConversationMessage
 {
+    /// <summary>Ordered immutable image references retained with this message, without encoded bytes.</summary>
+    public IReadOnlyList<ImageArtifact> Images { get; init; } = [];
+
     /// <summary>Stable message identity.</summary>
     public required ConversationMessageId Id { get; init; }
 

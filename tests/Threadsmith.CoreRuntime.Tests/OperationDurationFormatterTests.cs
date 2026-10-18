@@ -13,6 +13,27 @@ using Xunit;
 /// <summary>Verifies deterministic Plan-49 operation-duration formatting boundaries.</summary>
 public static class OperationDurationFormatterTests
 {
+    /// <summary>Restores file-read display from durable typed output.</summary>
+    [Theory]
+    [InlineData("{\"Path\":\"image.png\",\"BytesRead\":2578231,\"StartLine\":0}", "2578231 bytes, image.png")]
+    [InlineData("{\"Path\":\"image.png\",\"Image\":{\"ByteLength\":1234}}", "1234 bytes, image.png")]
+    [InlineData("{\"Path\":\"pages.pdf\",\"BytesRead\":4096,\"Pdf\":{\"TotalPages\":2}}", "4096 bytes, pages.pdf")]
+    [InlineData("{\"Path\":\"code.cs\",\"StartLine\":201,\"EndLine\":210}", "lines 201-210, code.cs")]
+    [InlineData("{\"Path\":\"empty.txt\",\"StartLine\":1,\"EndLine\":null}", "empty.txt")]
+    [InlineData("invalid-json", "original path")]
+    public static void ReadFileCompletionUsesDurableResultMetadata(string json, string expected)
+    {
+        var started = new ToolInvocationStarted(SessionId.New(), DateTimeOffset.UtcNow, ToolInvocationId.New(), "read_file", ActivityDetail: "original path");
+        var completed = new ToolInvocationCompleted(started.SessionId, started.OccurredAt, started.ToolInvocationId, true, ResultJson: json);
+        var restored = JsonSerializer.Deserialize<ToolInvocationCompleted>(JsonSerializer.Serialize(completed));
+        Assert.NotNull(restored);
+        var transcript = new ConversationTranscript(string.Empty, showOperationDurations: false);
+        transcript.Apply(started);
+        transcript.Apply(restored);
+        Assert.Contains(expected.Replace(CultureInfo.CurrentCulture.NumberFormat.NumberGroupSeparator, string.Empty, StringComparison.Ordinal), transcript.Text.Replace(CultureInfo.CurrentCulture.NumberFormat.NumberGroupSeparator, string.Empty, StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.DoesNotContain("lines 1-2000", transcript.Text, StringComparison.Ordinal);
+    }
+
     /// <summary>Formats zero, subsecond, second, minute, and hour boundaries compactly.</summary>
     [Theory]
     [InlineData(0L, "0ms")]

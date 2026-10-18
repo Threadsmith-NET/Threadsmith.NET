@@ -1,0 +1,236 @@
+{
+  "components": [
+    {
+      "id": "PDFtoImage",
+      "version": "5.4.0",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/PDFtoImage/5.4.0",
+      "packageSha512": "2eb8rDolYj9B7O87RpuqRG6oA6jEHV7z5PcBHmIP2KD75HNwJDxR91sXIYEh5DCCuvNxtSXtN8Bllfmma3RWBg==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/PDFtoImage-5.4.0-LICENSE.txt",
+      "sourceRevision": "5948628cb2cf7d070c7fd28b1b4496db39e3afcd",
+      "copyrightText": "Copyright holders identified in the exact-source license and bundled notices.",
+      "packageArchiveSha512": "82ARAD8HcA2auhEN/jnwJBB7WbiYkKVPlR/Ac/Ei/sZERk/GKnwOoVl2NKMr5Nq262Ncer50mFcX8f8JHhKF6A==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp/4.150.1",
+      "packageSha512": "5v3T8X1N62Dp+AkPO70GNBNS/NRBPGMOTiN+Prg33sZAcm/Ug3YOAH+3RTj/jxJV8NGTJs2idGpC2Qdae2mGLQ==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "packageArchiveSha512": "7DRqkmsU+ChkQYxHlIZJScJyHOhmfJZZ9eHn0T4XmNvJi/XZuMnH5rtluS6nWU6+H0mkrRrJYnklEbxRngrsHA==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp.NativeAssets.Win32",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp.NativeAssets.Win32/4.150.1",
+      "packageSha512": "qrLSL8OonbkMJdSH8heK0Jl39Y2xxZGdd7Ru4cyBXk2ITdx+Fu1sCFLmvCKmnMaYs//mlN/YSpSpOurEXErcQw==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "additionalNotices": [
+        "legal/PdfReading/SkiaSharp.NativeAssets.Linux.NoDependencies-4.150.1-THIRD-PARTY-NOTICES.txt"
+      ],
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "licenseConcluded": "NOASSERTION",
+      "packageArchiveSha512": "HxdWI/48pmiBHi63G2uRsFAAgzKfj4+v6W+6asVulJR+9NU9ixtmP8nuaIPyl3xtwvfrZs+H/Iqc+s1AVXi0MA==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp.NativeAssets.macOS",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp.NativeAssets.macOS/4.150.1",
+      "packageSha512": "r755HVwaHZhyf1clWjrM2/RoOZYCzkQEmE9pu/mVsebPejWu52niNPUwtfyf112qoF0PIk6OndqVOUoITj6TwQ==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "additionalNotices": [
+        "legal/PdfReading/SkiaSharp.NativeAssets.Linux.NoDependencies-4.150.1-THIRD-PARTY-NOTICES.txt"
+      ],
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "licenseConcluded": "NOASSERTION",
+      "packageArchiveSha512": "81rxa35mayAO3zzhJlat850uQ9YzGotQogesWsVOpp3K8FyjFRcdU5t0IjNVrRKcWtFXNwEEFZ1yaME+eTAqNA==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "SkiaSharp.NativeAssets.Linux.NoDependencies",
+      "version": "4.150.1",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/SkiaSharp.NativeAssets.Linux.NoDependencies/4.150.1",
+      "packageSha512": "2KVadgDky2xQw7lEMRT/u0ftX5K1u8X7MhCN47Em22Z6VM6JJg1c9cwfGuSPAt1oY6+GjGHH18vkeev+nqT9Kw==",
+      "licenseExpression": "MIT",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/PdfReading/SkiaSharp-4.150.1-LICENSE.txt",
+      "additionalNotices": [
+        "legal/PdfReading/SkiaSharp.NativeAssets.Linux.NoDependencies-4.150.1-THIRD-PARTY-NOTICES.txt"
+      ],
+      "sourceRevision": "c3e4f4c20e1f23ab74d31a8838a5bd6dc55365f2",
+      "copyrightText": "© Microsoft Corporation. All rights reserved.",
+      "licenseConcluded": "NOASSERTION",
+      "packageArchiveSha512": "nIuCmhq8vXr4+GdlNOHafv1TmDCHXCPb4bk0yTtd/mkhK/jPhZR+mmFxKhFR6VBRvTBRRoUc3Bn3tuX58X4IIg==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "bblanchon.PDFium.Win32",
+      "version": "152.0.7961",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Win32/152.0.7961",
+      "packageSha512": "E6m7Y/OZ/eySQBy4drjDCF6pspBdp2PaF6vC04K1BgGbS8UtXOdL0SnReg3zE309hBZ6U/ZDMys9QE5VhBzDDQ==",
+      "licenseExpression": "Apache-2.0",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/licenses/Apache-2.0.txt",
+      "additionalNotices": [
+        "legal/PdfReading/PDFium-152.0.7961-win-arm64-NOTICES.txt"
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
+      "packageArchiveSha512": "pWyGOMwMdyYGtBGqXa77gdXLKZJ0mJL9jLP09tFEpmJd6QVqZoVYPufmVdaKN/3t3RC16O6dZPuttpV97JBAOw==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "bblanchon.PDFium.macOS",
+      "version": "152.0.7961",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.macOS/152.0.7961",
+      "packageSha512": "GaBNtpfoiYbXTi9WLeEWSxWi2zG9kJMfuDMF7AH4kK0zjXz3C/Qg9epKIZKN3nfPaS48Qy3uV2VM14QBI/iAGg==",
+      "licenseExpression": "Apache-2.0",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/licenses/Apache-2.0.txt",
+      "additionalNotices": [
+        "legal/PdfReading/PDFium-152.0.7961-osx-arm64-NOTICES.txt"
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
+      "packageArchiveSha512": "o84By5TiSCLoPb6Mr/veMqkJDWCS0keu3Rrp+OpWBKLNOVy/alHUIdNKZhyd9H4PbbFACtBGagRryWNnYUdD7Q==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    },
+    {
+      "id": "bblanchon.PDFium.Linux",
+      "version": "152.0.7961",
+      "scope": "bundled-package",
+      "provenance": "https://www.nuget.org/packages/bblanchon.PDFium.Linux/152.0.7961",
+      "packageSha512": "80m1PwszVp53avI/l+BCov8/6jl7B2FU+hQNTSrApMrkwKcCSRDHkXYYrGYsxpc8NAs/44tyrEQdCfX1yRzPhw==",
+      "licenseExpression": "Apache-2.0",
+      "reviewState": "approved",
+      "noticeTreatment": "Preserve full exact-source license and bundled native third-party notices; see PDF reading source manifest.",
+      "licenseText": "legal/licenses/Apache-2.0.txt",
+      "additionalNotices": [
+        "legal/PdfReading/PDFium-152.0.7961-linux-arm64-NOTICES.txt"
+      ],
+      "licenseConcluded": "NOASSERTION",
+      "sourceRevision": "c6529b58791d142002f819beb46e370e668797d7",
+      "copyrightText": "Copyright © Benoît Blanchon 2017-2025",
+      "packageArchiveSha512": "mHqxElmixmwmLHJNCghdxOFlrvwn4rc79DblFfD8fQswbw4Ahk6vFVOCb9zuDyNcM+Fj/QCiVMGyuwlPekJk+w==",
+      "reviewNotes": "Release owner explicitly approved the prepared PDF reading disposition on 2026-10-18. Approval covers these exact unmodified dependencies with full bundled notices; source hashes and six-RID native asset provenance are in legal/PdfReading/candidate-evidence.json."
+    }
+  ],
+  "nativeSources": [
+    {
+      "rid": "win-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7961/pdfium-win-x64.tgz",
+      "archiveSha256": "88276459349b291c41f10422dad0210f007c04d919c8fa56472b6b7c6406adf4",
+      "nativeSha256": "d3d9f4b7c9dabe3363f30779c5c3c715c47332749fa590e4b4a2b8b6780cb1c4",
+      "notices": "PDFium-152.0.7961-win-arm64-NOTICES.txt",
+      "noticesSha256": "eea2f25946cd3159b85206c0048ccfb23c0b6a6863fbda99636316fb82749851"
+    },
+    {
+      "rid": "win-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7961/pdfium-win-arm64.tgz",
+      "archiveSha256": "9d8c50c65f129c3774b972cde09d3bea44478075f72faadfe9fc0c152e65d509",
+      "nativeSha256": "9c084388e1dbd1a41c4e876af02c929ae9b63fd9ff7eb1b6dc5750230a5a4dd9",
+      "notices": "PDFium-152.0.7961-win-arm64-NOTICES.txt",
+      "noticesSha256": "eea2f25946cd3159b85206c0048ccfb23c0b6a6863fbda99636316fb82749851"
+    },
+    {
+      "rid": "linux-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7961/pdfium-linux-x64.tgz",
+      "archiveSha256": "019665c8877d46fe65f625f80fd714ab07aac68554b0636acf2a2adf9288adb2",
+      "nativeSha256": "3019ad1cd6980e51d900bb9266f8980cb846cb8e0c1f6553c52a7a1626469020",
+      "notices": "PDFium-152.0.7961-linux-arm64-NOTICES.txt",
+      "noticesSha256": "6e531c101d6988b804f48a9d4f1261f9229275058a88b474f239151d70975719"
+    },
+    {
+      "rid": "linux-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7961/pdfium-linux-arm64.tgz",
+      "archiveSha256": "974107999784a438149605024475d42d80dd306799d90e1af5f6fa63f976455f",
+      "nativeSha256": "38832b476d8a6d2f9862bc8b3ab5a7171cfb5c6d830ef5f73b2918ab96515382",
+      "notices": "PDFium-152.0.7961-linux-arm64-NOTICES.txt",
+      "noticesSha256": "6e531c101d6988b804f48a9d4f1261f9229275058a88b474f239151d70975719"
+    },
+    {
+      "rid": "osx-x64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7961/pdfium-mac-x64.tgz",
+      "archiveSha256": "17f069d7012ab83898ad5eddebd139b240f05d7411c220775d507a0e3e285536",
+      "nativeSha256": "6656bfa9ad5f5fd7b66a104034c9ac6d390b369d540e6102f6d6bede687d09cf",
+      "notices": "PDFium-152.0.7961-osx-arm64-NOTICES.txt",
+      "noticesSha256": "0b25873ccae293fc8e690b02ddfe5ddb01b9c3d0f6ff9635324101aafc3b5c1d"
+    },
+    {
+      "rid": "osx-arm64",
+      "url": "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/7961/pdfium-mac-arm64.tgz",
+      "archiveSha256": "1193a771e0bd934530afa3df73a0d44551d8f4078442e290054e6dd38ded960f",
+      "nativeSha256": "c2f68f87106da4f0cb6d6a90a7aad9644b3c1cb92a3463dbdc8f39449aec3869",
+      "notices": "PDFium-152.0.7961-osx-arm64-NOTICES.txt",
+      "noticesSha256": "0b25873ccae293fc8e690b02ddfe5ddb01b9c3d0f6ff9635324101aafc3b5c1d"
+    }
+  ],
+  "skiaNativeAssets": [
+    {
+      "rid": "win-x64",
+      "assetRid": "win-x64",
+      "file": "libSkiaSharp.dll",
+      "sha256": "c8770c219e0d3cd9bb119fad46f2d00ae1855b11315816e86e909e3332826212"
+    },
+    {
+      "rid": "win-arm64",
+      "assetRid": "win-arm64",
+      "file": "libSkiaSharp.dll",
+      "sha256": "439d2ae70d56a52e5379b9ffb0b52192edac4251875caf85f7aed4dea8b22a73"
+    },
+    {
+      "rid": "linux-x64",
+      "assetRid": "linux-x64",
+      "file": "libSkiaSharp.so",
+      "sha256": "e52b1c15229d8d0bef672e354fd610b191782b834d865c3d52808f7ae2e08ede"
+    },
+    {
+      "rid": "linux-arm64",
+      "assetRid": "linux-arm64",
+      "file": "libSkiaSharp.so",
+      "sha256": "0739f3052b4250c5eeb43bf3dc5dc05069fa8e336f726292012a735d040ebcee"
+    },
+    {
+      "rid": "osx-x64",
+      "assetRid": "osx",
+      "file": "libSkiaSharp.dylib",
+      "sha256": "02d763cbf559621f5b3290db5871417e2e28e30835b1acb6644f5c984d0c2cf5"
+    },
+    {
+      "rid": "osx-arm64",
+      "assetRid": "osx",
+      "file": "libSkiaSharp.dylib",
+      "sha256": "02d763cbf559621f5b3290db5871417e2e28e30835b1acb6644f5c984d0c2cf5"
+    }
+  ]
+}

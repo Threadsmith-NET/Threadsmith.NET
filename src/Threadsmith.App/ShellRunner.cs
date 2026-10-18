@@ -229,8 +229,13 @@ internal static class ShellRunner
         {
             if (domainEvent is MemoriesIncluded memories)
             {
-                await output.WriteLineAsync("Memory:".AsMemory(), cancellationToken);
-                await output.WriteAsync(ContextUsageFormatter.FormatMemoryContext(memories.Items).AsMemory(), cancellationToken);
+                var memoryText = ContextUsageFormatter.FormatMemoryContext(memories.Items, includeStandingPreferences: false);
+                if (memoryText.Length > 0)
+                {
+                    await output.WriteLineAsync("Memory:".AsMemory(), cancellationToken);
+                    await output.WriteAsync(memoryText.AsMemory(), cancellationToken);
+                }
+
                 return;
             }
 
@@ -374,6 +379,9 @@ internal static class ShellRunner
 /// <summary>Collects immutable shell dependencies produced by earlier startup phases.</summary>
 internal sealed record ShellRunContext
 {
+    /// <summary>Shared binary capability of the existing artifact store.</summary>
+    internal IImageArtifactStore? ImageArtifacts { get; init; }
+
     /// <summary>Gets transient timings for the interactive startup projection.</summary>
     internal SemanticStartupProgress? SemanticStartupProgress { get; init; }
 

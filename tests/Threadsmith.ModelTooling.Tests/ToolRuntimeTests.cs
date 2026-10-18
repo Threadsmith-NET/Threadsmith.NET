@@ -2264,7 +2264,7 @@ public static partial class ToolRuntimeTests
                             ["DefaultLines"] = "2000",
                             ["MaximumLines"] = "2000",
                             ["MaximumContentBytes"] = "51200",
-                            ["MaximumFileBytes"] = "1048576",
+                            ["MaximumFileBytes"] = "5242880",
                         })
                         : TestPromptLoader.Instance.Get(assets[tool.Definition.Id]),
                 tool.Definition.Description));

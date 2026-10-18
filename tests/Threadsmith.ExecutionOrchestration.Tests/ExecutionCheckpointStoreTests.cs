@@ -23,7 +23,7 @@ public sealed partial class ExecutionCheckpointStoreTests
             var version = await runner.RunAsync();
 
             // Assert
-            Assert.Equal(15, version);
+            Assert.Equal(DefaultMigrations.All[^1].Version, version);
             await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();

@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Threading.Channels;
+using Threadsmith.Core;
 using Threadsmith.Interaction.Agents;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
@@ -36,6 +37,8 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         "F2 — selected agent details while output has focus",
         "Output keys — arrows scroll; Shift+arrows select text",
         "F8 — show output links; Enter copies the selected address",
+        "Ctrl+V / Shift+Insert — paste text; Ctrl+Alt+V — paste image",
+        "F9 — paste image; inspect/remove image attachments",
         "Ctrl+C — copy selected text; exit Threadsmith when none is selected",
         "F6 — copy the current selection without using Ctrl+C",
         "Ctrl+Shift+C — copy the complete message draft",
@@ -84,6 +87,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private Task _utilityModal = Task.CompletedTask;
     private TaskCompletionSource<InteractionInput>? _read;
     private bool _pendingIdleYield;
+    private bool _clipboardHintShown;
     private SessionStatusSnapshot? _status;
     private SessionStatusSnapshot? _formattedStatus;
     private InteractionActivity? _activity;
@@ -102,7 +106,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private InteractionActivity? _formattedActivity;
 
     /// <summary>Initializes a new instance of the <see cref="TuiKitSurface"/> class.</summary>
-    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null, Func<CancellationToken, Task<string?>>? readClipboard = null, TuiResourceLimits? limits = null)
+    internal TuiKitSurface(ConfiguredTheme theme, Action interrupt, ITerminalBackend? backend = null, Func<CancellationToken, Task<string?>>? readClipboard = null, TuiResourceLimits? limits = null, IImageArtifactStore? images = null, Func<CancellationToken, Task<ClipboardCapture>>? captureClipboard = null)
     {
         ArgumentNullException.ThrowIfNull(theme);
         ArgumentNullException.ThrowIfNull(interrupt);
@@ -114,6 +118,10 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         _steering = new TuiKitComposer(limits);
         _backend = backend ?? new TuiKitConsoleBackend();
         _readClipboard = readClipboard ?? (token => ClipboardReader.ReadAsync(limits, token));
+        _imageArtifacts = images;
+        _captureClipboard = captureClipboard ?? (readClipboard is null
+            ? token => ClipboardReader.CaptureAsync(limits, token)
+            : async token => new ClipboardCapture(await _readClipboard(token), null));
         if (backend is null && (!_backend.IsInteractive
             || string.Equals(Environment.GetEnvironmentVariable("TERM"), "dumb", StringComparison.OrdinalIgnoreCase)))
         {
@@ -154,6 +162,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         {
             composer.CopyRequested = Copy;
             composer.PasteRequested = () => RequestPaste(null);
+            composer.ImagePasteRequested = () => RequestPaste(null, image: true);
         }
 
         _app.Focus("composer");
@@ -219,12 +228,30 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     {
         ArgumentNullException.ThrowIfNull(request);
         var completion = new TaskCompletionSource<InteractionInput>(TaskCreationOptions.RunContinuationsAsynchronously);
+        ImageArtifact[] abandoned = [];
+        var previousSession = _attachmentSession;
+        if (request.Purpose == ComposerPurpose.Conversation && request.SessionId != previousSession)
+        {
+            var nextLease = _imageArtifacts is not null && request.SessionId is { } nextSession
+                ? await _imageArtifacts.PinSessionImagesAsync(nextSession, cancellationToken) : null;
+            _imageSessionLease?.Dispose();
+            _imageSessionLease = nextLease;
+        }
+
         await EnqueueAsync(
             () =>
         {
             if (_read is not null)
             {
                 throw new InvalidOperationException("Only one composer read may own input.");
+            }
+
+            if (request.Purpose == ComposerPurpose.Conversation && request.SessionId != _attachmentSession)
+            {
+                abandoned = [.. _draftImages, .. _failedImageSubmission?.Images ?? []];
+                _failedImageSubmission = null;
+                _draftImages.Clear();
+                _attachmentSession = request.SessionId;
             }
 
             _read = completion;
@@ -258,6 +285,14 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             cancellationToken);
         try
         {
+            if (_imageArtifacts is not null && previousSession is { } oldSession)
+            {
+                foreach (var image in abandoned)
+                {
+                    await _imageArtifacts.ReleaseImageAsync(image.Id, oldSession, cancellationToken);
+                }
+            }
+
             return await completion.Task.WaitAsync(cancellationToken);
         }
         finally
@@ -447,6 +482,15 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             }
             finally
             {
+                if (_imageArtifacts is not null && _attachmentSession is { } owner)
+                {
+                    foreach (var image in _draftImages.Concat(_failedImageSubmission?.Images ?? []).DistinctBy(image => image.Id))
+                    {
+                        await _imageArtifacts.ReleaseImageAsync(image.Id, owner, CancellationToken.None);
+                    }
+                }
+
+                _imageSessionLease?.Dispose();
                 _stop.Dispose();
             }
         }
@@ -649,6 +693,16 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             return true;
         }
 
+        if (key.Code == KeyCode.F9 && CanEdit && CurrentPurpose == ComposerPurpose.Conversation && !_app.Modals.IsActive)
+        {
+            if (_clipboardRead is null || _clipboardRead.IsCompleted)
+            {
+                _clipboardRead = InspectAttachmentsAsync(_stop.Token);
+            }
+
+            return true;
+        }
+
         if (key.Code == KeyCode.F12)
         {
             _app.ToggleMouseCapture();
@@ -663,6 +717,13 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
         if (_startupBlocked && _activeInput is null)
         {
+            return true;
+        }
+
+        if (_app.Modals.IsActive && key.Code == KeyCode.Character && key.Rune == 'v'
+            && key.Modifiers == (KeyModifiers.Ctrl | KeyModifiers.Alt))
+        {
+            _notice = "Image paste is available only in the ordinary conversation composer";
             return true;
         }
 
@@ -817,10 +878,26 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
                     return true;
                 }
 
-                var input = new InteractionInput(true, _composer.Text, _stop.Token);
+                var quitting = string.Equals(_composer.Text.Trim(), "/quit", StringComparison.OrdinalIgnoreCase);
+                if (_failedImageSubmission is not null && CurrentPurpose == ComposerPurpose.Conversation && !quitting)
+                {
+                    _notice = "F9: recover or discard the preserved failed submission first";
+                    return true;
+                }
+
+                var input = new InteractionInput(true, _composer.Text, _stop.Token)
+                {
+                    Images = CurrentPurpose == ComposerPurpose.Conversation ? _draftImages.ToArray() : [],
+                };
                 if (_read.TrySetResult(input))
                 {
                     CommitComposerInput(input.Text);
+
+                    // Quitting transfers no attachments to a conversation; keep ownership for disposal.
+                    if (input.Images.Count > 0 && !quitting)
+                    {
+                        _draftImages.Clear();
+                    }
                 }
 
                 return true;
@@ -844,6 +921,14 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
 
     private void RefreshDiscovery()
     {
+        if (!_clipboardHintShown && CanEdit && !_app.Modals.IsActive && ModalFrame.Fits(_backend.Size))
+        {
+            _clipboardHintShown = true;
+            _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
+                new("Use Control-V to paste text; Control-Alt-V to paste an image\n", PresentationTextRole.Status),
+            ])]));
+        }
+
         if (_paletteModal?.IsClosed == true)
         {
             _paletteModal = null;
@@ -1088,20 +1173,49 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         }
     }
 
-    private void RequestPaste(Modal? modal, Func<string>? filterText = null)
+    private void RequestPaste(Modal? modal, Func<string>? filterText = null, bool image = false)
     {
         if ((modal is not null || CanEdit) && _clipboardRead.IsCompleted)
         {
-            _clipboardRead = PasteClipboardAsync(modal, filterText, _composer, _inputEpoch, _stop.Token);
+            _clipboardRead = PasteClipboardAsync(modal, filterText, _composer, _inputEpoch, image, _stop.Token);
         }
     }
 
-    private async Task PasteClipboardAsync(Modal? modal, Func<string>? filterText, TuiKitComposer composer, long epoch, CancellationToken cancellationToken)
+    private async Task PasteClipboardAsync(Modal? modal, Func<string>? filterText, TuiKitComposer composer, long epoch, bool image, CancellationToken cancellationToken)
     {
         var filter = filterText?.Invoke();
+        var session = _attachmentSession;
         try
         {
-            var text = await _readClipboard(cancellationToken);
+            if (image)
+            {
+                await EnqueueAsync(
+                    () =>
+                {
+                    _notice = "Attaching image ...";
+                    _agents.Main.Transcript.Present(new PresentationBatch([new PresentationTextItem([
+                        new("Attaching image ...\n", PresentationTextRole.Status),
+                    ])]));
+                },
+                    cancellationToken);
+            }
+
+            var capture = image
+                ? await _captureClipboard(cancellationToken)
+                : new ClipboardCapture(await _readClipboard(cancellationToken), null);
+            if (capture.Image is { } bytes)
+            {
+                await AdmitClipboardImageAsync(bytes, modal, composer, epoch, session, cancellationToken);
+                return;
+            }
+
+            if (image)
+            {
+                await EnqueueAsync(() => _notice = "No image in clipboard; draft preserved", cancellationToken);
+                return;
+            }
+
+            var text = capture.Text;
             await EnqueueAsync(
                 () =>
             {
@@ -1130,7 +1244,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
         catch (ChannelClosedException) when (_stop.IsCancellationRequested)
         {
         }
-        catch (Exception exception) when (exception is IOException or DecoderFallbackException or InvalidOperationException or Win32Exception)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or OperationCanceledException or DecoderFallbackException or InvalidOperationException or Win32Exception)
         {
             if (!_stop.IsCancellationRequested)
             {
@@ -1207,6 +1321,13 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             _owner._composer.Style = _owner.ResolvePaneStyle(PresentationTextRole.Default, PresentationTextRole.ComposerBackgroundPaneRole);
             _owner._composer.Render(view);
             _prompt.Draw(view, 0, 0, _owner._prompt, _owner.ResolvePaneStyle(PresentationTextRole.ComposerPrompt, PresentationTextRole.ComposerBackgroundPaneRole));
+            if (_owner.CanEdit && _owner.CurrentPurpose == ComposerPurpose.Conversation
+                && ReferenceEquals(_owner._composer, _owner._ordinary) && _owner._draftImages.Count > 0)
+            {
+                var attachments = $" {_owner._draftImages.Count} image(s) — F9 paste/remove ";
+                _prompt.Draw(surface, 2, 0, attachments, background);
+            }
+
             if (!_owner.CanEdit)
             {
                 _prompt.Draw(surface, 2, 0, " Read-Only ", background);

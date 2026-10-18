@@ -164,6 +164,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-attachment-progress.md](maintenance-attachment-progress.md) | Clipboard attachment progress and repeat-paste recovery |
 | Maintenance | [maintenance-quit-with-attachments.md](maintenance-quit-with-attachments.md) | Quit with pending image attachments |
 | Maintenance | [maintenance-multimodal-fixture-paths.md](maintenance-multimodal-fixture-paths.md) | Physical temporary paths for multimodal export tests |
+| Maintenance | [maintenance-release-prompt-owner.md](maintenance-release-prompt-owner.md) | Release validation of repository intelligence prompt assets |
 | Maintenance | [maintenance-tool-image-admission.md](maintenance-tool-image-admission.md) | Aggregate tool-image admission and recoverable omission receipts |
 | Maintenance | [maintenance-historical-image-admission.md](maintenance-historical-image-admission.md) | Historical image capacity and explicit omission receipts |
 | — | [threadsmith-memory-reconciliation-concept-recall-implementation-plan.md](threadsmith-memory-reconciliation-concept-recall-implementation-plan.md) | Repository memory reconciliation and concept-aware recall |

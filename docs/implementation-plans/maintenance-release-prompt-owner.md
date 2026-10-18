@@ -1,6 +1,6 @@
 # Release prompt-owner validation
 
-**Status:** Active
+**Status:** Complete
 
 **Delivery track:** Maintenance
 
@@ -77,4 +77,5 @@ None.
 ## Verification record
 
 - The real-asset regression reproduced the missing RepositoryIntelligence source asset before the fix. All release contracts pass after the owner addition, including malformed-payload checks and legal/aggregate gates.
-- Fresh-context adversarial review found no scoped issues. The packaging rehearsal remains the verification gate before publishing beta 3.
+- Fresh-context adversarial review found no scoped issues.
+- [Release rehearsal 39174913791](https://github.com/Threadsmith-NET/Threadsmith.NET/actions/runs/39174913791) passed the release contracts, all six platform packages and aggregate verification at commit 3dd45c272cb02c55098355121eb1543ea7ed3340 before tagging beta 3.

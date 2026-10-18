@@ -621,7 +621,7 @@ public sealed partial class MultimodalTests
 
         public static async Task<Fixture> CreateAsync(bool migrate = true, long maximumRetainedImageBytes = ArtifactStore.DefaultMaximumRetainedImageBytes, ToolLimits? limits = null)
         {
-            var root = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "threadsmith-images-" + Guid.NewGuid().ToString("N"))).FullName;
+            var root = Directory.CreateDirectory(Path.Combine(TestTemporaryPath.PhysicalPath(), "threadsmith-images-" + Guid.NewGuid().ToString("N"))).FullName;
             var connection = $"Data Source={Path.Combine(root, "state.db")};Pooling=False";
             if (migrate)
             {
@@ -664,10 +664,13 @@ public sealed partial class MultimodalTests
         {
             await Events.DisposeAsync();
             SqliteConnection.ClearAllPools();
-            if (Path.GetFileName(Root).StartsWith("threadsmith-images-", StringComparison.Ordinal) && Path.GetDirectoryName(Root) == Path.TrimEndingDirectorySeparator(Path.GetTempPath()))
+            if (!Path.GetFileName(Root).StartsWith("threadsmith-images-", StringComparison.Ordinal)
+                || !string.Equals(Path.GetDirectoryName(Root), TestTemporaryPath.PhysicalPath(), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
             {
-                Directory.Delete(Root, recursive: true);
+                throw new InvalidOperationException("Unexpected fixture cleanup root.");
             }
+
+            Directory.Delete(Root, recursive: true);
         }
     }
 }

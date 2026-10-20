@@ -1147,8 +1147,6 @@ public sealed partial class SessionApplication :
 
         public SortedSet<string> MemoryConcepts { get; } = new(StringComparer.Ordinal);
 
-        public IReadOnlyList<RepositoryMemoryInclusion> RetainedMemories { get; set; } = [];
-
         public string? MemoryRepositoryIdentity { get; set; }
 
         public int ConceptResolutionRetries { get; set; }
@@ -1156,6 +1154,10 @@ public sealed partial class SessionApplication :
         public bool ConceptOverflowReported { get; set; }
 
         public bool MemoriesEnabled { get; set; }
+
+        public bool UsesMemoryConcepts => MemoriesEnabled
+            && (MemoryOptions?.ConceptRecallEnabled == true
+                || (IntelligenceEnabled && MemoryOptions?.Intelligence.Recall.ConceptRecallEnabled == true));
 
         public SessionId SessionId { get; }
 

@@ -122,7 +122,7 @@ public sealed record RepositoryMemoryRetrievalRequest
     /// <summary>Bounded normalized hints accumulated in this user turn.</summary>
     public IReadOnlyList<string> Concepts { get; init; } = [];
 
-    /// <summary>Previously admitted revisions eligible for conditional retention.</summary>
+    /// <summary>Legacy caller metadata; current relevance alone determines selection.</summary>
     public IReadOnlyList<RepositoryMemoryInclusion> RetainedMemories { get; init; } = [];
 
     /// <summary>Canonical repository identity supplied by the host.</summary>
@@ -152,6 +152,15 @@ public sealed record RepositoryMemoryRetrievalCandidate(
 {
     /// <summary>Exact concept matches that qualified this candidate.</summary>
     public IReadOnlyList<string> ConceptMatches { get; init; } = [];
+
+    /// <summary>Complete query content tokens used by the reranker, when supplied by the provider.</summary>
+    public int? RerankerQueryTokens { get; init; }
+
+    /// <summary>Question tokens actually scored after intentional recall reduction.</summary>
+    public int? RerankerUsedQueryTokens { get; init; }
+
+    /// <summary>Complete memory content tokens used by the reranker, when supplied by the provider.</summary>
+    public int? RerankerDocumentTokens { get; init; }
 }
 
 /// <summary>Detached ranking and truthful retrieval/rebuild diagnostics.</summary>

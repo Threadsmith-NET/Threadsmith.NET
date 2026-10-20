@@ -2136,8 +2136,10 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 1. Exercise ordinary tool continuations with concept recall enabled and disabled.
 2. Verify signed provider tool-use/tool-result correlation survives memory inclusion.
 3. Revise/remove a memory and verify append-only current snapshots preserve earlier replay prefixes.
-4. Start another ordinary run and verify concepts/retained inclusions reset.
+4. Start another ordinary run and verify concepts reset. Within a run, accumulate concepts and steer to a different subject; earlier selections must not reserve slots against newly relevant memories.
 5. Verify native deployed prompt assets and bounded memory authority.
+6. With onboarded intelligence enabled, disable ordinary concepts and enable intelligence concepts. Emit a relevant native tool hint and inspect the next request and both partition diagnostics. Intelligence history refresh may rebuild provider history; completed tool-call/result correlation must survive.
+7. Stage the pinned local models and run the opt-in local reranker tests. Verify long-question recall retains opening/closing current instruction sentences ahead of old task context, concept-only targets still reach reranking, and original/used question counts are visible. Verify full pairs through 512 tokens, explicit overflow fallback for oversized memories, no reconciliation writes on incomplete comparisons, and configured comparison windows spanning multiple eight-pair batches.
 
 ### MTP-278 — Repository intelligence lifecycle and context
 

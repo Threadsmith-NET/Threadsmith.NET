@@ -21,6 +21,9 @@ public sealed record RepositoryMemorySearchRequest
     /// <summary>Canonical repository identity.</summary>
     public required string RepositoryIdentity { get; init; }
 
+    /// <summary>Allows bounded question construction for recall only; reconciliation leaves this null.</summary>
+    public TextCrossEncoderRecallQuery? RecallQuery { get; init; }
+
     /// <summary>Complete direct query.</summary>
     public required string Query { get; init; }
 
@@ -42,7 +45,7 @@ public sealed record RepositoryMemorySearchRequest
     /// <summary>Space of the prepared vector; prevents accidental cross-model reuse.</summary>
     public string? PreparedEmbeddingSpaceId { get; init; }
 
-    /// <summary>Previously admitted revisions retained only while still current and eligible.</summary>
+    /// <summary>Legacy caller metadata; current relevance alone determines selection.</summary>
     public IReadOnlyList<RepositoryMemoryInclusion> RetainedMemories { get; init; } = [];
 
     /// <summary>Normalized active-turn discovery hints.</summary>
@@ -169,6 +172,27 @@ public enum RepositoryMemorySearchBranchStatus
 /// <summary>Structured search evidence; window omissions are separate from later output or context omissions.</summary>
 public sealed record RepositoryMemorySearchDetails
 {
+    /// <summary>Cross-encoder identity selected for this pass, absent when disabled or unavailable.</summary>
+    public string? RerankerModelId { get; init; }
+
+    /// <summary>Complete-pair rejection reason with side token counts and no source text.</summary>
+    public string? RerankerInputFailure { get; init; }
+
+    /// <summary>Original reranker question tokens when successful scoring exposes accounting.</summary>
+    public int? RerankerQueryTokens { get; init; }
+
+    /// <summary>Question tokens actually scored; smaller than the original count when recall shortened it.</summary>
+    public int? RerankerUsedQueryTokens { get; init; }
+
+    /// <summary>Elapsed time of the original search; cached results retain their original measurement.</summary>
+    public double ElapsedMilliseconds { get; init; }
+
+    /// <summary>Bounded per-memory discovery and selection evidence; final prompt inclusion is reported separately.</summary>
+    public IReadOnlyList<RepositoryMemoryCandidateSearchEvidence> Candidates { get; init; } = [];
+
+    /// <summary>Stored candidate rows omitted from detailed evidence by its bound or consumer output budget.</summary>
+    public int CandidateEvidenceOmissions { get; init; }
+
     /// <summary>Lexical snapshot outcome.</summary>
     public RepositoryMemorySearchBranchStatus Lexical { get; init; }
 
@@ -205,6 +229,17 @@ public sealed record RepositoryMemorySearchDetails
     /// <summary>At least one query-memory pair exceeded the complete-input limit.</summary>
     public bool PairTruncated { get; init; }
 }
+
+/// <summary>Explains where one stored memory reached in a search without logging its text.</summary>
+public sealed record RepositoryMemoryCandidateSearchEvidence(
+    RepositoryMemoryId Id,
+    string Outcome,
+    int? LexicalRank,
+    int? SemanticRank,
+    bool ConceptMatched,
+    double? RerankerScore,
+    int? QueryTokens,
+    int? DocumentTokens);
 
 /// <summary>Bounded typo recovery shared by both memory search consumers.</summary>
 public sealed record RepositoryMemoryLexicalOptions

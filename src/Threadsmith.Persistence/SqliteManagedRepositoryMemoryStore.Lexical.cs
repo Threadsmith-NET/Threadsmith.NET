@@ -43,7 +43,9 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             }
 
             var exactTerms = vocabulary.ToHashSet(StringComparer.Ordinal);
-            var pending = terms.Where(term => term.Length >= 5 && !exactTerms.Contains(term)).Distinct(StringComparer.Ordinal).ToArray();
+            var pending = terms.Where(term => term.Length >= 5
+                    && !RepositoryMemoryLexicalTerms.IsCodeIdentifier(term) && !exactTerms.Contains(term))
+                .Distinct(StringComparer.Ordinal).ToArray();
             if (pending.Length == 0)
             {
                 return snapshot with { FuzzyLexicalStatus = RepositoryMemorySearchBranchStatus.NotRequired };

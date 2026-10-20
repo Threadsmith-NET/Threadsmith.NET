@@ -362,7 +362,14 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         {
             Prepared = collection is not null,
             EvictedIds = result.EvictedIds.Select(id => id.Value.ToString("D")).ToArray(),
-            SearchDetails = result.SearchDetails,
+
+            // Per-row inspection evidence must not displace actionable collision texts
+            // from the tool's bounded response. Context inspection keeps those rows.
+            SearchDetails = result.SearchDetails is { } details ? details with
+            {
+                Candidates = [],
+                CandidateEvidenceOmissions = details.CandidateEvidenceOmissions + details.Candidates.Count,
+            } : null,
             ReconciliationKey = result.ReconciliationKey,
             Resolution = result.Outcome == "reconciliationRequired"
                 ? "Not added. Update a matching existing ID using expectedRevision, or retry the unchanged proposal with confirmDistinctFrom for the displayed IDs/revisions. Within collection, earlier confirmations accumulate for that exact proposal; changed proposals start fresh and changed candidate revisions require review."

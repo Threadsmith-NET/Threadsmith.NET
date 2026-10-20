@@ -294,7 +294,7 @@ public sealed partial class SessionApplication
         foreach (var message in messages)
         {
             registration.MemoryCurrentInstruction = message.Text;
-            if (!loopState.TransientState.HasResponses || registration.MemoryOptions?.ConceptRecallEnabled == true)
+            if (!loopState.TransientState.HasResponses || registration.UsesMemoryConcepts)
             {
                 loopState.InvalidateFrozenContext();
             }
@@ -379,7 +379,6 @@ public sealed partial class SessionApplication
             if (registration.MemoryRepositoryIdentity != identity)
             {
                 registration.MemoryConcepts.Clear();
-                registration.RetainedMemories = [];
                 registration.MemoryRepositoryIdentity = identity;
                 registration.ConceptResolutionRetries = 0;
                 registration.ConceptOverflowReported = false;
@@ -500,7 +499,6 @@ public sealed partial class SessionApplication
                 RepositoryMemoryOptions = registration.MemoryOptions,
                 RepositoryMemoryCurrentInstruction = registration.MemoryCurrentInstruction,
                 RepositoryMemoryConcepts = registration.MemoryConcepts.ToArray(),
-                RetainedRepositoryMemories = registration.RetainedMemories,
                 ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
                 ContinuationImages = continuationImages,
             };
@@ -516,7 +514,6 @@ public sealed partial class SessionApplication
                 cancellationToken);
             context = loopState.RefreshContext(context, modelRound);
             loopState.FrozenContext = context;
-            registration.RetainedMemories = context.RepositoryMemoryInclusions ?? [];
         }
 
         invocationContext = AttachModelBudgetToInvocationContext(
@@ -1391,7 +1388,7 @@ public sealed partial class SessionApplication
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
             var result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages);
-            if (round.Registration.MemoryOptions?.ConceptRecallEnabled == true)
+            if (round.Registration.UsesMemoryConcepts)
             {
                 foreach (var concept in result.Concepts)
                 {

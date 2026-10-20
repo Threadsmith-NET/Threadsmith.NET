@@ -1,7 +1,10 @@
 namespace Threadsmith.Reranking.Local.Tests;
 
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using Threadsmith.Core;
 using Xunit;
 
@@ -10,7 +13,7 @@ public sealed class LocalTextCrossEncoderTests
 {
     /// <summary>Verifies pair framing, segment assignment, and full input accounting without native assets.</summary>
     [Fact]
-    public static void PairEncodingPreservesReferenceFrameAndReportsTrailingOverflow()
+    public static void PairEncodingPreservesCanonicalFrameAndDocumentContent()
     {
         using var vocabulary = CreateVocabulary();
         var tokenizer = LocalTextCrossEncoderEngine.CreateTokenizer(vocabulary);
@@ -20,13 +23,113 @@ public sealed class LocalTextCrossEncoderTests
         Assert.Equal(1L, framed.AttentionMask[0]);
         Assert.Equal(101L, framed.InputIds[0]);
         Assert.Equal(0L, framed.TokenTypeIds[0]);
-        Assert.Equal(102L, framed.InputIds[3]);
-        Assert.Equal(0L, framed.TokenTypeIds[3]);
-        Assert.Equal(102L, framed.InputIds[4]);
-        Assert.Equal(1L, framed.TokenTypeIds[4]);
+        Assert.Equal([101L, 104L, 102L, 104L, 102L], framed.InputIds);
+        Assert.Equal([0L, 0L, 0L, 1L, 1L], framed.TokenTypeIds);
+        Assert.All(framed.AttentionMask, value => Assert.Equal(1, value));
         Assert.Equal(256, overflow.InputIds.Length);
-        Assert.True(overflow.WasTruncated);
-        Assert.True(overflow.InputTokenCount > overflow.InputIds.Length);
+        Assert.False(overflow.WasTruncated);
+        Assert.Equal(104, overflow.InputIds[^2]);
+        var otherDocument = LocalTextCrossEncoderEngine.Encode(tokenizer, string.Join(' ', Enumerable.Repeat("a", 252)), "b");
+        Assert.False(overflow.InputIds.SequenceEqual(otherDocument.InputIds));
+        var literal = LocalTextCrossEncoderEngine.Encode(tokenizer, "a [SEP] a", "a");
+        Assert.All(literal.TokenTypeIds[..^2], value => Assert.Equal(0, value));
+        var first = tokenizer.EncodeToIds("a [SEP] a", addSpecialTokens: false);
+        var second = tokenizer.EncodeToIds("a", addSpecialTokens: false);
+        Assert.Equal(tokenizer.BuildInputsWithSpecialTokens(first, second).Select(value => (long)value), literal.InputIds);
+        Assert.Equal(tokenizer.CreateTokenTypeIdsFromSequences(first, second).Select(value => (long)value), literal.TokenTypeIds);
+    }
+
+    /// <summary>Both full texts survive up to the verified limit; overflow cannot silently discard either side.</summary>
+    [Theory]
+    [InlineData(255)]
+    [InlineData(256)]
+    [InlineData(257)]
+    [InlineData(511)]
+    [InlineData(512)]
+    [InlineData(513)]
+    public static void PairBoundaryIsCompleteOrExplicitlyRejected(int length)
+    {
+        using var vocabulary = CreateVocabulary();
+        var tokenizer = LocalTextCrossEncoderEngine.CreateTokenizer(vocabulary);
+        var query = string.Join(' ', Enumerable.Repeat("a", 252));
+        var document = string.Join(' ', Enumerable.Repeat("a", length - 255));
+        if (length > 512)
+        {
+            var error = Assert.Throws<TextCrossEncoderInputException>(() => LocalTextCrossEncoderEngine.Encode(tokenizer, query, document));
+            Assert.Equal(252, error.QueryTokens);
+            Assert.Equal(length - 255, error.DocumentTokens);
+            return;
+        }
+
+        var pair = LocalTextCrossEncoderEngine.Encode(tokenizer, query, document);
+        Assert.Equal(length, pair.InputIds.Length);
+        Assert.Equal(102, pair.InputIds[^1]);
+        Assert.Equal(length - 255, pair.DocumentTokenCount);
+        Assert.All(pair.TokenTypeIds[254..], value => Assert.Equal(1, value));
+    }
+
+    /// <summary>Recall bounds only the question, consistently across documents, while strict scoring rejects overflow.</summary>
+    [Fact]
+    public static void RecallQueryKeepsBothEndsAndCompleteDocuments()
+    {
+        using var vocabulary = CreateVocabulary();
+        var tokenizer = LocalTextCrossEncoderEngine.CreateTokenizer(vocabulary);
+        var query = "a " + string.Join(' ', Enumerable.Repeat("b", 600)) + " a";
+        var document = string.Join(' ', Enumerable.Repeat("a", 254));
+        Assert.Throws<TextCrossEncoderInputException>(() => LocalTextCrossEncoderEngine.Encode(tokenizer, query, document));
+        var pair = LocalTextCrossEncoderEngine.Encode(tokenizer, query, document, useRecallQuery: true);
+        var shortDocument = LocalTextCrossEncoderEngine.Encode(tokenizer, query, "a", useRecallQuery: true);
+        Assert.Equal(602, pair.QueryTokenCount);
+        Assert.Equal(128, pair.UsedQueryTokenCount);
+        Assert.Equal(254, pair.DocumentTokenCount);
+        Assert.Equal(385, pair.InputIds.Length);
+        var withHistory = LocalTextCrossEncoderEngine.Encode(tokenizer, query, document, useRecallQuery: true, taskIntent: string.Join(' ', Enumerable.Repeat("b", 300)));
+        Assert.Equal(pair.InputIds, withHistory.InputIds);
+        var followup = LocalTextCrossEncoderEngine.Encode(tokenizer, "a", "a", useRecallQuery: true, taskIntent: "b");
+        Assert.Equal(2, followup.UsedQueryTokenCount);
+        Assert.False(pair.WasTruncated);
+        Assert.Equal(104, pair.InputIds[1]);
+        Assert.Equal(104, pair.InputIds[128]);
+        Assert.Equal(pair.InputIds[..130], shortDocument.InputIds[..130]);
+        Assert.All(pair.InputIds[130..^1], token => Assert.Equal(104, token));
+        Assert.Throws<TextCrossEncoderInputException>(() => LocalTextCrossEncoderEngine.Encode(
+            tokenizer, query, string.Join(' ', Enumerable.Repeat("a", 382)), useRecallQuery: true));
+    }
+
+    /// <summary>Tests the pinned export directly before relying on its declared 512-position capacity.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public static async Task PinnedExportAcceptsFullCapacityPairs()
+    {
+        if (Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
+        {
+            Assert.Skip("Stage the pinned reranker and enable integration checks.");
+        }
+
+        var bytes = await File.ReadAllBytesAsync(
+            Path.Combine(AppContext.BaseDirectory, "crossencoders", "ms-marco-MiniLM-L6-v2", "model.onnx"),
+            TestContext.Current.CancellationToken);
+        Assert.Equal("5d3e70fd0c9ff14b9b5169a51e957b7a9c74897afd0a35ce4bd318150c1d4d4a", Convert.ToHexStringLower(SHA256.HashData(bytes)));
+        using var options = new SessionOptions { IntraOpNumThreads = 1, InterOpNumThreads = 1 };
+        using var session = new InferenceSession(bytes, options);
+        foreach (var length in (int[])[256, 511, 512])
+        {
+            var ids = Enumerable.Repeat(104L, length).ToArray();
+            ids[0] = 101;
+            ids[length / 2] = 102;
+            ids[^1] = 102;
+            var segments = Enumerable.Range(0, length).Select(index => index > length / 2 ? 1L : 0L).ToArray();
+            NamedOnnxValue[] inputs =
+            [
+                NamedOnnxValue.CreateFromTensor("input_ids", new DenseTensor<long>(ids, [1, length])),
+                NamedOnnxValue.CreateFromTensor("attention_mask", new DenseTensor<long>(Enumerable.Repeat(1L, length).ToArray(), [1, length])),
+                NamedOnnxValue.CreateFromTensor("token_type_ids", new DenseTensor<long>(segments, [1, length])),
+            ];
+            using var runOptions = new RunOptions();
+            await using var cancellation = TestContext.Current.CancellationToken.Register(() => runOptions.Terminate = true);
+            using var output = session.Run(inputs, ["logits"], runOptions);
+            Assert.True(float.IsFinite(Assert.Single(output.Single().AsTensor<float>().ToArray())));
+        }
     }
 
     /// <summary>Verifies that pre-cancelled requests cannot trigger asset loading.</summary>
@@ -50,7 +153,7 @@ public sealed class LocalTextCrossEncoderTests
         {
             var empty = await encoder.ScoreAsync("query", [], TestContext.Current.CancellationToken);
             Assert.Empty(empty);
-            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => encoder.ScoreAsync("query", Enumerable.Repeat("document", 65).ToArray(), TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => encoder.ScoreAsync("query", Enumerable.Repeat("document", encoder.Model.MaxBatchSize + 1).ToArray(), TestContext.Current.CancellationToken));
             var error = await Assert.ThrowsAsync<TextCrossEncoderUnavailableException>(() => encoder.ScoreAsync("query", ["document"], TestContext.Current.CancellationToken));
             Assert.Contains("cross-encoder asset", error.Message, StringComparison.Ordinal);
         }
@@ -73,10 +176,12 @@ public sealed class LocalTextCrossEncoderTests
 
         var batch = await encoder.ScoreAsync("deployment review", documents, TestContext.Current.CancellationToken);
         var singles = await Task.WhenAll(documents.Select(document => encoder.ScoreAsync("deployment review", [document], TestContext.Current.CancellationToken)));
+        var recall = await encoder.ScoreRecallAsync(new("deployment review"), documents, TestContext.Current.CancellationToken);
+        Assert.Equal(batch, recall);
 
         Assert.Equal(documents.Length, batch.Count);
         Assert.All(batch, score => Assert.True(double.IsFinite(score.Score)));
-        Assert.True(batch[2].WasTruncated);
+        Assert.False(batch[2].WasTruncated);
         for (var index = 0; index < documents.Length; index++)
         {
             Assert.Equal(singles[index][0].InputTokenCount, batch[index].InputTokenCount);
@@ -85,10 +190,44 @@ public sealed class LocalTextCrossEncoderTests
         }
     }
 
-    /// <summary>Verifies raw logits against the unmodified production source's fixed-256 output fixture.</summary>
+    /// <summary>Relevant document-tail evidence reaches inference even beyond the former pair boundary.</summary>
     [Fact]
     [Trait("Category", "Integration")]
-    public static async Task StagedModelMatchesProductionReferenceLogits()
+    public static async Task StagedModelUsesDocumentTailAndComparesNearLimitMemories()
+    {
+        if (Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
+        {
+            Assert.Skip("Stage the pinned reranker and enable integration checks.");
+        }
+
+        await using var encoder = new LocalTextCrossEncoder();
+        var prefix = string.Join(' ', Enumerable.Repeat("implementation", 250)) + ". ";
+        var scores = await encoder.ScoreAsync(
+            "Which component enforces policy when executing model tools?",
+            [prefix + "ToolInvocationPipeline enforces policy and approval for all model tool execution.",
+                prefix + "The kitchen recipe describes how to cook tomato soup."],
+            TestContext.Current.CancellationToken);
+        Assert.True(scores[0].Score > scores[1].Score);
+        Assert.All(scores, score =>
+        {
+            Assert.True(score.InputTokenCount > 256);
+            Assert.False(score.WasTruncated);
+        });
+        var memory = string.Join(' ', Enumerable.Repeat("a", 254));
+        var full = Assert.Single(await encoder.ScoreAsync(memory, [memory], TestContext.Current.CancellationToken));
+        Assert.Equal(511, full.InputTokenCount);
+        Assert.Equal(254, full.QueryTokenCount);
+        Assert.Equal(254, full.DocumentTokenCount);
+        Assert.False(full.WasTruncated);
+        await Assert.ThrowsAsync<TextCrossEncoderInputException>(() => encoder.ScoreAsync(
+            memory, [memory + " a a"], TestContext.Current.CancellationToken));
+        Assert.Single(await encoder.ScoreAsync("policy", ["tool policy"], TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>Historical reference texts still rank the relevant memory first after canonical framing.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public static async Task StagedModelRanksRelevantHistoricalReferenceFirst()
     {
         if (Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
         {
@@ -107,10 +246,8 @@ public sealed class LocalTextCrossEncoderTests
         var actual = await encoder.ScoreAsync(query, documents, TestContext.Current.CancellationToken);
 
         Assert.Equal(samples.Length, actual.Count);
-        for (var index = 0; index < samples.Length; index++)
-        {
-            Assert.Equal(samples[index].GetProperty("score").GetDouble(), actual[index].Score, 5);
-        }
+        Assert.True(actual[0].Score > actual.Skip(1).Max(score => score.Score));
+        Assert.All(actual, score => Assert.False(score.WasTruncated));
     }
 
     /// <summary>Verifies deterministic pre-run cancellation does not poison a subsequently queued inference.</summary>

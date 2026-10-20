@@ -220,7 +220,9 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
                     searchDetails = matches.SearchDetails;
                     if (!matches.IsComplete || matches.MemorySetRevision is null)
                     {
-                        throw new InvalidOperationException("Memory reconciliation could not compare complete inputs. No memory was added. Check local inference and shorten oversized memories before retrying.");
+                        var overflow = matches.SearchDetails?.RerankerInputFailure;
+                        throw new InvalidOperationException("Memory reconciliation could not compare complete inputs. No memory was added. Check local inference and shorten oversized memories before retrying."
+                            + (overflow is null ? string.Empty : " " + overflow));
                     }
 
                     var proposalKey = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new

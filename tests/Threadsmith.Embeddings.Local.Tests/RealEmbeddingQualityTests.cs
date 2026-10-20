@@ -12,6 +12,159 @@ using Xunit;
 /// <summary>Verifies local embedding behavior at its host-owned boundary.</summary>
 public sealed class RealEmbeddingQualityTests
 {
+    /// <summary>Current intent displaces old recall in both partitions with real local inference.</summary>
+    [Theory]
+    [InlineData(RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryOwnership.Intelligence)]
+    [Trait("Category", "Integration")]
+    public static async Task ChangedIntentDisplacesRetainedMemory(RepositoryMemoryOwnership ownership)
+    {
+        if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
+            || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
+        {
+            Assert.Skip("Stage both local models and enable their integration flags.");
+        }
+
+        var ct = TestContext.Current.CancellationToken;
+        using var database = new FixtureDatabase();
+        await new SqliteEventStore(database.ConnectionString).InitializeAsync(ct);
+        await new MigrationRunner(database.ConnectionString, DefaultMigrations.All).RunAsync(ct);
+        var store = new SqliteManagedRepositoryMemoryStore(database.ConnectionString);
+        await using var generator = new LocalTextEmbeddingGenerator();
+        await using var encoder = new Threadsmith.Reranking.Local.LocalTextCrossEncoder();
+        var options = new RepositoryMemoryOptions();
+        var ids = new List<RepositoryMemoryId>();
+        string[] texts =
+        [
+            "For MCP integrations, compose McpManager and McpAdapter against the shared ToolRegistry and ToolInvocationPipeline.",
+            "For model-facing prose, declare a PromptAssetCatalog entry and deployed Markdown asset; synchronize the token contract and prompt documentation.",
+        ];
+        foreach (var text in texts)
+        {
+            var write = new RepositoryMemoryWrite { Text = text, Origin = RepositoryMemoryOrigin.Manual, Ownership = ownership };
+            var saved = await store.AddAsync("fixture", write, generator.Model, await generator.GenerateAsync(text, ct), options, ct);
+            ids.Add(Assert.IsType<RepositoryMemoryEntry>(saved.Entry).Id);
+        }
+
+        using var retriever = new HybridRepositoryMemoryRetriever(store, generator, encoder);
+        var request = new RepositoryMemorySearchRequest
+        {
+            RepositoryIdentity = "fixture",
+            Ownership = ownership,
+            Query = "Integrate an MCP server with McpManager and McpAdapter.",
+            Options = new() { RerankerEnabled = true, ConceptRecallEnabled = true, MaximumResults = 1 },
+        };
+        var first = Assert.Single((await retriever.SearchAsync(request, ct)).Selected);
+        Assert.Equal(ids[0], first.Entry.Id);
+        var changed = await retriever.SearchAsync(
+            request with
+            {
+                Query = "Add model-facing prose using PromptAssetCatalog and a deployed Markdown prompt asset.",
+                RetainedMemories = [new(first.Entry.Id, first.Entry.Revision)],
+            },
+            ct);
+        Assert.Equal(ids[1], Assert.Single(changed.Selected).Entry.Id);
+        Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, changed.SearchDetails?.Reranker);
+    }
+
+    /// <summary>Long questions recover concept-only recall in both partitions without weakening complete comparisons.</summary>
+    [Theory]
+    [InlineData(RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryOwnership.Intelligence)]
+    [Trait("Category", "Integration")]
+    public static async Task LongQuestionsRecoverConceptOnlyRecall(RepositoryMemoryOwnership ownership)
+    {
+        if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
+            || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
+        {
+            Assert.Skip("Stage both local models and enable their integration flags.");
+        }
+
+        var ct = TestContext.Current.CancellationToken;
+        using var database = new FixtureDatabase();
+        await new SqliteEventStore(database.ConnectionString).InitializeAsync(ct);
+        await new MigrationRunner(database.ConnectionString, DefaultMigrations.All).RunAsync(ct);
+        using var store = new SqliteManagedRepositoryMemoryStore(database.ConnectionString);
+        await using var generator = new LocalTextEmbeddingGenerator();
+        await using var encoder = new Threadsmith.Reranking.Local.LocalTextCrossEncoder();
+        var options = new RepositoryMemoryOptions
+        {
+            RerankerEnabled = true,
+            ConceptRecallEnabled = true,
+            SemanticMinimum = 1,
+            Intelligence = new() { Enabled = true, Recall = new() { RerankerEnabled = true, ConceptRecallEnabled = true, SemanticMinimum = 1 } },
+        };
+        string[] texts =
+        [
+            "For MCP integrations, compose McpManager and McpAdapter against the shared ToolRegistry and ToolInvocationPipeline.",
+            "For model-facing prose, declare a PromptAssetCatalog entry and deployed Markdown asset; synchronize the token contract and prompt documentation.",
+        ];
+        var ids = new List<RepositoryMemoryId>();
+        foreach (var text in texts)
+        {
+            var write = new RepositoryMemoryWrite
+            {
+                Text = text,
+                Origin = RepositoryMemoryOrigin.Manual,
+                Ownership = ownership,
+                Concepts = ["authoring"],
+            };
+            var saved = await store.AddAsync("fixture", write, generator.Model, await generator.GenerateAsync(text, ct), options, ct);
+            ids.Add(Assert.IsType<RepositoryMemoryEntry>(saved.Entry).Id);
+        }
+
+        const string preference = "Address the user respectfully.";
+        var preferenceWrite = new RepositoryMemoryWrite
+        {
+            Text = preference,
+            Origin = RepositoryMemoryOrigin.Manual,
+            MemoryType = RepositoryMemoryType.StandingPreference,
+        };
+        await store.AddAsync("fixture", preferenceWrite, generator.Model, await generator.GenerateAsync(preference, ct), options, ct);
+        using var retriever = new HybridRepositoryMemoryRetriever(store, generator, encoder);
+        var background = string.Join(' ', Enumerable.Repeat("Background context.", 240));
+        const string question = "How are prompts authored?";
+        var control = await encoder.ScoreRecallAsync(new(question), texts, ct);
+        Assert.True(control[1].Score > control[0].Score, $"Short control: prompt={control[1].Score}, MCP={control[0].Score}");
+        var taskIntent = string.Join(' ', Enumerable.Repeat("Integrate MCP servers with McpManager.", 60));
+        foreach (var query in (string[])[question + " " + background, background + " " + question, background + " " + background + " " + question])
+        {
+            var strict = new RepositoryMemorySearchRequest
+            {
+                RepositoryIdentity = "fixture",
+                Query = query + "\n" + taskIntent,
+                Ownership = ownership,
+                Concepts = ["authoring"],
+                Options = RepositoryMemorySearchOptions.ForRecall(options),
+            };
+            var before = await retriever.SearchAsync(strict, ct);
+            Assert.DoesNotContain(before.Selected, candidate => candidate.Entry.Id == ids[1]);
+            Assert.Equal(RepositoryMemorySearchBranchStatus.Incomplete, before.SearchDetails?.Reranker);
+            var recallRequest = new RepositoryMemoryRetrievalRequest
+            {
+                RepositoryIdentity = "fixture",
+                CurrentInstruction = query,
+                Options = options,
+                TaskIntent = taskIntent,
+                IntelligenceEnabled = true,
+                Concepts = ["authoring"],
+            };
+            var recall = await retriever.RetrieveAsync(recallRequest, ct);
+            Assert.True(ids[1] == recall.Selected[0].Entry.Id, string.Join("; ", recall.Selected.Select(item => item.Entry.Text + " score=" + item.CrossEncoderScore)));
+            Assert.Null(recall.Selected[0].LexicalRank);
+            Assert.Null(recall.Selected[0].SemanticRank);
+            Assert.Equal(preference, Assert.Single(recall.StandingPreferences).Text);
+            var details = ownership == RepositoryMemoryOwnership.Intelligence ? recall.IntelligenceSearchDetails : recall.SearchDetails;
+            Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, details?.Reranker);
+            Assert.True(details?.RerankerQueryTokens > 512);
+            Assert.InRange(details?.RerankerUsedQueryTokens ?? 0, 1, 128);
+            Assert.False(details?.PairTruncated);
+            var strictAgain = await retriever.SearchAsync(strict, ct);
+            Assert.DoesNotContain(strictAgain.Selected, candidate => candidate.Entry.Id == ids[1]);
+            Assert.False(strictAgain.IsComplete);
+        }
+    }
+
     /// <summary>Verifies the declared embedding behavior without online model calls.</summary>
     [Fact]
     [Trait("Category", "Integration")]
@@ -26,9 +179,8 @@ public sealed class RealEmbeddingQualityTests
         using var fixture = JsonDocument.Parse(await File.ReadAllTextAsync(Path.Combine(AppContext.BaseDirectory, "Fixtures", "retrieval-fixture.json"), cancellationToken));
         using var database = new FixtureDatabase();
         var connectionString = database.ConnectionString;
-        await using var connection = new SqliteConnection(connectionString);
-        await connection.OpenAsync(cancellationToken);
-        await new ManagedRepositoryMemorySchemaMigration().ApplyAsync(connection, cancellationToken);
+        await new SqliteEventStore(connectionString).InitializeAsync(cancellationToken);
+        await new MigrationRunner(connectionString, DefaultMigrations.All).RunAsync(cancellationToken);
         var store = new SqliteManagedRepositoryMemoryStore(connectionString);
         await using var generator = new LocalTextEmbeddingGenerator();
         var watch = Stopwatch.StartNew();

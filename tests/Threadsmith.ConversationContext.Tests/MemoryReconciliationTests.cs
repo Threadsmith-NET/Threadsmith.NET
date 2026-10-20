@@ -99,17 +99,35 @@ public static class MemoryReconciliationTests
 
     /// <summary>Verifies the observable memory contract through its owning boundary.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task Confirmations_are_revision_specific_and_preserve_distinct_entries(bool pairTruncated)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public static async Task Confirmations_are_revision_specific_and_preserve_distinct_entries(bool pairTruncated, bool overflow)
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var generator = new TestMemoryEmbeddingGenerator();
         var baseline = MemoryTestData.CreateService(fixture, generator);
         var saved = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "Existing convention"));
-        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder { Score = (_, _) => new TextCrossEncoderScore(2, pairTruncated ? 300 : 12, pairTruncated) });
+        using var search = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new MemoryScoreEncoder
+        {
+            Score = (_, _) => overflow ? throw new TextCrossEncoderInputException(250, 300, 512)
+                : new TextCrossEncoderScore(2, pairTruncated ? 300 : 12, pairTruncated),
+        });
         var service = new RepositoryMemoryService(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator, new SecretOutputSanitizer(), search: search);
         var proposal = MemoryTestData.Operation("add", "Related distinct requirement") with { Options = Reconcile };
+        if (pairTruncated || overflow)
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => service.ExecuteAsync(proposal));
+            Assert.Contains("could not compare complete inputs", error.Message, StringComparison.Ordinal);
+            if (overflow)
+            {
+                Assert.Contains("query=250, document=300", error.Message, StringComparison.Ordinal);
+            }
+
+            Assert.Single((await service.GetSnapshotAsync(MemoryTestData.Repository)).Entries);
+            return;
+        }
+
         var collision = await service.ExecuteAsync(proposal);
         Assert.Equal(pairTruncated, collision.SearchDetails?.PairTruncated);
         Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, collision.SearchDetails?.Reranker);

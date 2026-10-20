@@ -212,7 +212,7 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
     private static readonly TextEmbeddingModelDescriptor Model = new("test-space", 3, 256);
     private static readonly TextEmbeddingResult Embedding = new(new float[] { 1, 0, 0 }, 5, false);
 
-    /// <summary>FTS follows committed text changes and requires two distinct terms for multi-term queries.</summary>
+    /// <summary>FTS follows committed text changes; exact code names qualify independently of prose terms.</summary>
     [Fact]
     public async Task Crud_synchronizes_fts_and_preserves_repository_isolation()
     {
@@ -220,7 +220,8 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         var added = await fixture.Store.AddAsync("repo", Write("WidgetFactory uses careful cancellation"), Model, Embedding, new());
         var entry = Assert.IsType<RepositoryMemoryEntry>(added.Entry);
         Assert.Single((await fixture.Store.GetSnapshotAsync("repo", ["WidgetFactory", "cancellation"])).LexicalMatches);
-        Assert.Empty((await fixture.Store.GetSnapshotAsync("repo", ["WidgetFactory", "missing"])).LexicalMatches);
+        Assert.Single((await fixture.Store.GetSnapshotAsync("repo", ["WidgetFactory", "missing"])).LexicalMatches);
+        Assert.Empty((await fixture.Store.GetSnapshotAsync("repo", ["cancellation", "missing"])).LexicalMatches);
         Assert.Single((await fixture.Store.GetSnapshotAsync("repo", ["WidgetFactory"])).LexicalMatches);
         Assert.Empty((await fixture.Store.GetSnapshotAsync("other", ["WidgetFactory"])).Entries);
         var updated = await fixture.Store.UpdateAsync("repo", entry.Id, 1, Write("Database snapshots remain detached"), Model, Embedding, new());

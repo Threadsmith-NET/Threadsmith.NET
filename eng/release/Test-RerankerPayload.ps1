@@ -5,6 +5,9 @@ Assert-ReleaseRid $RuntimeIdentifier
 $root = Get-RepositoryRoot
 $sourceManifest = Join-Path $root 'src/Threadsmith.Reranking.Local/crossencoder-assets.json'
 $manifest = Get-Content -LiteralPath $sourceManifest -Raw | ConvertFrom-Json
+if ($manifest.maxInputTokens -ne 512 -or $manifest.maxBatchSize -ne 8) {
+    throw 'Reranker limits do not match the verified complete-pair engine.'
+}
 if ($manifest.schemaVersion -ne 1 -or $manifest.model -ne 'cross-encoder/ms-marco-MiniLM-L6-v2' -or $manifest.source -ne 'https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2' -or $manifest.revision -notmatch '^[0-9a-f]{40}$' -or $manifest.license -ne 'Apache-2.0') {
     throw 'Reranker manifest identity or licensing is invalid.'
 }

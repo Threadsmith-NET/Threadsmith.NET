@@ -224,9 +224,6 @@ public sealed record ContextAssemblyRequest
     /// <summary>Normalized applicability hints observed during this user turn.</summary>
     public IReadOnlyList<string> RepositoryMemoryConcepts { get; init; } = [];
 
-    /// <summary>Previously admitted current memory revisions.</summary>
-    public IReadOnlyList<RepositoryMemoryInclusion> RetainedRepositoryMemories { get; init; } = [];
-
     /// <summary>Configured prohibited repository paths.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
 

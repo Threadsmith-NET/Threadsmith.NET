@@ -13,29 +13,47 @@ public sealed partial class SessionConversationTests
 {
     /// <summary>A real Anthropic response envelope survives concept refresh and replays its tool correlation.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AnthropicConceptContinuation_PreservesReplayWithAndWithoutMemoryMatches(bool matches)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AnthropicConceptContinuation_PreservesReplayWithAndWithoutMemoryMatches(bool matches, bool intelligenceOnly)
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler();
         using var client = new HttpClient(handler);
         var provider = new MemoryReplayProvider(client);
-        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches);
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches, intelligenceOnly);
         var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect the repository"), ct);
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
 
         Assert.Equal(2, handler.Requests.Count);
-        Assert.Equal(provider.Requests[0].HistoryRewriteGeneration, provider.Requests[1].HistoryRewriteGeneration);
-        Assert.Equal(provider.Requests[0].Messages, provider.Requests[1].Messages.Take(provider.Requests[0].Messages.Count));
-        var response = Assert.Single(provider.RetainedResponses);
-        Assert.Equal("wire-memory", Assert.Single(response.WireToolCallIds));
+        if (intelligenceOnly)
+        {
+            Assert.True(provider.Requests[1].HistoryRewriteGeneration > provider.Requests[0].HistoryRewriteGeneration);
+        }
+        else
+        {
+            Assert.Equal(provider.Requests[0].HistoryRewriteGeneration, provider.Requests[1].HistoryRewriteGeneration);
+            Assert.Equal(provider.Requests[0].Messages, provider.Requests[1].Messages.Take(provider.Requests[0].Messages.Count));
+        }
+
+        if (intelligenceOnly)
+        {
+            Assert.Empty(provider.RetainedResponses);
+        }
+        else
+        {
+            var response = Assert.Single(provider.RetainedResponses);
+            Assert.Equal("wire-memory", Assert.Single(response.WireToolCallIds));
+        }
+
         var blocks = handler.Requests[1].GetProperty("messages").EnumerateArray()
             .SelectMany(message => message.GetProperty("content").EnumerateArray()).ToArray();
-        Assert.Contains(blocks, block => block.GetProperty("type").GetString() == "tool_use"
-            && block.GetProperty("id").GetString() == "wire-memory");
+        var toolUse = Assert.Single(blocks, block => block.GetProperty("type").GetString() == "tool_use");
+        var toolId = toolUse.GetProperty("id").GetString();
         Assert.Contains(blocks, block => block.GetProperty("type").GetString() == "tool_result"
-            && block.GetProperty("tool_use_id").GetString() == "wire-memory");
+            && block.GetProperty("tool_use_id").GetString() == toolId);
         var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
         Assert.Contains(memory.Requests, request => request.Concepts.Contains("cancellation"));
         Assert.Equal(matches, provider.Requests[1].Messages.Any(message => message.SectionId == "repository-memory"
@@ -72,7 +90,7 @@ public sealed partial class SessionConversationTests
         Assert.DoesNotContain(originalText, snapshots[1].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Contains("supersedes earlier", snapshots[1].GetModelVisibleContent(), StringComparison.Ordinal);
         Assert.Equal(!remove, snapshots[1].GetModelVisibleContent().Contains(memory.Entry.Text, StringComparison.Ordinal));
-        Assert.Contains(memory.Requests, request => request.RetainedMemories.Any(item => item.Revision == 1));
+        Assert.All(memory.Requests, request => Assert.Empty(request.RetainedMemories));
     }
 
     /// <summary>Concepts and admitted memory belong to one ordinary run and reset for the next request.</summary>
@@ -100,9 +118,16 @@ public sealed partial class SessionConversationTests
         });
     }
 
-    private sealed class ConceptMemory : IManagedRepositoryMemoryService, IHybridRepositoryMemoryRetriever, IRepositoryMemoryOptionsProvider
+    private sealed class ConceptMemory : IManagedRepositoryMemoryService, IHybridRepositoryMemoryRetriever, IRepositoryMemoryOptionsProvider, IRepositoryIntelligenceStatusProvider
     {
         public bool Matches { get; set; } = true;
+
+        public bool IntelligenceOnly { get; init; }
+
+        RepositoryIntelligenceStatus IRepositoryIntelligenceStatusProvider.Capture(string repositoryIdentity)
+        {
+            return new() { RepositoryIdentity = repositoryIdentity, Enabled = IntelligenceOnly, Onboarded = IntelligenceOnly };
+        }
 
         public RepositoryMemoryEntry Entry { get; set; } = new()
         {
@@ -120,7 +145,11 @@ public sealed partial class SessionConversationTests
 
         public RepositoryMemoryOptions CaptureCurrent()
         {
-            return new() { ConceptRecallEnabled = true, };
+            return new()
+            {
+                ConceptRecallEnabled = !IntelligenceOnly,
+                Intelligence = new() { Enabled = IntelligenceOnly },
+            };
         }
 
         public RepositoryMemoryOptions Capture(string repositoryIdentity)

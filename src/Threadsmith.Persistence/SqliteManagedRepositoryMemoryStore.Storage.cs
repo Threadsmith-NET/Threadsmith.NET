@@ -249,9 +249,11 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         }
 
         var groups = terms.Select(term => new[] { term }
-            .Concat(expansions?.Where(match => match.Query == term).Select(match => match.Term) ?? [])
+            .Concat(RepositoryMemoryLexicalTerms.IsCodeIdentifier(term) ? []
+                : expansions?.Where(match => match.Query == term).Select(match => match.Term) ?? [])
             .Distinct(StringComparer.Ordinal).ToArray()).ToArray();
         var termMatches = new Dictionary<string, int>(StringComparer.Ordinal);
+        var identifierMatches = new HashSet<string>(StringComparer.Ordinal);
         foreach (var group in groups)
         {
             await using var termCommand = connection.CreateCommand();
@@ -268,6 +270,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             {
                 var id = reader.GetString(0);
                 termMatches[id] = termMatches.GetValueOrDefault(id) + 1;
+                if (RepositoryMemoryLexicalTerms.IsCodeIdentifier(group[0]))
+                {
+                    identifierMatches.Add(id);
+                }
             }
         }
 
@@ -292,7 +298,8 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         while (await result.ReadAsync(cancellationToken))
         {
             var id = result.GetString(0);
-            if (termMatches.GetValueOrDefault(id) >= Math.Min(2, terms.Length) && Guid.TryParse(id, out var guid))
+            if ((identifierMatches.Contains(id) || termMatches.GetValueOrDefault(id) >= Math.Min(2, terms.Length))
+                && Guid.TryParse(id, out var guid))
             {
                 matches.Add(new RepositoryMemoryLexicalMatch(new RepositoryMemoryId(guid), result.GetDouble(1)));
             }

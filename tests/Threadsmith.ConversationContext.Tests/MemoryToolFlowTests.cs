@@ -115,6 +115,8 @@ public static class MemoryToolFlowTests
             {
                 Assert.Equal("reconciliationRequired", body.GetProperty("Outcome").GetString());
                 Assert.False(body.GetProperty("Added").GetBoolean());
+                Assert.Empty(body.GetProperty("SearchDetails").GetProperty("Candidates").EnumerateArray());
+                Assert.Equal(1, body.GetProperty("SearchDetails").GetProperty("CandidateEvidenceOmissions").GetInt32());
                 var candidate = Assert.Single(body.GetProperty("Entries").EnumerateArray());
                 Assert.Equal(_original.Value.ToString("D"), candidate.GetProperty("Id").GetString());
                 Assert.Contains("Original cancellation", candidate.GetProperty("Text").GetString(), StringComparison.Ordinal);

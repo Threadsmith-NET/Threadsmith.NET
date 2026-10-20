@@ -33,7 +33,7 @@ public sealed partial class SessionConversationTests
 
         public ConceptMemory Memory { get; }
 
-        public static async Task<ConversationScenario> CreateMemoryReplayAsync(IModelProvider provider, bool matches)
+        public static async Task<ConversationScenario> CreateMemoryReplayAsync(IModelProvider provider, bool matches, bool intelligenceOnly = false)
         {
             var ct = TestContext.Current.CancellationToken;
             var directory = Path.Combine(Path.GetTempPath(), $"threadsmith-conversation-{Guid.NewGuid():N}");
@@ -46,7 +46,12 @@ public sealed partial class SessionConversationTests
             await artifacts.InitializeAsync(ct);
             var store = new SqliteConversationStore(connectionString, artifacts, sanitizer);
             var evidence = new EvidenceStore(events, sanitizer);
-            var memory = new ConceptMemory { Matches = matches };
+            var memory = new ConceptMemory { Matches = matches, IntelligenceOnly = intelligenceOnly };
+            if (intelligenceOnly)
+            {
+                memory.Entry = memory.Entry with { Ownership = RepositoryMemoryOwnership.Intelligence };
+            }
+
             var assembler = new ContextAssembler(
                 evidence,
                 new TokenEstimator(),
@@ -78,13 +83,14 @@ public sealed partial class SessionConversationTests
                     });
                 },
                 contextAssembler: assembler,
-                toolRegistry: registry,
-                repositoryMemories: memory,
-                repositoryMemoryOptions: memory,
                 evidenceStore: evidence,
+                toolRegistry: registry,
                 conversationStore: store,
                 correctiveMessages: new CorrectiveMessageFactory(TestPromptLoader.Instance),
-                prompts: TestPromptLoader.Instance);
+                prompts: TestPromptLoader.Instance,
+                repositoryMemories: memory,
+                repositoryMemoryOptions: memory,
+                repositoryIntelligence: memory);
             var dispatcher = new CommandDispatcher([application]);
             var session = await dispatcher.DispatchAsync(new CreateSessionCommand("memory replay"), ct);
             return new(directory, events, dispatcher, session, memory);

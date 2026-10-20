@@ -9,7 +9,7 @@ public sealed class LocalTextCrossEncoder : ITextCrossEncoder, IAsyncDisposable
 {
     private const int MaximumTokens = LocalTextCrossEncoderEngine.MaximumTokens;
     private const int MaximumBatchSize = LocalTextCrossEncoderEngine.MaximumBatchSize;
-    private const string ModelId = "cross-encoder-ms-marco-minilm-l6-v2:233902d25c440f23af6f7d6e94d2946bac0bee0a:bert-lower-pair:raw-logit:256:64:v1";
+    private const string ModelId = "cross-encoder-ms-marco-minilm-l6-v2:233902d25c440f23af6f7d6e94d2946bac0bee0a:bert-lower-complete-pair:raw-logit:512:8:recall-sentence-ends128:v3";
     private readonly TimeSpan _disposalTimeout;
     private readonly SemaphoreSlim _inferenceGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
@@ -43,10 +43,50 @@ public sealed class LocalTextCrossEncoder : ITextCrossEncoder, IAsyncDisposable
     public TextCrossEncoderModelDescriptor Model { get; } = new(ModelId, MaximumTokens, MaximumBatchSize);
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<TextCrossEncoderScore>> ScoreAsync(
+    public Task<IReadOnlyList<TextCrossEncoderScore>> ScoreAsync(
         string query,
         IReadOnlyList<string> documents,
         CancellationToken cancellationToken = default)
+        => ScoreAsync(query, documents, false, null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<TextCrossEncoderScore>> ScoreRecallAsync(
+        TextCrossEncoderRecallQuery query,
+        IReadOnlyList<string> documents,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return ScoreAsync(query.Instruction, documents, true, query.TaskIntent, cancellationToken);
+    }
+
+    /// <summary>Cancels pending work and releases native resources without an unbounded terminal shutdown.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        await _shutdown.CancelAsync().ConfigureAwait(false);
+        if (await _inferenceGate.WaitAsync(_disposalTimeout).ConfigureAwait(false))
+        {
+            try
+            {
+                DisposeEngine();
+            }
+            finally
+            {
+                _inferenceGate.Release();
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<TextCrossEncoderScore>> ScoreAsync(
+        string query,
+        IReadOnlyList<string> documents,
+        bool useRecallQuery,
+        string? taskIntent,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(documents);
@@ -79,35 +119,15 @@ public sealed class LocalTextCrossEncoder : ITextCrossEncoder, IAsyncDisposable
             throw;
         }
 
-        var worker = Task.Run(() => ScoreOnWorker(query, documentCopy, linked), CancellationToken.None);
+        var worker = Task.Run(() => ScoreOnWorker(query, documentCopy, useRecallQuery, taskIntent, linked), CancellationToken.None);
         return await worker.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>Cancels pending work and releases native resources without an unbounded terminal shutdown.</summary>
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        await _shutdown.CancelAsync().ConfigureAwait(false);
-        if (await _inferenceGate.WaitAsync(_disposalTimeout).ConfigureAwait(false))
-        {
-            try
-            {
-                DisposeEngine();
-            }
-            finally
-            {
-                _inferenceGate.Release();
-            }
-        }
     }
 
     private IReadOnlyList<TextCrossEncoderScore> ScoreOnWorker(
         string query,
         IReadOnlyList<string> documents,
+        bool useRecallQuery,
+        string? taskIntent,
         CancellationTokenSource linked)
     {
         try
@@ -116,13 +136,17 @@ public sealed class LocalTextCrossEncoder : ITextCrossEncoder, IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             EnsureLoaded(cancellationToken);
             var engine = _engine ?? throw new TextCrossEncoderUnavailableException("Local cross-encoder engine did not initialize.");
-            return engine.Score(query, documents, _inferenceStarted, cancellationToken);
+            return engine.Score(query, documents, _inferenceStarted, cancellationToken, useRecallQuery, taskIntent);
         }
         catch (Exception exception) when (linked.IsCancellationRequested && exception is not OperationCanceledException)
         {
             throw new OperationCanceledException("Local cross-encoder inference was cancelled.", exception, linked.Token);
         }
         catch (TextCrossEncoderUnavailableException)
+        {
+            throw;
+        }
+        catch (TextCrossEncoderInputException)
         {
             throw;
         }

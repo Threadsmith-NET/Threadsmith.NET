@@ -730,6 +730,7 @@ public sealed class ContextAssembler : IContextAssembler
             RepositoryMemoryItems = repositoryMemory.CreateProjections(),
             ShowMemoryOutput = request.RepositoryMemoryOptions?.ShowMemoryOutput ?? true,
             RepositoryMemorySearch = repositoryMemory.SearchDetails,
+            RepositoryIntelligenceSearch = repositoryMemory.IntelligenceSearchDetails,
             ContextPressurePercent = contextPressurePercent,
             CompactionRecommended = compactionRecommended,
             CompactionRationale = compactionRecommended
@@ -1049,7 +1050,6 @@ public sealed class ContextAssembler : IContextAssembler
                 TaskIntent = task.Intent,
                 Options = request.RepositoryMemoryOptions ?? new RepositoryMemoryOptions(),
                 Concepts = request.RepositoryMemoryConcepts,
-                RetainedMemories = request.RetainedRepositoryMemories,
             },
             cancellationToken);
         foreach (var entry in retrieval.StandingPreferences)
@@ -1071,6 +1071,7 @@ public sealed class ContextAssembler : IContextAssembler
 
         assembly.ConceptResolutionPending = retrieval.ConceptResolutionPending;
         assembly.SearchDetails = retrieval.SearchDetails;
+        assembly.IntelligenceSearchDetails = retrieval.IntelligenceSearchDetails;
         assembly.Reductions.AddRange(retrieval.Diagnostics);
         assembly.Reductions.Add($"Memory query cache reused: {retrieval.QueryEmbeddingCacheHit}; ranking cache reused: {retrieval.RankingCacheHit}.");
         return assembly;
@@ -1526,6 +1527,8 @@ public sealed class ContextAssembler : IContextAssembler
         public bool ConceptResolutionPending { get; set; }
 
         public RepositoryMemorySearchDetails? SearchDetails { get; set; }
+
+        public RepositoryMemorySearchDetails? IntelligenceSearchDetails { get; set; }
 
         private readonly List<(RepositoryMemoryRetrievalCandidate Candidate, int Tokens)> _included = [];
         private readonly List<RepositoryMemoryContextItemProjection> _excluded = [];

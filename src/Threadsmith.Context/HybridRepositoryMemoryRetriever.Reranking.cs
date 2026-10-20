@@ -18,7 +18,7 @@ public sealed partial class HybridRepositoryMemoryRetriever
         }
         catch (Exception exception)
         {
-            diagnostics.Add($"The memory cross-encoder descriptor is unavailable ({exception.GetType().Name}); using qualified hybrid ranking.");
+            diagnostics.Add($"The memory cross-encoder descriptor is unavailable ({exception.GetType().Name}).");
             return null;
         }
     }
@@ -32,7 +32,9 @@ public sealed partial class HybridRepositoryMemoryRetriever
         List<string> diagnostics,
         CancellationToken cancellationToken)
     {
-        var fallback = ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null).ToArray();
+        var weighted = options.Scoring.Mode == RepositoryMemoryScoringMode.Weighted;
+        var fallback = weighted ? [] : ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null).ToArray();
+        var failurePolicy = weighted ? "omitting weighted results" : "using qualified hybrid ranking";
         if (!options.RerankerEnabled || ranked.Length == 0)
         {
             if (!options.RerankerEnabled && ranked.Any(candidate => candidate.ConceptMatches.Count > 0 && candidate.LexicalRank is null && candidate.SemanticRank is null))
@@ -46,7 +48,7 @@ public sealed partial class HybridRepositoryMemoryRetriever
         var crossEncoder = _crossEncoder;
         if (crossEncoder is null || model is null)
         {
-            diagnostics.Add("Memory reranking is enabled but no cross-encoder is available; using qualified hybrid ranking.");
+            diagnostics.Add($"Memory reranking is enabled but no cross-encoder is available; {failurePolicy}.");
             return (fallback, RepositoryMemorySearchBranchStatus.Unavailable, false, null);
         }
 
@@ -71,7 +73,7 @@ public sealed partial class HybridRepositoryMemoryRetriever
                     : await crossEncoder.ScoreAsync(query, documents, cancellationToken);
                 if (batchScores.Count != batch.Length)
                 {
-                    diagnostics.Add("The cross-encoder returned an incomplete batch; using qualified hybrid ranking.");
+                    diagnostics.Add($"The cross-encoder returned an incomplete batch; {failurePolicy}.");
                     return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, false, null);
                 }
 
@@ -81,13 +83,13 @@ public sealed partial class HybridRepositoryMemoryRetriever
             cancellationToken.ThrowIfCancellationRequested();
             if (scores.Count != candidates.Length || scores.Any(score => score is null || !double.IsFinite(score.Score) || score.InputTokenCount < 0))
             {
-                diagnostics.Add("The cross-encoder returned invalid or incomplete scores; using qualified hybrid ranking.");
+                diagnostics.Add($"The cross-encoder returned invalid or incomplete scores; {failurePolicy}.");
                 return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, false, null);
             }
 
             if (scores.Any(score => score.InputTokenCount > model.MaxInputTokens && !score.WasTruncated))
             {
-                diagnostics.Add("Memory reranking returned an overlength pair without truncation accounting; using qualified hybrid ranking.");
+                diagnostics.Add($"Memory reranking returned an overlength pair without truncation accounting; {failurePolicy}.");
                 return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, false, null);
             }
 
@@ -95,7 +97,7 @@ public sealed partial class HybridRepositoryMemoryRetriever
                 || (recallQuery is null && score.UsedQueryTokenCount < score.QueryTokenCount));
             if (pairTruncated)
             {
-                diagnostics.Add("Memory reranking omitted pair content; using qualified hybrid ranking without accepting incomplete scores.");
+                diagnostics.Add($"Memory reranking omitted pair content; {failurePolicy} without accepting incomplete scores.");
                 return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, true, null);
             }
 
@@ -123,12 +125,12 @@ public sealed partial class HybridRepositoryMemoryRetriever
         }
         catch (TextCrossEncoderInputException exception)
         {
-            diagnostics.Add($"{exception.Message} Recall is using qualified hybrid ranking.");
+            diagnostics.Add($"{exception.Message} Memory search is {failurePolicy}.");
             return (fallback, RepositoryMemorySearchBranchStatus.Incomplete, true, exception.Message);
         }
         catch (Exception exception)
         {
-            diagnostics.Add($"Memory reranking is unavailable ({exception.GetType().Name}); using qualified hybrid ranking.");
+            diagnostics.Add($"Memory reranking is unavailable ({exception.GetType().Name}); {failurePolicy}.");
             return (fallback, RepositoryMemorySearchBranchStatus.Unavailable, false, null);
         }
     }

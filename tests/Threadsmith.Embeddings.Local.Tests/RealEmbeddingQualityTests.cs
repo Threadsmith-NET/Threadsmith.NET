@@ -14,10 +14,12 @@ public sealed class RealEmbeddingQualityTests
 {
     /// <summary>Current intent displaces old recall in both partitions with real local inference.</summary>
     [Theory]
-    [InlineData(RepositoryMemoryOwnership.Ordinary)]
-    [InlineData(RepositoryMemoryOwnership.Intelligence)]
+    [InlineData(RepositoryMemoryOwnership.Ordinary, false)]
+    [InlineData(RepositoryMemoryOwnership.Intelligence, false)]
+    [InlineData(RepositoryMemoryOwnership.Ordinary, true)]
+    [InlineData(RepositoryMemoryOwnership.Intelligence, true)]
     [Trait("Category", "Integration")]
-    public static async Task ChangedIntentDisplacesRetainedMemory(RepositoryMemoryOwnership ownership)
+    public static async Task ChangedIntentDisplacesRetainedMemory(RepositoryMemoryOwnership ownership, bool weighted)
     {
         if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
             || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
@@ -52,7 +54,11 @@ public sealed class RealEmbeddingQualityTests
             RepositoryIdentity = "fixture",
             Ownership = ownership,
             Query = "Integrate an MCP server with McpManager and McpAdapter.",
-            Options = new() { RerankerEnabled = true, ConceptRecallEnabled = true, MaximumResults = 1 },
+            Options = new()
+            {
+                RerankerEnabled = true, ConceptRecallEnabled = true, MaximumResults = weighted ? 3 : 1,
+                Scoring = new() { Mode = weighted ? RepositoryMemoryScoringMode.Weighted : RepositoryMemoryScoringMode.Prior, FinalThreshold = .6 },
+            },
         };
         var first = Assert.Single((await retriever.SearchAsync(request, ct)).Selected);
         Assert.Equal(ids[0], first.Entry.Id);
@@ -65,6 +71,11 @@ public sealed class RealEmbeddingQualityTests
             ct);
         Assert.Equal(ids[1], Assert.Single(changed.Selected).Entry.Id);
         Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, changed.SearchDetails?.Reranker);
+        if (weighted)
+        {
+            Assert.True(Assert.Single(changed.Selected).ScoreEvidence!.Accepted);
+            Assert.Contains(changed.SearchDetails!.Candidates, row => row.Id == ids[0] && row.Outcome == "below final threshold");
+        }
     }
 
     /// <summary>Long questions recover concept-only recall in both partitions without weakening complete comparisons.</summary>

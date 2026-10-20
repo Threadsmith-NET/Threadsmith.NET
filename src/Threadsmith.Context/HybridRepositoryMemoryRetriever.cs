@@ -153,6 +153,8 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     StandingPreferences = standingPreferences,
                     SearchDetails = new RepositoryMemorySearchDetails
                     {
+                        ScoringOptions = scoring,
+                        Scoring = weighted ? RepositoryMemorySearchBranchStatus.NotRequired : RepositoryMemorySearchBranchStatus.Disabled,
                         Lexical = RepositoryMemorySearchBranchStatus.Completed,
                         FuzzyLexical = snapshot.FuzzyLexicalStatus,
                         LexicalExpansions = snapshot.LexicalExpansions,
@@ -329,8 +331,29 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 : 0;
             var (selected, rerankerStatus, pairTruncated, inputFailure) = await RerankAsync(
                 ranked, query, request.RecallQuery, request.Options, crossEncoderModel, diagnostics, cancellationToken);
+            var discoveryFailed = snapshot.FuzzyLexicalStatus == RepositoryMemorySearchBranchStatus.Unavailable || embedding is null
+                || resolution.DegradedReason is not null || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
+            var scoringStatus = RepositoryMemorySearchBranchStatus.Disabled;
+            if (weighted)
+            {
+                scoringStatus = discoveryFailed ? RepositoryMemorySearchBranchStatus.Unavailable : rerankerStatus;
+                selected = scoringStatus is RepositoryMemorySearchBranchStatus.Completed or RepositoryMemorySearchBranchStatus.NotRequired
+                    ? FuseWeightedScores(selected, scoring) : [];
+                if (discoveryFailed)
+                {
+                    diagnostics.Add("Weighted discovery is incomplete; weighted results were omitted.");
+                }
+            }
+
             var qualifiedById = ranked.ToDictionary(candidate => candidate.Entry.Id);
             var scoredById = selected.ToDictionary(candidate => candidate.Entry.Id);
+            var scoredQueryTokens = selected.FirstOrDefault()?.RerankerQueryTokens;
+            var scoredUsedQueryTokens = selected.FirstOrDefault()?.RerankerUsedQueryTokens;
+            if (weighted)
+            {
+                selected = [.. selected.Where(candidate => candidate.ScoreEvidence?.Accepted == true)];
+            }
+
             var resultLimitOmissions = Math.Max(0, selected.Length - request.Options.MaximumResults);
             selected = [.. selected.Take(request.Options.MaximumResults)];
             var selectedIds = selected.Select(candidate => candidate.Entry.Id).ToHashSet();
@@ -340,7 +363,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 scoredById.TryGetValue(entry.Id, out var scored);
                 var outcome = selectedIds.Contains(entry.Id) ? "selected"
                     : qualified is null ? "no branch match"
+                    : weighted && scored?.ScoreEvidence?.Accepted == false ? "below final threshold"
                     : scored is not null ? "result limit"
+                    : weighted ? "weighted scoring unavailable"
                     : rerankerStatus == RepositoryMemorySearchBranchStatus.Completed ? "comparison window"
                     : "concept-only deferred without complete reranking";
                 return new RepositoryMemoryCandidateSearchEvidence(
@@ -353,6 +378,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     scored?.RerankerQueryTokens,
                     scored?.RerankerDocumentTokens)
                 {
+                    ScoreEvidence = scored?.ScoreEvidence,
                     Ownership = entry.Ownership,
                     MatchedTerms = qualified?.MatchedTerms ?? [],
                 };
@@ -390,10 +416,11 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 SearchDetails = new RepositoryMemorySearchDetails
                 {
                     ScoringOptions = scoring,
+                    Scoring = scoringStatus,
                     ScoringPoolSizes = weighted ? ranked.GroupBy(candidate => candidate.Entry.Ownership).ToDictionary(group => group.Key, group => group.Count()) : new Dictionary<RepositoryMemoryOwnership, int>(),
                     RerankerModelId = crossEncoderModel?.ModelId,
-                    RerankerQueryTokens = selected.FirstOrDefault()?.RerankerQueryTokens,
-                    RerankerUsedQueryTokens = selected.FirstOrDefault()?.RerankerUsedQueryTokens,
+                    RerankerQueryTokens = scoredQueryTokens,
+                    RerankerUsedQueryTokens = scoredUsedQueryTokens,
                     ElapsedMilliseconds = timer.Elapsed.TotalMilliseconds,
                     Candidates = candidateEvidence,
                     CandidateEvidenceOmissions = snapshot.Entries.Count - candidateEvidence.Length,
@@ -455,6 +482,8 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 IsComplete = false,
                 SearchDetails = new RepositoryMemorySearchDetails
                 {
+                    ScoringOptions = scoring,
+                    Scoring = weighted ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Disabled,
                     Lexical = RepositoryMemorySearchBranchStatus.Unavailable,
                     FuzzyLexical = request.Options.Lexical.FuzzyEnabled ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Disabled,
                     Semantic = RepositoryMemorySearchBranchStatus.Unavailable,

@@ -55,6 +55,9 @@ public sealed record RepositoryMemorySearchRequest
 /// <summary>Search qualification and selection bounds independent of context admission and storage capacity.</summary>
 public sealed record RepositoryMemorySearchOptions
 {
+    /// <summary>Final admission policy; weighted discovery has its own explicit limits and floor.</summary>
+    public RepositoryMemoryScoringOptions Scoring { get; init; } = new();
+
     /// <summary>Strict semantic discovery floor.</summary>
     public double SemanticMinimum { get; init; } = RepositoryMemoryOptions.DefaultSemanticMinimum;
 
@@ -98,6 +101,7 @@ public sealed record RepositoryMemorySearchOptions
         options.Validate();
         return new()
         {
+            Scoring = options.RecallScoring,
             Lexical = options.Lexical,
             SemanticMinimum = options.SemanticMinimum,
             MaximumResults = options.EffectiveContextMaximum,
@@ -118,6 +122,7 @@ public sealed record RepositoryMemorySearchOptions
     {
         return ForRecall(options) with
         {
+            Scoring = options.ReconciliationScoring,
             SemanticMinimum = options.ReconciliationSemanticMinimum,
             MaximumResults = checked(options.ReconciliationCandidateLimit + (options.ReconciliationConceptsEnabled ? options.ReconciliationConceptCandidateLimit : 0)),
             RerankerEnabled = options.ReconciliationRerankerEnabled,
@@ -133,6 +138,8 @@ public sealed record RepositoryMemorySearchOptions
     /// <summary>Validates search bounds without consulting context or storage options.</summary>
     public void Validate()
     {
+        ArgumentNullException.ThrowIfNull(Scoring);
+        Scoring.Validate(RerankerEnabled);
         ArgumentNullException.ThrowIfNull(Lexical);
         Lexical.Validate();
         ArgumentOutOfRangeException.ThrowIfNegative(MaximumResults);
@@ -172,6 +179,15 @@ public enum RepositoryMemorySearchBranchStatus
 /// <summary>Structured search evidence; window omissions are separate from later output or context omissions.</summary>
 public sealed record RepositoryMemorySearchDetails
 {
+    /// <summary>Effective independent scoring limits, floor, weights and threshold.</summary>
+    public RepositoryMemoryScoringOptions ScoringOptions { get; init; } = new();
+
+    /// <summary>Weighted scoring status; failed inference is never represented as valid zero evidence.</summary>
+    public RepositoryMemorySearchBranchStatus Scoring { get; init; }
+
+    /// <summary>Frozen candidate counts by ownership; normalization never crosses these boundaries.</summary>
+    public IReadOnlyDictionary<RepositoryMemoryOwnership, int> ScoringPoolSizes { get; init; } = new Dictionary<RepositoryMemoryOwnership, int>();
+
     /// <summary>Cross-encoder identity selected for this pass, absent when disabled or unavailable.</summary>
     public string? RerankerModelId { get; init; }
 
@@ -239,7 +255,17 @@ public sealed record RepositoryMemoryCandidateSearchEvidence(
     bool ConceptMatched,
     double? RerankerScore,
     int? QueryTokens,
-    int? DocumentTokens);
+    int? DocumentTokens)
+{
+    /// <summary>Ownership identifies the independent normalization pool.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; }
+
+    /// <summary>Successful weighted decision including rejections, absent when scoring failed or was not requested.</summary>
+    public RepositoryMemoryScoreEvidence? ScoreEvidence { get; init; }
+
+    /// <summary>Query terms matched by lexical discovery, without memory text.</summary>
+    public IReadOnlyList<string> MatchedTerms { get; init; } = [];
+}
 
 /// <summary>Bounded typo recovery shared by both memory search consumers.</summary>
 public sealed record RepositoryMemoryLexicalOptions

@@ -211,6 +211,7 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Implementation | [repository-intelligence-as-memory.md](repository-intelligence-as-memory.md) | Repository intelligence through shared memory recall and reconciliation |
 | Maintenance | [maintenance-test-audit-ci-infrastructure.md](maintenance-test-audit-ci-infrastructure.md) | Test audit source fixtures and CI evidence |
 | Maintenance | [maintenance-memory-recall-audit.md](maintenance-memory-recall-audit.md) | Complete memory comparisons and current relevance |
+| Maintenance | [maintenance-weighted-memory-scoring.md](maintenance-weighted-memory-scoring.md) | Three-signal scoring and measured admission |
 
 ## Update discipline
 

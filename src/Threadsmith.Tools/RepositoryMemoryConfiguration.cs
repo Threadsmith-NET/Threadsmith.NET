@@ -124,6 +124,8 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
                 ReconciliationEnabled = configuration.GetValue($"{SectionName}:Intelligence:Reconciliation:Enabled", fallback.Intelligence.ReconciliationEnabled),
                 Reconciliation = ReadSearch(configuration, "Intelligence:Reconciliation", fallback.Intelligence.Reconciliation),
             },
+            RecallScoring = ReadScoring(configuration, "Recall", fallback.RecallScoring),
+            ReconciliationScoring = ReadScoring(configuration, "Reconciliation", fallback.ReconciliationScoring),
             Lexical = recallLexical,
             ReconciliationLexical = reconciliationLexical,
             ReconciliationRerankerEnabled = configuration.GetValue($"{SectionName}:Reconciliation:RerankerEnabled", fallback.ReconciliationRerankerEnabled),
@@ -157,6 +159,23 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
         return options;
     }
 
+    private static RepositoryMemoryScoringOptions ReadScoring(IConfiguration configuration, string scenario, RepositoryMemoryScoringOptions fallback)
+    {
+        var section = configuration.GetSection($"{SectionName}:{scenario}:Scoring");
+        return new()
+        {
+            Mode = section.GetValue("Mode", fallback.Mode),
+            SemanticWeight = section.GetValue("SemanticWeight", fallback.SemanticWeight),
+            LexicalWeight = section.GetValue("LexicalWeight", fallback.LexicalWeight),
+            CrossEncoderWeight = section.GetValue("CrossEncoderWeight", fallback.CrossEncoderWeight),
+            FinalThreshold = section.GetValue("FinalThreshold", fallback.FinalThreshold),
+            SemanticCandidateLimit = section.GetValue("SemanticCandidateLimit", fallback.SemanticCandidateLimit),
+            LexicalCandidateLimit = section.GetValue("LexicalCandidateLimit", fallback.LexicalCandidateLimit),
+            ConceptCandidateLimit = section.GetValue("ConceptCandidateLimit", fallback.ConceptCandidateLimit),
+            SemanticDiscoveryMinimum = section.GetValue("SemanticDiscoveryMinimum", fallback.SemanticDiscoveryMinimum),
+        };
+    }
+
     private static RepositoryMemoryLexicalOptions ReadLexical(IConfiguration configuration, string scenario, RepositoryMemoryLexicalOptions fallback)
     {
         return new()
@@ -173,6 +192,7 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
         var lexical = ReadLexical(configuration, scenario, fallback.Lexical);
         return fallback with
         {
+            Scoring = ReadScoring(configuration, scenario, fallback.Scoring),
             Lexical = lexical,
             SemanticMinimum = configuration.GetValue($"{SectionName}:{scenario}:SemanticMinimum", fallback.SemanticMinimum),
             MaximumResults = configuration.GetValue($"{SectionName}:{scenario}:MaximumResults", fallback.MaximumResults),

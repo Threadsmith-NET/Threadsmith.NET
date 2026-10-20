@@ -156,6 +156,15 @@ public sealed record RepositoryMemoryRetrievalCandidate(
     /// <summary>Complete query content tokens used by the reranker, when supplied by the provider.</summary>
     public int? RerankerQueryTokens { get; init; }
 
+    /// <summary>Successful weighted admission evidence; null for prior mode or incomplete scoring.</summary>
+    public RepositoryMemoryScoreEvidence? ScoreEvidence { get; init; }
+
+    /// <summary>Native SQLite BM25 returned by lexical discovery; lower is better.</summary>
+    public double? LexicalScore { get; init; }
+
+    /// <summary>Original query terms matched by lexical discovery.</summary>
+    public IReadOnlyList<string> MatchedTerms { get; init; } = [];
+
     /// <summary>Question tokens actually scored after intentional recall reduction.</summary>
     public int? RerankerUsedQueryTokens { get; init; }
 

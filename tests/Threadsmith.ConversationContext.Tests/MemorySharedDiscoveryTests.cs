@@ -9,6 +9,61 @@ using Xunit;
 /// <summary>Shared text and concept discovery through real persistence and consumer paths.</summary>
 public static class MemorySharedDiscoveryTests
 {
+    /// <summary>Weighted discovery freezes independent bounded branch unions before the old window or TopN.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Weighted_discovery_preserves_branch_provenance_and_partition_limits(bool bothPartitions)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator
+        {
+            Generate = text => new(
+                text.StartsWith("semantic", StringComparison.Ordinal) || text == "orchid missing" ? (float[])[1, 0, 0]
+                : text.StartsWith("hint", StringComparison.Ordinal) ? (float[])[-1, 0, 0] : [0, 1, 0],
+                12,
+                false),
+        };
+        using var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
+        var expected = new List<RepositoryMemoryId>();
+        var owners = bothPartitions ? new[] { RepositoryMemoryOwnership.Ordinary, RepositoryMemoryOwnership.Intelligence } : [RepositoryMemoryOwnership.Ordinary];
+        foreach (var owner in owners)
+        {
+            foreach (var text in (string[])["orchid", "semantic note", "hint note", "orchid extra unrelated verbose filler"])
+            {
+                var write = new RepositoryMemoryWrite { Text = text, Origin = RepositoryMemoryOrigin.Manual, Ownership = owner, Concepts = text == "hint note" ? ["botany"] : [] };
+                var saved = await store.AddAsync(MemoryTestData.Repository, write, generator.Model, await generator.GenerateAsync(text, ct), new(), ct);
+                if (!text.Contains("extra", StringComparison.Ordinal))
+                {
+                    expected.Add(Assert.IsType<RepositoryMemoryEntry>(saved.Entry).Id);
+                }
+            }
+        }
+
+        var before = await store.GetSnapshotAsync(MemoryTestData.Repository, ["orchid", "missing"], ct);
+        Assert.Empty(before.LexicalMatches);
+        using var search = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder());
+        var request = new RepositoryMemorySearchRequest
+        {
+            RepositoryIdentity = MemoryTestData.Repository, Query = "orchid missing", Concepts = ["botany"],
+            Options = new()
+            {
+                SemanticMinimum = 1, RerankerEnabled = true, RerankerCandidateLimit = 1, MaximumResults = 1, ConceptRecallEnabled = true,
+                Scoring = new() { Mode = RepositoryMemoryScoringMode.Weighted, FinalThreshold = 0, SemanticCandidateLimit = 1, LexicalCandidateLimit = 1, ConceptCandidateLimit = 1 },
+            },
+        };
+        var result = await search.SearchAsync(request, ct);
+        var details = Assert.IsType<RepositoryMemorySearchDetails>(result.SearchDetails);
+        Assert.Equal(expected.Count, details.ComparedCandidates);
+        Assert.Equal(expected.OrderBy(id => id.Value), details.Candidates.Where(row => row.RerankerScore is not null).Select(row => row.Id).OrderBy(id => id.Value));
+        Assert.All(details.ScoringPoolSizes.Values, size => Assert.Equal(3, size));
+        Assert.Equal(owners.Length, details.Candidates.Count(row => row.LexicalRank is not null && row.MatchedTerms.SequenceEqual(["orchid"])));
+        Assert.Equal(owners.Length, details.Candidates.Count(row => row.SemanticRank is not null));
+        Assert.Equal(owners.Length, details.Candidates.Count(row => row.ConceptMatched && row.SemanticRank is null && row.LexicalRank is null));
+        Assert.Single(result.Selected);
+    }
+
     /// <summary>Explicit code names qualify exactly without weakening ordinary prose or fuzzy discovery.</summary>
     [Theory]
     [InlineData("Explain FindSymbolAsync", true)]
@@ -136,7 +191,9 @@ public static class MemorySharedDiscoveryTests
         var terms = new[] { "alpha", "beta", "cancelation" };
         var plain = await store.GetSnapshotAsync(MemoryTestData.Repository, terms, ct);
         var expanded = await store.GetSnapshotAsync(MemoryTestData.Repository, terms, new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20, MaximumExpansions = 1 }, ct);
-        Assert.Equal(plain.LexicalMatches, expanded.LexicalMatches.Where(match => !match.IsFuzzy));
+        Assert.Equal(
+            plain.LexicalMatches.Select(match => (match.Id, match.Bm25, Terms: string.Join("|", match.MatchedTerms))),
+            expanded.LexicalMatches.Where(match => !match.IsFuzzy).Select(match => (match.Id, match.Bm25, Terms: string.Join("|", match.MatchedTerms))));
         Assert.Equal(exact.Id, expanded.LexicalMatches[0].Id);
         Assert.Contains(expanded.LexicalMatches, match => match.Id == fuzzy.Id && match.IsFuzzy);
         Assert.DoesNotContain(expanded.LexicalMatches, match => match.Id == oneTerm.Id);
@@ -145,6 +202,25 @@ public static class MemorySharedDiscoveryTests
         Assert.Empty(grouped.LexicalMatches);
         Assert.All(resolver.Vocabularies, snapshot => Assert.DoesNotContain("foreignword", snapshot.Vocabulary));
         Assert.All(resolver.Queries, query => Assert.DoesNotContain(query, new[] { "alpha", "beta" }));
+    }
+
+    /// <summary>Weighted expansion compares every raw score from the same expanded FTS query.</summary>
+    [Fact]
+    public static async Task Weighted_expansion_refreshes_exact_hit_scores_and_matched_groups()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var baseline = MemoryTestData.CreateService(fixture, new TestMemoryEmbeddingGenerator());
+        var exact = await baseline.ExecuteAsync(MemoryTestData.Operation("add", "alpha cancellation"), ct);
+        await baseline.ExecuteAsync(MemoryTestData.Operation("add", "cancellation"), ct);
+        using var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString, termResolver: new TestResolver());
+        var options = new RepositoryMemoryLexicalOptions { FuzzyEnabled = true, FuzzyMaximumDistance = 20, MinimumMatchedTerms = 1, PreserveExactScores = false };
+        var expanded = await store.GetSnapshotAsync(MemoryTestData.Repository, ["alpha", "cancelation"], options, ct);
+        var resolved = await store.GetSnapshotAsync(MemoryTestData.Repository, ["alpha", "cancellation"], options with { FuzzyEnabled = false }, ct);
+        Assert.Equal(resolved.LexicalMatches.Select(match => (match.Id, match.Bm25)), expanded.LexicalMatches.Select(match => (match.Id, match.Bm25)));
+        var exactHit = Assert.Single(expanded.LexicalMatches, match => match.Id == exact.Id);
+        Assert.False(exactHit.IsFuzzy);
+        Assert.Equal(["alpha", "cancelation"], exactHit.MatchedTerms);
     }
 
     /// <summary>Exact matching and failure boundaries remain truthful with bounded fuzzy expansion.</summary>

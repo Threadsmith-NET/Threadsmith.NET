@@ -238,7 +238,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
     }
 
     private static async Task<IReadOnlyList<RepositoryMemoryLexicalMatch>> ReadLexicalMatchesAsync(
-        SqliteConnection connection, SqliteTransaction transaction, string repositoryIdentity, IReadOnlyList<string> lexicalTerms, IReadOnlyList<MemoryTermMatch>? expansions, CancellationToken cancellationToken)
+        SqliteConnection connection, SqliteTransaction transaction, string repositoryIdentity, IReadOnlyList<string> lexicalTerms, IReadOnlyList<MemoryTermMatch>? expansions, int minimumMatchedTerms, CancellationToken cancellationToken)
     {
         var terms = lexicalTerms.Where(term => !string.IsNullOrWhiteSpace(term)
                 && !term.Any(char.IsControl))
@@ -252,7 +252,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             .Concat(RepositoryMemoryLexicalTerms.IsCodeIdentifier(term) ? []
                 : expansions?.Where(match => match.Query == term).Select(match => match.Term) ?? [])
             .Distinct(StringComparer.Ordinal).ToArray()).ToArray();
-        var termMatches = new Dictionary<string, int>(StringComparer.Ordinal);
+        var termMatches = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         var identifierMatches = new HashSet<string>(StringComparer.Ordinal);
         foreach (var group in groups)
         {
@@ -269,7 +269,13 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             while (await reader.ReadAsync(cancellationToken))
             {
                 var id = reader.GetString(0);
-                termMatches[id] = termMatches.GetValueOrDefault(id) + 1;
+                if (!termMatches.TryGetValue(id, out var matched))
+                {
+                    matched = [];
+                    termMatches.Add(id, matched);
+                }
+
+                matched.Add(group[0]);
                 if (RepositoryMemoryLexicalTerms.IsCodeIdentifier(group[0]))
                 {
                     identifierMatches.Add(id);
@@ -298,10 +304,10 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         while (await result.ReadAsync(cancellationToken))
         {
             var id = result.GetString(0);
-            if ((identifierMatches.Contains(id) || termMatches.GetValueOrDefault(id) >= Math.Min(2, terms.Length))
+            if ((identifierMatches.Contains(id) || termMatches.GetValueOrDefault(id)?.Count >= Math.Min(minimumMatchedTerms, terms.Length))
                 && Guid.TryParse(id, out var guid))
             {
-                matches.Add(new RepositoryMemoryLexicalMatch(new RepositoryMemoryId(guid), result.GetDouble(1)));
+                matches.Add(new RepositoryMemoryLexicalMatch(new RepositoryMemoryId(guid), result.GetDouble(1)) { MatchedTerms = termMatches[id].ToArray() });
             }
         }
 

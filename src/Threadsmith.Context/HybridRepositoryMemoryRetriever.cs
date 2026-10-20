@@ -91,6 +91,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         var store = request.Collection is null ? _store : _store.ForCollection(request.Collection);
         var concepts = request.Options.ConceptRecallEnabled ? request.Concepts.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(MemoryConcepts.MaximumPerTurn).ToArray() : [];
         var semanticMinimum = request.Options.SemanticMinimum;
+        var scoring = request.Options.Scoring;
+        var weighted = scoring.Mode == RepositoryMemoryScoringMode.Weighted;
+        var lexicalOptions = weighted ? request.Options.Lexical with { MinimumMatchedTerms = 1, PreserveExactScores = false } : request.Options.Lexical;
         var query = request.Query;
         var bounded = request.QueryBounded;
         IReadOnlyList<RepositoryMemoryEntry> standingPreferences = [];
@@ -134,7 +137,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 .OrderByDescending(RepositoryMemoryLexicalTerms.IsCodeIdentifier)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .Take(request.Options.MaximumQueryTerms).ToArray();
-            var snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, request.Ownership, cancellationToken);
+            var snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, terms, lexicalOptions, request.Ownership, cancellationToken);
             memorySetRevision = snapshot.Revision;
             standingPreferences = SelectStandingPreferences(snapshot);
             snapshot = request.IncludeStandingPreferences ? snapshot : SelectSituationalSnapshot(snapshot);
@@ -211,7 +214,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 if (rebuilt)
                 {
                     // Both rankings must observe precisely the same content and vector generation after rebuild.
-                    snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, terms, request.Options.Lexical, request.Ownership, cancellationToken);
+                    snapshot = await store.GetSnapshotAsync(request.RepositoryIdentity, terms, lexicalOptions, request.Ownership, cancellationToken);
                     memorySetRevision = snapshot.Revision;
                     standingPreferences = SelectStandingPreferences(snapshot);
                     snapshot = request.IncludeStandingPreferences ? snapshot : SelectSituationalSnapshot(snapshot);
@@ -219,14 +222,29 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 }
             }
 
-            var lexical = snapshot.LexicalMatches.OrderBy(match => match.IsFuzzy).ThenBy(match => match.Bm25).ThenBy(match => match.Id.Value)
-                .Select((match, index) => (match.Id, Rank: index + 1)).ToDictionary(match => match.Id, match => match.Rank);
+            var ownership = snapshot.Entries.ToDictionary(entry => entry.Id, entry => entry.Ownership);
+            var lexicalMatches = snapshot.LexicalMatches.Where(match => ownership.ContainsKey(match.Id))
+                .GroupBy(match => match.Id)
+                .Select(group => weighted ? group.MinBy(match => match.Bm25) : group.OrderBy(match => match.IsFuzzy).ThenBy(match => match.Bm25).First())
+                .OfType<RepositoryMemoryLexicalMatch>().ToArray();
+            if (weighted && snapshot.LexicalMatches.Any(match => !double.IsFinite(match.Bm25)))
+            {
+                throw new InvalidOperationException("Weighted lexical discovery returned non-finite BM25 evidence.");
+            }
+
+            var lexicalPool = lexicalMatches.OrderBy(match => !weighted && match.IsFuzzy).ThenBy(match => match.Bm25).ThenBy(match => match.Id.Value)
+                .GroupBy(match => weighted ? ownership[match.Id] : default)
+                .SelectMany(group => group.Take(weighted ? scoring.LexicalCandidateLimit : int.MaxValue)).ToArray();
+            var lexical = lexicalPool.Select((match, index) => (match.Id, Rank: index + 1)).ToDictionary(match => match.Id, match => match.Rank);
+            var lexicalById = lexicalPool.ToDictionary(match => match.Id);
             var semantic = embedding is null
                 ? []
                 : snapshot.Entries.Where(entry => IsCompatible(entry, model))
                     .Select(entry => (entry.Id, Similarity: Cosine(embedding.Vector.Span, entry.Embedding.Span)))
-                    .Where(match => match.Similarity > semanticMinimum)
+                    .Where(match => weighted ? scoring.SemanticDiscoveryMinimum is null || match.Similarity > scoring.SemanticDiscoveryMinimum : match.Similarity > semanticMinimum)
                     .OrderByDescending(match => match.Similarity).ThenBy(match => match.Id.Value)
+                    .GroupBy(match => weighted ? ownership[match.Id] : default)
+                    .SelectMany(group => group.Take(weighted ? scoring.SemanticCandidateLimit : int.MaxValue))
                     .Select((match, index) => (match.Id, match.Similarity, Rank: index + 1))
                     .ToDictionary(match => match.Id, match => (match.Similarity, match.Rank));
             var resolvedConcepts = new HashSet<string>(StringComparer.Ordinal);
@@ -282,25 +300,31 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
 
             var conceptMatches = snapshot.Entries
                 .Select(entry => (entry.Id, Matches: entry.Concepts.Intersect(resolvedConcepts, StringComparer.Ordinal).ToArray()))
-                .Where(item => item.Matches.Length > 0).ToDictionary(item => item.Id, item => item.Matches);
+                .Where(item => item.Matches.Length > 0)
+                .OrderBy(item => item.Id.Value)
+                .GroupBy(item => ownership[item.Id])
+                .SelectMany(group => group.Take(weighted ? scoring.ConceptCandidateLimit : int.MaxValue))
+                .ToDictionary(item => item.Id, item => item.Matches);
             var ranked = snapshot.Entries.Where(entry => lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id) || conceptMatches.ContainsKey(entry.Id))
                 .Select(entry =>
                 {
                     int? lexicalRank = lexical.TryGetValue(entry.Id, out var rank) ? rank : null;
                     var hasSemantic = semantic.TryGetValue(entry.Id, out var vectorMatch);
                     int? semanticRank = hasSemantic ? vectorMatch.Rank : null;
-                    var score = (lexicalRank is { } left ? 1d / (FusionConstant + left) : 0)
+                    var score = weighted ? 0 : (lexicalRank is { } left ? 1d / (FusionConstant + left) : 0)
                         + (semanticRank is { } right ? 1d / (FusionConstant + right) : 0);
                     return new RepositoryMemoryRetrievalCandidate(entry, score, lexicalRank, semanticRank, hasSemantic ? vectorMatch.Similarity : null)
                     {
                         ConceptMatches = conceptMatches.GetValueOrDefault(entry.Id) ?? [],
+                        LexicalScore = lexicalById.GetValueOrDefault(entry.Id)?.Bm25,
+                        MatchedTerms = lexicalById.GetValueOrDefault(entry.Id)?.MatchedTerms ?? [],
                     };
                 })
                 .OrderByDescending(candidate => candidate.Score).ThenBy(candidate => candidate.Entry.Id.Value).ToArray();
             var hybridCandidates = ranked.Count(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null);
             var conceptOnlyCandidates = ranked.Length - hybridCandidates;
             var comparedCandidates = request.Options.RerankerEnabled
-                ? Math.Min(hybridCandidates, request.Options.RerankerCandidateLimit)
+                ? weighted ? ranked.Length : Math.Min(hybridCandidates, request.Options.RerankerCandidateLimit)
                     + Math.Min(conceptOnlyCandidates, request.Options.ConceptRecallEnabled ? request.Options.ConceptCandidateLimit : 0)
                 : 0;
             var (selected, rerankerStatus, pairTruncated, inputFailure) = await RerankAsync(
@@ -327,7 +351,11 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     qualified?.ConceptMatches.Count > 0,
                     scored?.CrossEncoderScore,
                     scored?.RerankerQueryTokens,
-                    scored?.RerankerDocumentTokens);
+                    scored?.RerankerDocumentTokens)
+                {
+                    Ownership = entry.Ownership,
+                    MatchedTerms = qualified?.MatchedTerms ?? [],
+                };
             }).ToArray();
 
             foreach (var expansion in snapshot.LexicalExpansions)
@@ -361,6 +389,8 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 IsComplete = !degraded && !truncated,
                 SearchDetails = new RepositoryMemorySearchDetails
                 {
+                    ScoringOptions = scoring,
+                    ScoringPoolSizes = weighted ? ranked.GroupBy(candidate => candidate.Entry.Ownership).ToDictionary(group => group.Key, group => group.Count()) : new Dictionary<RepositoryMemoryOwnership, int>(),
                     RerankerModelId = crossEncoderModel?.ModelId,
                     RerankerQueryTokens = selected.FirstOrDefault()?.RerankerQueryTokens,
                     RerankerUsedQueryTokens = selected.FirstOrDefault()?.RerankerUsedQueryTokens,

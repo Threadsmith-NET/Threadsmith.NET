@@ -58,10 +58,10 @@ public sealed partial class HybridRepositoryMemoryRetriever
                 throw new InvalidOperationException("The cross-encoder descriptor is invalid.");
             }
 
-            var candidates = ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null)
+            var candidates = options.Scoring.Mode == RepositoryMemoryScoringMode.Weighted ? ranked : [.. ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null)
                 .Take(options.RerankerCandidateLimit)
                 .Concat(ranked.Where(candidate => candidate.LexicalRank is null && candidate.SemanticRank is null)
-                    .Take(options.ConceptRecallEnabled ? options.ConceptCandidateLimit : 0)).ToArray();
+                    .Take(options.ConceptRecallEnabled ? options.ConceptCandidateLimit : 0))];
             var scores = new List<TextCrossEncoderScore>(candidates.Length);
             foreach (var batch in candidates.Chunk(model.MaxBatchSize))
             {

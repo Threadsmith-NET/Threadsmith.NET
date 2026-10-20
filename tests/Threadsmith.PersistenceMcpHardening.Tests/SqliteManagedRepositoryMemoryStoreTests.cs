@@ -452,7 +452,9 @@ public sealed class SqliteManagedRepositoryMemoryStoreTests
         Assert.Equal(1, included.InclusionCount);
         Assert.Equal(fixture.Clock.GetUtcNow(), included.LastIncludedAt);
         Assert.Equal(before.Revision, after.Revision);
-        Assert.Equal(before.LexicalMatches, after.LexicalMatches);
+        Assert.Equal(
+            before.LexicalMatches.Select(match => (match.Id, match.Bm25, match.IsFuzzy, Terms: string.Join("|", match.MatchedTerms))),
+            after.LexicalMatches.Select(match => (match.Id, match.Bm25, match.IsFuzzy, Terms: string.Join("|", match.MatchedTerms))));
         await fixture.Store.UpdateAsync("repo", entry.Id, 1, Write("New prompt text"), Model, Embedding, new());
         await fixture.Store.RecordInclusionsAsync("repo", run, [new(entry.Id, 1)]);
         Assert.Equal(0, Assert.Single((await fixture.Store.GetSnapshotAsync("repo", [])).Entries).InclusionCount);

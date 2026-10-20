@@ -270,6 +270,12 @@ public sealed record RepositoryMemoryCandidateSearchEvidence(
 /// <summary>Bounded typo recovery shared by both memory search consumers.</summary>
 public sealed record RepositoryMemoryLexicalOptions
 {
+    /// <summary>Required matching query groups, capped by query size; weighted discovery uses one (FTS OR).</summary>
+    public int MinimumMatchedTerms { get; init; } = 2;
+
+    /// <summary>Retain original exact-query scores; disable when comparing raw scores across expanded matches.</summary>
+    public bool PreserveExactScores { get; init; } = true;
+
     /// <summary>Enables expansion of terms absent from the indexed vocabulary.</summary>
     public bool FuzzyEnabled { get; init; }
 
@@ -285,6 +291,8 @@ public sealed record RepositoryMemoryLexicalOptions
     /// <summary>Validates finite work bounds and enabled distance policy.</summary>
     public void Validate()
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(MinimumMatchedTerms, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(MinimumMatchedTerms, 2);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaximumExpansionsPerTerm, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumExpansionsPerTerm, 3);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumExpansions);

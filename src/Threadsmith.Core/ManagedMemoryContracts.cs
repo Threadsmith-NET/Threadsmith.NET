@@ -341,6 +341,9 @@ public sealed record RepositoryMemoryWriteResult(
 /// <summary>Qualified SQLite lexical candidate; lower BM25 values rank ahead of higher ones.</summary>
 public sealed record RepositoryMemoryLexicalMatch(RepositoryMemoryId Id, double Bm25)
 {
+    /// <summary>Original query groups matched by FTS, without exposing memory text.</summary>
+    public IReadOnlyList<string> MatchedTerms { get; init; } = [];
+
     /// <summary>Qualified only after bounded query expansion; exact matches rank first.</summary>
     public bool IsFuzzy { get; init; }
 }

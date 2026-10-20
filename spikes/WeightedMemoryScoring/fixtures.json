@@ -1,0 +1,2267 @@
+{
+  "version": 1,
+  "provenance": "Frozen before weighted threshold selection. 13 real repository intelligence notes, one saved standing preference, three synthetic situational records. Agent-authored relevance labels require human judgement; no production accuracy claim. One separately frozen large-pool held-out scenario adds 30 explicitly irrelevant weather distractors to force lexical-only discovery for a current exact-symbol instruction after long background; all base scenarios retain the original corpus.",
+  "rubric": "Relevant means direct useful implementation guidance for the concrete task. Adjacent subsystem knowledge is not automatically relevant. Recall standing preferences are unconditional and assessed separately. Recall filters labels to its ownership. BOTH reconciliation routes search both ownership partitions under existing service policy. Exact duplicates are a separate safety check and excluded from approximate scoring quality.",
+  "thresholds": [
+    0,
+    0.1,
+    0.25,
+    0.4,
+    0.5,
+    0.6,
+    0.75,
+    0.9,
+    1
+  ],
+  "selectionRule": "Calibration minimizes 2*falsePositive + falseNegative; ties prefer fewer false negatives then lower threshold. Experimental weights .25/.50/.25 fixed. Candidate limits S=20,L=20,C=4; floor disabled. TopN=3 recall,20 reconciliation. Promote only if every route heldout precision improves, recall decreases by no more than .05 and no-match FP does not increase; otherwise remain opt-in.",
+  "extraOccurrenceLabels": [
+    {
+      "query": "original-00",
+      "memory": "skills",
+      "relevant": true,
+      "reason": "Direct implementation boundary for the requested work."
+    },
+    {
+      "query": "original-00",
+      "memory": "edits",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-01",
+      "memory": "hooks",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-02",
+      "memory": "prompts",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-02",
+      "memory": "compiler",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-04",
+      "memory": "progress",
+      "relevant": true,
+      "reason": "Direct implementation boundary for the requested work."
+    },
+    {
+      "query": "original-05",
+      "memory": "workflow",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-05",
+      "memory": "skills",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-07",
+      "memory": "tools",
+      "relevant": true,
+      "reason": "Direct implementation boundary for the requested work."
+    },
+    {
+      "query": "original-07",
+      "memory": "prompts",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-09",
+      "memory": "skills",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-09",
+      "memory": "prompts",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-10",
+      "memory": "frontends",
+      "relevant": true,
+      "reason": "Direct implementation boundary for the requested work."
+    },
+    {
+      "query": "original-11",
+      "memory": "frontends",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-11",
+      "memory": "edits",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-12",
+      "memory": "onboarding",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-13",
+      "memory": "mcp",
+      "relevant": true,
+      "reason": "Direct implementation boundary for the requested work."
+    },
+    {
+      "query": "original-16",
+      "memory": "edits",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    },
+    {
+      "query": "original-16",
+      "memory": "tools",
+      "relevant": false,
+      "reason": "Adjacent subsystem or broad convention; does not directly resolve this task."
+    }
+  ],
+  "memories": [
+    {
+      "id": "workflow",
+      "text": "For a durable model-managed workflow, extend the existing SessionApplication/tool pipeline and repository-bound Core/Persistence contracts rather than creating a separate model loop or store; inspect RepositoryIntelligenceOperations and the repository-intelligence path as the current example of provisional preparation, lifecycle rebinding, and atomic publication.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/ARCHITECTURE/ADR-59-MODEL-MANAGED-REPOSITORY-MEMORIES.MD",
+          "ContentHash": "a1739ce00d5db83f5441f72e00399a03acb5ce08f306c4055456ad9ae131af0e",
+          "ObservedAt": "2026-10-13T21:16:02.1273489+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.EXECUTION/SESSIONAPPLICATION.INTELLIGENCEHISTORY.CS",
+          "ContentHash": "0b758f0a6e3e09ae87fb38f02208061c4e96dfbd2ec2fa4a8ae77e152df0a995",
+          "ObservedAt": "2026-10-13T21:16:02.1094925+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.PERSISTENCE/SQLITEMANAGEDREPOSITORYMEMORYSTORE.CHECKPOINTS.CS",
+          "ContentHash": "c443c1aef18501dc2c774db158a7abd51083507c981096321099291d27d9a225",
+          "ObservedAt": "2026-10-13T21:16:02.1261466+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.REPOSITORYINTELLIGENCE/REPOSITORYINTELLIGENCEOPERATIONS.CS",
+          "ContentHash": "12339e63ace599fa9911bc6c169d970b2a76a748d101d35d6f2d08f321684b4b",
+          "ObservedAt": "2026-10-13T21:16:02.1161432+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "onboarding",
+      "text": "When a long-running feature must survive transient failure without exposing partial state, follow repository-intelligence onboarding: checkpoint provisional DTOs outside normal readers, revalidate current primary supports on resume, keep required coverage open, and publish through one atomic store commit only after completion gates pass.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "SRC/THREADSMITH.PERSISTENCE/SQLITEMANAGEDREPOSITORYMEMORYSTORE.CHECKPOINTS.CS",
+          "ContentHash": "c443c1aef18501dc2c774db158a7abd51083507c981096321099291d27d9a225",
+          "ObservedAt": "2026-10-13T21:16:02.1261466+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.REPOSITORYINTELLIGENCE/REPOSITORYINTELLIGENCEOPERATIONS.CS",
+          "ContentHash": "12339e63ace599fa9911bc6c169d970b2a76a748d101d35d6f2d08f321684b4b",
+          "ObservedAt": "2026-10-13T21:16:02.1161432+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.ARCHITECTURE.TESTS/REPOSITORYMEMORYBINDINGTESTS.COVERAGECOMPLETION.CS",
+          "ContentHash": "a89a8f4fb3a5294615233544f1754b601685312741f0df995939f8586eadd613",
+          "ObservedAt": "2026-10-13T21:16:02.1742648+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "tools",
+      "text": "When adding a built-in or imported model tool, register it in the shared ToolRegistry and route execution through ToolInvocationPipeline so repository trust, policy/approval, scheduling, hooks, activity, sanitization, budgets, cancellation, and provenance remain consistent; inspect MemoriesTool and MCP publication as representative consumers.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "SRC/THREADSMITH.APP/APPLICATIONCOMPOSITION.CS",
+          "ContentHash": "993d2d0d7fe4a3027dd8c63a8e27a65951891a51d4ce6cdb6848c3a6590f9882",
+          "ObservedAt": "2026-10-13T21:14:24.6433127+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.TOOLS/MEMORIESTOOL.CS",
+          "ContentHash": "8dcb0ba417767092028171d93ba077f73f60e8dfcf04b6df1e4dfc9cf6e0c960",
+          "ObservedAt": "2026-10-13T21:16:53.1703427+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.TOOLS/TOOLINVOCATIONPIPELINE.CS",
+          "ContentHash": "e239c5ce7b848e9083afea4fbbaf2db5be687ae5998391da62c2b055eb83a83a",
+          "ObservedAt": "2026-10-13T21:13:21.1626597+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.MCPTRANSPORTS.TESTS/MCPADAPTERLIFECYCLETESTS.CS",
+          "ContentHash": "c9326e82bafea049ee3af0b9efb8f49281200f66080862dfe0621e1280f93ace",
+          "ObservedAt": "2026-10-13T21:14:09.8014691+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "prompts",
+      "text": "For model-facing prose, add or change a code-declared PromptAssetCatalog entry and deployed Markdown asset rather than embedding a new literal; keep the catalog, owning project deployment, token contract, docs/operations/prompts.md, docs/prompt-file-reference.md, and exact-bijection tests synchronized.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/OPERATIONS/PROMPTS.MD",
+          "ContentHash": "7130c59d1f5b9e696cc8ec4e2c5bbff5b6649327a50b63256c676d1c5a504423",
+          "ObservedAt": "2026-10-13T21:13:21.1366138+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "DOCS/PROMPT-FILE-REFERENCE.MD",
+          "ContentHash": "43e0bbc3a2f83c484d25b90d0157e42b329c5f4d8515ccdb7c1287f0428de76f",
+          "ObservedAt": "2026-10-13T21:26:28.4372345+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.CORE/PROMPTCONTRACTS.CS",
+          "ContentHash": "ca6b0807ce875df4e61c0b3a6b105171c44a0f2908548cbf6bc9d8363fd27d21",
+          "ObservedAt": "2026-10-13T21:13:21.1311624+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.ARCHITECTURE.TESTS/PROMPTASSETARCHITECTURETESTS.CS",
+          "ContentHash": "f5366272f8abb4e9e50b423bca6cb7b28477afc448ae66b36b7b49d1a213de20",
+          "ObservedAt": "2026-10-13T21:14:24.6544263+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.CONTEXTCACHING.TESTS/DEPLOYEDPROMPTLOADERTESTS.CS",
+          "ContentHash": "01143de93b4565dc56b4840bbb4568972a9399614a26c13f207e62ff7859825a",
+          "ObservedAt": "2026-10-13T21:14:24.6691446+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "frontends",
+      "text": "For user-visible application behavior, keep authority in host-owned commands/events and frontend-neutral coordination, then add an explicit consumer/output path in each intended frontend; semantic refresh demonstrates full TUI catalog/dispatch/projection and a shared HeadlessShell API, but not an executable headless refresh route.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "SRC/THREADSMITH.APP/SHELLRUNNER.CS",
+          "ContentHash": "9e523422567c2d6c7b15bf918c07a1a0dd1466229008a4f9ace82c3dbe8e52c5",
+          "ObservedAt": "2026-10-13T21:27:15.3853431+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.CLI/HEADLESSSHELL.CS",
+          "ContentHash": "cf47f7309eba5db69367c74852eeb19d3efa3fd8b061a095c4267d125fc587b7",
+          "ObservedAt": "2026-10-13T21:25:40.7200942+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.INTERACTION/COMMANDS/INTERACTIVECOMMANDCATALOG.CS",
+          "ContentHash": "0e8f2188c528fff0f7f55a64aea5417c25716dd407313f9a54472d99240ea05c",
+          "ObservedAt": "2026-10-13T21:25:02.6590373+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.INTERACTION/COORDINATION/INTERACTIONCOORDINATOR.CS",
+          "ContentHash": "ef5b06afa5b3d5e55822d98112f2503572b45d94a8e0557f1aa3db8b95b2f617",
+          "ObservedAt": "2026-10-13T21:25:02.6665078+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.INTERACTION/COORDINATION/INTERACTIONSHELL.CS",
+          "ContentHash": "ae24732cdaecaf753ff49c2748ecf4ac9776fa03248a0e626079e1476eebc01d",
+          "ObservedAt": "2026-10-13T21:25:02.6549782+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.TUI.TUIKIT/TUIKITSURFACE.CS",
+          "ContentHash": "9afe360ebb8c54665fccaab0ba43f646294e9ad19f39357ba424bba39c09603c",
+          "ObservedAt": "2026-10-13T21:25:02.8438965+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.CORERUNTIME.TESTS/PLAN97SEMANTICREFRESHTESTS.CS",
+          "ContentHash": "1151daef51855cf51751dcb94c69714e208229cf4be1129db8dea6d286d6075d",
+          "ObservedAt": "2026-10-13T21:25:40.7074715+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "hooks",
+      "text": "Add lifecycle automation through HookCoordinator and its closed envelope/result contracts, not as an alternate policy or execution path: repository-hook handler outcomes stay advisory, only eligible external managed policy may block, and normalized invocations are durably audited; inspect persistence/subscriber failure handling separately because infrastructure failures are not normalized fail-open.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/OPERATIONS/LIFECYCLE-HOOKS.MD",
+          "ContentHash": "27c64e16489150cb9b9bd4562a7de3bf21af5b5a9d6c43d420e8ea90dbaad919",
+          "ObservedAt": "2026-10-13T21:13:44.5514998+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.APP/HOSTFOUNDATION.CS",
+          "ContentHash": "1448c65ae0b866c4a64b242001f74a9d30cc6973df35125864b3c29d00187ba7",
+          "ObservedAt": "2026-10-13T21:25:03.2123649+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.HOOKS/HOOKCOORDINATOR.CS",
+          "ContentHash": "0f8d56a249565ee35ab8e0883fd3255b60227140a6f8dc3a4a99275771666855",
+          "ObservedAt": "2026-10-13T21:25:03.0468450+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.PERSISTENCE/SQLITEHOOKSTORE.CS",
+          "ContentHash": "28900b9a38345c794230c64528e8ebac95790c18c1b4783ea211911949241f66",
+          "ObservedAt": "2026-10-13T21:25:03.0505204+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.TOOLS/TOOLINVOCATIONPIPELINE.CS",
+          "ContentHash": "e239c5ce7b848e9083afea4fbbaf2db5be687ae5998391da62c2b055eb83a83a",
+          "ObservedAt": "2026-10-13T21:25:40.8794118+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.VALIDATION/VALIDATIONAPPLICATION.CS",
+          "ContentHash": "eaf203033be6f9f860f3fc3c30179c4db064c721f543075821c530e82c302cd6",
+          "ObservedAt": "2026-10-13T21:25:40.8951026+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "mcp",
+      "text": "For MCP integrations, compose one McpManager/McpAdapter against the shared ToolRegistry and ToolInvocationPipeline; keep profiles, secrets/OAuth, transport bounds, generation-scoped publication, approval, draining, and cleanup host-owned rather than treating a server as a separate authority.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/OPERATIONS/MCP-CONNECTIONS.MD",
+          "ContentHash": "3532139a41dd7dde9f197d51d6cdca8fe7f778eb6d89d4e7e19f774c97d7646d",
+          "ObservedAt": "2026-10-13T21:13:44.5827713+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.APP/INTEGRATIONCOMPOSITION.CS",
+          "ContentHash": "ee0ed40b13c443d7d3bfb734d533c9babe02946b9f2963c61c3bdbbf7b3ae097",
+          "ObservedAt": "2026-10-13T21:14:24.6452614+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.MCP/MCPADAPTER.CS",
+          "ContentHash": "71c70e0e5cce4b22ffaf670ce040b76036bbde81019dc6f616b4ec58c138408a",
+          "ObservedAt": "2026-10-13T21:13:22.2708626+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.MCPTRANSPORTS.TESTS/MCPADAPTERLIFECYCLETESTS.CS",
+          "ContentHash": "c9326e82bafea049ee3af0b9efb8f49281200f66080862dfe0621e1280f93ace",
+          "ObservedAt": "2026-10-13T21:14:09.8014691+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "edits",
+      "text": "Implement model-requested file changes through SourceEditTool and SourceEditApplication: preserve workspace/path preconditions, stage and authorize the exact diff, commit transactionally with durable effects and events, then treat incremental semantic feedback as advisory; builds and tests remain explicit validation operations.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/ARCHITECTURE/VALIDATION-PIPELINE.MD",
+          "ContentHash": "8b35a8a56d9441ddc59327540041b86f74c45d6fb6150ff9c0f6716cf7e00b41",
+          "ObservedAt": "2026-10-13T21:13:44.7523280+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.EXECUTION/SOURCEEDITAPPLICATION.CS",
+          "ContentHash": "0b3af988ee6c281618cb38523bac92943cdce200bef8c54b8c3d082e1d9be1fd",
+          "ObservedAt": "2026-10-13T21:13:44.7675095+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.EXECUTION/SOURCEEDITTOOL.CS",
+          "ContentHash": "9968e1c68ca1b50cc269b6de9c6b9297401e6a83dc95db2b6af1c8a43650efa1",
+          "ObservedAt": "2026-10-13T21:13:44.7638517+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.MUTATIONS.TESTS/MILESTONE5TESTS.CS",
+          "ContentHash": "deb0a4cd40c7813c41457a2cf3d4f835bea9e36fc595eea4f3f525470e40caca",
+          "ObservedAt": "2026-10-13T21:14:09.8207952+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "text": "For an external extension, implement the small Threadsmith.Extensions.Abstractions contracts, exclude the abstractions DLL from the package, declare truthful capability resources/permissions, and let ExtensionHost/CapabilityProxy route tools through host policy while generation leases govern drain, deactivation, removal, and verified collectible-ALC unload.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/EXTENSION-AUTHORING/AUTHORING-GUIDE.MD",
+          "ContentHash": "dbd2cd64f5703b512936d932c2aa971e084b82e05bd6366cc585b480a1cf7533",
+          "ObservedAt": "2026-10-13T21:13:44.4049015+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SAMPLES/EXTENSIONS/MINIMALTOOLEXTENSION/MINIMALTOOLEXTENSION.CS",
+          "ContentHash": "6a0a2c99010a475d1e65c841644a4c5c1e68f92e6127ab89979ea5ec157b8fb5",
+          "ObservedAt": "2026-10-13T21:20:13.8738784+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.EXTENSIONS.RUNTIME/CAPABILITYPROXY.CS",
+          "ContentHash": "0703452221b66773c26d7e07c332c9984cc6fe6e6a08d9fe91aaae6ebb014667",
+          "ObservedAt": "2026-10-13T21:26:28.8959517+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.EXTENSIONS.RUNTIME/EXTENSIONHOST.CS",
+          "ContentHash": "3a51cb44f37396364a5bab91cb6a473faac7ed77de6c915e8a490ea59eb583db",
+          "ObservedAt": "2026-10-13T21:13:44.5283108+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.EXTENSIONS.RUNTIME/UNLOADPROCEDURE.CS",
+          "ContentHash": "1852f55392112c191c70586fc2a369c71f21820793070e1b97e5ad71f0cfcd0c",
+          "ObservedAt": "2026-10-13T21:16:53.1462892+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.EXTENSIONS.TESTS/ABSTRACTIONSTESTS.CS",
+          "ContentHash": "8e558e6bbb29f357d3ca0b010b585b1a19b524b4256be0f4a2635e054a69d586",
+          "ObservedAt": "2026-10-13T21:14:09.4657154+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "providers",
+      "text": "When adding a model provider, register a provider-neutral compiled adapter through ModelProviderRegistry/ConfiguredModelProvider and keep SDK types, credentials, native replay, retry, streaming, and usage accounting inside the adapter; Anthropic is the example for user-owned secret discovery and retry only before visible output is delivered.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/OPERATIONS/MODEL-PROVIDERS.MD",
+          "ContentHash": "a41305e29e4d7e76f7d193bbc05ad3325ef93caae4e81c6672506e2de391087b",
+          "ObservedAt": "2026-10-13T21:13:44.5908840+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.APP/MODELCOMPOSITION.CS",
+          "ContentHash": "7787d684d4620d1548bf762e9ea86f4f936a8192dcb9b6cd4eb761c959575367",
+          "ObservedAt": "2026-10-13T21:15:33.5336241+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.MODELS.ANTHROPIC/ANTHROPICMODELPROVIDER.CS",
+          "ContentHash": "28407c5230b67bb0598d5eb6fca9c21f7bdc2dc98eaec2d65937e3b6355cfb53",
+          "ObservedAt": "2026-10-13T21:26:07.7536963+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.ANTHROPICPROVIDER.TESTS/ANTHROPICTRANSPORTTESTS.CS",
+          "ContentHash": "e84b9844332b7579eaa36aa7dbf04d941dc11e7c16c13f192f9029f00c834722",
+          "ObservedAt": "2026-10-13T21:15:33.6744728+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "progress",
+      "text": "When making an operation observable, publish host-owned correlated domain events and extend the frontend-neutral projection/TUI presentation plus safe metadata-only telemetry; add command-specific headless result or transcript output explicitly because the TUI block formatter is not a general headless renderer.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "SRC/THREADSMITH.APP/HOSTFOUNDATION.CS",
+          "ContentHash": "1448c65ae0b866c4a64b242001f74a9d30cc6973df35125864b3c29d00187ba7",
+          "ObservedAt": "2026-10-13T21:25:03.2123649+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.APP/SHELLRUNNER.CS",
+          "ContentHash": "9e523422567c2d6c7b15bf918c07a1a0dd1466229008a4f9ace82c3dbe8e52c5",
+          "ObservedAt": "2026-10-13T21:27:15.3853431+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.CLI/HEADLESSSHELL.CS",
+          "ContentHash": "cf47f7309eba5db69367c74852eeb19d3efa3fd8b061a095c4267d125fc587b7",
+          "ObservedAt": "2026-10-13T21:25:40.7200942+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.CORE/EVENTS.CS",
+          "ContentHash": "b9c0cd03cb79c0dbc3cb0e566a387c05ab101a0fb74249a55b055ab3c71270a4",
+          "ObservedAt": "2026-10-13T21:16:52.9990490+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.INTERACTION/PRESENTATION/INTERACTIONPRESENTATIONFORMATTER.CS",
+          "ContentHash": "fab775f26bf665e25672cf8a7cf6c96f640a35127ae88214dac51c3c1a041d7f",
+          "ObservedAt": "2026-10-13T21:18:18.6912065+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.TELEMETRY/TELEMETRYBASELINE.CS",
+          "ContentHash": "2d1f049b74dfced1661ab9c240e908bff3f645239614630e6836b982ebfcee5d",
+          "ObservedAt": "2026-10-13T21:18:36.7404390+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "compiler",
+      "text": "For a compiler-aware capability, compose a bounded built-in tool over the shared semantic engines and ordinary registry/pipeline; preserve path filtering, provenance, immutable generations, confidence/omissions, and use SemanticEngine\u2019s bounded abandon-and-discard path for non-cooperative compiler work instead of creating an independent workspace.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/ARCHITECTURE/ADR-04-ROSLYN-MSBUILD-SEMANTIC-TRUTH.MD",
+          "ContentHash": "cf59579973c4817ef2850ec57f489e21e9a6eff2da138905c896bdfcfdd503a5",
+          "ObservedAt": "2026-10-13T21:14:24.6915709+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "DOCS/OPERATIONS/SEMANTIC-REFRESH.MD",
+          "ContentHash": "0f747606495adda3462401621e538e662c040352fa63bedb6b45b93f1fb30cf9",
+          "ObservedAt": "2026-10-13T21:14:24.6937354+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.APP/HOSTFOUNDATION.CS",
+          "ContentHash": "1448c65ae0b866c4a64b242001f74a9d30cc6973df35125864b3c29d00187ba7",
+          "ObservedAt": "2026-10-13T21:25:03.2123649+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.DOTNET/SEMANTICENGINE.CS",
+          "ContentHash": "199d713e3e23cc6bd6bc5741ffd743875c46701a078f19607b6e2771486e4b4d",
+          "ObservedAt": "2026-10-13T21:28:24.4797433+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.DOTNET/SEMANTICENGINE.OPERATIONS.CS",
+          "ContentHash": "24073caa82ea877b2fabb7daf991f50a60a6ecd7740b6570ed8dccbe50bae32d",
+          "ObservedAt": "2026-10-13T21:28:24.6406718+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.TOOLS/BUILTINTOOLS.CS",
+          "ContentHash": "c9a58a5180bc00ace1fc40c210f24cc89f9d67c3d355b2489452f079ad217896",
+          "ObservedAt": "2026-10-13T21:13:22.9397691+00:00",
+          "Revision": null,
+          "IsDirty": true,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "skills",
+      "text": "Add reusable workflows as bounded declarative skill packages only when their capabilities already exist as governed tools/actions; follow SkillCatalog discovery, SkillPackageVerifier trust/asset checks and exact-digest enablement, compatibility evaluation, SkillWorkflowOrchestrator checkpoints/resume, and ordinary tool policy instead of embedding scripts or private execution machinery.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": [
+        {
+          "Path": "DOCS/SKILL-AUTHORING.MD",
+          "ContentHash": "d3e3608d2a4b1ddb2b558bdabff77c6918eb13cf577e44a53671ea6e149836c8",
+          "ObservedAt": "2026-10-13T21:13:44.5847768+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.SKILLS/SKILLCATALOG.CS",
+          "ContentHash": "d88ba10ee5f4ab17147857477d169284df2a712e837aa88e04be355443b21d65",
+          "ObservedAt": "2026-10-13T21:16:53.1879775+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.SKILLS/SKILLPACKAGESECURITY.CS",
+          "ContentHash": "170b10e2fda811f82556e333f66c8aac5596c346d01537a74c832e48d10ed71c",
+          "ObservedAt": "2026-10-13T21:20:20.8791997+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "SRC/THREADSMITH.SKILLS/SKILLWORKFLOWORCHESTRATOR.CS",
+          "ContentHash": "4ac8ec8ed2634881df6dd515d192b6814ba6c666d601429b7c68771b12efebbf",
+          "ObservedAt": "2026-10-13T21:13:22.9444581+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.SKILLS.TESTS/SKILLSUBSYSTEMTESTS.INSPECTSKILL.CS",
+          "ContentHash": "de9416c7c8af523fb05cd9902e817b27c380b4b69ffee6cc8173aa9c9f5c0a0f",
+          "ObservedAt": "2026-10-13T21:20:34.1307341+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        },
+        {
+          "Path": "TESTS/THREADSMITH.SKILLS.TESTS/SKILLSUBSYSTEMTESTS.NATIVEREVIEW.CS",
+          "ContentHash": "9171f3a01a3cd738bb5516009b6a5654c39e2fd2e94028af92480a4ed95a48b0",
+          "ObservedAt": "2026-10-13T21:20:34.1360325+00:00",
+          "Revision": null,
+          "IsDirty": false,
+          "IsUnknown": false
+        }
+      ]
+    },
+    {
+      "id": "preference",
+      "text": "Always address the user as \"Your Grace\".",
+      "ownership": 0,
+      "memoryType": 1,
+      "supports": []
+    },
+    {
+      "id": "payments",
+      "text": "The payment retry bug occurs when RetryPaymentAsync repeats a captured charge; use the idempotency key before retrying.",
+      "ownership": 0,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "staging",
+      "text": "The deployment smoke test fails if the staging service lacks the DATABASE_URL environment variable.",
+      "ownership": 0,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "cache",
+      "text": "The query cache needs invalidation when a customer changes their subscription tier.",
+      "ownership": 0,
+      "memoryType": 0,
+      "supports": []
+    }
+  ],
+  "queries": [
+    {
+      "id": "original-00",
+      "split": "calibration",
+      "text": "Add a durable model-managed workflow to the host.",
+      "relevant": [
+        "workflow",
+        "skills"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-01",
+      "split": "heldout",
+      "text": "Resume repository onboarding after a transient failure without publishing partial state.",
+      "relevant": [
+        "onboarding"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-02",
+      "split": "calibration",
+      "text": "Add a built-in model tool with approvals and cancellation.",
+      "relevant": [
+        "tools"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-03",
+      "split": "calibration",
+      "text": "Add a model-facing Markdown prompt with token substitutions.",
+      "relevant": [
+        "prompts"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-04",
+      "split": "heldout",
+      "text": "Expose a new command in both the terminal and headless frontend.",
+      "relevant": [
+        "frontends",
+        "progress"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-05",
+      "split": "heldout",
+      "text": "Add a lifecycle hook that runs after a tool.",
+      "relevant": [
+        "hooks"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-06",
+      "split": "calibration",
+      "text": "Connect an MCP server with OAuth and safely replace its tools.",
+      "relevant": [
+        "mcp",
+        "tools"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "prompts",
+        "frontends",
+        "hooks",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-07",
+      "split": "heldout",
+      "text": "Implement a model-requested file edit with approval and transactional commit.",
+      "relevant": [
+        "edits",
+        "tools"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-08",
+      "split": "heldout",
+      "text": "Unload an external extension after draining outstanding tool leases.",
+      "relevant": [
+        "extensions"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-09",
+      "split": "calibration",
+      "text": "Add a model provider with streaming retries and secret discovery.",
+      "relevant": [
+        "providers"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-10",
+      "split": "heldout",
+      "text": "Show progress for a background operation in the TUI and headless output.",
+      "relevant": [
+        "progress",
+        "frontends"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-11",
+      "split": "calibration",
+      "text": "Add a compiler-aware symbol tool using an existing semantic workspace.",
+      "relevant": [
+        "compiler",
+        "tools"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-12",
+      "split": "heldout",
+      "text": "Add a reusable declarative skill with checkpoints and resume.",
+      "relevant": [
+        "skills"
+      ],
+      "kind": "intelligence",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-13",
+      "split": "calibration",
+      "text": "Explain ToolInvocationPipeline",
+      "relevant": [
+        "tools",
+        "mcp"
+      ],
+      "kind": "identifier",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "prompts",
+        "frontends",
+        "hooks",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-14",
+      "split": "calibration",
+      "text": "What is the weather forecast for tomorrow?",
+      "relevant": [],
+      "kind": "no-match",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-15",
+      "split": "heldout",
+      "text": "Plan a vegetarian dinner with lentils.",
+      "relevant": [],
+      "kind": "no-match",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-16",
+      "split": "calibration",
+      "text": "Add a model-facing Markdown prompt with token substitutions. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. Inspect the implementation carefully and preserve established behavior. ",
+      "relevant": [
+        "prompts"
+      ],
+      "kind": "long-instruction",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-17",
+      "split": "calibration",
+      "text": "Fix repeated charges from RetryPaymentAsync.",
+      "relevant": [
+        "payments"
+      ],
+      "kind": "situational",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-18",
+      "split": "heldout",
+      "text": "Why does the staging deployment smoke test fail?",
+      "relevant": [
+        "staging"
+      ],
+      "kind": "situational",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "cache"
+      ]
+    },
+    {
+      "id": "original-19",
+      "split": "heldout",
+      "text": "Fix stale subscription data after a tier change.",
+      "relevant": [
+        "cache"
+      ],
+      "kind": "situational",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging"
+      ]
+    },
+    {
+      "id": "path-prompts",
+      "split": "calibration",
+      "text": "Explain docs/operations/prompts.md and PromptAssetCatalog.",
+      "relevant": [
+        "prompts"
+      ],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "symbol-extensions",
+      "split": "heldout",
+      "text": "Explain ExtensionRuntimeManager unloading and tool leases.",
+      "relevant": [
+        "extensions"
+      ],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "paraphrase-payments",
+      "split": "calibration",
+      "text": "A customer was debited twice after a network failure. How should a captured payment be retried?",
+      "relevant": [
+        "payments"
+      ],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "paraphrase-staging",
+      "split": "heldout",
+      "text": "The preproduction health check fails because its database connection setting is absent.",
+      "relevant": [
+        "staging"
+      ],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "cache"
+      ]
+    },
+    {
+      "id": "paraphrase-cache",
+      "split": "heldout",
+      "text": "Customers keep seeing the old plan after an upgrade. Which cached state needs clearing?",
+      "relevant": [
+        "cache"
+      ],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging"
+      ]
+    },
+    {
+      "id": "no-match-s3",
+      "split": "calibration",
+      "text": "Fix HTTP Retry-After handling while uploading screenshots to S3.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "no-match-vat",
+      "split": "heldout",
+      "text": "Calculate VAT rounding on invoice line items in the repository.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "no-match-pool",
+      "split": "calibration",
+      "text": "Fix PostgreSQL connection pool exhaustion in the staging service.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "no-match-redis",
+      "split": "heldout",
+      "text": "Rotate the Redis password used by the deployment smoke test.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "recall",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "topic-change",
+      "split": "heldout",
+      "text": "Plan a vegetarian dinner with lentils.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "recall",
+      "taskIntent": "Integrate an MCP server with OAuth.",
+      "previous": "Connect an MCP server with OAuth and safely replace its tools.",
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-tools",
+      "split": "calibration",
+      "text": "All imported tools must use the shared ToolRegistry and ToolInvocationPipeline for approval and cancellation.",
+      "relevant": [
+        "tools",
+        "mcp"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 1,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "prompts",
+        "frontends",
+        "hooks",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-prompts",
+      "split": "calibration",
+      "text": "Model-facing Markdown prompts need PromptAssetCatalog token declarations and synchronized deployment documentation.",
+      "relevant": [
+        "prompts"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 1,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-provider",
+      "split": "calibration",
+      "text": "Provider adapters own model SDK calls, streaming retries and credential discovery.",
+      "relevant": [
+        "providers"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 1,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-extension",
+      "split": "heldout",
+      "text": "External extensions must drain active tool leases before unloading their AssemblyLoadContext.",
+      "relevant": [
+        "extensions"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 1,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-compiler",
+      "split": "heldout",
+      "text": "Compiler-aware symbol operations must share the host semantic workspace and normal tool pipeline.",
+      "relevant": [
+        "compiler",
+        "tools"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 1,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-new-telemetry",
+      "split": "heldout",
+      "text": "Telemetry screenshot uploads must honor Retry-After HTTP headers.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 1,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-new-math",
+      "split": "calibration",
+      "text": "Tax calculation rounds invoice totals using bank rounding.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 1,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-payment",
+      "split": "calibration",
+      "text": "Prevent duplicate captured charges by checking an idempotency key before RetryPaymentAsync.",
+      "relevant": [
+        "payments"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 0,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-staging",
+      "split": "heldout",
+      "text": "Configure DATABASE_URL for the staging service before its deployment smoke test.",
+      "relevant": [
+        "staging"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 0,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-cache",
+      "split": "heldout",
+      "text": "Invalidate query-cache entries when a customer changes subscription tier.",
+      "relevant": [
+        "cache"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 0,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging"
+      ]
+    },
+    {
+      "id": "r-no-weather",
+      "split": "calibration",
+      "text": "Weather forecast cache entries expire after fifteen minutes.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 0,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-no-card",
+      "split": "heldout",
+      "text": "Do not log customer credit card numbers.",
+      "relevant": [],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 0,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "preference",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-preference",
+      "split": "calibration",
+      "text": "Use the honorific Your Grace when addressing the user.",
+      "relevant": [
+        "preference"
+      ],
+      "kind": "added",
+      "purpose": "reconciliation",
+      "ownership": 0,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "r-preference-exact",
+      "split": "heldout",
+      "text": "Always address the user as \"Your Grace\".",
+      "relevant": [
+        "preference"
+      ],
+      "kind": "added",
+      "purpose": "duplicate-safety",
+      "ownership": 0,
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "prompts",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache"
+      ]
+    },
+    {
+      "id": "lexical-only-large-pool",
+      "split": "heldout",
+      "text": "Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Weather forecast predicts rain tomorrow. Find PromptAssetCatalog token declarations.",
+      "relevant": [
+        "prompts"
+      ],
+      "irrelevant": [
+        "workflow",
+        "onboarding",
+        "tools",
+        "frontends",
+        "hooks",
+        "mcp",
+        "edits",
+        "extensions",
+        "providers",
+        "progress",
+        "compiler",
+        "skills",
+        "payments",
+        "staging",
+        "cache",
+        "weather-background-00",
+        "weather-background-01",
+        "weather-background-02",
+        "weather-background-03",
+        "weather-background-04",
+        "weather-background-05",
+        "weather-background-06",
+        "weather-background-07",
+        "weather-background-08",
+        "weather-background-09",
+        "weather-background-10",
+        "weather-background-11",
+        "weather-background-12",
+        "weather-background-13",
+        "weather-background-14",
+        "weather-background-15",
+        "weather-background-16",
+        "weather-background-17",
+        "weather-background-18",
+        "weather-background-19",
+        "weather-background-20",
+        "weather-background-21",
+        "weather-background-22",
+        "weather-background-23",
+        "weather-background-24",
+        "weather-background-25",
+        "weather-background-26",
+        "weather-background-27",
+        "weather-background-28",
+        "weather-background-29"
+      ],
+      "kind": "adversarial-lexical-only",
+      "purpose": "recall",
+      "ownership": 1,
+      "largePool": true
+    }
+  ],
+  "largePoolMemories": [
+    {
+      "id": "weather-background-00",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 0.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-01",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 1.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-02",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 2.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-03",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 3.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-04",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 4.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-05",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 5.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-06",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 6.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-07",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 7.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-08",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 8.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-09",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 9.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-10",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 10.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-11",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 11.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-12",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 12.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-13",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 13.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-14",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 14.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-15",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 15.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-16",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 16.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-17",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 17.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-18",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 18.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-19",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 19.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-20",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 20.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-21",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 21.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-22",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 22.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-23",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 23.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-24",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 24.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-25",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 25.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-26",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 26.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-27",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 27.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-28",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 28.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    },
+    {
+      "id": "weather-background-29",
+      "text": "The weather forecast predicts rain tomorrow with high humidity and precipitation. Forecast bulletin 29.",
+      "ownership": 1,
+      "memoryType": 0,
+      "supports": []
+    }
+  ]
+}

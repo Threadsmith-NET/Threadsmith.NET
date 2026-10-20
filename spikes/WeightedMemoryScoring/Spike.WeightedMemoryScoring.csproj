@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="supplemental.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="fixtures.json" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="../../src/Threadsmith.Context/Threadsmith.Context.csproj" />
+    <ProjectReference Include="../../src/Threadsmith.Persistence/Threadsmith.Persistence.csproj" />
+    <ProjectReference Include="../../src/Threadsmith.Embeddings.Local/Threadsmith.Embeddings.Local.csproj" />
+    <ProjectReference Include="../../src/Threadsmith.Reranking.Local/Threadsmith.Reranking.Local.csproj" />
+    <ProjectReference Include="../../src/Threadsmith.Execution/Threadsmith.Execution.csproj" />
+    <ProjectReference Include="../../src/Threadsmith.Telemetry/Threadsmith.Telemetry.csproj" />
+    <None Include="../../src/*/Prompts/*.md" Link="prompts/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../artifacts/embedding-assets/embeddings/all-MiniLM-L12-v2/*"
+          Link="embeddings/all-MiniLM-L12-v2/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../artifacts/reranker-assets/crossencoders/ms-marco-MiniLM-L6-v2/*"
+          Link="crossencoders/ms-marco-MiniLM-L6-v2/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -46,10 +46,16 @@ public static class MemorySharedDiscoveryTests
         using var search = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder());
         var request = new RepositoryMemorySearchRequest
         {
-            RepositoryIdentity = MemoryTestData.Repository, Query = "orchid missing", Concepts = ["botany"],
+            RepositoryIdentity = MemoryTestData.Repository,
+            Query = "orchid missing",
+            Concepts = ["botany"],
             Options = new()
             {
-                SemanticMinimum = 1, RerankerEnabled = true, RerankerCandidateLimit = 1, MaximumResults = 1, ConceptRecallEnabled = true,
+                SemanticMinimum = 1,
+                RerankerEnabled = true,
+                RerankerCandidateLimit = 1,
+                MaximumResults = 1,
+                ConceptRecallEnabled = true,
                 Scoring = new() { Mode = RepositoryMemoryScoringMode.Weighted, FinalThreshold = 0, SemanticCandidateLimit = 1, LexicalCandidateLimit = 1, ConceptCandidateLimit = 1 },
             },
         };

@@ -76,7 +76,8 @@ public static class WeightedMemoryScoringTests
 
         var request = new RepositoryMemorySearchRequest
         {
-            RepositoryIdentity = MemoryTestData.Repository, Query = "memory",
+            RepositoryIdentity = MemoryTestData.Repository,
+            Query = "memory",
             Options = new() { RerankerEnabled = true, RerankerCandidateLimit = 1, MaximumResults = 1, Scoring = new() { Mode = RepositoryMemoryScoringMode.Weighted, FinalThreshold = .2 } },
         };
         using var singles = new HybridRepositoryMemoryRetriever(store, generator, new BatchEncoder { BatchSize = 1 });
@@ -94,8 +95,13 @@ public static class WeightedMemoryScoringTests
     {
         var entry = new RepositoryMemoryEntry
         {
-            Id = new(new Guid(id, 0, 0, new byte[8])), RepositoryIdentity = "fixture", Text = id.ToString(), ContentHash = "fixture",
-            Origin = RepositoryMemoryOrigin.Manual, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch,
+            Id = new(new Guid(id, 0, 0, new byte[8])),
+            RepositoryIdentity = "fixture",
+            Text = id.ToString(),
+            ContentHash = "fixture",
+            Origin = RepositoryMemoryOrigin.Manual,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
         };
         return new(entry, 0, lexical is null ? null : 1, semantic is null ? null : 1, semantic) { LexicalScore = lexical, CrossEncoderScore = ce };
     }

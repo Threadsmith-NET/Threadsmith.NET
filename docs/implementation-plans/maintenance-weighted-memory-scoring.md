@@ -1,6 +1,6 @@
 # Weighted memory scoring
 
-**Status:** Active.
+**Status:** Completed (implementation and evaluation; promotion rejected).
 **Delivery track:** Maintenance.
 **Prerequisites:** Shared memory search and the completed recall/comparison repairs.
 
@@ -13,7 +13,7 @@ Four independent routes: ordinary/intelligence recall/reconciliation. Opt-in wei
 ## 4 Non-Scope
 No embedding migration, time decay, new model call, raw-logit cutoff or persisted schema.
 ## 5 Current State
-Prior mode uses hybrid discovery and optional cross-encoder ordering without final-score admission.
+Prior remains the default. Weighted is implemented behind explicit configuration and shares existing discovery, inference and consumers. The labelled comparison failed its promotion gate.
 ## 6 Proposed Design
 Freeze bounded branch unions per ownership partition, complete inference, normalize S/L/C, threshold, then TopN and existing prompt admission.
 ## 7 Public Contracts
@@ -23,7 +23,7 @@ Core contracts, Tools configuration, existing Persistence lexical discovery, Con
 ## 9 Ordered Tasks
 Configuration; bounded discovery; deterministic fusion; consumer safety; labelled calibration/held-out comparison. Commit each reviewable batch.
 ## 10 Testing
-Hand calculations, SQLite integration, real packaged-model inference, unchanged recall/reconciliation regressions and labelled final prompt evaluation.
+Hand calculations, SQLite integration, real packaged-model inference, unchanged recall/reconciliation regressions and labelled final prompt evaluation. Behavioral ownership: Scenario AM; manual checks: MTP-276/277.
 ## 11 Security/Permissions
 No user database or configuration mutation. Exact duplicates, revisions, approval and incomplete-search write guards remain authoritative.
 ## 12 Observability
@@ -37,4 +37,4 @@ Relative normalization can promote weak no-match candidates. Missing-branch weig
 ## 16 Documentation
 Operations owns settings; acceptance/manual guides own behavior. The single `.inbox/memory-recall-reconciliation-work-log.md` records iterations and live evidence.
 ## 17 Open Decisions
-No calibrated thresholds yet. Research weights .25/.50/.25 are experimental. Keep opt-in unless the release gate is met.
+Calibration selected .60 ordinary recall, .90 intelligence recall, 1.00 ordinary reconciliation and .90 intelligence reconciliation with experimental .25/.50/.25 weights. These are evaluation settings, not recommendations. Held-out intelligence recall lost 33.3 percentage points and increased no-match false positives. Prior remains default; further experiments require fresh held-out data. See [evaluation](../operations/weighted-memory-scoring-evaluation.md).

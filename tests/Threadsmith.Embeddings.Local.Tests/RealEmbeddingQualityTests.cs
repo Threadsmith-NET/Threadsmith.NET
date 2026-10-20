@@ -56,7 +56,9 @@ public sealed class RealEmbeddingQualityTests
             Query = "Integrate an MCP server with McpManager and McpAdapter.",
             Options = new()
             {
-                RerankerEnabled = true, ConceptRecallEnabled = true, MaximumResults = weighted ? 3 : 1,
+                RerankerEnabled = true,
+                ConceptRecallEnabled = true,
+                MaximumResults = weighted ? 3 : 1,
                 Scoring = new() { Mode = weighted ? RepositoryMemoryScoringMode.Weighted : RepositoryMemoryScoringMode.Prior, FinalThreshold = .6 },
             },
         };

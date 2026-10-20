@@ -31,7 +31,9 @@ public static class WeightedMemoryConsumerTests
         var scoring = new RepositoryMemoryScoringOptions { Mode = RepositoryMemoryScoringMode.Weighted, FinalThreshold = 0 };
         var request = new RepositoryMemorySearchRequest
         {
-            RepositoryIdentity = MemoryTestData.Repository, Query = "alpha refined convention", IncludeStandingPreferences = true,
+            RepositoryIdentity = MemoryTestData.Repository,
+            Query = "alpha refined convention",
+            IncludeStandingPreferences = true,
             Options = new() { RerankerEnabled = true, Scoring = scoring },
         };
         var result = await search.SearchAsync(request, ct);
@@ -60,7 +62,8 @@ public static class WeightedMemoryConsumerTests
         using var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
         var options = new RepositoryMemoryOptions
         {
-            RerankerEnabled = true, MaximumDiagnostics = 1,
+            RerankerEnabled = true,
+            MaximumDiagnostics = 1,
             RecallScoring = new() { Mode = RepositoryMemoryScoringMode.Weighted, FinalThreshold = .6 },
             Intelligence = new() { Enabled = true, Recall = new() { RerankerEnabled = true, MaximumDiagnostics = 1, Scoring = new() { Mode = RepositoryMemoryScoringMode.Weighted, FinalThreshold = .6 } } },
         };
@@ -68,7 +71,8 @@ public static class WeightedMemoryConsumerTests
         {
             var write = new RepositoryMemoryWrite
             {
-                Text = text, Origin = RepositoryMemoryOrigin.Manual,
+                Text = text,
+                Origin = RepositoryMemoryOrigin.Manual,
                 Ownership = text == "standing preference" ? RepositoryMemoryOwnership.Ordinary : ownership,
                 MemoryType = text == "standing preference" ? RepositoryMemoryType.StandingPreference : RepositoryMemoryType.Situational,
             };
@@ -81,8 +85,14 @@ public static class WeightedMemoryConsumerTests
         var assembler = new ContextAssembler(new EvidenceStore(events, sanitizer), new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, TestPromptLoader.Instance, repositoryMemoryRetriever: retriever);
         var request = new ContextAssemblyRequest
         {
-            SessionId = SessionId.New(), RunId = RunId.New(), Phase = RunPhase.EvidenceCollection, RepositoryPath = fixture.DirectoryPath,
-            RepositoryIdentity = MemoryTestData.Repository, Task = new TaskSpecification("alpha", []), IntelligenceEnabled = true, RepositoryMemoryOptions = options,
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            Phase = RunPhase.EvidenceCollection,
+            RepositoryPath = fixture.DirectoryPath,
+            RepositoryIdentity = MemoryTestData.Repository,
+            Task = new TaskSpecification("alpha", []),
+            IntelligenceEnabled = true,
+            RepositoryMemoryOptions = options,
         };
         var admitted = await assembler.AssembleAsync(request, ct);
         Assert.Equal(3, admitted.Inspection.RepositoryMemoryItems.Count(item => item.Included));
@@ -99,7 +109,9 @@ public static class WeightedMemoryConsumerTests
         Assert.All(changed.Inspection.RepositoryMemoryItems.Where(item => item.Included && item.MemoryType == RepositoryMemoryType.Situational), item => Assert.True(item.ScoreEvidence!.FinalScore >= .9));
         var rejectionRequest = new RepositoryMemorySearchRequest
         {
-            RepositoryIdentity = MemoryTestData.Repository, Ownership = ownership, Query = "unmatched",
+            RepositoryIdentity = MemoryTestData.Repository,
+            Ownership = ownership,
+            Query = "unmatched",
             Options = new() { RerankerEnabled = true, Scoring = new() { Mode = RepositoryMemoryScoringMode.Weighted, FinalThreshold = 1 } },
         };
         var rejected = await retriever.SearchAsync(rejectionRequest, ct);

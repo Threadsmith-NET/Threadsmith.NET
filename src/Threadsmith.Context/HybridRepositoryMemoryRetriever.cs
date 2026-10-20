@@ -417,7 +417,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 {
                     ScoringOptions = scoring,
                     Scoring = scoringStatus,
-                    ScoringPoolSizes = weighted ? ranked.GroupBy(candidate => candidate.Entry.Ownership).ToDictionary(group => group.Key, group => group.Count()) : new Dictionary<RepositoryMemoryOwnership, int>(),
+                    ScoringPoolSizes = weighted ? ranked.GroupBy(candidate => candidate.Entry.Ownership).ToDictionary(group => group.Key, group => group.Count()) : [],
                     RerankerModelId = crossEncoderModel?.ModelId,
                     RerankerQueryTokens = scoredQueryTokens,
                     RerankerUsedQueryTokens = scoredUsedQueryTokens,

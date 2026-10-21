@@ -94,7 +94,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore : IManagedReposit
 
         await using var generation = CreateCommand(connection, transaction, "SELECT revision FROM managed_memory_repositories WHERE repository_identity = $repo;", repositoryIdentity);
         var revision = Convert.ToInt64(await generation.ExecuteScalarAsync(cancellationToken), CultureInfo.InvariantCulture);
-        var matches = await ReadLexicalMatchesAsync(connection, transaction, repositoryIdentity, lexicalTerms, null, lexicalOptions.MinimumMatchedTerms, cancellationToken);
+        var matches = await ReadLexicalMatchesAsync(connection, transaction, repositoryIdentity, lexicalTerms, null, cancellationToken);
         var snapshot = new RepositoryMemoryReadSnapshot(repositoryIdentity, revision, entries, matches, warnings);
         if (lexicalOptions.FuzzyEnabled)
         {

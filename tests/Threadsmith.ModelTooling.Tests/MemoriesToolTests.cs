@@ -18,6 +18,27 @@ using Xunit;
 /// <summary>Exercises explicit memory admission and actual conversation dispatch boundaries.</summary>
 public static class MemoriesToolTests
 {
+    /// <summary>Retired scoring blocks cannot activate a removed policy or replace a valid repository snapshot.</summary>
+    [Theory]
+    [InlineData("Recall")]
+    [InlineData("Reconciliation")]
+    [InlineData("Intelligence:Recall")]
+    [InlineData("Intelligence:Reconciliation")]
+    public static void Retired_scoring_configuration_is_rejected(string route)
+    {
+        var valid = new ConfigurationBuilder().Build();
+        var retired = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            [$"tools:config:memories:{route}:Scoring:Mode"] = "Weighted",
+        }).Build();
+        Assert.Throws<ArgumentException>(() => new RepositoryMemoryConfiguration(retired, valid, Path.GetTempPath()));
+        var source = new RepositoryMemoryConfiguration(valid, valid, Path.GetTempPath());
+        var before = source.CaptureCurrent();
+        var exception = Assert.Throws<ArgumentException>(() => source.BindRepository(Path.GetTempPath(), retired));
+        Assert.Contains("retired", exception.Message, StringComparison.Ordinal);
+        Assert.Same(before, source.CaptureCurrent());
+    }
+
     /// <summary>Memory operations may repeat across rounds, but identical siblings remain invalid.</summary>
     [Fact]
     public static void Memory_call_reuse_preserves_batch_duplicate_rejection()
@@ -193,8 +214,8 @@ public static class MemoriesToolTests
         var definition = Assert.Single(definitions);
         using var schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
         var fields = schema.RootElement.GetProperty("properties");
-        Assert.Equal(["action", "afterKey", "afterPath", "concepts", "confirmDistinctFrom", "coverage", "coveredPaths", "expectedRevision", "id", "kind", "memoryType", "proposalKey", "proposalOffset", "supportingPaths", "survey", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
-        Assert.Equal(["add", "update", "remove", "list", "changes", "coverChanges", "coverage", "updateCoverage", "initializeCoverage"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(["action", "afterKey", "afterPath", "concepts", "confirmDistinctFrom", "coverage", "coveredPaths", "expectedRevision", "id", "kind", "memoryType", "ownership", "proposalKey", "proposalOffset", "query", "supportingPaths", "survey", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
+        Assert.Equal(["add", "update", "remove", "list", "search", "changes", "coverChanges", "coverage", "updateCoverage", "initializeCoverage"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
         Assert.Contains("null", fields.GetProperty("id").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("null", fields.GetProperty("text").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
@@ -632,8 +653,8 @@ public static class MemoriesToolTests
         using var body = JsonDocument.Parse(handler.Body);
         var function = Assert.Single(body.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
         var schema = function.GetProperty("parameters");
-        Assert.Equal(16, schema.GetProperty("properties").EnumerateObject().Count());
-        Assert.Equal(9, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
+        Assert.Equal(18, schema.GetProperty("properties").EnumerateObject().Count());
+        Assert.Equal(10, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
         Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
         Assert.DoesNotContain("SubmissionObserver", handler.Body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("MemorySubmission", handler.Body, StringComparison.OrdinalIgnoreCase);
@@ -655,8 +676,166 @@ public static class MemoriesToolTests
         }
     }
 
+    /// <summary>Verifies independent memory routing and intent eligibility.</summary>
+    [Theory]
+    [InlineData(null, SituationalConceptFilterMode.Off, false)]
+    [InlineData("Shadow", SituationalConceptFilterMode.Shadow, false)]
+    [InlineData("Enforce", SituationalConceptFilterMode.Enforce, false)]
+    [InlineData("invalid", SituationalConceptFilterMode.Off, true)]
+    [InlineData("99", SituationalConceptFilterMode.Off, true)]
+    public static void Independent_settings_preserve_legacy_routes(string? value, SituationalConceptFilterMode expected, bool diagnostic)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["tools:config:memories:Recall:SituationalConceptFilterMode"] = value,
+        }).Build();
+        var options = new RepositoryMemoryConfiguration(configuration, new ConfigurationBuilder().Build(), Path.GetTempPath()).CaptureCurrent();
+        Assert.Equal(expected, options.SituationalConceptFilterMode);
+        Assert.Equal(diagnostic, options.ConfigurationDiagnostics.Count > 0);
+        Assert.True(options.Intelligence.AutomaticRecallEnabled);
+        Assert.False(options.Intelligence.Enabled);
+        Assert.False(options.ConceptRecallEnabled);
+    }
+
+    /// <summary>Verifies independent memory routing and intent eligibility.</summary>
+    [Theory]
+    [InlineData(false, true, null, "disabled")]
+    [InlineData(true, false, null, "not_collected")]
+    [InlineData(true, true, "monitor failed", "error")]
+    [InlineData(true, true, null, "no_matches")]
+    public static async Task Search_uses_existing_availability_and_never_mutates(bool enabled, bool onboarded, string? fault, string outcome)
+    {
+        var path = Path.GetTempPath();
+        var memory = new MemoryService();
+        var search = new IntelligenceSearch();
+        var options = new Options { IntelligenceEnabled = enabled };
+        var tool = new MemoriesTool(memory, options, TestPromptLoader.Instance, new IntelligenceStatus(onboarded, fault), search);
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(path));
+        var result = await tool.ExecuteAsync(new MemoriesInput("search", Query: "architecture", Ownership: "intelligence"), context, TestContext.Current.CancellationToken);
+        Assert.Equal(outcome, result.Value.Outcome);
+        Assert.Empty(memory.Actions);
+        Assert.Equal(outcome == "no_matches", search.Request is not null);
+        if (search.Request is { } request)
+        {
+            Assert.Equal(RepositoryIdentity.Create(path), request.RepositoryIdentity);
+            Assert.Equal(RepositoryMemoryOwnership.Intelligence, request.Ownership);
+            Assert.True(request.IncludeStandingPreferences);
+            Assert.False(request.AllowEmbeddingRebuild);
+            Assert.Equal(SituationalConceptFilterMode.Off, request.SituationalConceptFilterMode);
+        }
+    }
+
+    /// <summary>Verifies independent memory routing and intent eligibility.</summary>
+    [Theory]
+    [InlineData("ordinary", "architecture")]
+    [InlineData(null, "architecture")]
+    [InlineData("intelligence", " ")]
+    public static async Task Search_rejects_unbounded_or_wrong_ownership(string? ownership, string query)
+    {
+        var tool = new MemoriesTool(new MemoryService(), new Options(), TestPromptLoader.Instance);
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(Path.GetTempPath()));
+        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => tool.ExecuteAsync(new MemoriesInput("search", Query: query, Ownership: ownership), context, TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => tool.ExecuteAsync(new MemoriesInput("search", Query: new string('x', 8001), Ownership: "intelligence"), context, TestContext.Current.CancellationToken));
+        Assert.False(new DefaultPolicyEngine().Evaluate(tool, new MemoriesInput("search", Query: "architecture", Ownership: "intelligence"), context.Invocation with { DenyAllTools = true }).IsAllowed);
+    }
+
+    /// <summary>Search preserves incompleteness, ownership isolation, bounds and cancellation.</summary>
+    [Fact]
+    public static async Task Search_reports_incomplete_dirty_evidence_and_rejects_cross_repository_results()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var path = Path.GetTempPath();
+        var memory = new MemoryService();
+        var entry = memory.Entry with
+        {
+            RepositoryIdentity = RepositoryIdentity.Create(path), Ownership = RepositoryMemoryOwnership.Intelligence,
+            Supports = [new RepositoryMemorySupport { Path = "source.cs", ContentHash = "observed", ObservedAt = DateTimeOffset.UnixEpoch, IsDirty = true }],
+        };
+        var search = new IntelligenceSearch { Result = new([new(entry, 1, 1, null, null)], []) { IsComplete = false } };
+        var tool = new MemoriesTool(memory, new Options { IntelligenceEnabled = true }, TestPromptLoader.Instance, new IntelligenceStatus(true, null), search);
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(path));
+        var input = new MemoriesInput("search", Query: "architecture", Ownership: "intelligence");
+        var result = await tool.ExecuteAsync(input, context, ct);
+        Assert.Equal("incomplete", result.Value.Outcome);
+        Assert.False(result.Value.IsComplete);
+        var info = Assert.Single(result.Value.Entries);
+        Assert.Equal("dirty", info.Freshness);
+        Assert.Equal("untrusted", info.Trust);
+        Assert.DoesNotContain("Embedding\":", JsonSerializer.Serialize(info), StringComparison.Ordinal);
+        search.Result = new([new(entry with { Text = new string('x', 50 * 1024) }, 1, 1, null, null)], []);
+        var bounded = await tool.ExecuteAsync(input, context, ct);
+        Assert.Empty(bounded.Value.Entries);
+        Assert.Equal(1, bounded.Value.OmittedEntries);
+        Assert.Equal("matches", bounded.Value.Outcome);
+        search.Result = new([new(entry with { RepositoryIdentity = "another repository" }, 1, 1, null, null)], []);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => tool.ExecuteAsync(input, context, ct));
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tool.ExecuteAsync(input, context, cancellation.Token));
+    }
+
+    /// <summary>Explicit search honors operator limits above and below the former fixed caps.</summary>
+    [Theory]
+    [InlineData(60 * 1024, 25)]
+    [InlineData(3000, 1)]
+    public static async Task Search_honors_configured_result_and_byte_limits(int maximumBytes, int expectedEntries)
+    {
+        var memory = new MemoryService();
+        var path = Path.GetTempPath();
+        var entries = Enumerable.Range(0, 25).Select(_ => memory.Entry with
+        {
+            Id = RepositoryMemoryId.New(), RepositoryIdentity = RepositoryIdentity.Create(path),
+            Ownership = RepositoryMemoryOwnership.Intelligence, Text = new string('x', 1600),
+        }).Select(entry => new RepositoryMemoryRetrievalCandidate(entry, 1, 1, null, null)).ToArray();
+        var search = new IntelligenceSearch { Result = new(entries, []) };
+        var options = new Options { IntelligenceEnabled = true, SearchMaximumResults = 25, MaximumListBytes = maximumBytes };
+        var tool = new MemoriesTool(memory, options, TestPromptLoader.Instance, new IntelligenceStatus(true, null), search);
+        var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(path));
+        var result = await tool.ExecuteAsync(new MemoriesInput("search", Query: "architecture", Ownership: "intelligence"), context, TestContext.Current.CancellationToken);
+        Assert.Equal(25, search.Request!.Options.MaximumResults);
+        Assert.Equal(expectedEntries, result.Value.Entries.Count);
+        Assert.Equal(25 - expectedEntries, result.Value.OmittedEntries);
+    }
+
+    private sealed class IntelligenceStatus : IRepositoryIntelligenceStatusProvider
+    {
+        private readonly bool _onboarded;
+        private readonly string? _fault;
+
+        public IntelligenceStatus(bool onboarded, string? fault)
+        {
+            _onboarded = onboarded;
+            _fault = fault;
+        }
+
+        public RepositoryIntelligenceStatus Capture(string repositoryIdentity) => new()
+        {
+            RepositoryIdentity = repositoryIdentity, Enabled = true, Onboarded = _onboarded, Fault = _fault,
+        };
+    }
+
+    private sealed class IntelligenceSearch : IRepositoryMemorySearch
+    {
+        public RepositoryMemoryRetrievalResult Result { get; set; } = new([], []);
+
+        public RepositoryMemorySearchRequest? Request { get; private set; }
+
+        public Task<RepositoryMemoryRetrievalResult> SearchAsync(RepositoryMemorySearchRequest request, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Request = request;
+            return Task.FromResult(Result);
+        }
+    }
+
     private sealed class Options : IRepositoryMemoryOptionsProvider
     {
+        public bool IntelligenceEnabled { get; init; }
+
+        public int SearchMaximumResults { get; init; } = 3;
+
+        public int MaximumListBytes { get; init; } = 48 * 1024;
+
         public int StandingPreferenceWarningThreshold { get; init; } = 3;
 
         public RepositoryMemoryOptions CaptureCurrent()
@@ -669,6 +848,8 @@ public static class MemoriesToolTests
             return new()
             {
                 StandingPreferenceWarningThreshold = StandingPreferenceWarningThreshold,
+                MaximumListBytes = MaximumListBytes,
+                Intelligence = new() { Enabled = IntelligenceEnabled, AutomaticRecallEnabled = false, Recall = new() { MaximumResults = SearchMaximumResults } },
             };
         }
     }

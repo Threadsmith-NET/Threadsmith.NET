@@ -425,7 +425,6 @@ Ordinary configuration; repository rebinding supported. Binding: `src/Threadsmit
 | `Reconciliation:Enabled` | `false` | Checks manual/model adds against both memory types. |
 | `Reconciliation:RerankerEnabled` | `true` | Required while reconciliation is enabled. |
 | `Recall:RerankerCandidateLimit` / `Reconciliation:RerankerCandidateLimit` | `8` / `20` | Independent positive hybrid comparison windows. |
-| `<route>:Scoring:SemanticCandidateLimit` / `LexicalCandidateLimit` / `ConceptCandidateLimit` | `20` / `20` / `4` | Weighted TopK per ownership partition; each 1..128. Routes: Recall, Reconciliation, Intelligence:Recall, Intelligence:Reconciliation. Prior remains default. |
 | `Recall:Concepts:Enabled` / `Reconciliation:Concepts:Enabled` | `false` / `true` | Independent concept discovery switches. |
 | `Recall:Concepts:CandidateLimit` / `Reconciliation:Concepts:CandidateLimit` | `4` | Reserved concept-only comparison slots per scenario. |
 | `Recall:Fuzzy:Enabled` / `Reconciliation:Fuzzy:Enabled` | `false` | One policy for both text and concept spelling alternatives per scenario. |

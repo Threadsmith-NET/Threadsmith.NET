@@ -12,6 +12,18 @@ public interface IRepositoryMemorySearch
 /// <summary>Host-owned direct search inputs, independent of conversational query construction.</summary>
 public sealed record RepositoryMemorySearchRequest
 {
+    /// <summary>Allows legacy automatic maintenance; explicit read-only search disables it.</summary>
+    public bool AllowEmbeddingRebuild { get; init; } = true;
+
+    /// <summary>Only the ordinary conversational route opts into eligibility filtering.</summary>
+    public SituationalConceptFilterMode SituationalConceptFilterMode { get; init; }
+
+    /// <summary>Current instruction evidence, separate from legacy discovery concepts.</summary>
+    public MemoryIntentSnapshot? IntentConcepts { get; init; }
+
+    /// <summary>Host instruction epoch expected for this request.</summary>
+    public long IntentEpoch { get; init; }
+
     /// <summary>Host-owned collection whose provisional contents use the shared search implementation.</summary>
     public RepositoryMemoryCollection? Collection { get; init; }
 
@@ -55,9 +67,6 @@ public sealed record RepositoryMemorySearchRequest
 /// <summary>Search qualification and selection bounds independent of context admission and storage capacity.</summary>
 public sealed record RepositoryMemorySearchOptions
 {
-    /// <summary>Final admission policy; weighted discovery has its own explicit limits and floor.</summary>
-    public RepositoryMemoryScoringOptions Scoring { get; init; } = new();
-
     /// <summary>Strict semantic discovery floor.</summary>
     public double SemanticMinimum { get; init; } = RepositoryMemoryOptions.DefaultSemanticMinimum;
 
@@ -101,7 +110,6 @@ public sealed record RepositoryMemorySearchOptions
         options.Validate();
         return new()
         {
-            Scoring = options.RecallScoring,
             Lexical = options.Lexical,
             SemanticMinimum = options.SemanticMinimum,
             MaximumResults = options.EffectiveContextMaximum,
@@ -122,7 +130,6 @@ public sealed record RepositoryMemorySearchOptions
     {
         return ForRecall(options) with
         {
-            Scoring = options.ReconciliationScoring,
             SemanticMinimum = options.ReconciliationSemanticMinimum,
             MaximumResults = checked(options.ReconciliationCandidateLimit + (options.ReconciliationConceptsEnabled ? options.ReconciliationConceptCandidateLimit : 0)),
             RerankerEnabled = options.ReconciliationRerankerEnabled,
@@ -138,8 +145,6 @@ public sealed record RepositoryMemorySearchOptions
     /// <summary>Validates search bounds without consulting context or storage options.</summary>
     public void Validate()
     {
-        ArgumentNullException.ThrowIfNull(Scoring);
-        Scoring.Validate(RerankerEnabled);
         ArgumentNullException.ThrowIfNull(Lexical);
         Lexical.Validate();
         ArgumentOutOfRangeException.ThrowIfNegative(MaximumResults);
@@ -179,14 +184,20 @@ public enum RepositoryMemorySearchBranchStatus
 /// <summary>Structured search evidence; window omissions are separate from later output or context omissions.</summary>
 public sealed record RepositoryMemorySearchDetails
 {
-    /// <summary>Effective independent scoring limits, floor, weights and threshold.</summary>
-    public RepositoryMemoryScoringOptions ScoringOptions { get; init; } = new();
+    /// <summary>Effective ordinary eligibility policy; direct intelligence and reconciliation remain Off.</summary>
+    public SituationalConceptFilterMode ConceptFilterMode { get; init; }
 
-    /// <summary>Weighted scoring status; failed inference is never represented as valid zero evidence.</summary>
-    public RepositoryMemorySearchBranchStatus Scoring { get; init; }
+    /// <summary>Version of eligibility decisions.</summary>
+    public int ConceptPolicyVersion { get; init; } = MemoryIntentSnapshot.PolicyVersion;
 
-    /// <summary>Frozen candidate counts by ownership; normalization never crosses these boundaries.</summary>
-    public IReadOnlyDictionary<RepositoryMemoryOwnership, int> ScoringPoolSizes { get; init; } = new Dictionary<RepositoryMemoryOwnership, int>();
+    /// <summary>Current instruction revision without message or argument text.</summary>
+    public long IntentEpoch { get; init; }
+
+    /// <summary>Number of bounded hints available to eligibility.</summary>
+    public int IntentConceptCount { get; init; }
+
+    /// <summary>Whether differing tool origins required conservative fallback.</summary>
+    public bool MixedIntentOrigins { get; init; }
 
     /// <summary>Cross-encoder identity selected for this pass, absent when disabled or unavailable.</summary>
     public string? RerankerModelId { get; init; }
@@ -257,11 +268,17 @@ public sealed record RepositoryMemoryCandidateSearchEvidence(
     int? QueryTokens,
     int? DocumentTokens)
 {
-    /// <summary>Ownership identifies the independent normalization pool.</summary>
-    public RepositoryMemoryOwnership Ownership { get; init; }
+    /// <summary>Discovery matched an original normalized hint exactly.</summary>
+    public bool ExactConceptDiscovery { get; init; }
 
-    /// <summary>Successful weighted decision including rejections, absent when scoring failed or was not requested.</summary>
-    public RepositoryMemoryScoreEvidence? ScoreEvidence { get; init; }
+    /// <summary>Discovery matched a spelling-resolved hint rather than the original.</summary>
+    public bool SpellingAssistedConceptDiscovery { get; init; }
+
+    /// <summary>Eligibility decision before comparison allocation; shadow decisions never change selection.</summary>
+    public string? ConceptPolicyDecision { get; init; }
+
+    /// <summary>Ownership identifies the memory partition.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; }
 
     /// <summary>Query terms matched by lexical discovery, without memory text.</summary>
     public IReadOnlyList<string> MatchedTerms { get; init; } = [];
@@ -270,12 +287,6 @@ public sealed record RepositoryMemoryCandidateSearchEvidence(
 /// <summary>Bounded typo recovery shared by both memory search consumers.</summary>
 public sealed record RepositoryMemoryLexicalOptions
 {
-    /// <summary>Required matching query groups, capped by query size; weighted discovery uses one (FTS OR).</summary>
-    public int MinimumMatchedTerms { get; init; } = 2;
-
-    /// <summary>Retain original exact-query scores; disable when comparing raw scores across expanded matches.</summary>
-    public bool PreserveExactScores { get; init; } = true;
-
     /// <summary>Enables expansion of terms absent from the indexed vocabulary.</summary>
     public bool FuzzyEnabled { get; init; }
 
@@ -291,8 +302,6 @@ public sealed record RepositoryMemoryLexicalOptions
     /// <summary>Validates finite work bounds and enabled distance policy.</summary>
     public void Validate()
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(MinimumMatchedTerms, 1);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(MinimumMatchedTerms, 2);
         ArgumentOutOfRangeException.ThrowIfLessThan(MaximumExpansionsPerTerm, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(MaximumExpansionsPerTerm, 3);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumExpansions);

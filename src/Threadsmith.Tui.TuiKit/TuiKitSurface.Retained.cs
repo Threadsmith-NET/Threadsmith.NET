@@ -2,6 +2,7 @@ namespace Threadsmith.Tui.TuiKit;
 
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
+using System.Threading.Channels;
 using Threadsmith.Core;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Contracts;
@@ -9,7 +10,7 @@ using Threadsmith.Interaction.Presentation;
 using TUIKit.Modals;
 
 /// <summary>Owns startup, command-help, and immediate-toggle modal lifetimes on the existing terminal runtime.</summary>
-internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface, IContextUsageSurface
+internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteractionActionToggleSurface, IInteractionHelpSurface, IContextUsageSurface, IRepositoryMemoryListSurface
 {
     private readonly List<string> _startupPhases = [];
     private IReadOnlyList<string> _startupDetails = [];
@@ -18,9 +19,48 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     private Func<IReadOnlyList<SemanticStartupPhaseSnapshot>>? _startupProgress;
 
     /// <inheritdoc />
+    public Task ShowRepositoryMemoriesAsync(RepositoryMemoryListSnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        return ShowRetainedModalAsync(
+            new RepositoryMemoryModal(snapshot, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture(), () => _app.MouseCaptureEnabled),
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task ManageRepositoryMemoriesAsync(
+        RepositoryMemoryListSnapshot snapshot,
+        Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+        CancellationToken cancellationToken = default)
+    {
+        var modal = new RepositoryMemoryModal(snapshot, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture(), () => _app.MouseCaptureEnabled) { CanManage = true };
+        return RunMemoryModalAsync(
+            modal,
+            modal.Changes,
+            async (request, token) =>
+        {
+            RepositoryMemoryListSnapshot? refreshed = null;
+            string? error = null;
+            try
+            {
+                refreshed = request.Delete
+                    ? await change(request.Item, null, token)
+                    : await EditRepositoryMemoryAsync(request.Item, change, token);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                error = exception.Message;
+            }
+
+            await EnqueueAsync(() => modal.CompleteChange(refreshed, error), token);
+            return false;
+        },
+            cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task ShowContextUsageAsync(ContextUsageSnapshot? snapshot, CancellationToken cancellationToken = default)
     {
-        return ShowReadOnlyModalAsync(
+        return ShowRetainedModalAsync(
             new ContextUsageModal(
                 snapshot,
                 ResolveStyle,
@@ -34,7 +74,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     public Task ShowCommandHelpAsync(IReadOnlyList<InteractiveCommandDescriptor> commands, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(commands);
-        return ShowReadOnlyModalAsync(new CommandHelpModal(commands, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()), cancellationToken);
+        return ShowRetainedModalAsync(new CommandHelpModal(commands, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture()), cancellationToken);
     }
 
     /// <inheritdoc />
@@ -164,7 +204,91 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         return SelectTogglesCoreAsync(request, change, action, cancellationToken);
     }
 
-    private async Task ShowReadOnlyModalAsync(Modal modal, CancellationToken cancellationToken)
+    private async Task<RepositoryMemoryListSnapshot?> EditRepositoryMemoryAsync(
+        RepositoryMemoryListItem item,
+        Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+        CancellationToken cancellationToken)
+    {
+        var modal = new RepositoryMemoryEditModal(item.Text, ResolveStyle, _limits, () => _app.MouseCaptureEnabled, () => _app.ToggleMouseCapture()) { CopyRequested = Copy };
+        modal.PasteRequested = () => RequestPaste(modal, () => modal.Text);
+        RepositoryMemoryListSnapshot? refreshed = null;
+        await RunMemoryModalAsync(
+            modal,
+            modal.Saves,
+            async (text, token) =>
+        {
+            try
+            {
+                refreshed = await change(item, text, token);
+                return true;
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                await EnqueueAsync(() => modal.SaveFailed(exception.Message), token);
+                return false;
+            }
+        },
+            cancellationToken);
+        return refreshed;
+    }
+
+    [SuppressMessage("Usage", "VSTHRD003", Justification = "Modal completion is owned by the dedicated terminal loop.")]
+    private async Task RunMemoryModalAsync<T>(
+        Modal modal,
+        ChannelReader<T> requests,
+        Func<T, CancellationToken, Task<bool>> apply,
+        CancellationToken cancellationToken)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var completion = ShowRetainedModalAsync(modal, lifetime.Token);
+        try
+        {
+            while (!completion.IsCompleted)
+            {
+                var next = requests.ReadAsync(lifetime.Token).AsTask();
+                if (await Task.WhenAny(next, completion) == completion)
+                {
+                    await lifetime.CancelAsync();
+                    try
+                    {
+                        await next;
+                    }
+                    catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+                    {
+                    }
+
+                    break;
+                }
+
+                if (await apply(await next, cancellationToken))
+                {
+                    await EnqueueAsync(
+                        () =>
+                    {
+                        modal.RequestClose(null);
+                        _app.Modals.RemoveClosed();
+                    },
+                        cancellationToken);
+                    break;
+                }
+            }
+
+            await completion;
+        }
+        finally
+        {
+            await lifetime.CancelAsync();
+            try
+            {
+                await completion;
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            {
+            }
+        }
+    }
+
+    private async Task ShowRetainedModalAsync(Modal modal, CancellationToken cancellationToken)
     {
         Task<string?>? completion = null;
         await EnqueueAsync(
@@ -176,13 +300,19 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             cancellationToken);
         try
         {
-            _ = await (completion ?? throw new InvalidOperationException("Read-only modal did not open.")).WaitAsync(cancellationToken);
+            _ = await (completion ?? throw new InvalidOperationException("Retained modal did not open.")).WaitAsync(cancellationToken);
         }
         finally
         {
             if (!_stop.IsCancellationRequested)
             {
-                await EnqueueAsync(() => modal.RequestClose(null), _stop.Token);
+                await EnqueueAsync(
+                    () =>
+                {
+                    modal.RequestClose(null);
+                    _app.Modals.RemoveClosed();
+                },
+                    _stop.Token);
             }
         }
     }

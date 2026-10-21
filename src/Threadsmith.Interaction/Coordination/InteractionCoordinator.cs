@@ -3348,10 +3348,40 @@ public sealed partial class InteractionCoordinator
                         sessionId,
                         repositoryIdentity,
                         cancellationToken);
-                    await _surface.WriteAsync(
-                        FormatRepositoryMemorySnapshot(listed),
-                        PresentationTextRole.Status,
-                        cancellationToken);
+                    if (_surface.Surface is IRepositoryMemoryListSurface memorySurface)
+                    {
+                        await memorySurface.ManageRepositoryMemoriesAsync(
+                            new RepositoryMemoryListSnapshot(
+                                listed.Entries.Select(item => new RepositoryMemoryListItem(item.Id, item.Text, item.Origin, item.MemoryType, item.Ownership) { Revision = item.Revision }).ToArray(),
+                                listed.Warnings.ToArray()),
+                            async (item, text, token) =>
+                            {
+                                if (text is null)
+                                {
+                                    await _presenter.ForgetRepositoryMemoryAsync(sessionId, repositoryIdentity, item.Id, token);
+                                }
+                                else
+                                {
+                                    await _presenter.UpdateRepositoryMemoryAsync(
+                                        new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, item.Id, text) { ExpectedRevision = item.Revision },
+                                        token);
+                                }
+
+                                var refreshed = await _presenter.ListRepositoryMemoryAsync(sessionId, repositoryIdentity, token);
+                                return new RepositoryMemoryListSnapshot(
+                                    refreshed.Entries.Select(entry => new RepositoryMemoryListItem(entry.Id, entry.Text, entry.Origin, entry.MemoryType, entry.Ownership) { Revision = entry.Revision }).ToArray(),
+                                    refreshed.Warnings.ToArray());
+                            },
+                            cancellationToken);
+                    }
+                    else
+                    {
+                        await _surface.WriteAsync(
+                            FormatRepositoryMemorySnapshot(listed),
+                            PresentationTextRole.Status,
+                            cancellationToken);
+                    }
+
                     return;
 
                 case "inspect":

@@ -198,6 +198,9 @@ public sealed record RepositoryIntelligenceState
 /// <summary>Independent intelligence policies, captured through normal repository configuration.</summary>
 public sealed record RepositoryIntelligenceOptions
 {
+    /// <summary>Includes intelligence in automatic context; missing legacy settings preserve this route.</summary>
+    public bool AutomaticRecallEnabled { get; init; } = true;
+
     /// <summary>Enables previously onboarded guidance; never initiates collection.</summary>
     public bool Enabled { get; init; }
 

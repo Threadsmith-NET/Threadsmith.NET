@@ -1145,6 +1145,8 @@ public sealed partial class SessionApplication :
 
         public long? MemorySetRevision { get; set; }
 
+        public MemoryIntentState MemoryIntent { get; } = new();
+
         public SortedSet<string> MemoryConcepts { get; } = new(StringComparer.Ordinal);
 
         public string? MemoryRepositoryIdentity { get; set; }
@@ -1155,9 +1157,12 @@ public sealed partial class SessionApplication :
 
         public bool MemoriesEnabled { get; set; }
 
-        public bool UsesMemoryConcepts => MemoriesEnabled
+        public bool UsesConceptDiscovery => MemoriesEnabled
             && (MemoryOptions?.ConceptRecallEnabled == true
-                || (IntelligenceEnabled && MemoryOptions?.Intelligence.Recall.ConceptRecallEnabled == true));
+                || (IntelligenceEnabled && MemoryOptions?.Intelligence.AutomaticRecallEnabled == true && MemoryOptions.Intelligence.Recall.ConceptRecallEnabled));
+
+        public bool UsesMemoryConcepts => UsesConceptDiscovery
+            || (MemoriesEnabled && MemoryOptions?.SituationalConceptFilterMode is SituationalConceptFilterMode.Shadow or SituationalConceptFilterMode.Enforce);
 
         public SessionId SessionId { get; }
 

@@ -5,14 +5,14 @@ using System.Text.Json.Serialization;
 /// <summary>Effective repository memory bounds and retrieval policy, frozen for each operation or user turn.</summary>
 public sealed record RepositoryMemoryOptions
 {
+    /// <summary>Optional ordinary situational eligibility policy, independent of discovery.</summary>
+    public SituationalConceptFilterMode SituationalConceptFilterMode { get; init; }
+
+    /// <summary>Bounded configuration diagnostics without setting contents.</summary>
+    public IReadOnlyList<string> ConfigurationDiagnostics { get; init; } = [];
+
     /// <summary>Independent ownership, retrieval and collection settings for intelligence.</summary>
     public RepositoryIntelligenceOptions Intelligence { get; init; } = new();
-
-    /// <summary>Independent ordinary recall fusion policy.</summary>
-    public RepositoryMemoryScoringOptions RecallScoring { get; init; } = new();
-
-    /// <summary>Independent ordinary reconciliation fusion policy.</summary>
-    public RepositoryMemoryScoringOptions ReconciliationScoring { get; init; } = new();
 
     /// <summary>Displays actually submitted memory content through the shared output projection.</summary>
     public bool ShowMemoryOutput { get; init; } = true;
@@ -107,10 +107,6 @@ public sealed record RepositoryMemoryOptions
     {
         ArgumentNullException.ThrowIfNull(Intelligence);
         Intelligence.Validate();
-        ArgumentNullException.ThrowIfNull(RecallScoring);
-        ArgumentNullException.ThrowIfNull(ReconciliationScoring);
-        RecallScoring.Validate(RerankerEnabled);
-        ReconciliationScoring.Validate(ReconciliationRerankerEnabled);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReconciliationCandidateLimit);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ConceptCandidateLimit);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(ReconciliationConceptCandidateLimit);

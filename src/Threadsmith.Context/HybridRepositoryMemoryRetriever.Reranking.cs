@@ -32,9 +32,8 @@ public sealed partial class HybridRepositoryMemoryRetriever
         List<string> diagnostics,
         CancellationToken cancellationToken)
     {
-        var weighted = options.Scoring.Mode == RepositoryMemoryScoringMode.Weighted;
-        var fallback = weighted ? [] : ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null).ToArray();
-        var failurePolicy = weighted ? "omitting weighted results" : "using qualified hybrid ranking";
+        var fallback = ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null).ToArray();
+        const string failurePolicy = "using qualified hybrid ranking";
         if (!options.RerankerEnabled || ranked.Length == 0)
         {
             if (!options.RerankerEnabled && ranked.Any(candidate => candidate.ConceptMatches.Count > 0 && candidate.LexicalRank is null && candidate.SemanticRank is null))
@@ -60,7 +59,7 @@ public sealed partial class HybridRepositoryMemoryRetriever
                 throw new InvalidOperationException("The cross-encoder descriptor is invalid.");
             }
 
-            var candidates = options.Scoring.Mode == RepositoryMemoryScoringMode.Weighted ? ranked : [.. ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null)
+            RepositoryMemoryRetrievalCandidate[] candidates = [.. ranked.Where(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null)
                 .Take(options.RerankerCandidateLimit)
                 .Concat(ranked.Where(candidate => candidate.LexicalRank is null && candidate.SemanticRank is null)
                     .Take(options.ConceptRecallEnabled ? options.ConceptCandidateLimit : 0))];

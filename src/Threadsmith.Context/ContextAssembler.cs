@@ -1050,6 +1050,8 @@ public sealed class ContextAssembler : IContextAssembler
                 TaskIntent = task.Intent,
                 Options = request.RepositoryMemoryOptions ?? new RepositoryMemoryOptions(),
                 Concepts = request.RepositoryMemoryConcepts,
+                IntentConcepts = request.MemoryIntentConcepts,
+                IntentEpoch = request.MemoryIntentEpoch,
             },
             cancellationToken);
         foreach (var entry in retrieval.StandingPreferences)
@@ -1594,7 +1596,7 @@ public sealed class ContextAssembler : IContextAssembler
         public IReadOnlyList<RepositoryMemoryContextItemProjection> CreateProjections()
         {
             return [.. _standingPreferences.Select(item => CreateProjection(item.Candidate, true, "Standing preference included independently of the current query.", item.Tokens)),
-                .. _included.Select(item => CreateProjection(item.Candidate, true, item.Candidate.ScoreEvidence is null ? "Included by qualified hybrid retrieval and context budget." : "Included by weighted score admission and context budget.", item.Tokens)), .. _excluded];
+                .. _included.Select(item => CreateProjection(item.Candidate, true, "Included by qualified hybrid retrieval and context budget.", item.Tokens)), .. _excluded];
         }
 
         public int EstimateAddition(RepositoryMemoryRetrievalCandidate candidate)
@@ -1678,7 +1680,6 @@ public sealed class ContextAssembler : IContextAssembler
                 SemanticRank = candidate.SemanticRank,
                 CosineSimilarity = candidate.CosineSimilarity,
                 CrossEncoderScore = candidate.CrossEncoderScore,
-                ScoreEvidence = candidate.ScoreEvidence,
             };
         }
     }

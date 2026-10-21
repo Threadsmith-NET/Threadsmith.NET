@@ -212,6 +212,8 @@ This table is navigation only. Each active document owns its status, delivery tr
 | Maintenance | [maintenance-test-audit-ci-infrastructure.md](maintenance-test-audit-ci-infrastructure.md) | Test audit source fixtures and CI evidence |
 | Maintenance | [maintenance-memory-recall-audit.md](maintenance-memory-recall-audit.md) | Complete memory comparisons and current relevance |
 | Maintenance | [maintenance-weighted-memory-scoring.md](maintenance-weighted-memory-scoring.md) | Three-signal scoring and measured admission |
+| Maintenance | [maintenance-memory-retrieval-cleanup.md](maintenance-memory-retrieval-cleanup.md) | Baseline retrieval cleanup |
+| Maintenance | [maintenance-memory-intelligence-routing.md](maintenance-memory-intelligence-routing.md) | Independent intelligence routing and situational concept eligibility |
 
 ## Update discipline
 

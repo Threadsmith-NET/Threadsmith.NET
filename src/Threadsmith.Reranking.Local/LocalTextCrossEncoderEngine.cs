@@ -74,91 +74,7 @@ internal sealed class LocalTextCrossEncoderEngine : IDisposable
         ArgumentNullException.ThrowIfNull(tokenizer);
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(document);
-        var first = tokenizer.EncodeToIds(query, addSpecialTokens: false);
-        var context = useRecallQuery && !string.IsNullOrWhiteSpace(taskIntent)
-            && !query.Contains(taskIntent, StringComparison.Ordinal)
-            ? tokenizer.EncodeToIds(taskIntent, addSpecialTokens: false) : [];
-        var originalQueryTokens = first.Count + context.Count;
-        if (useRecallQuery)
-        {
-            // Keep current instructions ahead of historical context, using the same
-            // document-independent question across every scoring batch.
-            if (first.Count > RecallQueryTokens)
-            {
-                var firstEnd = query.Length;
-                var lastStart = 0;
-                for (var index = 0; index < query.Length - 1; index++)
-                {
-                    if (query[index] is not ('\r' or '\n')
-                        && !(query[index] is '.' or '?' or '!' && char.IsWhiteSpace(query[index + 1])))
-                    {
-                        continue;
-                    }
-
-                    var next = index + 1;
-                    while (next < query.Length && char.IsWhiteSpace(query[next]))
-                    {
-                        next++;
-                    }
-
-                    if (next < query.Length)
-                    {
-                        firstEnd = Math.Min(firstEnd, index + 1);
-                        lastStart = next;
-                    }
-                }
-
-                var opening = tokenizer.EncodeToIds(query[..firstEnd], addSpecialTokens: false);
-                var closing = tokenizer.EncodeToIds(query[lastStart..], addSpecialTokens: false);
-                first = [.. opening.Take(RecallQueryTokens / 2), .. closing.TakeLast(RecallQueryTokens / 2)];
-            }
-            else
-            {
-                first = [.. first, .. context.Take(RecallQueryTokens - first.Count)];
-            }
-        }
-
-        var second = tokenizer.EncodeToIds(document, addSpecialTokens: false);
-        var fullCount = checked(first.Count + second.Count + 3);
-        if (fullCount > MaximumTokens)
-        {
-            throw new TextCrossEncoderInputException(first.Count, second.Count, MaximumTokens);
-        }
-
-        var length = fullCount;
-        var ids = new long[length];
-        var mask = new long[length];
-        var types = new long[length];
-        var position = 0;
-        var segment = 0L;
-        Add(ClassificationTokenId);
-        foreach (var token in first)
-        {
-            Add(token);
-        }
-
-        Add(SeparatorTokenId);
-        segment = 1;
-        foreach (var token in second)
-        {
-            Add(token);
-        }
-
-        Add(SeparatorTokenId);
-        return new EncodedPair(ids, mask, types, fullCount, false)
-        {
-            QueryTokenCount = originalQueryTokens,
-            UsedQueryTokenCount = first.Count,
-            DocumentTokenCount = second.Count,
-        };
-
-        void Add(long token)
-        {
-            ids[position] = token;
-            mask[position] = 1;
-            types[position] = segment;
-            position++;
-        }
+        return Encode(tokenizer, PrepareQuery(tokenizer, query, useRecallQuery, taskIntent), document);
     }
 
     /// <summary>Runs one cancellable batch inference and returns finite raw logits in input order.</summary>
@@ -172,7 +88,8 @@ internal sealed class LocalTextCrossEncoderEngine : IDisposable
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
-        var pairs = documents.Select(document => Encode(_tokenizer, query, document, useRecallQuery, taskIntent)).ToArray();
+        var preparedQuery = PrepareQuery(_tokenizer, query, useRecallQuery, taskIntent);
+        var pairs = documents.Select(document => Encode(_tokenizer, preparedQuery, document)).ToArray();
         var sequenceLength = pairs.Max(pair => pair.InputIds.Length);
         var batchSize = pairs.Length;
         var elementCount = checked(batchSize * sequenceLength);
@@ -231,6 +148,103 @@ internal sealed class LocalTextCrossEncoderEngine : IDisposable
             throw new OperationCanceledException("Local cross-encoder inference was cancelled.", exception, cancellationToken);
         }
     }
+
+    private static PreparedQuery PrepareQuery(BertTokenizer tokenizer, string query, bool useRecallQuery, string? taskIntent)
+    {
+        var first = tokenizer.EncodeToIds(query, addSpecialTokens: false);
+        var context = useRecallQuery && !string.IsNullOrWhiteSpace(taskIntent)
+            && !query.Contains(taskIntent, StringComparison.Ordinal)
+            ? tokenizer.EncodeToIds(taskIntent, addSpecialTokens: false) : [];
+        var originalQueryTokens = first.Count + context.Count;
+        if (useRecallQuery)
+        {
+            // Keep current instructions ahead of historical context, using the same
+            // document-independent question across every scoring batch.
+            if (first.Count > RecallQueryTokens)
+            {
+                var firstEnd = query.Length;
+                var lastStart = 0;
+                for (var index = 0; index < query.Length - 1; index++)
+                {
+                    if (query[index] is not ('\r' or '\n')
+                        && !(query[index] is '.' or '?' or '!' && char.IsWhiteSpace(query[index + 1])))
+                    {
+                        continue;
+                    }
+
+                    var next = index + 1;
+                    while (next < query.Length && char.IsWhiteSpace(query[next]))
+                    {
+                        next++;
+                    }
+
+                    if (next < query.Length)
+                    {
+                        firstEnd = Math.Min(firstEnd, index + 1);
+                        lastStart = next;
+                    }
+                }
+
+                var opening = tokenizer.EncodeToIds(query[..firstEnd], addSpecialTokens: false);
+                var closing = tokenizer.EncodeToIds(query[lastStart..], addSpecialTokens: false);
+                first = [.. opening.Take(RecallQueryTokens / 2), .. closing.TakeLast(RecallQueryTokens / 2)];
+            }
+            else
+            {
+                first = [.. first, .. context.Take(RecallQueryTokens - first.Count)];
+            }
+        }
+
+        return new(first, originalQueryTokens);
+    }
+
+    private static EncodedPair Encode(BertTokenizer tokenizer, PreparedQuery query, string document)
+    {
+        var first = query.Tokens;
+        var second = tokenizer.EncodeToIds(document, addSpecialTokens: false);
+        var fullCount = checked(first.Count + second.Count + 3);
+        if (fullCount > MaximumTokens)
+        {
+            throw new TextCrossEncoderInputException(first.Count, second.Count, MaximumTokens);
+        }
+
+        var length = fullCount;
+        var ids = new long[length];
+        var mask = new long[length];
+        var types = new long[length];
+        var position = 0;
+        var segment = 0L;
+        Add(ClassificationTokenId);
+        foreach (var token in first)
+        {
+            Add(token);
+        }
+
+        Add(SeparatorTokenId);
+        segment = 1;
+        foreach (var token in second)
+        {
+            Add(token);
+        }
+
+        Add(SeparatorTokenId);
+        return new EncodedPair(ids, mask, types, fullCount, false)
+        {
+            QueryTokenCount = query.OriginalTokenCount,
+            UsedQueryTokenCount = first.Count,
+            DocumentTokenCount = second.Count,
+        };
+
+        void Add(long token)
+        {
+            ids[position] = token;
+            mask[position] = 1;
+            types[position] = segment;
+            position++;
+        }
+    }
+
+    private sealed record PreparedQuery(IReadOnlyList<int> Tokens, int OriginalTokenCount);
 
     private static void ValidateMetadata(InferenceSession session)
     {

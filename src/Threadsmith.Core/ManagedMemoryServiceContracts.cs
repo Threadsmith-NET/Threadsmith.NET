@@ -116,6 +116,12 @@ public interface IManagedRepositoryMemoryService
 /// <summary>Bounded retrieval query made exclusively from current instructions and active task intent.</summary>
 public sealed record RepositoryMemoryRetrievalRequest
 {
+    /// <summary>Current instruction evidence, separate from legacy discovery concepts.</summary>
+    public MemoryIntentSnapshot? IntentConcepts { get; init; }
+
+    /// <summary>Host instruction epoch expected for this request.</summary>
+    public long IntentEpoch { get; init; }
+
     /// <summary>Host-confirmed onboarded and healthy intelligence eligibility.</summary>
     public bool IntelligenceEnabled { get; init; }
 
@@ -155,9 +161,6 @@ public sealed record RepositoryMemoryRetrievalCandidate(
 
     /// <summary>Complete query content tokens used by the reranker, when supplied by the provider.</summary>
     public int? RerankerQueryTokens { get; init; }
-
-    /// <summary>Successful weighted admission evidence; null for prior mode or incomplete scoring.</summary>
-    public RepositoryMemoryScoreEvidence? ScoreEvidence { get; init; }
 
     /// <summary>Native SQLite BM25 returned by lexical discovery; lower is better.</summary>
     public double? LexicalScore { get; init; }

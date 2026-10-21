@@ -4,6 +4,22 @@ using Threadsmith.Core;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Presentation;
 
+/// <summary>Optional retained browser for stored repository memories.</summary>
+public interface IRepositoryMemoryListSurface
+{
+    /// <summary>Shows the supplied read-only projection until dismissed.</summary>
+    Task ShowRepositoryMemoriesAsync(RepositoryMemoryListSnapshot snapshot, CancellationToken cancellationToken = default);
+
+    /// <summary>Edits or deletes through host authority; null replacement text requests deletion.</summary>
+    Task ManageRepositoryMemoriesAsync(
+        RepositoryMemoryListSnapshot snapshot,
+        Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+        CancellationToken cancellationToken = default)
+    {
+        return ShowRepositoryMemoriesAsync(snapshot, cancellationToken);
+    }
+}
+
 /// <summary>Optional retained presentation of a frozen, size-only request snapshot.</summary>
 public interface IContextUsageSurface
 {

@@ -94,7 +94,7 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
 | `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
-| `System-RepositoryIntelligenceGuidance.md` | Enabled-only advisory implementation hints with supporting code/documentation file lists to inspect for similar implementations and reuse; current-source verification, history investigation, clarification of ambiguous task conflicts, and respect for explicit user-directed departures. | `None` |
+| `System-RepositoryIntelligenceGuidance.md` | Enabled-only targeted `memories search` guidance and advisory implementation hints with supporting code/documentation file lists to inspect for similar implementations and reuse; current-source verification, history investigation, clarification of ambiguous task conflicts, and respect for explicit user-directed departures. | `None` |
 | `System-StandingPreferenceGuidance.md` | Caption for always-included standing-preference memory blocks. | `None` |
 
 #### `RequiredOutput` family
@@ -594,7 +594,7 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates with required or optional investigation priority. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
+| `Tool-memories-Description.md` | Explicit memory writes, bounded current-repository intelligence search, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates with required or optional investigation priority. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
 | `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
 
 #### `read_file` family

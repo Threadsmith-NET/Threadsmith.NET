@@ -163,6 +163,94 @@ public static class MemoryTypeCommandTests
         Assert.Single(dispatcher.Entries);
     }
 
+    /// <summary>Both list aliases use the retained browser without dumping the list into the transcript.</summary>
+    [Theory]
+    [InlineData("/memory")]
+    [InlineData("/memory list")]
+    public static async Task Memory_list_uses_the_optional_browser(string command)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var dispatcher = new MemoryDispatcher(1);
+        dispatcher.Seed(RepositoryMemoryType.Situational);
+        dispatcher.Entries.Add(dispatcher.Entries[0] with { Id = RepositoryMemoryId.New(), Ownership = RepositoryMemoryOwnership.Intelligence });
+        var surface = new MemoryBrowserSurface([command, "/quit"]);
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
+        await coordinator.RunAsync(
+            "memory-command-fixture",
+            requestedTrust: RepositoryTrustLevel.UntrustedInspection,
+            repositoryConfigurationDirectoryExistedAtStartup: true,
+            cancellationToken: ct);
+        var snapshot = Assert.Single(surface.Snapshots);
+        Assert.Equal(dispatcher.Entries.Select(entry => entry.Id), snapshot.Entries.Select(entry => entry.Id));
+        Assert.Contains(snapshot.Entries, entry => entry.Ownership == RepositoryMemoryOwnership.Intelligence);
+        Assert.DoesNotContain("best-effort recall", surface.Output, StringComparison.Ordinal);
+        Assert.Single(dispatcher.Commands.OfType<ListRepositoryMemoryCommand>());
+    }
+
+    /// <summary>Browser edits preserve metadata and use revision-checked host commands.</summary>
+    [Theory]
+    [InlineData(RepositoryMemoryType.StandingPreference, RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Intelligence)]
+    public static async Task Browser_mutations_use_host_commands_with_revision_and_refresh(RepositoryMemoryType type, RepositoryMemoryOwnership ownership)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var dispatcher = new MemoryDispatcher(0);
+        dispatcher.Seed(type);
+        dispatcher.Entries[0] = dispatcher.Entries[0] with { Ownership = ownership, Revision = 7 };
+        var surface = new MemoryBrowserSurface(["/memory", "/quit"]) { Mutate = true };
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
+        await coordinator.RunAsync(
+            "memory-command-fixture",
+            requestedTrust: RepositoryTrustLevel.UntrustedInspection,
+            repositoryConfigurationDirectoryExistedAtStartup: true,
+            cancellationToken: ct);
+        var update = Assert.Single(dispatcher.Commands.OfType<UpdateRepositoryMemoryCommand>());
+        Assert.Equal(7, update.ExpectedRevision);
+        Assert.Null(update.MemoryType);
+        Assert.Equal("Edited memory", update.ReplacementText);
+        var afterEdit = surface.Snapshots[1].Entries.Single();
+        Assert.Equal(type, afterEdit.MemoryType);
+        Assert.Equal(ownership, afterEdit.Ownership);
+        Assert.Single(dispatcher.Commands.OfType<ForgetRepositoryMemoryCommand>());
+        Assert.Empty(surface.Snapshots[2].Entries);
+    }
+
+    private sealed class MemoryBrowserSurface : RecordingSurface, IRepositoryMemoryListSurface
+    {
+        public MemoryBrowserSurface(IEnumerable<string> inputs)
+            : base(inputs)
+        {
+        }
+
+        public List<RepositoryMemoryListSnapshot> Snapshots { get; } = [];
+
+        public bool Mutate { get; init; }
+
+        public async Task ManageRepositoryMemoriesAsync(
+            RepositoryMemoryListSnapshot snapshot,
+            Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+            CancellationToken cancellationToken = default)
+        {
+            await ShowRepositoryMemoriesAsync(snapshot, cancellationToken);
+            if (Mutate)
+            {
+                var edited = await change(snapshot.Entries.Single(), "Edited memory", cancellationToken);
+                Snapshots.Add(edited);
+                Snapshots.Add(await change(edited.Entries.Single(), null, cancellationToken));
+            }
+        }
+
+        public Task ShowRepositoryMemoriesAsync(RepositoryMemoryListSnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Snapshots.Add(snapshot);
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class MemoryDispatcher : ICommandDispatcher
     {
         private readonly SessionId _sessionId = SessionId.New();
@@ -199,6 +287,7 @@ public static class MemoryTypeCommandTests
                     []),
                 RememberRepositoryMemoryCommand remembered => Add(remembered),
                 UpdateRepositoryMemoryCommand updated => Update(updated),
+                ForgetRepositoryMemoryCommand removed => Entries.RemoveAll(entry => entry.Id == removed.MemoryId) > 0,
                 ListRepositoryMemoryCommand listed => new RepositoryMemoryReadSnapshot(listed.RepositoryIdentity, 1, Entries.ToArray(), [], []),
                 _ => throw new InvalidOperationException($"Unexpected command: {command.GetType().Name}."),
             };
@@ -261,7 +350,7 @@ public static class MemoryTypeCommandTests
         }
     }
 
-    private sealed class RecordingSurface : IInteractionSurface
+    private class RecordingSurface : IInteractionSurface
     {
         private readonly Queue<InteractionInput> _inputs;
 

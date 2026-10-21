@@ -186,6 +186,30 @@ public static class RepositorySettingsCoordinatorTests
         Assert.Empty(Directory.GetFiles(fixture.SettingsDirectory, "*.tmp"));
     }
 
+    /// <summary>Onboarding activation and rollback preserve explicit on-demand routing on disk and in memory.</summary>
+    [Fact]
+    public static async Task Intelligence_activation_preserves_automatic_recall_false()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var fixture = new Fixture();
+        const string json = """
+            {"tools":{"config":{"memories":{"Recall":{"SituationalConceptFilterMode":"Enforce"},"Intelligence":{"Enabled":false,"AutomaticRecallEnabled":false}}}}}
+            """;
+        await File.WriteAllTextAsync(fixture.ConfigurationPath, json, ct);
+        var configuration = new ConfigurationBuilder().AddJsonFile(fixture.ConfigurationPath).Build();
+        var options = new RepositoryMemoryConfiguration(configuration, new ConfigurationBuilder().Build(), fixture.Repository);
+        foreach (var enabled in (bool[])[true, false, true])
+        {
+            await options.SetIntelligenceEnabledAsync(fixture.Repository, enabled, ct);
+            Assert.False(options.CaptureCurrent().Intelligence.AutomaticRecallEnabled);
+            var reloaded = new ConfigurationBuilder().AddJsonFile(fixture.ConfigurationPath).Build();
+            var captured = options.ReadRepositoryOptions(reloaded);
+            Assert.Equal(enabled, captured.Intelligence.Enabled);
+            Assert.False(captured.Intelligence.AutomaticRecallEnabled);
+            Assert.Equal(SituationalConceptFilterMode.Enforce, captured.SituationalConceptFilterMode);
+        }
+    }
+
     private static Task<bool> PublishAsync(string path, ReadOnlyMemory<byte> content, bool overwrite, CancellationToken cancellationToken)
     {
         return RepositorySettingsCoordinator.UpdateAsync(

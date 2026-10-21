@@ -177,9 +177,6 @@ public sealed record ConversationContextItemProjection
 /// <summary>One repository-scoped memory inclusion or omission decision.</summary>
 public sealed record RepositoryMemoryContextItemProjection
 {
-    /// <summary>Weighted admission evidence, retained even when bounded search diagnostics omit this item.</summary>
-    public RepositoryMemoryScoreEvidence? ScoreEvidence { get; init; }
-
     /// <summary>Complete sanitized included assertion text, independent of display preferences.</summary>
     public string Text { get; init; } = string.Empty;
 

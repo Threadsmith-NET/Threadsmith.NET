@@ -224,6 +224,12 @@ public sealed record ContextAssemblyRequest
     /// <summary>Normalized applicability hints observed during this user turn.</summary>
     public IReadOnlyList<string> RepositoryMemoryConcepts { get; init; } = [];
 
+    /// <summary>Provenance of current instruction eligibility hints.</summary>
+    public MemoryIntentSnapshot? MemoryIntentConcepts { get; init; }
+
+    /// <summary>Current instruction revision.</summary>
+    public long MemoryIntentEpoch { get; init; }
+
     /// <summary>Configured prohibited repository paths.</summary>
     public IReadOnlyList<string> ProhibitedPaths { get; init; } = [];
 

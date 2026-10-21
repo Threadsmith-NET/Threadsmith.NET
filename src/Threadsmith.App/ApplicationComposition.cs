@@ -495,7 +495,7 @@ internal static class ApplicationComposition
             intelligenceOperations);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
-        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader, intelligence);
+        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader, intelligence, memoryRetriever);
         try
         {
             tools.ToolRegistry.RegisterOrReplace(memoriesTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "memories"));

@@ -294,7 +294,9 @@ public sealed partial class SessionApplication
         foreach (var message in messages)
         {
             registration.MemoryCurrentInstruction = message.Text;
-            if (!loopState.TransientState.HasResponses || registration.UsesMemoryConcepts)
+            registration.MemoryIntent.Advance();
+            if (!loopState.TransientState.HasResponses || registration.UsesConceptDiscovery
+                || registration.MemoryOptions?.SituationalConceptFilterMode == SituationalConceptFilterMode.Enforce)
             {
                 loopState.InvalidateFrozenContext();
             }
@@ -379,6 +381,7 @@ public sealed partial class SessionApplication
             if (registration.MemoryRepositoryIdentity != identity)
             {
                 registration.MemoryConcepts.Clear();
+                registration.MemoryIntent.Advance();
                 registration.MemoryRepositoryIdentity = identity;
                 registration.ConceptResolutionRetries = 0;
                 registration.ConceptOverflowReported = false;
@@ -499,6 +502,9 @@ public sealed partial class SessionApplication
                 RepositoryMemoryOptions = registration.MemoryOptions,
                 RepositoryMemoryCurrentInstruction = registration.MemoryCurrentInstruction,
                 RepositoryMemoryConcepts = registration.MemoryConcepts.ToArray(),
+                MemoryIntentEpoch = registration.MemoryIntent.Epoch,
+                MemoryIntentConcepts = registration.MemoryRepositoryIdentity is { } intentRepository
+                    ? registration.MemoryIntent.Capture(intentRepository, runId) : null,
                 ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
                 ContinuationImages = continuationImages,
             };
@@ -1377,6 +1383,8 @@ public sealed partial class SessionApplication
             }
         }
 
+        var intentEpoch = round.Registration.MemoryIntent.Epoch;
+        var intentRepository = round.Registration.MemoryRepositoryIdentity;
         var batchResults = await _toolPipeline.InvokePreparedBatchAsync(preparation, cancellationToken);
 
         // Historical user pixels can yield during context selection; current attachments and
@@ -1390,7 +1398,19 @@ public sealed partial class SessionApplication
             var result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages);
             if (round.Registration.UsesMemoryConcepts)
             {
-                foreach (var concept in result.Concepts)
+                if (intentRepository == round.Registration.MemoryRepositoryIdentity
+                    && round.Registration.MemoryIntent.Observe(intentEpoch, round.ModelRound, result.ToolInvocationId, result.Succeeded, result.Concepts))
+                {
+                    _logger.LogDebug("Memory intent v1 received a batch with {Count} admitted hints for run {RunId}, epoch {Epoch}, round {Round}, succeeded {Succeeded}, mode {Mode}.", result.Concepts.Count, round.RunId, intentEpoch, round.ModelRound, result.Succeeded, round.Registration.MemoryOptions?.SituationalConceptFilterMode);
+                    if (round.Registration.MemoryOptions?.SituationalConceptFilterMode == SituationalConceptFilterMode.Enforce)
+                    {
+                        loopState.InvalidateFrozenContext();
+                    }
+                }
+
+                // Shadow observes only baseline retrieval boundaries; it cannot create a new
+                // search, change a frozen query, or rewrite provider continuation by itself.
+                foreach (var concept in round.Registration.UsesConceptDiscovery ? result.Concepts : [])
                 {
                     if (round.Registration.MemoryConcepts.Contains(concept))
                     {

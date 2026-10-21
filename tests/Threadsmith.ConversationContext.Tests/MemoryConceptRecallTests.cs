@@ -207,6 +207,34 @@ public static class MemoryConceptRecallTests
         Assert.Single(result.RepositoryMemoryInclusions!);
     }
 
+    /// <summary>Spelling assistance expands discovery but cannot satisfy the exact eligibility gate.</summary>
+    [Fact]
+    public static async Task Spelling_only_candidates_are_excluded_before_reranking()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "iterator policy") with { Concepts = ["cancellation"] }, ct);
+        var store = new ConceptReadStore(await service.GetSnapshotAsync(MemoryTestData.Repository, ct));
+        var encoder = new MemoryScoreEncoder();
+        using var retriever = new HybridRepositoryMemoryRetriever(store, generator, encoder);
+        var turn = RunId.New();
+        var request = new RepositoryMemorySearchRequest
+            {
+                RepositoryIdentity = MemoryTestData.Repository, Ownership = RepositoryMemoryOwnership.Ordinary,
+                Query = "unrelated", Concepts = ["cancelation"], UserTurnId = turn,
+                IntentConcepts = new(MemoryTestData.Repository, turn, 0, [new(1, ToolInvocationId.New(), true, ["cancelation"])]),
+                SituationalConceptFilterMode = SituationalConceptFilterMode.Enforce,
+                Options = Options with { ConceptFuzzyEnabled = true, ConceptFuzzyMaximumDistance = 20 },
+            };
+        await retriever.SearchAsync(request, ct); // First native lookup is deliberately unavailable in this fixture.
+        var result = await retriever.SearchAsync(request, ct);
+        Assert.Empty(result.Selected);
+        Assert.True(Assert.Single(result.SearchDetails!.Candidates).SpellingAssistedConceptDiscovery);
+        Assert.Empty(encoder.Documents);
+    }
+
     private static RepositoryMemorySearchOptions Options => new() { ConceptRecallEnabled = true, RerankerEnabled = true, SemanticMinimum = 1 };
 
     private sealed class ConceptReadStore : IManagedRepositoryMemoryStore, IRepositoryMemoryTermResolver

@@ -69,14 +69,12 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
                 .DistinctBy(match => match.Term).OrderBy(match => match.Distance).ThenBy(match => match.Term, StringComparer.Ordinal)
                 .Take(options.MaximumExpansionsPerTerm)).Take(options.MaximumExpansions).ToArray();
             var matches = expansions.Length == 0 ? [] : await ReadLexicalMatchesAsync(
-                connection, transaction, snapshot.RepositoryIdentity, terms, expansions, options.MinimumMatchedTerms, cancellationToken);
+                connection, transaction, snapshot.RepositoryIdentity, terms, expansions, cancellationToken);
             var exactIds = snapshot.LexicalMatches.Select(match => match.Id).ToHashSet();
             return snapshot with
             {
                 LexicalMatches = expansions.Length == 0 ? snapshot.LexicalMatches
-                    : options.PreserveExactScores
-                        ? [.. snapshot.LexicalMatches, .. matches.Where(match => !exactIds.Contains(match.Id)).Select(match => match with { IsFuzzy = true })]
-                        : [.. matches.Select(match => match with { IsFuzzy = !exactIds.Contains(match.Id) })],
+                    : [.. snapshot.LexicalMatches, .. matches.Where(match => !exactIds.Contains(match.Id)).Select(match => match with { IsFuzzy = true })],
                 FuzzyLexicalStatus = RepositoryMemorySearchBranchStatus.Completed,
                 LexicalExpansions = expansions,
             };

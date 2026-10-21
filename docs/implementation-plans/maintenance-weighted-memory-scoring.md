@@ -1,6 +1,8 @@
 # Weighted memory scoring
 
-**Status:** Completed (implementation and evaluation; promotion rejected).
+**Status:** Completed (historical implementation and evaluation; promotion rejected).
+
+The runtime experiment was subsequently removed by [memory retrieval cleanup](maintenance-memory-retrieval-cleanup.md). The contract below records the evaluated implementation, not current configuration support.
 **Delivery track:** Maintenance.
 **Prerequisites:** Shared memory search and the completed recall/comparison repairs.
 

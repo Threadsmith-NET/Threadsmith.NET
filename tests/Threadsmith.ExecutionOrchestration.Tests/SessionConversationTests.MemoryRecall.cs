@@ -56,6 +56,9 @@ public sealed partial class SessionConversationTests
             && block.GetProperty("tool_use_id").GetString() == toolId);
         var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
         Assert.Contains(memory.Requests, request => request.Concepts.Contains("cancellation"));
+        Assert.Contains(memory.Requests, request => request.IntentConcepts is { } snapshot
+            && snapshot.Concepts.Contains("cancellation") && snapshot.RunId == request.UserTurnId
+            && snapshot.Epoch == request.IntentEpoch && snapshot.RepositoryIdentity == request.RepositoryIdentity);
         Assert.Equal(matches, provider.Requests[1].Messages.Any(message => message.SectionId == "repository-memory"
             && message.GetModelVisibleContent().Contains(memory.Entry.Text, StringComparison.Ordinal)));
     }
@@ -94,18 +97,26 @@ public sealed partial class SessionConversationTests
     }
 
     /// <summary>Concepts and admitted memory belong to one ordinary run and reset for the next request.</summary>
-    [Fact]
-    public async Task OrdinaryRuns_ResetConceptRecall()
+    [Theory]
+    [InlineData(SituationalConceptFilterMode.Off, true)]
+    [InlineData(SituationalConceptFilterMode.Shadow, true)]
+    [InlineData(SituationalConceptFilterMode.Enforce, false)]
+    public async Task OrdinaryRuns_ResetConceptRecall(SituationalConceptFilterMode mode, bool expansion)
     {
         var ct = TestContext.Current.CancellationToken;
         using var handler = new MemoryReplayHandler();
         using var client = new HttpClient(handler);
         var provider = new MemoryReplayProvider(client);
         await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
+        scenario.Memory.FilterMode = mode;
+        scenario.Memory.ExpansionEnabled = expansion;
         var first = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect cancellation"), ct);
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(first), ct));
         var memory = Assert.IsType<ConceptMemory>(scenario.Memory);
-        Assert.Contains(memory.Requests, request => request.Concepts.Contains("cancellation"));
+        Assert.Equal(expansion, memory.Requests.Any(request => request.Concepts.Contains("cancellation")));
+        Assert.Contains(memory.Requests, request => request.IntentConcepts is { } snapshot
+            && snapshot.Concepts.Contains("cancellation") && snapshot.RunId == request.UserTurnId
+            && snapshot.Epoch == request.IntentEpoch && snapshot.RepositoryIdentity == request.RepositoryIdentity);
         var count = memory.Requests.Count;
         var next = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Explain another topic"), ct);
         Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(next), ct));
@@ -115,11 +126,52 @@ public sealed partial class SessionConversationTests
         {
             Assert.Empty(request.Concepts);
             Assert.Empty(request.RetainedMemories);
+            Assert.Empty(request.IntentConcepts?.Concepts ?? []);
         });
+    }
+
+    /// <summary>Shadow collects hints without introducing non-baseline retrieval or replay rewrites.</summary>
+    [Fact]
+    public async Task ShadowWithoutDiscovery_PreservesFrozenContinuation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var handler = new MemoryReplayHandler();
+        using var client = new HttpClient(handler);
+        var provider = new MemoryReplayProvider(client);
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
+        scenario.Memory.FilterMode = SituationalConceptFilterMode.Shadow;
+        scenario.Memory.ExpansionEnabled = false;
+        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect repository"), ct);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+        Assert.Equal(2, provider.Requests.Count);
+        Assert.Single(scenario.Memory.Requests);
+        Assert.Equal(provider.Requests[0].Messages, provider.Requests[1].Messages.Take(provider.Requests[0].Messages.Count));
+        Assert.Equal(provider.Requests[0].HistoryRewriteGeneration, provider.Requests[1].HistoryRewriteGeneration);
+    }
+
+    /// <summary>Repeated hints do not rebuild context after eligibility has stabilized.</summary>
+    [Fact]
+    public async Task Enforce_identical_hints_preserve_frozen_context_on_subsequent_rounds()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var handler = new MemoryReplayHandler { EmitSecondTool = true, RepeatConcept = true };
+        using var client = new HttpClient(handler);
+        var provider = new MemoryReplayProvider(client);
+        await using var scenario = await ConversationScenario.CreateMemoryReplayAsync(provider, matches: true);
+        scenario.Memory.FilterMode = SituationalConceptFilterMode.Enforce;
+        scenario.Memory.ExpansionEnabled = false;
+        var run = await scenario.Dispatcher.DispatchAsync(new SubmitRequestCommand(scenario.SessionId, "Inspect repository"), ct);
+        Assert.True(await scenario.Dispatcher.DispatchAsync(new WaitForRunCommand(run), ct));
+        Assert.Equal(3, provider.Requests.Count);
+        Assert.Equal(2, scenario.Memory.Requests.Count);
     }
 
     private sealed class ConceptMemory : IManagedRepositoryMemoryService, IHybridRepositoryMemoryRetriever, IRepositoryMemoryOptionsProvider, IRepositoryIntelligenceStatusProvider
     {
+        public SituationalConceptFilterMode FilterMode { get; set; }
+
+        public bool ExpansionEnabled { get; set; } = true;
+
         public bool Matches { get; set; } = true;
 
         public bool IntelligenceOnly { get; init; }
@@ -147,7 +199,8 @@ public sealed partial class SessionConversationTests
         {
             return new()
             {
-                ConceptRecallEnabled = !IntelligenceOnly,
+                ConceptRecallEnabled = !IntelligenceOnly && ExpansionEnabled,
+                SituationalConceptFilterMode = FilterMode,
                 Intelligence = new() { Enabled = IntelligenceOnly },
             };
         }
@@ -267,6 +320,8 @@ public sealed partial class SessionConversationTests
 
         public bool EmitSecondTool { get; init; }
 
+        public bool RepeatConcept { get; init; }
+
         public Action? BeforeSecondResponse { get; set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -283,7 +338,7 @@ public sealed partial class SessionConversationTests
             var stream = Event("message_start", new { type = "message_start", message = new { id = "memory-response", type = "message", role = "assistant", model = "claude-test", content = Array.Empty<object>(), usage = new { input_tokens = 100, output_tokens = 0 } } });
             if (toolResponse)
             {
-                var arguments = Requests.Count == 1 ? "{\"concepts\":[\"cancellation\"]}" : "{\"path\":\".\",\"concepts\":[\"logging\"]}";
+                var arguments = Requests.Count == 1 ? "{\"concepts\":[\"cancellation\"]}" : RepeatConcept ? "{\"path\":\".\",\"concepts\":[\"cancellation\"]}" : "{\"path\":\".\",\"concepts\":[\"logging\"]}";
                 stream += Event("content_block_start", new { type = "content_block_start", index = 0, content_block = new { type = "tool_use", id = Requests.Count == 1 ? "wire-memory" : "wire-memory-2", name = "list_files", input = new { } } });
                 stream += Event("content_block_delta", new { type = "content_block_delta", index = 0, delta = new { type = "input_json_delta", partial_json = arguments } });
             }

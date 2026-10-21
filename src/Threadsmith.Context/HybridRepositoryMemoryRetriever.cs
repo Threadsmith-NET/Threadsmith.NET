@@ -53,9 +53,13 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             Ownership = RepositoryMemoryOwnership.Ordinary,
             UserTurnId = request.UserTurnId,
             Concepts = request.Concepts,
+            IntentConcepts = request.IntentConcepts,
+            IntentEpoch = request.IntentEpoch,
+            SituationalConceptFilterMode = request.Options.SituationalConceptFilterMode,
         };
         var ordinary = await SearchAsync(search, cancellationToken);
-        if (!request.IntelligenceEnabled || !request.Options.Intelligence.Enabled)
+        ordinary = ordinary with { Diagnostics = [.. request.Options.ConfigurationDiagnostics, .. ordinary.Diagnostics] };
+        if (!request.IntelligenceEnabled || !request.Options.Intelligence.Enabled || !request.Options.Intelligence.AutomaticRecallEnabled)
         {
             return ordinary;
         }
@@ -64,6 +68,8 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             search with
             {
                 Ownership = RepositoryMemoryOwnership.Intelligence,
+                SituationalConceptFilterMode = SituationalConceptFilterMode.Off,
+                IntentConcepts = null,
                 Options = request.Options.Intelligence.Recall,
             },
             cancellationToken);
@@ -91,9 +97,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
         var store = request.Collection is null ? _store : _store.ForCollection(request.Collection);
         var concepts = request.Options.ConceptRecallEnabled ? request.Concepts.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).Take(MemoryConcepts.MaximumPerTurn).ToArray() : [];
         var semanticMinimum = request.Options.SemanticMinimum;
-        var scoring = request.Options.Scoring;
-        var weighted = scoring.Mode == RepositoryMemoryScoringMode.Weighted;
-        var lexicalOptions = weighted ? request.Options.Lexical with { MinimumMatchedTerms = 1, PreserveExactScores = false } : request.Options.Lexical;
+        var lexicalOptions = request.Options.Lexical;
         var query = request.Query;
         var bounded = request.QueryBounded;
         IReadOnlyList<RepositoryMemoryEntry> standingPreferences = [];
@@ -113,14 +117,25 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
             var recallKey = request.RecallQuery is { } recall
                 ? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{recall.Instruction.Length}:{recall.Instruction}{recall.TaskIntent}")))
                 : "strict";
-            string RankingKey(long revision) => string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, revision, request.Ownership, request.IncludeStandingPreferences, recallKey, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
+            var policyKey = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? "off"
+                : string.Join(':', MemoryIntentSnapshot.PolicyVersion, request.SituationalConceptFilterMode, request.UserTurnId, request.IntentEpoch, request.IntentConcepts?.CacheKey);
+            string RankingKey(long revision) => string.Join(':', request.RepositoryIdentity, request.Collection?.Id, request.Collection?.Generation, revision, request.Ownership, request.IncludeStandingPreferences, request.AllowEmbeddingRebuild, policyKey, recallKey, request.QueryBounded, request.Options.ConceptRecallEnabled, string.Join(',', concepts), request.Options.ConceptCandidateLimit, request.Options.ConceptFuzzyEnabled, request.Options.ConceptFuzzyMaximumDistance, queryKey, request.Options, minimumKey, rerankerKey);
             string? DegradedKey(string key) => request.UserTurnId is { } turn ? key + ":degraded:" + turn.Value.ToString("D") : null;
             RepositoryMemoryRetrievalResult? CachedRanking(string key)
             {
                 var degraded = DegradedKey(key);
                 return _rankingCache.TryGetValue(key, out var cached)
                     || (degraded is not null && _rankingCache.TryGetValue(degraded, out cached))
-                    ? cached with { QueryEmbeddingCacheHit = _queryCache.ContainsKey(queryKey), RankingCacheHit = true }
+                    ? cached with
+                    {
+                        QueryEmbeddingCacheHit = _queryCache.ContainsKey(queryKey),
+                        RankingCacheHit = true,
+                        SearchDetails = cached.SearchDetails is { } details ? details with
+                        {
+                            IntentConceptCount = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? 0 : request.IntentConcepts?.Concepts.Count ?? 0,
+                            MixedIntentOrigins = request.SituationalConceptFilterMode != SituationalConceptFilterMode.Off && request.IntentConcepts?.MixedOrigins == true,
+                        } : null,
+                    }
                     : null;
             }
 
@@ -153,8 +168,10 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     StandingPreferences = standingPreferences,
                     SearchDetails = new RepositoryMemorySearchDetails
                     {
-                        ScoringOptions = scoring,
-                        Scoring = weighted ? RepositoryMemorySearchBranchStatus.NotRequired : RepositoryMemorySearchBranchStatus.Disabled,
+                        ConceptFilterMode = request.SituationalConceptFilterMode,
+                        IntentEpoch = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? 0 : request.IntentEpoch,
+                        IntentConceptCount = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? 0 : request.IntentConcepts?.Concepts.Count ?? 0,
+                        MixedIntentOrigins = request.SituationalConceptFilterMode != SituationalConceptFilterMode.Off && request.IntentConcepts?.MixedOrigins == true,
                         Lexical = RepositoryMemorySearchBranchStatus.Completed,
                         FuzzyLexical = snapshot.FuzzyLexicalStatus,
                         LexicalExpansions = snapshot.LexicalExpansions,
@@ -210,7 +227,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 }
             }
 
-            if (embedding is not null)
+            if (embedding is not null && request.AllowEmbeddingRebuild)
             {
                 var rebuilt = await RebuildEmbeddingsAsync(snapshot, model, diagnostics, store, cancellationToken);
                 if (rebuilt)
@@ -224,29 +241,21 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 }
             }
 
-            var ownership = snapshot.Entries.ToDictionary(entry => entry.Id, entry => entry.Ownership);
-            var lexicalMatches = snapshot.LexicalMatches.Where(match => ownership.ContainsKey(match.Id))
+            var entryIds = snapshot.Entries.Select(entry => entry.Id).ToHashSet();
+            var lexicalMatches = snapshot.LexicalMatches.Where(match => entryIds.Contains(match.Id))
                 .GroupBy(match => match.Id)
-                .Select(group => weighted ? group.MinBy(match => match.Bm25) : group.OrderBy(match => match.IsFuzzy).ThenBy(match => match.Bm25).First())
-                .OfType<RepositoryMemoryLexicalMatch>().ToArray();
-            if (weighted && snapshot.LexicalMatches.Any(match => !double.IsFinite(match.Bm25)))
-            {
-                throw new InvalidOperationException("Weighted lexical discovery returned non-finite BM25 evidence.");
-            }
-
-            var lexicalPool = lexicalMatches.OrderBy(match => !weighted && match.IsFuzzy).ThenBy(match => match.Bm25).ThenBy(match => match.Id.Value)
-                .GroupBy(match => weighted ? ownership[match.Id] : default)
-                .SelectMany(group => group.Take(weighted ? scoring.LexicalCandidateLimit : int.MaxValue)).ToArray();
+                .Select(group => group.OrderBy(match => match.IsFuzzy).ThenBy(match => match.Bm25).First())
+                .ToArray();
+            var lexicalPool = lexicalMatches.OrderBy(match => match.IsFuzzy).ThenBy(match => match.Bm25).ThenBy(match => match.Id.Value)
+                .ToArray();
             var lexical = lexicalPool.Select((match, index) => (match.Id, Rank: index + 1)).ToDictionary(match => match.Id, match => match.Rank);
             var lexicalById = lexicalPool.ToDictionary(match => match.Id);
             var semantic = embedding is null
                 ? []
                 : snapshot.Entries.Where(entry => IsCompatible(entry, model))
                     .Select(entry => (entry.Id, Similarity: Cosine(embedding.Vector.Span, entry.Embedding.Span)))
-                    .Where(match => weighted ? scoring.SemanticDiscoveryMinimum is null || match.Similarity > scoring.SemanticDiscoveryMinimum : match.Similarity > semanticMinimum)
+                    .Where(match => match.Similarity > semanticMinimum)
                     .OrderByDescending(match => match.Similarity).ThenBy(match => match.Id.Value)
-                    .GroupBy(match => weighted ? ownership[match.Id] : default)
-                    .SelectMany(group => group.Take(weighted ? scoring.SemanticCandidateLimit : int.MaxValue))
                     .Select((match, index) => (match.Id, match.Similarity, Rank: index + 1))
                     .ToDictionary(match => match.Id, match => (match.Similarity, match.Rank));
             var resolvedConcepts = new HashSet<string>(StringComparer.Ordinal);
@@ -304,8 +313,6 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 .Select(entry => (entry.Id, Matches: entry.Concepts.Intersect(resolvedConcepts, StringComparer.Ordinal).ToArray()))
                 .Where(item => item.Matches.Length > 0)
                 .OrderBy(item => item.Id.Value)
-                .GroupBy(item => ownership[item.Id])
-                .SelectMany(group => group.Take(weighted ? scoring.ConceptCandidateLimit : int.MaxValue))
                 .ToDictionary(item => item.Id, item => item.Matches);
             var ranked = snapshot.Entries.Where(entry => lexical.ContainsKey(entry.Id) || semantic.ContainsKey(entry.Id) || conceptMatches.ContainsKey(entry.Id))
                 .Select(entry =>
@@ -313,7 +320,7 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     int? lexicalRank = lexical.TryGetValue(entry.Id, out var rank) ? rank : null;
                     var hasSemantic = semantic.TryGetValue(entry.Id, out var vectorMatch);
                     int? semanticRank = hasSemantic ? vectorMatch.Rank : null;
-                    var score = weighted ? 0 : (lexicalRank is { } left ? 1d / (FusionConstant + left) : 0)
+                    var score = (lexicalRank is { } left ? 1d / (FusionConstant + left) : 0)
                         + (semanticRank is { } right ? 1d / (FusionConstant + right) : 0);
                     return new RepositoryMemoryRetrievalCandidate(entry, score, lexicalRank, semanticRank, hasSemantic ? vectorMatch.Similarity : null)
                     {
@@ -323,37 +330,34 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     };
                 })
                 .OrderByDescending(candidate => candidate.Score).ThenBy(candidate => candidate.Entry.Id.Value).ToArray();
+            var discovered = ranked;
+            var policyDecisions = ranked.ToDictionary(candidate => candidate.Entry.Id, candidate =>
+                MemoryIntentPolicy.Decide(request, candidate.Entry));
+            if (request.SituationalConceptFilterMode != SituationalConceptFilterMode.Off)
+            {
+                foreach (var group in policyDecisions.Values.GroupBy(reason => reason))
+                {
+                    diagnostics.Add($"Situational concept policy v1 {request.SituationalConceptFilterMode}: {group.Key}={group.Count()}.");
+                }
+            }
+
+            if (request.SituationalConceptFilterMode == SituationalConceptFilterMode.Enforce)
+            {
+                ranked = [.. ranked.Where(candidate => policyDecisions[candidate.Entry.Id] != "concept_nonmatch_policy")];
+            }
+
             var hybridCandidates = ranked.Count(candidate => candidate.LexicalRank is not null || candidate.SemanticRank is not null);
             var conceptOnlyCandidates = ranked.Length - hybridCandidates;
             var comparedCandidates = request.Options.RerankerEnabled
-                ? weighted ? ranked.Length : Math.Min(hybridCandidates, request.Options.RerankerCandidateLimit)
+                ? Math.Min(hybridCandidates, request.Options.RerankerCandidateLimit)
                     + Math.Min(conceptOnlyCandidates, request.Options.ConceptRecallEnabled ? request.Options.ConceptCandidateLimit : 0)
                 : 0;
             var (selected, rerankerStatus, pairTruncated, inputFailure) = await RerankAsync(
                 ranked, query, request.RecallQuery, request.Options, crossEncoderModel, diagnostics, cancellationToken);
-            var discoveryFailed = snapshot.FuzzyLexicalStatus == RepositoryMemorySearchBranchStatus.Unavailable || embedding is null
-                || resolution.DegradedReason is not null || snapshot.Entries.Any(entry => !IsCompatible(entry, model));
-            var scoringStatus = RepositoryMemorySearchBranchStatus.Disabled;
-            if (weighted)
-            {
-                scoringStatus = discoveryFailed ? RepositoryMemorySearchBranchStatus.Unavailable : rerankerStatus;
-                selected = scoringStatus is RepositoryMemorySearchBranchStatus.Completed or RepositoryMemorySearchBranchStatus.NotRequired
-                    ? FuseWeightedScores(selected, scoring) : [];
-                if (discoveryFailed)
-                {
-                    diagnostics.Add("Weighted discovery is incomplete; weighted results were omitted.");
-                }
-            }
-
-            var qualifiedById = ranked.ToDictionary(candidate => candidate.Entry.Id);
+            var qualifiedById = discovered.ToDictionary(candidate => candidate.Entry.Id);
             var scoredById = selected.ToDictionary(candidate => candidate.Entry.Id);
             var scoredQueryTokens = selected.FirstOrDefault()?.RerankerQueryTokens;
             var scoredUsedQueryTokens = selected.FirstOrDefault()?.RerankerUsedQueryTokens;
-            if (weighted)
-            {
-                selected = [.. selected.Where(candidate => candidate.ScoreEvidence?.Accepted == true)];
-            }
-
             var resultLimitOmissions = Math.Max(0, selected.Length - request.Options.MaximumResults);
             selected = [.. selected.Take(request.Options.MaximumResults)];
             var selectedIds = selected.Select(candidate => candidate.Entry.Id).ToHashSet();
@@ -362,10 +366,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 qualifiedById.TryGetValue(entry.Id, out var qualified);
                 scoredById.TryGetValue(entry.Id, out var scored);
                 var outcome = selectedIds.Contains(entry.Id) ? "selected"
+                    : request.SituationalConceptFilterMode == SituationalConceptFilterMode.Enforce && policyDecisions.GetValueOrDefault(entry.Id) == "concept_nonmatch_policy" ? "concept_nonmatch_policy"
                     : qualified is null ? "no branch match"
-                    : weighted && scored?.ScoreEvidence?.Accepted == false ? "below final threshold"
                     : scored is not null ? "result limit"
-                    : weighted ? "weighted scoring unavailable"
                     : rerankerStatus == RepositoryMemorySearchBranchStatus.Completed ? "comparison window"
                     : "concept-only deferred without complete reranking";
                 return new RepositoryMemoryCandidateSearchEvidence(
@@ -378,7 +381,9 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                     scored?.RerankerQueryTokens,
                     scored?.RerankerDocumentTokens)
                 {
-                    ScoreEvidence = scored?.ScoreEvidence,
+                    ExactConceptDiscovery = qualified?.ConceptMatches.Intersect(concepts, StringComparer.Ordinal).Any() == true,
+                    SpellingAssistedConceptDiscovery = qualified?.ConceptMatches.Except(concepts, StringComparer.Ordinal).Any() == true,
+                    ConceptPolicyDecision = policyDecisions.GetValueOrDefault(entry.Id),
                     Ownership = entry.Ownership,
                     MatchedTerms = qualified?.MatchedTerms ?? [],
                 };
@@ -415,9 +420,10 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 IsComplete = !degraded && !truncated,
                 SearchDetails = new RepositoryMemorySearchDetails
                 {
-                    ScoringOptions = scoring,
-                    Scoring = scoringStatus,
-                    ScoringPoolSizes = weighted ? ranked.GroupBy(candidate => candidate.Entry.Ownership).ToDictionary(group => group.Key, group => group.Count()) : [],
+                    ConceptFilterMode = request.SituationalConceptFilterMode,
+                    IntentEpoch = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? 0 : request.IntentEpoch,
+                    IntentConceptCount = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? 0 : request.IntentConcepts?.Concepts.Count ?? 0,
+                    MixedIntentOrigins = request.SituationalConceptFilterMode != SituationalConceptFilterMode.Off && request.IntentConcepts?.MixedOrigins == true,
                     RerankerModelId = crossEncoderModel?.ModelId,
                     RerankerQueryTokens = scoredQueryTokens,
                     RerankerUsedQueryTokens = scoredUsedQueryTokens,
@@ -482,8 +488,10 @@ public sealed partial class HybridRepositoryMemoryRetriever : IHybridRepositoryM
                 IsComplete = false,
                 SearchDetails = new RepositoryMemorySearchDetails
                 {
-                    ScoringOptions = scoring,
-                    Scoring = weighted ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Disabled,
+                    ConceptFilterMode = request.SituationalConceptFilterMode,
+                    IntentEpoch = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? 0 : request.IntentEpoch,
+                    IntentConceptCount = request.SituationalConceptFilterMode == SituationalConceptFilterMode.Off ? 0 : request.IntentConcepts?.Concepts.Count ?? 0,
+                    MixedIntentOrigins = request.SituationalConceptFilterMode != SituationalConceptFilterMode.Off && request.IntentConcepts?.MixedOrigins == true,
                     Lexical = RepositoryMemorySearchBranchStatus.Unavailable,
                     FuzzyLexical = request.Options.Lexical.FuzzyEnabled ? RepositoryMemorySearchBranchStatus.Unavailable : RepositoryMemorySearchBranchStatus.Disabled,
                     Semantic = RepositoryMemorySearchBranchStatus.Unavailable,

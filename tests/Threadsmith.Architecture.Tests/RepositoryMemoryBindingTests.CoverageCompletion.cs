@@ -107,6 +107,10 @@ public static partial class RepositoryMemoryBindingTests
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await BindingFixture.CreateAsync(false);
         await using var intelligence = await IntelligenceFixture.CreateAsync(fixture, ct);
+        intelligence.Options.BindRepository(fixture.InitialRoot, intelligence.Options.CaptureCurrent() with
+        {
+            Intelligence = intelligence.Options.CaptureCurrent().Intelligence with { AutomaticRecallEnabled = false },
+        });
         await using (var operations = intelligence.CreateOperations())
         await using (var run = await operations.BeginAsync(SessionId.New(), RunId.New(), fixture.InitialRoot, RepositoryIntelligenceOperation.Onboard, ct))
         {
@@ -164,6 +168,7 @@ public static partial class RepositoryMemoryBindingTests
             return Task.CompletedTask;
         });
         await resumed.CompleteAsync(ct);
+        Assert.False(intelligence.Options.CaptureCurrent().Intelligence.AutomaticRecallEnabled);
         Assert.Null(await intelligence.Store.ReadOnboardingCheckpointAsync(intelligence.Identity, ct));
         Assert.Contains("allocation strategy", (await diagnostic.Task.WaitAsync(ct)).Message, StringComparison.Ordinal);
     }

@@ -8,7 +8,7 @@ public sealed record MemoriesInput(string Action, string? Id = null, string? Tex
     string? Kind = null, IReadOnlyList<string>? Concepts = null,
     IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null, long? ExpectedRevision = null,
     IReadOnlyList<string>? SupportingPaths = null, string? AfterPath = null, IReadOnlyList<string>? CoveredPaths = null,
-    MemoryCoverageInput? Coverage = null, string? AfterKey = null, IReadOnlyList<MemoryCoverageInput>? Survey = null, string? ProposalKey = null, int ProposalOffset = 0) : IConceptToolInput;
+    MemoryCoverageInput? Coverage = null, string? AfterKey = null, IReadOnlyList<MemoryCoverageInput>? Survey = null, string? ProposalKey = null, int ProposalOffset = 0, string? Query = null, string? Ownership = null) : IConceptToolInput;
 
 /// <summary>Onboarding investigation update; supporting paths are resolved to host-observed receipts.</summary>
 public sealed record MemoryCoverageInput(string Key, string Area, string Question, string Status,
@@ -34,6 +34,12 @@ public sealed record MemoryInfo(
     IReadOnlyList<string>? Concepts = null,
     bool TextTruncated = false)
 {
+    /// <summary>Search evidence freshness; supports remain advisory leads.</summary>
+    public string? Freshness { get; init; }
+
+    /// <summary>Search results are untrusted repository guidance.</summary>
+    public string? Trust { get; init; }
+
     /// <summary>Immutable ownership; collection may only mutate intelligence IDs.</summary>
     public string Ownership { get; init; } = "ordinary";
 
@@ -44,6 +50,12 @@ public sealed record MemoryInfo(
 /// <summary>A bounded operation outcome with explicit list omissions.</summary>
 public sealed record MemoriesOutput(string Action, string Outcome, string? Id, bool? Removed, IReadOnlyList<MemoryInfo> Entries, int OmittedEntries, string? StandingPreferenceWarning = null)
 {
+    /// <summary>Search completeness, independent of bounded output omissions.</summary>
+    public bool? IsComplete { get; init; }
+
+    /// <summary>Whether search query representation was truncated.</summary>
+    public bool QueryTruncated { get; init; }
+
     /// <summary>One bounded page of collection work; use its cursor for the next page.</summary>
     public RepositoryIntelligenceChangePage? Changes { get; init; }
 
@@ -72,6 +84,7 @@ public sealed record MemoriesOutput(string Action, string Outcome, string? Id, b
 /// <summary>Admits explicit memory changes through the shared repository memory service.</summary>
 public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransientToolActivityDetail
 {
+    private readonly IRepositoryMemorySearch? _search;
     private readonly IManagedRepositoryMemoryService _memories;
     private readonly IRepositoryMemoryOptionsProvider _options;
     private readonly IPromptLoader _prompts;
@@ -85,7 +98,8 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         IManagedRepositoryMemoryService memories,
         IRepositoryMemoryOptionsProvider options,
         IPromptLoader prompts,
-        IRepositoryIntelligenceStatusProvider? intelligence = null)
+        IRepositoryIntelligenceStatusProvider? intelligence = null,
+        IRepositoryMemorySearch? search = null)
     {
         ArgumentNullException.ThrowIfNull(memories);
         ArgumentNullException.ThrowIfNull(options);
@@ -94,6 +108,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         _options = options;
         _prompts = prompts;
         _intelligence = intelligence;
+        _search = search;
         _descriptionMaximumCharacters = options.CaptureCurrent().MaximumTextCharacters;
         var definition = ToolDefinitionFactory.Create<MemoriesInput, MemoriesOutput>(
             "memories",
@@ -113,7 +128,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             InputSchema = definition.InputSchema with
             {
                 JsonSchema = """
-                    {"type":"object","properties":{"action":{"type":"string","enum":["add","update","remove","list","changes","coverChanges","coverage","updateCoverage","initializeCoverage"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]},"kind":{"type":["string","null"],"enum":["unspecified","constraint","decision","convention","requirement","finding",null]},"concepts":{"type":["array","null"],"items":{"type":"string","maxLength":96},"maxItems":8},"confirmDistinctFrom":{"type":["array","null"],"items":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id","revision"],"additionalProperties":false}},"supportingPaths":{"type":["array","null"],"items":{"type":"string"}},"afterPath":{"type":["string","null"]},"coveredPaths":{"type":["array","null"],"items":{"type":"string"}},"expectedRevision":{"type":["integer","null"],"minimum":1},"afterKey":{"type":["string","null"],"maxLength":80},"coverage":{"type":["object","null"],"properties":{"key":{"type":"string","maxLength":80},"area":{"type":"string","maxLength":160},"question":{"type":"string","maxLength":600},"conclusion":{"type":"string","maxLength":1200},"gaps":{"type":"string","maxLength":600},"priority":{"type":"string","enum":["required","optional"]},"status":{"type":"string","enum":["uninvestigated","investigating","investigated","blocked","outOfScope"]},"memoryIds":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"supportingPaths":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"limitations":{"type":"string","maxLength":600},"followUpKeys":{"type":["array","null"],"items":{"type":"string","maxLength":80},"maxItems":8},"noMemoryReason":{"type":"string","maxLength":600},"resolvedProposalKeys":{"type":["array","null"],"items":{"type":"string","maxLength":64},"maxItems":8}},"required":["key","area","question","status"],"additionalProperties":false},"survey":{"type":["array","null"],"minItems":1,"maxItems":64,"items":{"type":"object","properties":{"key":{"type":"string","maxLength":80},"area":{"type":"string","maxLength":160},"question":{"type":"string","maxLength":600},"conclusion":{"type":"string","maxLength":1200},"gaps":{"type":"string","maxLength":600},"priority":{"type":"string","enum":["required","optional"]},"status":{"type":"string","enum":["uninvestigated","investigating","investigated","blocked","outOfScope"]},"memoryIds":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"supportingPaths":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"limitations":{"type":"string","maxLength":600},"followUpKeys":{"type":["array","null"],"items":{"type":"string","maxLength":80},"maxItems":8},"noMemoryReason":{"type":"string","maxLength":600},"resolvedProposalKeys":{"type":["array","null"],"items":{"type":"string","maxLength":64},"maxItems":8}},"required":["key","area","question","status"],"additionalProperties":false}},"proposalKey":{"type":["string","null"],"maxLength":64},"proposalOffset":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}
+                    {"type":"object","properties":{"query":{"type":["string","null"],"maxLength":8000},"ownership":{"type":["string","null"],"enum":["intelligence",null]},"action":{"type":"string","enum":["add","update","remove","list","search","changes","coverChanges","coverage","updateCoverage","initializeCoverage"]},"id":{"type":["string","null"]},"text":{"type":["string","null"]},"memoryType":{"type":["string","null"],"enum":["standingPreference","situational",null]},"kind":{"type":["string","null"],"enum":["unspecified","constraint","decision","convention","requirement","finding",null]},"concepts":{"type":["array","null"],"items":{"type":"string","maxLength":96},"maxItems":8},"confirmDistinctFrom":{"type":["array","null"],"items":{"type":"object","properties":{"id":{"type":"string"},"revision":{"type":"integer","minimum":1}},"required":["id","revision"],"additionalProperties":false}},"supportingPaths":{"type":["array","null"],"items":{"type":"string"}},"afterPath":{"type":["string","null"]},"coveredPaths":{"type":["array","null"],"items":{"type":"string"}},"expectedRevision":{"type":["integer","null"],"minimum":1},"afterKey":{"type":["string","null"],"maxLength":80},"coverage":{"type":["object","null"],"properties":{"key":{"type":"string","maxLength":80},"area":{"type":"string","maxLength":160},"question":{"type":"string","maxLength":600},"conclusion":{"type":"string","maxLength":1200},"gaps":{"type":"string","maxLength":600},"priority":{"type":"string","enum":["required","optional"]},"status":{"type":"string","enum":["uninvestigated","investigating","investigated","blocked","outOfScope"]},"memoryIds":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"supportingPaths":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"limitations":{"type":"string","maxLength":600},"followUpKeys":{"type":["array","null"],"items":{"type":"string","maxLength":80},"maxItems":8},"noMemoryReason":{"type":"string","maxLength":600},"resolvedProposalKeys":{"type":["array","null"],"items":{"type":"string","maxLength":64},"maxItems":8}},"required":["key","area","question","status"],"additionalProperties":false},"survey":{"type":["array","null"],"minItems":1,"maxItems":64,"items":{"type":"object","properties":{"key":{"type":"string","maxLength":80},"area":{"type":"string","maxLength":160},"question":{"type":"string","maxLength":600},"conclusion":{"type":"string","maxLength":1200},"gaps":{"type":"string","maxLength":600},"priority":{"type":"string","enum":["required","optional"]},"status":{"type":"string","enum":["uninvestigated","investigating","investigated","blocked","outOfScope"]},"memoryIds":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"supportingPaths":{"type":["array","null"],"items":{"type":"string"},"maxItems":8},"limitations":{"type":"string","maxLength":600},"followUpKeys":{"type":["array","null"],"items":{"type":"string","maxLength":80},"maxItems":8},"noMemoryReason":{"type":"string","maxLength":600},"resolvedProposalKeys":{"type":["array","null"],"items":{"type":"string","maxLength":64},"maxItems":8}},"required":["key","area","question","status"],"additionalProperties":false}},"proposalKey":{"type":["string","null"],"maxLength":64},"proposalOffset":{"type":"integer","minimum":0}},"required":["action"],"additionalProperties":false}
                     """,
             },
             Scheduling = new ToolSchedulingDescriptor
@@ -289,6 +304,11 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
 
         var repositoryIdentity = RepositoryIdentity.Create(context.Invocation.RepositoryPath);
         var options = _options.Capture(repositoryIdentity);
+        if (input.Action == "search")
+        {
+            return await SearchIntelligenceAsync(input, repositoryIdentity, options, cancellationToken);
+        }
+
         var collection = context.Invocation.IntelligenceRun?.Collection;
         if (collection is not null && input.Action is "add" or "update" && input.SupportingPaths is not { Count: > 0 })
         {
@@ -388,6 +408,12 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     /// <inheritdoc />
     protected override void ValidateInput(MemoriesInput input)
     {
+        if ((input.Action == "search" && (input.Ownership != "intelligence" || string.IsNullOrWhiteSpace(input.Query) || input.Query.Length > 8000))
+            || (input.Action != "search" && (input.Query is not null || input.Ownership is not null)))
+        {
+            throw new ToolArgumentValidationException("search requires query (1–8000 characters) and ownership: intelligence; these fields apply only to search.");
+        }
+
         ArgumentNullException.ThrowIfNull(input);
         _ = MemoryConcepts.Normalize(input.Concepts);
         if (input.ProposalOffset < 0 || (input.ProposalOffset != 0 && input.ProposalKey is null)
@@ -442,7 +468,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             "add" => input.Id is null && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "update" => IsId(input.Id) && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "remove" => IsId(input.Id) && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
-            "list" or "changes" or "coverChanges" or "coverage" or "updateCoverage" or "initializeCoverage" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
+            "search" or "list" or "changes" or "coverChanges" or "coverage" or "updateCoverage" or "initializeCoverage" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
             _ => false,
         };
         if (!valid)
@@ -455,6 +481,72 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     protected override string? DescribeActivity(MemoriesInput input)
     {
         return input.Id is null ? input.Action : $"{input.Action} {input.Id}";
+    }
+
+    private async Task<ToolExecution<MemoriesOutput>> SearchIntelligenceAsync(
+        MemoriesInput input, string repositoryIdentity, RepositoryMemoryOptions options, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var status = _intelligence?.Capture(repositoryIdentity);
+        var unavailable = !options.Intelligence.Enabled ? "disabled"
+            : status is null || status.Fault is not null ? "error"
+            : !status.Onboarded ? "not_collected"
+            : !status.IsEffective ? "disabled"
+            : _search is null ? "error" : null;
+        if (unavailable is not null || _search is null)
+        {
+            return new(new MemoriesOutput("search", unavailable ?? "error", null, null, [], 0), [], false);
+        }
+
+        var result = await _search.SearchAsync(
+            new RepositoryMemorySearchRequest
+        {
+            RepositoryIdentity = repositoryIdentity,
+            Query = input.Query ?? string.Empty,
+            Ownership = RepositoryMemoryOwnership.Intelligence,
+            IncludeStandingPreferences = true,
+            AllowEmbeddingRebuild = false,
+            Options = options.Intelligence.Recall,
+        },
+            cancellationToken);
+        var entries = new List<MemoryInfo>();
+        var bytes = 0;
+        foreach (var candidate in result.Selected)
+        {
+            var item = candidate.Entry;
+            if (item.RepositoryIdentity != repositoryIdentity || item.Ownership != RepositoryMemoryOwnership.Intelligence)
+            {
+                throw new InvalidOperationException("Intelligence search returned an entry outside the requested ownership or repository.");
+            }
+
+            var info = new MemoryInfo(item.Id.Value.ToString("D"), item.Text, item.Origin.ToString().ToLowerInvariant(), FormatMemoryType(item.MemoryType), item.CreatedAt, item.UpdatedAt, item.InclusionCount, item.LastIncludedAt, item.EmbeddingSpaceId, item.Revision, item.Kind.ToString().ToLowerInvariant(), item.Concepts)
+            {
+                Ownership = "intelligence", Supports = item.Supports,
+                Trust = "untrusted",
+                Freshness = item.Supports.Count == 0 || item.Supports.Any(support => support.IsUnknown) ? "unknown"
+                    : item.Supports.Any(support => support.IsDirty) ? "dirty" : "observed",
+            };
+            bytes += JsonSerializer.SerializeToUtf8Bytes(info).Length;
+            if (bytes > options.MaximumListBytes)
+            {
+                break;
+            }
+
+            entries.Add(info);
+        }
+
+        var outcome = result.SearchDetails?.Lexical == RepositoryMemorySearchBranchStatus.Unavailable ? "error"
+            : !result.IsComplete ? "incomplete" : result.Selected.Count == 0 ? "no_matches" : "matches";
+        var output = new MemoriesOutput("search", outcome, null, null, entries, result.Selected.Count - entries.Count)
+        {
+            IsComplete = result.IsComplete,
+            QueryTruncated = result.QueryTruncated,
+            SearchDetails = result.SearchDetails is { } details ? details with
+            {
+                Candidates = [], CandidateEvidenceOmissions = details.CandidateEvidenceOmissions + details.Candidates.Count,
+            } : null,
+        };
+        return new(output, [], false);
     }
 
     private string RenderDescription(int maximumCharacters)

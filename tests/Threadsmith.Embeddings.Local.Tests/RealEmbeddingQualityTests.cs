@@ -14,12 +14,10 @@ public sealed class RealEmbeddingQualityTests
 {
     /// <summary>Current intent displaces old recall in both partitions with real local inference.</summary>
     [Theory]
-    [InlineData(RepositoryMemoryOwnership.Ordinary, false)]
-    [InlineData(RepositoryMemoryOwnership.Intelligence, false)]
-    [InlineData(RepositoryMemoryOwnership.Ordinary, true)]
-    [InlineData(RepositoryMemoryOwnership.Intelligence, true)]
+    [InlineData(RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryOwnership.Intelligence)]
     [Trait("Category", "Integration")]
-    public static async Task ChangedIntentDisplacesRetainedMemory(RepositoryMemoryOwnership ownership, bool weighted)
+    public static async Task ChangedIntentDisplacesRetainedMemory(RepositoryMemoryOwnership ownership)
     {
         if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
             || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
@@ -58,8 +56,7 @@ public sealed class RealEmbeddingQualityTests
             {
                 RerankerEnabled = true,
                 ConceptRecallEnabled = true,
-                MaximumResults = weighted ? 3 : 1,
-                Scoring = new() { Mode = weighted ? RepositoryMemoryScoringMode.Weighted : RepositoryMemoryScoringMode.Prior, FinalThreshold = .6 },
+                MaximumResults = 1,
             },
         };
         var first = Assert.Single((await retriever.SearchAsync(request, ct)).Selected);
@@ -73,21 +70,14 @@ public sealed class RealEmbeddingQualityTests
             ct);
         Assert.Equal(ids[1], Assert.Single(changed.Selected).Entry.Id);
         Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, changed.SearchDetails?.Reranker);
-        if (weighted)
-        {
-            Assert.True(Assert.Single(changed.Selected).ScoreEvidence!.Accepted);
-            Assert.Contains(changed.SearchDetails!.Candidates, row => row.Id == ids[0] && row.Outcome == "below final threshold");
-        }
     }
 
     /// <summary>Long questions recover concept-only recall in both partitions without weakening complete comparisons.</summary>
     [Theory]
-    [InlineData(RepositoryMemoryOwnership.Ordinary, false)]
-    [InlineData(RepositoryMemoryOwnership.Intelligence, false)]
-    [InlineData(RepositoryMemoryOwnership.Ordinary, true)]
-    [InlineData(RepositoryMemoryOwnership.Intelligence, true)]
+    [InlineData(RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryOwnership.Intelligence)]
     [Trait("Category", "Integration")]
-    public static async Task LongQuestionsRecoverConceptOnlyRecall(RepositoryMemoryOwnership ownership, bool weighted)
+    public static async Task LongQuestionsRecoverConceptOnlyRecall(RepositoryMemoryOwnership ownership)
     {
         if (Environment.GetEnvironmentVariable("THREADSMITH_EMBEDDING_INTEGRATION") != "1"
             || Environment.GetEnvironmentVariable("THREADSMITH_RERANKING_INTEGRATION") != "1")
@@ -102,14 +92,13 @@ public sealed class RealEmbeddingQualityTests
         using var store = new SqliteManagedRepositoryMemoryStore(database.ConnectionString);
         await using var generator = new LocalTextEmbeddingGenerator();
         await using var encoder = new Threadsmith.Reranking.Local.LocalTextCrossEncoder();
-        var scoring = new RepositoryMemoryScoringOptions { Mode = weighted ? RepositoryMemoryScoringMode.Weighted : RepositoryMemoryScoringMode.Prior, FinalThreshold = .1, SemanticDiscoveryMinimum = 1 };
+
         var options = new RepositoryMemoryOptions
         {
-            RecallScoring = scoring,
             RerankerEnabled = true,
             ConceptRecallEnabled = true,
             SemanticMinimum = 1,
-            Intelligence = new() { Enabled = true, Recall = new() { RerankerEnabled = true, ConceptRecallEnabled = true, SemanticMinimum = 1, Scoring = scoring } },
+            Intelligence = new() { Enabled = true, Recall = new() { RerankerEnabled = true, ConceptRecallEnabled = true, SemanticMinimum = 1 } },
         };
         string[] texts =
         [
@@ -170,20 +159,7 @@ public sealed class RealEmbeddingQualityTests
             var target = Assert.Single(recall.Selected, item => item.Entry.Id == ids[1]);
             Assert.Null(target.LexicalRank);
             Assert.Null(target.SemanticRank);
-            if (weighted)
-            {
-                // The requested weights favor old-task lexical evidence over concept-only evidence.
-                // Keep this observed ranking tradeoff explicit rather than claim CE-only order survives fusion.
-                // At the character cap, the old task no longer fits and supplies no lexical match.
-                Assert.Equal(query.Length > options.MaximumQueryCharacters ? ids[1] : ids[0], recall.Selected[0].Entry.Id);
-                Assert.Equal(.25, target.ScoreEvidence!.FinalScore);
-                Assert.True(target.ScoreEvidence.Accepted);
-                Assert.Equal(1, target.ScoreEvidence.CrossEncoder);
-            }
-            else
-            {
-                Assert.Equal(ids[1], recall.Selected[0].Entry.Id);
-            }
+            Assert.Equal(ids[1], recall.Selected[0].Entry.Id);
 
             Assert.Equal(preference, Assert.Single(recall.StandingPreferences).Text);
             var details = ownership == RepositoryMemoryOwnership.Intelligence ? recall.IntelligenceSearchDetails : recall.SearchDetails;

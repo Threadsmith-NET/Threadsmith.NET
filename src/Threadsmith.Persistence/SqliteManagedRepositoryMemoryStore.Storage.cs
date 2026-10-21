@@ -238,7 +238,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
     }
 
     private static async Task<IReadOnlyList<RepositoryMemoryLexicalMatch>> ReadLexicalMatchesAsync(
-        SqliteConnection connection, SqliteTransaction transaction, string repositoryIdentity, IReadOnlyList<string> lexicalTerms, IReadOnlyList<MemoryTermMatch>? expansions, int minimumMatchedTerms, CancellationToken cancellationToken)
+        SqliteConnection connection, SqliteTransaction transaction, string repositoryIdentity, IReadOnlyList<string> lexicalTerms, IReadOnlyList<MemoryTermMatch>? expansions, CancellationToken cancellationToken)
     {
         var terms = lexicalTerms.Where(term => !string.IsNullOrWhiteSpace(term)
                 && !term.Any(char.IsControl))
@@ -304,7 +304,7 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
         while (await result.ReadAsync(cancellationToken))
         {
             var id = result.GetString(0);
-            if ((identifierMatches.Contains(id) || termMatches.GetValueOrDefault(id)?.Count >= Math.Min(minimumMatchedTerms, terms.Length))
+            if ((identifierMatches.Contains(id) || termMatches.GetValueOrDefault(id)?.Count >= Math.Min(2, terms.Length))
                 && Guid.TryParse(id, out var guid))
             {
                 matches.Add(new RepositoryMemoryLexicalMatch(new RepositoryMemoryId(guid), result.GetDouble(1)) { MatchedTerms = termMatches[id].ToArray() });

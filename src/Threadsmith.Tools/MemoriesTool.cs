@@ -8,7 +8,7 @@ public sealed record MemoriesInput(string Action, string? Id = null, string? Tex
     string? Kind = null, IReadOnlyList<string>? Concepts = null,
     IReadOnlyList<MemoryDistinctnessConfirmation>? ConfirmDistinctFrom = null, long? ExpectedRevision = null,
     IReadOnlyList<string>? SupportingPaths = null, string? AfterPath = null, IReadOnlyList<string>? CoveredPaths = null,
-    MemoryCoverageInput? Coverage = null, string? AfterKey = null, IReadOnlyList<MemoryCoverageInput>? Survey = null, string? ProposalKey = null, int ProposalOffset = 0) : IConceptToolInput;
+    MemoryCoverageInput? Coverage = null, string? AfterKey = null, IReadOnlyList<MemoryCoverageInput>? Survey = null, string? ProposalKey = null, int ProposalOffset = 0, string? Query = null, string? Ownership = null) : IConceptToolInput;
 
 /// <summary>Onboarding investigation update; supporting paths are resolved to host-observed receipts.</summary>
 public sealed record MemoryCoverageInput(string Key, string Area, string Question, string Status,
@@ -34,6 +34,12 @@ public sealed record MemoryInfo(
     IReadOnlyList<string>? Concepts = null,
     bool TextTruncated = false)
 {
+    /// <summary>Search evidence freshness; supports remain advisory leads.</summary>
+    public string? Freshness { get; init; }
+
+    /// <summary>Search results are untrusted repository guidance.</summary>
+    public string? Trust { get; init; }
+
     /// <summary>Immutable ownership; collection may only mutate intelligence IDs.</summary>
     public string Ownership { get; init; } = "ordinary";
 
@@ -44,6 +50,18 @@ public sealed record MemoryInfo(
 /// <summary>A bounded operation outcome with explicit list omissions.</summary>
 public sealed record MemoriesOutput(string Action, string Outcome, string? Id, bool? Removed, IReadOnlyList<MemoryInfo> Entries, int OmittedEntries, string? StandingPreferenceWarning = null)
 {
+    /// <summary>Stable reason for explicit intelligence availability or search outcome.</summary>
+    public string? ReasonCode { get; init; }
+
+    /// <summary>Query supplied to the shared search engine.</summary>
+    public string? Query { get; init; }
+
+    /// <summary>Search completeness, independent of bounded output omissions.</summary>
+    public bool? IsComplete { get; init; }
+
+    /// <summary>Whether search query representation was truncated.</summary>
+    public bool QueryTruncated { get; init; }
+
     /// <summary>One bounded page of collection work; use its cursor for the next page.</summary>
     public RepositoryIntelligenceChangePage? Changes { get; init; }
 
@@ -85,7 +103,8 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         IManagedRepositoryMemoryService memories,
         IRepositoryMemoryOptionsProvider options,
         IPromptLoader prompts,
-        IRepositoryIntelligenceStatusProvider? intelligence = null)
+        IRepositoryIntelligenceStatusProvider? intelligence = null,
+        IRepositoryMemorySearch? search = null)
     {
         ArgumentNullException.ThrowIfNull(memories);
         ArgumentNullException.ThrowIfNull(options);
@@ -147,6 +166,17 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     public override async Task<ToolExecution<MemoriesOutput>> ExecuteAsync(MemoriesInput input, ToolExecutionContext context, CancellationToken cancellationToken = default)
     {
         ValidateInput(input);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (input.Action == "search")
+        {
+            var removed = new MemoriesOutput("search", "legacy_search_removed", null, null, [], 0)
+            {
+                ReasonCode = "legacy_search_removed",
+                Resolution = "Use repository_intelligence with its required query field.",
+            };
+            return new(removed, [], false);
+        }
+
         if (context.Invocation.IntelligenceRun?.Operation == RepositoryIntelligenceOperation.Archeology && input.Action != "list")
         {
             throw new UnauthorizedAccessException("Archeology may read memories but cannot change them.");
@@ -362,7 +392,14 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
         {
             Prepared = collection is not null,
             EvictedIds = result.EvictedIds.Select(id => id.Value.ToString("D")).ToArray(),
-            SearchDetails = result.SearchDetails,
+
+            // Per-row inspection evidence must not displace actionable collision texts
+            // from the tool's bounded response. Context inspection keeps those rows.
+            SearchDetails = result.SearchDetails is { } details ? details with
+            {
+                Candidates = [],
+                CandidateEvidenceOmissions = details.CandidateEvidenceOmissions + details.Candidates.Count,
+            } : null,
             ReconciliationKey = result.ReconciliationKey,
             Resolution = result.Outcome == "reconciliationRequired"
                 ? "Not added. Update a matching existing ID using expectedRevision, or retry the unchanged proposal with confirmDistinctFrom for the displayed IDs/revisions. Within collection, earlier confirmations accumulate for that exact proposal; changed proposals start fresh and changed candidate revisions require review."
@@ -382,6 +419,17 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
     protected override void ValidateInput(MemoriesInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
+        if (input.Action == "search")
+        {
+            // Retained input fields allow pending historical calls to reach one correlated rejection.
+            return;
+        }
+
+        if (input.Query is not null || input.Ownership is not null)
+        {
+            throw new ToolArgumentValidationException("query and ownership are retired; use repository_intelligence(query).");
+        }
+
         _ = MemoryConcepts.Normalize(input.Concepts);
         if (input.ProposalOffset < 0 || (input.ProposalOffset != 0 && input.ProposalKey is null)
             || (input.ProposalKey is not null && (input.Action != "coverage" || input.ProposalKey.Length != 64 || input.AfterKey is not null)))
@@ -435,7 +483,7 @@ public sealed class MemoriesTool : Tool<MemoriesInput, MemoriesOutput>, ITransie
             "add" => input.Id is null && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "update" => IsId(input.Id) && !string.IsNullOrWhiteSpace(input.Text) && IsMemoryType(input.MemoryType),
             "remove" => IsId(input.Id) && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
-            "list" or "changes" or "coverChanges" or "coverage" or "updateCoverage" or "initializeCoverage" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
+            "search" or "list" or "changes" or "coverChanges" or "coverage" or "updateCoverage" or "initializeCoverage" => input.Id is null && input.Text is null && input.MemoryType is null && input.Kind is null && input.Concepts is null,
             _ => false,
         };
         if (!valid)

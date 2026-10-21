@@ -116,13 +116,19 @@ public interface IManagedRepositoryMemoryService
 /// <summary>Bounded retrieval query made exclusively from current instructions and active task intent.</summary>
 public sealed record RepositoryMemoryRetrievalRequest
 {
+    /// <summary>Current instruction evidence, separate from legacy discovery concepts.</summary>
+    public MemoryIntentSnapshot? IntentConcepts { get; init; }
+
+    /// <summary>Host instruction epoch expected for this request.</summary>
+    public long IntentEpoch { get; init; }
+
     /// <summary>Host-confirmed onboarded and healthy intelligence eligibility.</summary>
     public bool IntelligenceEnabled { get; init; }
 
     /// <summary>Bounded normalized hints accumulated in this user turn.</summary>
     public IReadOnlyList<string> Concepts { get; init; } = [];
 
-    /// <summary>Previously admitted revisions eligible for conditional retention.</summary>
+    /// <summary>Legacy caller metadata; current relevance alone determines selection.</summary>
     public IReadOnlyList<RepositoryMemoryInclusion> RetainedMemories { get; init; } = [];
 
     /// <summary>Canonical repository identity supplied by the host.</summary>
@@ -152,6 +158,21 @@ public sealed record RepositoryMemoryRetrievalCandidate(
 {
     /// <summary>Exact concept matches that qualified this candidate.</summary>
     public IReadOnlyList<string> ConceptMatches { get; init; } = [];
+
+    /// <summary>Complete query content tokens used by the reranker, when supplied by the provider.</summary>
+    public int? RerankerQueryTokens { get; init; }
+
+    /// <summary>Native SQLite BM25 returned by lexical discovery; lower is better.</summary>
+    public double? LexicalScore { get; init; }
+
+    /// <summary>Original query terms matched by lexical discovery.</summary>
+    public IReadOnlyList<string> MatchedTerms { get; init; } = [];
+
+    /// <summary>Question tokens actually scored after intentional recall reduction.</summary>
+    public int? RerankerUsedQueryTokens { get; init; }
+
+    /// <summary>Complete memory content tokens used by the reranker, when supplied by the provider.</summary>
+    public int? RerankerDocumentTokens { get; init; }
 }
 
 /// <summary>Detached ranking and truthful retrieval/rebuild diagnostics.</summary>

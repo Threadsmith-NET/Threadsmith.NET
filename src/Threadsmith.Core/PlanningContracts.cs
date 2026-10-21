@@ -480,6 +480,9 @@ public sealed record ContextInspectionProjection
     /// <summary>Branch availability and search-window omissions before context admission.</summary>
     public RepositoryMemorySearchDetails? RepositoryMemorySearch { get; init; }
 
+    /// <summary>Independent intelligence recall branch outcomes, including incomplete comparisons.</summary>
+    public RepositoryMemorySearchDetails? RepositoryIntelligenceSearch { get; init; }
+
     /// <summary>Estimated percentage of the selected model context window used.</summary>
     public double ContextPressurePercent { get; init; }
 

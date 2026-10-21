@@ -42,12 +42,22 @@ public sealed class RepositoryIntelligenceOperations : IRepositoryIntelligenceOp
         _setEnabled = setEnabled ?? throw new ArgumentNullException(nameof(setEnabled));
     }
 
+    /// <inheritdoc />
+    public bool IsBusy => _collectionGate.CurrentCount == 0;
+
     /// <summary>Starts feature consumers after repository persistence and settings have rebound.</summary>
     public async Task BindAsync(SessionId sessionId, string repositoryPath, CancellationToken cancellationToken = default)
     {
         await _monitor.BindAsync(sessionId, repositoryPath, _options.Capture(RepositoryIdentity.Create(repositoryPath)).Intelligence, cancellationToken);
         await _automation.BindAsync(sessionId, repositoryPath, cancellationToken);
         Volatile.Write(ref _binding, new Binding(sessionId, repositoryPath));
+    }
+
+    /// <summary>Routes either feature catalog row through the existing shared lifecycle handler.</summary>
+    public async Task SetEnabledAsync(bool enabled, CancellationToken cancellationToken = default)
+    {
+        var binding = Volatile.Read(ref _binding) ?? throw new InvalidOperationException("Open a repository before changing intelligence availability.");
+        await HandleAsync(new ManageRepositoryIntelligenceCommand(binding.SessionId, binding.RepositoryPath, enabled ? "enable" : "disable"), cancellationToken);
     }
 
     /// <summary>Retargets repository-owned notifications at a successful same-repository session transition.</summary>

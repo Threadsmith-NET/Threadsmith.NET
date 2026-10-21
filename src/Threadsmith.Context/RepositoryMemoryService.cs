@@ -148,7 +148,8 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
         var concepts = request.Concepts is null ? existing?.Concepts ?? [] : MemoryConcepts.Normalize(request.Concepts.Select(_sanitizer.Sanitize).ToArray());
         var memoryType = request.MemoryType ?? existing?.MemoryType ?? RepositoryMemoryType.Situational;
         var supports = request.Supports ?? existing?.Supports ?? [];
-        if (request.Ownership == RepositoryMemoryOwnership.Intelligence && supports.Count == 0)
+        if (request.Ownership == RepositoryMemoryOwnership.Intelligence && supports.Count == 0
+            && (request.Origin != RepositoryMemoryOrigin.Manual || request.Collection is not null))
         {
             throw new ArgumentException("An intelligence assertion requires at least one observed primary support.");
         }
@@ -220,7 +221,9 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
                     searchDetails = matches.SearchDetails;
                     if (!matches.IsComplete || matches.MemorySetRevision is null)
                     {
-                        throw new InvalidOperationException("Memory reconciliation could not compare complete inputs. No memory was added. Check local inference and shorten oversized memories before retrying.");
+                        var overflow = matches.SearchDetails?.RerankerInputFailure;
+                        throw new InvalidOperationException("Memory reconciliation could not compare complete inputs. No memory was added. Check local inference and shorten oversized memories before retrying."
+                            + (overflow is null ? string.Empty : " " + overflow));
                     }
 
                     var proposalKey = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new

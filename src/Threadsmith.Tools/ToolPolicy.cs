@@ -30,7 +30,8 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
-        if (!RepositoryIntelligenceToolPolicy.IsAllowed(tool.Definition, context)
+        if ((tool.Definition.Id == "repository_archeology" && (context.IsChildAgent || context.IntelligenceRun is not null))
+            || !RepositoryIntelligenceToolPolicy.IsAllowed(tool.Definition, context)
             || (context.IntelligenceRun?.Operation == RepositoryIntelligenceOperation.Archeology
                 && input is MemoriesInput { Action: not "list" }))
         {

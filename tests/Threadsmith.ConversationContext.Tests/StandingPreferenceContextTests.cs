@@ -244,6 +244,85 @@ public static class StandingPreferenceContextTests
         Assert.Equal(calls, generator.Calls);
     }
 
+    /// <summary>Verifies independent memory routing and intent eligibility.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public static async Task Enforced_mismatches_never_remove_required_preference_text(bool intelligence, bool automatic)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var preferences = new List<RepositoryMemoryEntry>();
+        foreach (var text in (string[])["Address the user as sir.", "Use concise responses."])
+        {
+            var saved = await service.ExecuteAsync(
+                MemoryTestData.Operation("add", text) with
+            {
+                MemoryType = RepositoryMemoryType.StandingPreference, Concepts = ["unrelated"],
+            },
+                ct);
+            preferences.Add(saved.Entry!);
+        }
+
+        var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
+        const string intelligenceText = "Compiler errors reveal subsystem design history.";
+        await store.AddAsync(
+            MemoryTestData.Repository,
+            new RepositoryMemoryWrite { Text = intelligenceText, Origin = RepositoryMemoryOrigin.Model, Ownership = RepositoryMemoryOwnership.Intelligence },
+            generator.Model,
+            await generator.GenerateAsync(intelligenceText, ct),
+            new RepositoryMemoryOptions(),
+            ct);
+        using var retriever = new HybridRepositoryMemoryRetriever(store, generator);
+        var request = Request(fixture);
+        request = request with
+        {
+            IntelligenceEnabled = intelligence,
+            RepositoryMemoryOptions = new()
+            {
+                SituationalConceptFilterMode = SituationalConceptFilterMode.Enforce,
+                Intelligence = new() { Enabled = intelligence, AutomaticRecallEnabled = automatic, Recall = new() },
+            },
+            MemoryIntentEpoch = 1,
+            MemoryIntentConcepts = new(MemoryTestData.Repository, request.RunId, 1, [new(1, ToolInvocationId.New(), true, ["compiler"])]),
+        };
+        var result = await CreateAssembler(events, retriever, new FixedModelResolver(32_000)).AssembleAsync(request, ct);
+        var memory = Assert.Single(result.Messages!, message => message.SectionId == "repository-memory").GetModelVisibleContent();
+        var positions = preferences.OrderBy(entry => entry.Id.Value).Select(entry => memory.IndexOf(entry.Text, StringComparison.Ordinal)).ToArray();
+        Assert.All(positions, position => Assert.True(position >= 0));
+        Assert.Equal(positions.Order(), positions);
+        Assert.Equal(intelligence && automatic, memory.Contains(intelligenceText, StringComparison.Ordinal));
+    }
+
+    /// <summary>Shadow instrumentation leaves actual submitted context identical to Off.</summary>
+    [Fact]
+    public static async Task Shadow_keeps_submitted_context_identical()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        await using var events = new DomainEventStream();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        await service.ExecuteAsync(MemoryTestData.Operation("add", "Compiler error guidance") with { Concepts = ["unrelated"] }, ct);
+        using var retriever = new HybridRepositoryMemoryRetriever(new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString), generator);
+        var request = Request(fixture);
+        request = request with
+        {
+            MemoryIntentConcepts = new(MemoryTestData.Repository, request.RunId, 0, [new(1, ToolInvocationId.New(), true, ["compiler"])]),
+            RepositoryMemoryOptions = new(),
+        };
+        var baseline = await CreateAssembler(events, retriever, new FixedModelResolver(32_000)).AssembleAsync(request, ct);
+        var shadow = await CreateAssembler(events, retriever, new FixedModelResolver(32_000)).AssembleAsync(
+            request with { RepositoryMemoryOptions = new() { SituationalConceptFilterMode = SituationalConceptFilterMode.Shadow } },
+            ct);
+        Assert.Equal(baseline.ModelInput, shadow.ModelInput);
+        Assert.Equal(baseline.RepositoryMemoryInclusions, shadow.RepositoryMemoryInclusions);
+    }
+
     private static RepositoryMemoryRetrievalRequest Query(string query)
     {
         return new() { RepositoryIdentity = MemoryTestData.Repository, CurrentInstruction = query };

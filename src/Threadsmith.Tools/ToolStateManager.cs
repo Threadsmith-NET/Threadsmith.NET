@@ -1,5 +1,6 @@
 namespace Threadsmith.Tools;
 
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -68,6 +69,12 @@ public sealed record ToolStateEntry
     /// <summary>Effective enabled state.</summary>
     public bool Enabled { get; init; }
 
+    /// <summary>Current repository feature readiness or policy reason.</summary>
+    public string? AvailabilityReason { get; init; }
+
+    /// <summary>Stable current readiness classification.</summary>
+    public string? AvailabilityReasonCode { get; init; }
+
     /// <summary>Whether the tool is protected from disablement.</summary>
     public bool Essential { get; init; }
 
@@ -80,6 +87,7 @@ public sealed class ToolStateManager : IToolStateManager
 {
     private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
 
+    private readonly ConcurrentDictionary<string, (IRepositoryFeatureTool Tool, Func<bool, CancellationToken, Task> Toggle)> _features = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, ToolDefinition> _definitions;
     private readonly Lock _definitionsGate = new();
@@ -140,6 +148,17 @@ public sealed class ToolStateManager : IToolStateManager
         _defaultEnabledOverrides = new HashSet<string>(
             configuration.GetSection("tools:defaultEnabledOverrides").Get<string[]>() ?? [],
             StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Routes feature rows through their shared lifecycle control instead of per-tool persistence.</summary>
+    public void RegisterFeature(string toolId, IRepositoryFeatureTool tool, Func<bool, CancellationToken, Task> toggle)
+    {
+        ArgumentNullException.ThrowIfNull(tool);
+        ArgumentNullException.ThrowIfNull(toggle);
+        lock (_definitionsGate)
+        {
+            _features[toolId] = (tool, toggle);
+        }
     }
 
     /// <summary>Reloads effective state and persistence for the active repository.</summary>
@@ -281,6 +300,12 @@ public sealed class ToolStateManager : IToolStateManager
     /// <inheritdoc />
     public async Task DisableAsync(string toolId, CancellationToken cancellationToken = default)
     {
+        if (_features.TryGetValue(toolId, out var feature))
+        {
+            await feature.Toggle(false, cancellationToken);
+            return;
+        }
+
         var definition = GetDefinition(toolId);
         if (definition.Essential)
         {
@@ -336,16 +361,22 @@ public sealed class ToolStateManager : IToolStateManager
         {
             return _definitions.Values
                 .OrderBy(definition => definition.Id, StringComparer.Ordinal)
-                .Select(definition => new ToolStateEntry
+                .Select(definition =>
                 {
-                    Id = definition.Id,
-                    DisplayName = definition.DisplayName,
-                    Category = definition.Category,
-                    Source = definition.Source,
-                    Enabled = IsEnabledCore(definition),
-                    Essential = definition.Essential,
-                    ConsentRequired = definition.RequiresOutboundConsent
-                        && !_consentStore.HasValidConsent(definition.Id, _repositoryRoot),
+                    var availability = GetFeatureAvailability(definition);
+                    return new ToolStateEntry
+                    {
+                        Id = definition.Id,
+                        DisplayName = definition.DisplayName,
+                        Category = definition.Category,
+                        Source = definition.Source,
+                        Enabled = IsEnabledCore(definition) && availability?.ReasonCode != "master_disabled",
+                        AvailabilityReason = availability?.Message,
+                        AvailabilityReasonCode = availability?.ReasonCode,
+                        Essential = definition.Essential,
+                        ConsentRequired = definition.RequiresOutboundConsent
+                            && !_consentStore.HasValidConsent(definition.Id, _repositoryRoot),
+                    };
                 })
                 .ToArray();
         }
@@ -369,6 +400,7 @@ public sealed class ToolStateManager : IToolStateManager
         lock (_definitionsGate)
         {
             _definitions.Remove(toolId);
+            _features.TryRemove(toolId, out _);
         }
     }
 
@@ -377,6 +409,12 @@ public sealed class ToolStateManager : IToolStateManager
         string? expectedVersion,
         CancellationToken cancellationToken)
     {
+        if (_features.TryGetValue(toolId, out var feature))
+        {
+            await feature.Toggle(true, cancellationToken);
+            return;
+        }
+
         var definition = GetDefinition(toolId);
         if (expectedVersion is not null
             && !string.Equals(definition.Version, expectedVersion, StringComparison.Ordinal))
@@ -438,6 +476,18 @@ public sealed class ToolStateManager : IToolStateManager
                 ? definition
                 : throw new KeyNotFoundException($"Tool '{toolId}' is not registered.");
         }
+    }
+
+    private RepositoryIntelligenceAvailability? GetFeatureAvailability(ToolDefinition definition)
+    {
+        if (!_features.TryGetValue(definition.Id, out var feature))
+        {
+            return null;
+        }
+
+        var availability = feature.Tool.CaptureAvailability(_repositoryRoot);
+        return availability.ReasonCode == "master_disabled" || IsEnabledCore(definition) ? availability
+            : new(false, "policy_denied", "Tool settings deny this capability; shared enablement does not override that denial.");
     }
 
     private bool IsEnabledCore(ToolDefinition definition)

@@ -133,11 +133,12 @@ public static class MemorySearchContractTests
         Assert.Equal(selected.ConceptMatches, retainedCandidate.ConceptMatches);
     }
 
-    /// <summary>Unavailable scoring degrades recall; bounded prefix scoring succeeds with visible truncation accounting.</summary>
+    /// <summary>Unavailable and truncated scoring both preserve hybrid recall with distinct incomplete outcomes.</summary>
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public static async Task Scoring_outcomes_distinguish_bounded_prefixes_from_unavailable_inference(bool truncated)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public static async Task Scoring_outcomes_distinguish_bounded_prefixes_from_unavailable_inference(bool truncated, bool shortenedQuery)
     {
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = await ConversationFixture.CreateAsync();
@@ -145,8 +146,13 @@ public static class MemorySearchContractTests
         var service = MemoryTestData.CreateService(fixture, generator);
         await service.ExecuteAsync(MemoryTestData.Operation("add", "cancellation convention"), ct);
         using var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString);
-        var encoder = new MemoryScoreEncoder { Score = (_, _) => new(2, 257, true) };
-        using var search = new HybridRepositoryMemoryRetriever(store, generator, truncated ? encoder : null);
+        var encoder = new MemoryScoreEncoder
+        {
+            Score = (_, _) => shortenedQuery
+                ? new(2, 140, false) { QueryTokenCount = 600, UsedQueryTokenCount = 128 }
+                : new(2, 257, true),
+        };
+        using var search = new HybridRepositoryMemoryRetriever(store, generator, truncated || shortenedQuery ? encoder : null);
         var result = await search.SearchAsync(
             new RepositoryMemorySearchRequest
             {
@@ -155,12 +161,12 @@ public static class MemorySearchContractTests
                 Options = new RepositoryMemorySearchOptions { SemanticMinimum = 1, RerankerEnabled = true },
             },
             ct);
-        Assert.Equal(truncated, result.IsComplete);
+        Assert.False(result.IsComplete);
         var selected = Assert.Single(result.Selected);
-        Assert.Equal(truncated ? 2d : (double?)null, selected.CrossEncoderScore);
+        Assert.Null(selected.CrossEncoderScore);
         var details = Assert.IsType<RepositoryMemorySearchDetails>(result.SearchDetails);
-        Assert.Equal(truncated ? RepositoryMemorySearchBranchStatus.Completed : RepositoryMemorySearchBranchStatus.Unavailable, details.Reranker);
-        Assert.Equal(truncated, details.PairTruncated);
+        Assert.Equal(truncated || shortenedQuery ? RepositoryMemorySearchBranchStatus.Incomplete : RepositoryMemorySearchBranchStatus.Unavailable, details.Reranker);
+        Assert.Equal(truncated || shortenedQuery, details.PairTruncated);
     }
 
     private sealed class CountingTermResolver : IRepositoryMemoryTermResolver

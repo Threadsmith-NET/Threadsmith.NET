@@ -18,6 +18,11 @@ internal static class RepositoryIntelligenceToolPolicy
             return false;
         }
 
+        if (definition.Id == "repository_archeology")
+        {
+            return false;
+        }
+
         if (definition.Id == "memories")
         {
             return !context.IsChildAgent;

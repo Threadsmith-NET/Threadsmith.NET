@@ -22,6 +22,10 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
     private int _width = 80;
     private int _height = 4;
     private int _top;
+
+    /// <summary>Gets whether typing replaces the next grapheme.</summary>
+    internal bool Overwrite { get; private set; }
+
     private int? _preferredColumn;
 
     /// <summary>Gets the bounded editable draft.</summary>
@@ -207,7 +211,17 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
                     return false;
                 }
 
-                Buffer.Insert(char.ConvertFromUtf32(key.Rune));
+                var typed = char.ConvertFromUtf32(key.Rune);
+                if (Overwrite && Buffer.SelectionStart == Buffer.SelectionEnd && Buffer.Caret < Text.Length && Text[Buffer.Caret] != '\n')
+                {
+                    var next = Buffer.Boundaries[Array.BinarySearch(Buffer.Boundaries, Buffer.Caret) + 1];
+                    Buffer.ReplaceRange(Buffer.Caret, next, typed);
+                }
+                else
+                {
+                    Buffer.Insert(typed);
+                }
+
                 break;
             case KeyCode.Enter:
                 Buffer.Insert("\n");
@@ -243,6 +257,9 @@ internal sealed class TuiKitComposer : IWidget, IFocusable, IFocusAware, IMouseA
                 break;
             case KeyCode.Insert when ctrl:
                 CopyRequested?.Invoke(Buffer.Selection);
+                break;
+            case KeyCode.Insert:
+                Overwrite = !Overwrite;
                 break;
             case KeyCode.Up:
             case KeyCode.Down:

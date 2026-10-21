@@ -1,0 +1,15 @@
+{
+  "tools": {
+    "config": {
+      "memories": {
+        "Recall": {
+          "SituationalConceptFilterMode": "Off"
+        },
+        "Intelligence": {
+          "Enabled": true,
+          "AutomaticRecallEnabled": false
+        }
+      }
+    }
+  }
+}

@@ -42,11 +42,11 @@ Common editing rules:
 | System prompts | 22 | System policy, stable conversation instructions, request envelopes, and required-output contracts. |
 | Context prompts | 28 | Active-turn, summary, steering, advisory source-edit feedback, execution outcomes, and delegated-child context framing. |
 | Correction prompts | 25 | Host-authored ordinary tool and malformed-output retry messages. |
-| Tool prompts | 198 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
+| Tool prompts | 200 | Built-in tool descriptions plus model-visible tool results, guidance, omissions, and retry blocks. |
 | Skill prompts | 15 | Governed skill discovery, compatibility, workflow, checkpoint, and procedure messages. |
 | Provider prompts | 1 | Cataloged provider-specific instructions declared by compiled provider registrations and attached after provider-neutral request assembly. |
 | Adapter prompts | 2 | Host policy and fallback prose used around dynamically imported MCP capabilities. |
-| **Total** | **291** | Complete deployed catalog. |
+| **Total** | **293** | Complete deployed catalog. |
 
 ## Categorized file catalog
 
@@ -94,7 +94,7 @@ System policy, stable conversation instructions, request envelopes, and required
 |---|---|---|
 | `System-RepositoryInstructions-None.md` | System framing for `RepositoryInstructions-None`. | `None` |
 | `System-RepositoryMemoryGuidance.md` | Best-effort relevance guidance prefixed to untrusted repository-memory blocks. | `None` |
-| `System-RepositoryIntelligenceGuidance.md` | Enabled-only advisory implementation hints with supporting code/documentation file lists to inspect for similar implementations and reuse; current-source verification, history investigation, clarification of ambiguous task conflicts, and respect for explicit user-directed departures. | `None` |
+| `System-RepositoryIntelligenceGuidance.md` | Enabled-only targeted `memories search` guidance and advisory implementation hints with supporting code/documentation file lists to inspect for similar implementations and reuse; current-source verification, history investigation, clarification of ambiguous task conflicts, and respect for explicit user-directed departures. | `None` |
 | `System-StandingPreferenceGuidance.md` | Caption for always-included standing-preference memory blocks. | `None` |
 
 #### `RequiredOutput` family
@@ -594,7 +594,9 @@ Built-in tool descriptions plus model-visible tool results, guidance, omissions,
 
 | File | What Threadsmith uses it for | Placeholders |
 |---|---|---|
-| `Tool-memories-Description.md` | Explicit memory writes, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates with required or optional investigation priority. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
+| `Tool-memories-Description.md` | Explicit memory writes, bounded current-repository intelligence search, kind/concepts, revision-aware collision resolution, and onboarding-only coverage inspection/updates with required or optional investigation priority. | [`MaximumTextCharacters`](#placeholder-maximumtextcharacters) |
+| `Tool-repository_intelligence-Description.md` | Read-only explicit stored intelligence query. | `None` |
+| `Tool-repository_archeology-Description.md` | Bounded read-only historical investigation. | `None` |
 | `Tool-nuget_health-Description.md` | Project NuGet health, source-backed outdated advisories, and completeness guidance. | `None` |
 
 #### `read_file` family

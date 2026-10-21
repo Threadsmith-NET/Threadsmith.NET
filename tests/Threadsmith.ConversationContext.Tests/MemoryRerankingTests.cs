@@ -9,12 +9,20 @@ using Xunit;
 public static class MemoryRerankingTests
 {
     /// <summary>Configured candidate pools can exceed a provider batch without dropping candidates.</summary>
-    [Fact]
-    public static async Task Candidate_pool_is_processed_in_provider_sized_batches()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task Candidate_pool_is_processed_in_provider_sized_batches(bool overflow)
     {
         await using var fixture = await ConversationFixture.CreateAsync();
         var generator = await SeedAsync(fixture);
-        var encoder = new TestCrossEncoder { Model = new("small-batch", 256, 2) };
+        var encoder = new TestCrossEncoder
+        {
+            Model = new("small-batch", 256, 2),
+            Score = (_, texts) => overflow && texts.Count == 1
+                ? throw new TextCrossEncoderInputException(200, 200, 256)
+                : texts.Select(text => new TextCrossEncoderScore(text[0], 12, false)).ToArray(),
+        };
         using var retriever = CreateRetriever(fixture, generator, encoder);
         var result = await retriever.RetrieveAsync(Query() with
         {
@@ -22,7 +30,12 @@ public static class MemoryRerankingTests
         });
         Assert.Equal(2, encoder.Calls);
         Assert.Equal(3, result.Selected.Count);
-        Assert.All(result.Selected, candidate => Assert.NotNull(candidate.CrossEncoderScore));
+        Assert.All(result.Selected, candidate => Assert.Equal(!overflow, candidate.CrossEncoderScore.HasValue));
+        Assert.Equal(!overflow, result.IsComplete);
+        if (!overflow)
+        {
+            Assert.Equal(["third note", "second note", "first note"], result.Selected.Select(candidate => candidate.Entry.Text));
+        }
     }
 
     /// <summary>Reranking sees qualified candidates before the final cap and never receives unrelated records.</summary>
@@ -69,6 +82,9 @@ public static class MemoryRerankingTests
 
         Assert.Equal(2, encoder.Documents.Count);
         Assert.Equal(baseline.Selected.Take(2).Select(item => item.Entry.Id), result.Selected.Select(item => item.Entry.Id));
+        Assert.Equal(2, result.SearchDetails!.Candidates.Count(item => item.Outcome == "selected"));
+        Assert.Single(result.SearchDetails.Candidates, item => item.Outcome == "comparison window");
+        Assert.Single(result.SearchDetails.Candidates, item => item.Outcome == "no branch match");
     }
 
     /// <summary>Raw negative logits order candidates; result limits bound selection.</summary>
@@ -139,6 +155,8 @@ public static class MemoryRerankingTests
     [InlineData("nonfinite")]
     [InlineData("overlength")]
     [InlineData("negativeTokens")]
+    [InlineData("truncated")]
+    [InlineData("overflow")]
     public static async Task Invalid_reranking_preserves_hybrid_results_with_a_diagnostic(string mode)
     {
         await using var fixture = await ConversationFixture.CreateAsync();
@@ -151,6 +169,8 @@ public static class MemoryRerankingTests
                 "count" => [],
                 "nonfinite" => [.. texts.Select(_ => new TextCrossEncoderScore(double.NaN, 12, false))],
                 "overlength" => [.. texts.Select(_ => new TextCrossEncoderScore(100, 300, false))],
+                "truncated" => [.. texts.Select(_ => new TextCrossEncoderScore(100, 300, true))],
+                "overflow" => throw new TextCrossEncoderInputException(400, 200, 512),
                 _ => [.. texts.Select(_ => new TextCrossEncoderScore(100, -1, false))],
             },
         };

@@ -33,6 +33,7 @@ public sealed class RepositoryMemoryApplication :
                 RepositoryIdentity = command.RepositoryIdentity,
                 Action = "add",
                 Text = command.Text,
+                Ownership = command.Ownership,
                 MemoryType = command.MemoryType,
                 Kind = command.Kind,
                 Concepts = command.Concepts,
@@ -71,11 +72,13 @@ public sealed class RepositoryMemoryApplication :
     /// <inheritdoc />
     public async Task<bool> HandleAsync(ForgetRepositoryMemoryCommand command, CancellationToken cancellationToken = default)
     {
+        var existing = await _memories.GetEntryAsync(command.RepositoryIdentity, command.MemoryId, cancellationToken);
         var result = await _memories.ExecuteAsync(
             new RepositoryMemoryOperationRequest
             {
                 RepositoryIdentity = command.RepositoryIdentity,
                 Action = "remove",
+                Ownership = existing?.Ownership ?? RepositoryMemoryOwnership.Ordinary,
                 Id = command.MemoryId,
                 Origin = RepositoryMemoryOrigin.Manual,
                 SourceSessionId = command.SessionId.Value.ToString("D"),
@@ -94,11 +97,13 @@ public sealed class RepositoryMemoryApplication :
 
     private async Task<RepositoryMemoryEntry> WriteAsync(SessionId sessionId, string repositoryIdentity, string action, RepositoryMemoryId? id, string text, RepositoryMemoryType? memoryType, long? expectedRevision, ManagedRepositoryMemoryKind? kind, IReadOnlyList<string>? concepts, CancellationToken cancellationToken)
     {
+        var existing = id is { } memoryId ? await _memories.GetEntryAsync(repositoryIdentity, memoryId, cancellationToken) : null;
         var result = await _memories.ExecuteAsync(
             new RepositoryMemoryOperationRequest
             {
                 RepositoryIdentity = repositoryIdentity,
                 Action = action,
+                Ownership = existing?.Ownership ?? RepositoryMemoryOwnership.Ordinary,
                 Id = id,
                 Text = text,
                 MemoryType = memoryType,

@@ -12,6 +12,18 @@ public interface IRepositoryMemorySearch
 /// <summary>Host-owned direct search inputs, independent of conversational query construction.</summary>
 public sealed record RepositoryMemorySearchRequest
 {
+    /// <summary>Allows legacy automatic maintenance; explicit read-only search disables it.</summary>
+    public bool AllowEmbeddingRebuild { get; init; } = true;
+
+    /// <summary>Only the ordinary conversational route opts into eligibility filtering.</summary>
+    public SituationalConceptFilterMode SituationalConceptFilterMode { get; init; }
+
+    /// <summary>Current instruction evidence, separate from legacy discovery concepts.</summary>
+    public MemoryIntentSnapshot? IntentConcepts { get; init; }
+
+    /// <summary>Host instruction epoch expected for this request.</summary>
+    public long IntentEpoch { get; init; }
+
     /// <summary>Host-owned collection whose provisional contents use the shared search implementation.</summary>
     public RepositoryMemoryCollection? Collection { get; init; }
 
@@ -20,6 +32,9 @@ public sealed record RepositoryMemorySearchRequest
 
     /// <summary>Canonical repository identity.</summary>
     public required string RepositoryIdentity { get; init; }
+
+    /// <summary>Allows bounded question construction for recall only; reconciliation leaves this null.</summary>
+    public TextCrossEncoderRecallQuery? RecallQuery { get; init; }
 
     /// <summary>Complete direct query.</summary>
     public required string Query { get; init; }
@@ -42,7 +57,7 @@ public sealed record RepositoryMemorySearchRequest
     /// <summary>Space of the prepared vector; prevents accidental cross-model reuse.</summary>
     public string? PreparedEmbeddingSpaceId { get; init; }
 
-    /// <summary>Previously admitted revisions retained only while still current and eligible.</summary>
+    /// <summary>Legacy caller metadata; current relevance alone determines selection.</summary>
     public IReadOnlyList<RepositoryMemoryInclusion> RetainedMemories { get; init; } = [];
 
     /// <summary>Normalized active-turn discovery hints.</summary>
@@ -169,6 +184,42 @@ public enum RepositoryMemorySearchBranchStatus
 /// <summary>Structured search evidence; window omissions are separate from later output or context omissions.</summary>
 public sealed record RepositoryMemorySearchDetails
 {
+    /// <summary>Effective ordinary eligibility policy; direct intelligence and reconciliation remain Off.</summary>
+    public SituationalConceptFilterMode ConceptFilterMode { get; init; }
+
+    /// <summary>Version of eligibility decisions.</summary>
+    public int ConceptPolicyVersion { get; init; } = MemoryIntentSnapshot.PolicyVersion;
+
+    /// <summary>Current instruction revision without message or argument text.</summary>
+    public long IntentEpoch { get; init; }
+
+    /// <summary>Number of bounded hints available to eligibility.</summary>
+    public int IntentConceptCount { get; init; }
+
+    /// <summary>Whether differing tool origins required conservative fallback.</summary>
+    public bool MixedIntentOrigins { get; init; }
+
+    /// <summary>Cross-encoder identity selected for this pass, absent when disabled or unavailable.</summary>
+    public string? RerankerModelId { get; init; }
+
+    /// <summary>Complete-pair rejection reason with side token counts and no source text.</summary>
+    public string? RerankerInputFailure { get; init; }
+
+    /// <summary>Original reranker question tokens when successful scoring exposes accounting.</summary>
+    public int? RerankerQueryTokens { get; init; }
+
+    /// <summary>Question tokens actually scored; smaller than the original count when recall shortened it.</summary>
+    public int? RerankerUsedQueryTokens { get; init; }
+
+    /// <summary>Elapsed time of the original search; cached results retain their original measurement.</summary>
+    public double ElapsedMilliseconds { get; init; }
+
+    /// <summary>Bounded per-memory discovery and selection evidence; final prompt inclusion is reported separately.</summary>
+    public IReadOnlyList<RepositoryMemoryCandidateSearchEvidence> Candidates { get; init; } = [];
+
+    /// <summary>Stored candidate rows omitted from detailed evidence by its bound or consumer output budget.</summary>
+    public int CandidateEvidenceOmissions { get; init; }
+
     /// <summary>Lexical snapshot outcome.</summary>
     public RepositoryMemorySearchBranchStatus Lexical { get; init; }
 
@@ -204,6 +255,33 @@ public sealed record RepositoryMemorySearchDetails
 
     /// <summary>At least one query-memory pair exceeded the complete-input limit.</summary>
     public bool PairTruncated { get; init; }
+}
+
+/// <summary>Explains where one stored memory reached in a search without logging its text.</summary>
+public sealed record RepositoryMemoryCandidateSearchEvidence(
+    RepositoryMemoryId Id,
+    string Outcome,
+    int? LexicalRank,
+    int? SemanticRank,
+    bool ConceptMatched,
+    double? RerankerScore,
+    int? QueryTokens,
+    int? DocumentTokens)
+{
+    /// <summary>Discovery matched an original normalized hint exactly.</summary>
+    public bool ExactConceptDiscovery { get; init; }
+
+    /// <summary>Discovery matched a spelling-resolved hint rather than the original.</summary>
+    public bool SpellingAssistedConceptDiscovery { get; init; }
+
+    /// <summary>Eligibility decision before comparison allocation; shadow decisions never change selection.</summary>
+    public string? ConceptPolicyDecision { get; init; }
+
+    /// <summary>Ownership identifies the memory partition.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; }
+
+    /// <summary>Query terms matched by lexical discovery, without memory text.</summary>
+    public IReadOnlyList<string> MatchedTerms { get; init; } = [];
 }
 
 /// <summary>Bounded typo recovery shared by both memory search consumers.</summary>

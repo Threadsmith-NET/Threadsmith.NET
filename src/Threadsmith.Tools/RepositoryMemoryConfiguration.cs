@@ -110,14 +110,29 @@ public sealed class RepositoryMemoryConfiguration : IRepositoryMemoryOptionsProv
             }
         }
 
+        foreach (var route in new[] { "Recall", "Reconciliation", "Intelligence:Recall", "Intelligence:Reconciliation" })
+        {
+            if (configuration.GetSection($"{SectionName}:{route}:Scoring").Exists())
+            {
+                throw new ArgumentException($"Memory setting '{route}:Scoring' has been retired. Remove the Scoring block; baseline hybrid retrieval and optional reranker ordering are the supported policy.");
+            }
+        }
+
         var recallLexical = ReadLexical(configuration, "Recall", fallback.Lexical);
         var reconciliationLexical = ReadLexical(configuration, "Reconciliation", fallback.ReconciliationLexical);
+        var filterValue = configuration[$"{SectionName}:Recall:SituationalConceptFilterMode"];
+        var validFilter = filterValue is null || (Enum.TryParse<SituationalConceptFilterMode>(filterValue, true, out var parsedFilter) && Enum.IsDefined(parsedFilter));
+        var filter = filterValue is null ? fallback.SituationalConceptFilterMode
+            : validFilter ? Enum.Parse<SituationalConceptFilterMode>(filterValue, true) : SituationalConceptFilterMode.Off;
         var options = new RepositoryMemoryOptions
         {
+            SituationalConceptFilterMode = filter,
+            ConfigurationDiagnostics = validFilter ? [] : ["Invalid Recall:SituationalConceptFilterMode; using Off."],
             ShowMemoryOutput = configuration.GetValue($"{SectionName}:ShowMemoryOutput", fallback.ShowMemoryOutput),
             Intelligence = new RepositoryIntelligenceOptions
             {
                 Enabled = configuration.GetValue($"{SectionName}:Intelligence:Enabled", fallback.Intelligence.Enabled),
+                AutomaticRecallEnabled = configuration.GetValue($"{SectionName}:Intelligence:AutomaticRecallEnabled", fallback.Intelligence.AutomaticRecallEnabled),
                 RefreshOnCommit = configuration.GetValue($"{SectionName}:Intelligence:RefreshOnCommit", fallback.Intelligence.RefreshOnCommit),
                 MaximumStoredMemories = configuration.GetValue($"{SectionName}:Intelligence:MaximumStoredMemories", fallback.Intelligence.MaximumStoredMemories),
                 Recall = ReadSearch(configuration, "Intelligence:Recall", fallback.Intelligence.Recall),

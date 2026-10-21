@@ -495,9 +495,14 @@ internal static class ApplicationComposition
             intelligenceOperations);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
-        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader, intelligence);
+        var intelligenceQuery = new RepositoryIntelligenceQuery(memoryRetriever, memoryOptions, intelligence);
+        var intelligenceTool = new RepositoryIntelligenceTool(intelligenceQuery, memoryOptions, host.PromptLoader);
+        RepositoryArcheologyTool? archeologyTool = null;
+        var memoriesTool = new MemoriesTool(memoryService, memoryOptions, host.PromptLoader, intelligence, memoryRetriever);
         try
         {
+            tools.ToolRegistry.RegisterOrReplace(intelligenceTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-intelligence"));
+            tools.ToolStateManager.RegisterFeature(intelligenceTool.Definition.Id, intelligenceTool, intelligenceOperations.SetEnabledAsync);
             tools.ToolRegistry.RegisterOrReplace(memoriesTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "memories"));
             tools.ToolRegistry.RegisterOrReplace(sourceEditTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "source-edit"));
             repositoryBindings.AttachScratchpad(scratchpad);
@@ -552,6 +557,7 @@ internal static class ApplicationComposition
                 providerInstructionResolver,
                 integration.Models.RoleModels,
                 trustedProviderInstructionResolver);
+            ModelExplorerAssignmentRunnerFactory? explorerRunners = null;
             if (integration.Models.Catalog.Profiles.Count > 0)
             {
                 if (Enum.GetValues<AgentRole>().Any(role => childModelSelection.CanSelectRole(
@@ -563,7 +569,7 @@ internal static class ApplicationComposition
                         repositoryInstructionResolver,
                         host.PromptAppendLoader,
                         promptAppendFiles);
-                    var explorerRunners = new ModelExplorerAssignmentRunnerFactory(
+                    explorerRunners = new ModelExplorerAssignmentRunnerFactory(
                         new AgentContextAssembler(persistence.EvidenceStore),
                         new AgentFindingAdmission(persistence.EvidenceStore),
                         childModelSelection,
@@ -601,6 +607,21 @@ internal static class ApplicationComposition
                             "delegate-agents"));
                 }
             }
+
+            archeologyTool = new RepositoryArcheologyTool(
+                persistence.EvidenceStore,
+                intelligenceQuery,
+                intelligenceOperations,
+                new DelegateAgentsPlanFactory(mutationCoordinator, preferences, conversationToolSnapshots, host.PromptLoader, delegateAgentsOptions, childModelSelection),
+                explorerRunners,
+                delegationCoordinator,
+                conversationToolSnapshots,
+                tools.ToolRegistry,
+                delegateAgentsOptions,
+                host.PromptLoader,
+                runSteering);
+            tools.ToolRegistry.RegisterOrReplace(archeologyTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-archeology"));
+            tools.ToolStateManager.RegisterFeature(archeologyTool.Definition.Id, archeologyTool, intelligenceOperations.SetEnabledAsync);
 
             // Skill discovery remains metadata-only until an explicit verify or invoke boundary.
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -879,6 +900,7 @@ internal static class ApplicationComposition
                 embeddings,
                 reranker,
                 memoriesTool,
+                [intelligenceTool, archeologyTool],
                 memoryRetriever,
                 memoryOptions,
                 startupDisplayWarnings,
@@ -904,6 +926,12 @@ internal static class ApplicationComposition
             }
 
             tools.ToolRegistry.Remove(sourceEditTool.Definition.Id, sourceEditTool);
+            tools.ToolRegistry.Remove(intelligenceTool.Definition.Id, intelligenceTool);
+            if (archeologyTool is not null)
+            {
+                tools.ToolRegistry.Remove(archeologyTool.Definition.Id, archeologyTool);
+            }
+
             tools.ToolRegistry.Remove(memoriesTool.Definition.Id, memoriesTool);
             await mutationCoordinator.DisposeAsync();
             await ((IAsyncDisposable)scratchpad).DisposeAsync();
@@ -1408,6 +1436,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
     private readonly LocalTextEmbeddingGenerator _embeddings;
     private readonly LocalTextCrossEncoder _reranker;
     private readonly MemoriesTool _memoriesTool;
+    private readonly IReadOnlyList<ITool> _intelligenceTools;
     private readonly HybridRepositoryMemoryRetriever _memoryRetriever;
     private readonly DelegateAgentsTool? _delegateAgentsTool;
     private readonly SourceEditTool _sourceEditTool;
@@ -1443,6 +1472,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         LocalTextEmbeddingGenerator embeddings,
         LocalTextCrossEncoder reranker,
         MemoriesTool memoriesTool,
+        IReadOnlyList<ITool> intelligenceTools,
         HybridRepositoryMemoryRetriever memoryRetriever,
         RepositoryMemoryConfiguration memoryOptions,
         IReadOnlyList<string> startupDisplayWarnings,
@@ -1479,6 +1509,7 @@ internal sealed class ApplicationServices : IAsyncDisposable
         _embeddings = embeddings;
         _reranker = reranker;
         _memoriesTool = memoriesTool;
+        _intelligenceTools = intelligenceTools;
         _memoryRetriever = memoryRetriever;
         MemoryOptions = memoryOptions;
         StartupDisplayWarnings = startupDisplayWarnings;
@@ -1544,6 +1575,11 @@ internal sealed class ApplicationServices : IAsyncDisposable
             if (_delegateAgentsTool is not null)
             {
                 _toolRegistry.Remove(_delegateAgentsTool.Definition.Id, _delegateAgentsTool);
+            }
+
+            foreach (var tool in _intelligenceTools)
+            {
+                _toolRegistry.Remove(tool.Definition.Id, tool);
             }
 
             _toolRegistry.Remove(_memoriesTool.Definition.Id, _memoriesTool);

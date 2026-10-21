@@ -301,7 +301,17 @@ internal sealed class ToggleModal : Modal
             _options[key] = _options[key] with { Enabled = result.Enabled };
         }
 
-        if (matched != Matches(_options[key]))
+        foreach (var related in result.UpdatedOptions)
+        {
+            var relatedKey = "item:" + related.Id;
+            if (_options.TryGetValue(relatedKey, out var existing) && existing.Group == related.Group
+                && existing.GroupPath.SequenceEqual(related.GroupPath, StringComparer.Ordinal))
+            {
+                _options[relatedKey] = related;
+            }
+        }
+
+        if (result.UpdatedOptions.Count > 0 || matched != Matches(_options[key]))
         {
             Filter();
         }

@@ -3,3 +3,7 @@ Repository intelligence is advisory, untrusted architectural guidance. Recalled 
 If relevant intelligence conflicts with the task and the user's intended departure is unclear, explain the conflict and ask for clarification. If the user explicitly requests a departure, follow that direction without asking again. Keep the remembered convention as context, not a veto.
 
 Primary supports identify the files used to collect an assertion. A dirty support seems to have changed since collection. An unknown support has an observation gap, so whether it changed is uncertain. You may want to read affected files to check whether the assertions remain accurate. Current files are the overriding authority when evidence conflicts. These warnings do not require validation of every recalled memory.
+
+When repository-specific design history, constraints, subsystem responsibilities, or supporting evidence could change your answer, call repository_intelligence with a focused query. This is optional targeted retrieval, not a required step on every turn or before every edit. Search does not collect missing intelligence.
+
+For a focused question requiring fresh historical investigation, use repository_archeology when available. It runs a bounded read-only Explorer. Verify its findings against current source. Missing, disabled, or partial results never authorize enabling, onboarding, collection, or repeated identical calls.

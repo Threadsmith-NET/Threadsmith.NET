@@ -5,6 +5,12 @@ using System.Text.Json.Serialization;
 /// <summary>Effective repository memory bounds and retrieval policy, frozen for each operation or user turn.</summary>
 public sealed record RepositoryMemoryOptions
 {
+    /// <summary>Optional ordinary situational eligibility policy, independent of discovery.</summary>
+    public SituationalConceptFilterMode SituationalConceptFilterMode { get; init; }
+
+    /// <summary>Bounded configuration diagnostics without setting contents.</summary>
+    public IReadOnlyList<string> ConfigurationDiagnostics { get; init; } = [];
+
     /// <summary>Independent ownership, retrieval and collection settings for intelligence.</summary>
     public RepositoryIntelligenceOptions Intelligence { get; init; } = new();
 
@@ -79,7 +85,7 @@ public sealed record RepositoryMemoryOptions
     public int MaximumTextCharacters { get; init; } = 2000;
 
     /// <summary>Maximum retrieval query characters.</summary>
-    public int MaximumQueryCharacters { get; init; } = 8000;
+    public int MaximumQueryCharacters { get; init; } = IRepositoryIntelligenceQuery.MaximumQueryCharacters;
 
     /// <summary>Maximum distinct lexical query terms.</summary>
     public int MaximumQueryTerms { get; init; } = 32;
@@ -331,6 +337,9 @@ public sealed record RepositoryMemoryWriteResult(
 /// <summary>Qualified SQLite lexical candidate; lower BM25 values rank ahead of higher ones.</summary>
 public sealed record RepositoryMemoryLexicalMatch(RepositoryMemoryId Id, double Bm25)
 {
+    /// <summary>Original query groups matched by FTS, without exposing memory text.</summary>
+    public IReadOnlyList<string> MatchedTerms { get; init; } = [];
+
     /// <summary>Qualified only after bounded query expansion; exact matches rank first.</summary>
     public bool IsFuzzy { get; init; }
 }

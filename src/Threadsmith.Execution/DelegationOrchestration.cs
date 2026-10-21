@@ -564,6 +564,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                     Usage = failure.Usage,
                     ModelProfileId = failure.ModelProfileId,
                     ModelSelection = failure.ModelSelection,
+                    DeliveredEvidenceIds = failure.DeliveredEvidenceIds,
                 };
             }
         }
@@ -579,6 +580,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                     Usage = failure.Usage,
                     ModelProfileId = failure.ModelProfileId,
                     ModelSelection = failure.ModelSelection,
+                    DeliveredEvidenceIds = failure.DeliveredEvidenceIds,
                 }
                 : CreateTerminal(
                     plan,
@@ -651,6 +653,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
                     Usage = failure.Usage,
                     ModelProfileId = failure.ModelProfileId,
                     ModelSelection = failure.ModelSelection,
+                    DeliveredEvidenceIds = failure.DeliveredEvidenceIds,
                 }
                 : outcome;
         }
@@ -1567,6 +1570,7 @@ public sealed class DelegationCoordinator :
                         Usage = failure.Usage,
                         ModelProfileId = failure.ModelProfileId,
                         ModelSelection = failure.ModelSelection,
+                    DeliveredEvidenceIds = failure.DeliveredEvidenceIds,
                     }
                     : CreateProgressOutcome(
                         plan,

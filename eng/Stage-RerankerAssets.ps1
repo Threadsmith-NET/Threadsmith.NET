@@ -6,7 +6,8 @@ $manifestPath = Join-Path $root 'src/Threadsmith.Reranking.Local/crossencoder-as
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 if ($manifest.schemaVersion -ne 1 -or $manifest.model -ne 'cross-encoder/ms-marco-MiniLM-L6-v2' -or
     $manifest.source -ne 'https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2' -or
-    $manifest.revision -notmatch '^[0-9a-f]{40}$' -or $manifest.license -ne 'Apache-2.0') {
+    $manifest.revision -notmatch '^[0-9a-f]{40}$' -or $manifest.license -ne 'Apache-2.0' -or
+    $manifest.maxInputTokens -ne 512 -or $manifest.maxBatchSize -ne 8) {
     throw 'Reranker asset manifest is not a pinned official Apache-2.0 source.'
 }
 

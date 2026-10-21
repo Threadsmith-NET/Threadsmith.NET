@@ -2424,7 +2424,7 @@ public sealed partial class InteractionCoordinator
                     state.Category.ToString(),
                     state.Enabled,
                     state.Essential,
-                    state.Essential ? "Essential: locked by host policy" : state.ConsentRequired ? "Enabling requires repository consent" : null)).ToArray()),
+                    state.AvailabilityReason ?? (state.Essential ? "Essential: locked by host policy" : state.ConsentRequired ? "Enabling requires repository consent" : null))).ToArray()),
                 ApplyToolToggleAsync,
                 cancellationToken);
             return;
@@ -3348,10 +3348,59 @@ public sealed partial class InteractionCoordinator
                         sessionId,
                         repositoryIdentity,
                         cancellationToken);
-                    await _surface.WriteAsync(
-                        FormatRepositoryMemorySnapshot(listed),
-                        PresentationTextRole.Status,
-                        cancellationToken);
+                    if (_surface.Surface is IRepositoryMemoryListSurface memorySurface)
+                    {
+                        async Task<RepositoryMemoryListSnapshot> RefreshMemoriesAsync(CancellationToken token)
+                        {
+                            var refreshed = await _presenter.ListRepositoryMemoryAsync(sessionId, repositoryIdentity, token);
+                            return new RepositoryMemoryListSnapshot(
+                                refreshed.Entries.Select(entry => new RepositoryMemoryListItem(entry.Id, entry.Text, entry.Origin, entry.MemoryType, entry.Ownership) { Revision = entry.Revision }).ToArray(),
+                                refreshed.Warnings.ToArray());
+                        }
+
+                        await memorySurface.ManageRepositoryMemoriesAsync(
+                            new RepositoryMemoryListSnapshot(
+                                listed.Entries.Select(item => new RepositoryMemoryListItem(item.Id, item.Text, item.Origin, item.MemoryType, item.Ownership) { Revision = item.Revision }).ToArray(),
+                                listed.Warnings.ToArray()),
+                            async (item, text, token) =>
+                            {
+                                if (text is null)
+                                {
+                                    await _presenter.ForgetRepositoryMemoryAsync(sessionId, repositoryIdentity, item.Id, token);
+                                }
+                                else
+                                {
+                                    await _presenter.UpdateRepositoryMemoryAsync(
+                                        new UpdateRepositoryMemoryCommand(sessionId, repositoryIdentity, item.Id, text) { ExpectedRevision = item.Revision },
+                                        token);
+                                }
+
+                                return await RefreshMemoriesAsync(token);
+                            },
+                            async (type, ownership, text, token) =>
+                            {
+                                var result = await _presenter.RememberRepositoryMemoryAsync(
+                                    new RememberRepositoryMemoryCommand(sessionId, repositoryIdentity, text, type) { Ownership = ownership },
+                                    token);
+                                if (result.Outcome is not ("added" or "duplicate"))
+                                {
+                                    throw new InvalidOperationException(result.Outcome == "reconciliationRequired"
+                                        ? "Memory was not added because related memories need reconciliation. Review or edit the existing memories before retrying."
+                                        : $"Memory was not added: {result.Outcome}.");
+                                }
+
+                                return await RefreshMemoriesAsync(token);
+                            },
+                            cancellationToken);
+                    }
+                    else
+                    {
+                        await _surface.WriteAsync(
+                            FormatRepositoryMemorySnapshot(listed),
+                            PresentationTextRole.Status,
+                            cancellationToken);
+                    }
+
                     return;
 
                 case "inspect":

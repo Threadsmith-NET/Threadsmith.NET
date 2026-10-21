@@ -103,6 +103,8 @@ Tool/service output and runtime limits are configurable. See [Resource limits](r
 
 During explicit onboarding or refresh, the same `memories` tool accepts `supportingPaths` for intelligence adds/updates after primary sources were read in that collection. `action:"changes"` pages pending paths with `afterPath`; `action:"coverChanges"` prepares acknowledgments using `coveredPaths`. These actions and intelligence write authority are scoped to the host-authorized collection. Normal model calls cannot select intelligence ownership, onboard, or replace a collection. A successful run publishes prepared changes; cancellation/failure preserves committed data.
 
+`repository_intelligence(query)` searches stored guidance without collection or embedding rebuilding. `repository_archeology(question)` runs one bounded read-only historical investigation through an Explorer child. Both share `/intelligence enable|disable`; Tools shows current readiness.
+
 Ordinary model `list` excludes intelligence when disabled or ineffective. Manual `/memory list` and `/memory inspect <id>` retain access to preserved entries. Archeology is read-only. See [repository intelligence operations](conversation-context.md#repository-intelligence) for lifecycle, separate capacities, warnings, and commit detection limits.
 
 ### Raster image artifacts

@@ -294,7 +294,9 @@ public sealed partial class SessionApplication
         foreach (var message in messages)
         {
             registration.MemoryCurrentInstruction = message.Text;
-            if (!loopState.TransientState.HasResponses || registration.MemoryOptions?.ConceptRecallEnabled == true)
+            registration.MemoryIntent.Advance();
+            if (!loopState.TransientState.HasResponses || registration.UsesConceptDiscovery
+                || registration.MemoryOptions?.SituationalConceptFilterMode == SituationalConceptFilterMode.Enforce)
             {
                 loopState.InvalidateFrozenContext();
             }
@@ -379,7 +381,7 @@ public sealed partial class SessionApplication
             if (registration.MemoryRepositoryIdentity != identity)
             {
                 registration.MemoryConcepts.Clear();
-                registration.RetainedMemories = [];
+                registration.MemoryIntent.Advance();
                 registration.MemoryRepositoryIdentity = identity;
                 registration.ConceptResolutionRetries = 0;
                 registration.ConceptOverflowReported = false;
@@ -388,7 +390,7 @@ public sealed partial class SessionApplication
             }
 
             var options = _repositoryMemoryOptions?.Capture(identity) ?? new RepositoryMemoryOptions();
-            var intelligenceEnabled = enabled && options.Intelligence.Enabled
+            var intelligenceEnabled = options.Intelligence.Enabled
                 && _repositoryIntelligence?.Capture(identity).IsEffective == true;
             if (registration.MemoryOptions != options || registration.IntelligenceEnabled != intelligenceEnabled)
             {
@@ -500,7 +502,9 @@ public sealed partial class SessionApplication
                 RepositoryMemoryOptions = registration.MemoryOptions,
                 RepositoryMemoryCurrentInstruction = registration.MemoryCurrentInstruction,
                 RepositoryMemoryConcepts = registration.MemoryConcepts.ToArray(),
-                RetainedRepositoryMemories = registration.RetainedMemories,
+                MemoryIntentEpoch = registration.MemoryIntent.Epoch,
+                MemoryIntentConcepts = registration.MemoryRepositoryIdentity is { } intentRepository
+                    ? registration.MemoryIntent.Capture(intentRepository, runId) : null,
                 ActiveTurnEvidenceIds = loopState.RepresentedEvidenceIds,
                 ContinuationImages = continuationImages,
             };
@@ -516,7 +520,6 @@ public sealed partial class SessionApplication
                 cancellationToken);
             context = loopState.RefreshContext(context, modelRound);
             loopState.FrozenContext = context;
-            registration.RetainedMemories = context.RepositoryMemoryInclusions ?? [];
         }
 
         invocationContext = AttachModelBudgetToInvocationContext(
@@ -1380,6 +1383,8 @@ public sealed partial class SessionApplication
             }
         }
 
+        var intentEpoch = round.Registration.MemoryIntent.Epoch;
+        var intentRepository = round.Registration.MemoryRepositoryIdentity;
         var batchResults = await _toolPipeline.InvokePreparedBatchAsync(preparation, cancellationToken);
 
         // Historical user pixels can yield during context selection; current attachments and
@@ -1391,9 +1396,21 @@ public sealed partial class SessionApplication
         foreach (var batchResult in batchResults.OrderBy(item => item.Ordinal))
         {
             var result = ToolEvidenceAdmission.AdmitImages(batchResult.Result, reservedImages);
-            if (round.Registration.MemoryOptions?.ConceptRecallEnabled == true)
+            if (round.Registration.UsesMemoryConcepts)
             {
-                foreach (var concept in result.Concepts)
+                if (intentRepository == round.Registration.MemoryRepositoryIdentity
+                    && round.Registration.MemoryIntent.Observe(intentEpoch, round.ModelRound, result.ToolInvocationId, result.Succeeded, result.Concepts))
+                {
+                    _logger.LogDebug("Memory intent v1 received a batch with {Count} admitted hints for run {RunId}, epoch {Epoch}, round {Round}, succeeded {Succeeded}, mode {Mode}.", result.Concepts.Count, round.RunId, intentEpoch, round.ModelRound, result.Succeeded, round.Registration.MemoryOptions?.SituationalConceptFilterMode);
+                    if (round.Registration.MemoryOptions?.SituationalConceptFilterMode == SituationalConceptFilterMode.Enforce)
+                    {
+                        loopState.InvalidateFrozenContext();
+                    }
+                }
+
+                // Shadow observes only baseline retrieval boundaries; it cannot create a new
+                // search, change a frozen query, or rewrite provider continuation by itself.
+                foreach (var concept in round.Registration.UsesConceptDiscovery ? result.Concepts : [])
                 {
                     if (round.Registration.MemoryConcepts.Contains(concept))
                     {

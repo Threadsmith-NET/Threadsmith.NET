@@ -5,8 +5,8 @@
   "source": "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2",
   "license": "Apache-2.0",
   "licenseEvidence": "model-card frontmatter at the pinned source revision",
-  "maxInputTokens": 256,
-  "maxBatchSize": 64,
+  "maxInputTokens": 512,
+  "maxBatchSize": 8,
   "artifacts": [
     {
       "name": "model.onnx",

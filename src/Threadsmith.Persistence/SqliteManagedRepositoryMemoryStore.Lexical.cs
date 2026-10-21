@@ -43,7 +43,9 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             }
 
             var exactTerms = vocabulary.ToHashSet(StringComparer.Ordinal);
-            var pending = terms.Where(term => term.Length >= 5 && !exactTerms.Contains(term)).Distinct(StringComparer.Ordinal).ToArray();
+            var pending = terms.Where(term => term.Length >= 5
+                    && !RepositoryMemoryLexicalTerms.IsCodeIdentifier(term) && !exactTerms.Contains(term))
+                .Distinct(StringComparer.Ordinal).ToArray();
             if (pending.Length == 0)
             {
                 return snapshot with { FuzzyLexicalStatus = RepositoryMemorySearchBranchStatus.NotRequired };
@@ -71,7 +73,8 @@ public sealed partial class SqliteManagedRepositoryMemoryStore
             var exactIds = snapshot.LexicalMatches.Select(match => match.Id).ToHashSet();
             return snapshot with
             {
-                LexicalMatches = [.. snapshot.LexicalMatches, .. matches.Where(match => !exactIds.Contains(match.Id)).Select(match => match with { IsFuzzy = true })],
+                LexicalMatches = expansions.Length == 0 ? snapshot.LexicalMatches
+                    : [.. snapshot.LexicalMatches, .. matches.Where(match => !exactIds.Contains(match.Id)).Select(match => match with { IsFuzzy = true })],
                 FuzzyLexicalStatus = RepositoryMemorySearchBranchStatus.Completed,
                 LexicalExpansions = expansions,
             };

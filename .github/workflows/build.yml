@@ -62,8 +62,25 @@ jobs:
           if (Test-Path -LiteralPath $resultsDirectory) { throw "Test evidence directory must be fresh: $resultsDirectory" }
           dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules $parallelModules --list-tests | Tee-Object TestResults/ci/discovered-tests.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet test --solution src/Threadsmith.sln --configuration Debug --no-build --max-parallel-test-modules $parallelModules --report-xunit --report-ctrf --results-directory $resultsDirectory --diagnostic --diagnostic-verbosity Warning --output Detailed | Tee-Object TestResults/ci/test.log
-          exit $LASTEXITCODE
+          # xUnit's timestamp-based report names can collide across parallel modules.
+          # Give each solution test project its own evidence directory, retaining parallel execution.
+          $solutionProjects = @(dotnet sln src/Threadsmith.sln list)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $testProjects = @($solutionProjects | Where-Object { $_ -match '\.Tests\.csproj$' } | ForEach-Object {
+            (Resolve-Path (Join-Path "$PWD/src" ($_ -replace '\\', '/'))).Path
+          })
+          if ($testProjects.Count -eq 0) { throw 'No test projects found in the solution.' }
+          $outcomes = @($testProjects | ForEach-Object -Parallel {
+            $ErrorActionPreference = 'Stop'
+            $project = $_
+            $moduleResults = Join-Path $using:resultsDirectory ([IO.Path]::GetFileNameWithoutExtension($project))
+            New-Item -ItemType Directory $moduleResults | Out-Null
+            dotnet test --project $project --configuration Debug --no-build --report-xunit --report-xunit-filename results.xunit --report-ctrf --report-ctrf-filename results.ctrf --results-directory $moduleResults --diagnostic --diagnostic-verbosity Warning --output Detailed | Tee-Object (Join-Path $moduleResults 'test.log') | Out-Host
+            [pscustomobject]@{ Project = $project; ExitCode = $LASTEXITCODE }
+          } -ThrottleLimit $parallelModules)
+          if ($outcomes.Count -ne $testProjects.Count) { throw 'Not all test projects returned an outcome.' }
+          $failedProjects = @($outcomes | Where-Object ExitCode -ne 0)
+          if ($failedProjects.Count -gt 0) { throw "Test projects failed: $($failedProjects.Project -join ', ')" }
 
       - name: Verify required platform cases executed
         if: ${{ !cancelled() }}

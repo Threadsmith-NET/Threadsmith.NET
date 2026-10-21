@@ -4,6 +4,23 @@ using Threadsmith.Core;
 using Threadsmith.Interaction.Commands;
 using Threadsmith.Interaction.Presentation;
 
+/// <summary>Optional retained browser for stored repository memories.</summary>
+public interface IRepositoryMemoryListSurface
+{
+    /// <summary>Shows the supplied read-only projection until dismissed.</summary>
+    Task ShowRepositoryMemoriesAsync(RepositoryMemoryListSnapshot snapshot, CancellationToken cancellationToken = default);
+
+    /// <summary>Adds, edits or deletes through host authority; null replacement text requests deletion.</summary>
+    Task ManageRepositoryMemoriesAsync(
+        RepositoryMemoryListSnapshot snapshot,
+        Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+        Func<RepositoryMemoryType, RepositoryMemoryOwnership, string, CancellationToken, Task<RepositoryMemoryListSnapshot>> add,
+        CancellationToken cancellationToken = default)
+    {
+        return ShowRepositoryMemoriesAsync(snapshot, cancellationToken);
+    }
+}
+
 /// <summary>Optional retained presentation of a frozen, size-only request snapshot.</summary>
 public interface IContextUsageSurface
 {
@@ -60,6 +77,9 @@ public sealed record InteractionToggleOption(string Id, string Label, string Gro
 /// <summary>Current host state after one immediate toggle, including bounded denial or failure detail.</summary>
 public sealed record InteractionToggleResult(bool Enabled, string? Reason = null)
 {
+    /// <summary>Related rows changed by one shared host setting.</summary>
+    public IReadOnlyList<InteractionToggleOption> UpdatedOptions { get; init; } = [];
+
     /// <summary>Refreshed item metadata, when the host operation changes status or available actions.</summary>
     public InteractionToggleOption? UpdatedOption { get; init; }
 }

@@ -257,6 +257,10 @@ public sealed record ToolDefinition
     /// <summary>Maximum invocation duration.</summary>
     public TimeSpan Timeout { get; init; }
 
+    /// <summary>Optional total budget starting at pipeline admission, including scheduling and source waits.
+    /// The implementation must honor the forwarded absolute deadline while joining its owned work.</summary>
+    public TimeSpan? AdmissionTimeout { get; init; }
+
     /// <summary>Maximum serialized result size retained in durable activity.</summary>
     public int MaximumOutputBytes { get; init; }
 
@@ -582,6 +586,12 @@ public sealed record ToolExecutionContext(
 
     /// <summary>Effective serialized output ceiling after configured runtime wrappers are applied.</summary>
     public int? MaximumOutputBytes { get; init; }
+
+    /// <summary>Absolute deadline established at pipeline admission, including time already spent waiting.</summary>
+    public DateTimeOffset? Deadline { get; init; }
+
+    /// <summary>Host clock used to interpret the absolute deadline.</summary>
+    public TimeProvider TimeProvider { get; init; } = TimeProvider.System;
 
     /// <summary>Whether tool policy requires review of the exact staged diff.</summary>
     internal bool RequireExactDiffReview { get; init; }

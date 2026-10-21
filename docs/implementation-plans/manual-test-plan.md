@@ -1950,7 +1950,7 @@ Expected: discovery only edits eligible command names; shared command execution 
 Prerequisites: a disposable trusted repository, working deployed embedding assets, a model/provider or scripted tool fixture, the retained TUIKit frontend, and headless access.
 
 1. Ask the model to remember a focused preference. Capture its actual advertised `memories` schema and invocation; confirm only `action`, nullable/omitted `id`, and nullable/omitted `text`, with actions add/update/remove/list. Try unknown fields and invalid argument combinations.
-2. Run `/memory remember <text>`, `/memory list`, `/memory inspect <id>`, `/memory update <id> <replacement>`, and `/memory forget <id>` in the retained frontend and headless adapter. Repeat removal, unknown-ID update, exact normalized duplicate add, unchanged update, and update duplicating another ID. Try `supersede`, `validate`, and old category/validity arguments.
+2. Run `/memory remember <text>`, `/memory list`, `/memory inspect <id>`, `/memory update <id> <replacement>`, and `/memory forget <id>` in the retained frontend and headless adapter. Repeat removal, unknown-ID update, exact normalized duplicate add, unchanged update, and update duplicating another ID. Try `supersede`, `validate`, and old category/validity arguments. In the retained frontend, also open `/memory`; verify native Preferences, Situational, and Intelligence tabs. Include Intelligence-owned notes of both memory types and confirm both appear only in Intelligence. Verify wrapped ID/origin/text columns, Tab/arrow category navigation, keyboard and mouse scrolling, F2 full IDs, empty categories, and resizing down to 40×12. On each tab, select memories with Up/Down, edit with Enter/F4, and delete with Delete. Verify Ctrl+A/C/X/V, text-only paste, Delete, Insert/Overwrite, Unicode, and undo/redo. Save must be disabled initially and after undoing back to the original text. Verify Save Changes persists and refreshes the same tab; Cancel, No Changes and Escape discard edits without confirmation. Trigger a save failure and confirm the draft remains editable with an error. Close with Escape and confirm composer focus and draft restoration.
 3. Test text at and beyond 2,000 sanitized characters and at/beyond 256 complete encoder tokens using the maintained tokenizer-boundary fixture. Inject failed/truncated embeddings on an otherwise valid write with capacity full.
 4. Complete ordinary conversation, approval, successful mutation, rollback, failure, `/new`, and restart without explicit memory operations. Compare list/usage before and after.
 
@@ -2136,8 +2136,11 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 1. Exercise ordinary tool continuations with concept recall enabled and disabled.
 2. Verify signed provider tool-use/tool-result correlation survives memory inclusion.
 3. Revise/remove a memory and verify append-only current snapshots preserve earlier replay prefixes.
-4. Start another ordinary run and verify concepts/retained inclusions reset.
+4. Start another ordinary run and verify concepts reset. Within a run, accumulate concepts and steer to a different subject; earlier selections must not reserve slots against newly relevant memories.
 5. Verify native deployed prompt assets and bounded memory authority.
+6. With onboarded intelligence enabled, disable ordinary concepts and enable intelligence concepts. Emit a relevant native tool hint and inspect the next request and both partition diagnostics. Intelligence history refresh may rebuild provider history; completed tool-call/result correlation must survive.
+7. Stage the pinned local models and run the opt-in local reranker tests. Verify long-question recall retains opening/closing current instruction sentences ahead of old task context, concept-only targets still reach reranking, and original/used question counts are visible. Verify full pairs through 512 tokens, explicit Prior-mode overflow fallback for oversized memories, no reconciliation writes on incomplete comparisons, and configured comparison windows spanning multiple eight-pair batches.
+8. In a disposable repository, add a retired `Scoring` block to each recall/reconciliation route in turn. Confirm configuration is rejected with removal guidance and no replacement snapshot is published. Remove the block and verify baseline hybrid retrieval, optional reranker ordering, and per-route result/comparison limits. Fail reranking: qualified hybrid recall remains available, concept-only candidates are deferred, and incomplete reconciliation cannot authorize a write. Preserve standing preferences and exact duplicate handling. The [historical weighted evaluation](../operations/weighted-memory-scoring-evaluation.md) records the removed experiment only.
 
 ### MTP-278 — Repository intelligence lifecycle and context
 
@@ -2153,3 +2156,29 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 **Expected:** One shared storage/search/model/tool/presentation path, independent ownership capacities, transactional publication, advisory warnings, current continuation state and no late automatic-refresh suppression.
 
 **Limitations:** Automatic detection recognizes validated standard reflog creation records. Clients suppressing reflogs or using custom messages may be missed; manually refresh those cases. Filesystem observation is eventual and gaps remain visible. Full interactive draft/modal timing, platform-specific worktree behavior, and controlled fault/persistence failures require their corresponding environments; record unassessed cases explicitly.
+
+## MTP-MEMORY-ROUTING — Intelligence routing and concept eligibility
+
+**Prerequisites:** Disposable onboarded repository with standing preferences, tagged/untagged situational entries and intelligence; enabled native tools and inference assets. Preserve original configuration. Use [routing settings](../operations/memory-intelligence-routing.md).
+
+1. Set master true, automatic recall false, filter Off. Submit a relevant request and inspect the actual submitted context. Verify all preference text/order and ordinary situational context, with no automatically injected intelligence. Request `memories search` with a focused query and ownership intelligence; inspect IDs, supports, freshness, completeness and omissions.
+2. Repeat with master false, with an uncollected repository, and with a controlled monitoring fault. Verify distinct disabled/not_collected/error states; no automatic collection or writes. Reject ordinary ownership, arbitrary repository arguments and oversized queries.
+3. Compare identical fixed inputs in Off and Shadow, then opt into Enforce. Use exact matches, tagged mismatches, untagged entries and typo-only matches. Inspect pre-comparison eligibility reasons and actual prompt text. Preferences must remain complete and ordered; exact agreement cannot force relevance or bypass incomplete comparisons.
+4. Exercise the initial round, admitted successful/failed calls, denied calls, multiple different hint origins, steering and a new run. Confirm current-epoch hints only, conservative missing/mixed fallback, and no prior-run carryover. Repeat with candidate expansion disabled.
+5. Publish onboarding with automatic recall explicitly false. Verify it remains false. Restore true and Off; verify legacy automatic intelligence returns without data migration. Revert the disposable configuration afterward.
+
+**Expected:** Independent automatic/tool routes and unchanged preference/reconciliation contracts. Empty search never starts collection. Do not infer real recall quality from these branch checks.
+
+**Limitations:** Provider-backed steering timing, captured real concept coverage, and held-out recall/latency evaluation require their own evidence; record unassessed cases.
+
+## MTP-REPO-TOOLS — Shared repository tool availability and bounded investigation
+
+**Prerequisites:** A disposable onboarded Git repository, a model supporting native tools, and intelligence automatic recall disabled.
+
+1. Open Tools with intelligence disabled. Verify both repository rows show the shared disabled reason and actual model requests omit them. Enable either row; verify both refresh, automatic recall stays off, and no onboarding begins.
+2. Disable ordinary memories. Ask a focused stored-intelligence question, then a focused historical question. Inspect actual requests, child activity, Git/query calls, evidence references, usage, omissions and the single parent result.
+3. Deny a history reader and a repository path, then repeat with a question asking to escape roots or enable collection. Verify the denied operation never executes.
+4. Disable intelligence during an active investigation. Verify cancellation reaches the child and no work continues after completion. Re-enable and verify another investigation can start; explicit denials remain unchanged.
+5. Inspect a historical memory-search transcript and resume a pending legacy call if available. Verify old results remain readable and the pending call receives migration guidance without executing search.
+
+**Limits:** A bounded investigation can be partial. Missing evidence does not prove no relevant history exists. Run these steps only in the disposable repository; no production feature activation is required for implementation verification.

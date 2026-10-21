@@ -211,6 +211,9 @@ public sealed record AgentResourceBudget
         };
     }
 
+    /// <summary>Maximum model rounds; zero retains the tool/correction-derived limit.</summary>
+    public int ModelTurns { get; init; }
+
     /// <summary>Maximum model tokens.</summary>
     public long ModelTokens { get; init; } = 32_000;
 

@@ -29,6 +29,9 @@ public sealed record TakeRepositoryIntelligenceRefreshCommand(SessionId SessionI
 /// <summary>Feature orchestration invoked inside the ordinary execution lifetime.</summary>
 public interface IRepositoryIntelligenceOperations
 {
+    /// <summary>Whether the nonwaiting exclusive feature operation gate is occupied.</summary>
+    bool IsBusy => false;
+
     /// <summary>Prepares a restricted operation without starting a separate model loop.</summary>
     Task<IRepositoryIntelligenceRun> BeginAsync(SessionId sessionId, RunId runId, string repositoryPath, RepositoryIntelligenceOperation operation, CancellationToken cancellationToken = default);
 
@@ -198,6 +201,9 @@ public sealed record RepositoryIntelligenceState
 /// <summary>Independent intelligence policies, captured through normal repository configuration.</summary>
 public sealed record RepositoryIntelligenceOptions
 {
+    /// <summary>Includes intelligence in automatic context; missing legacy settings preserve this route.</summary>
+    public bool AutomaticRecallEnabled { get; init; } = true;
+
     /// <summary>Enables previously onboarded guidance; never initiates collection.</summary>
     public bool Enabled { get; init; }
 

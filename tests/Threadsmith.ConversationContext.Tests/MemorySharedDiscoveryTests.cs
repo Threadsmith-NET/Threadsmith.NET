@@ -9,6 +9,38 @@ using Xunit;
 /// <summary>Shared text and concept discovery through real persistence and consumer paths.</summary>
 public static class MemorySharedDiscoveryTests
 {
+    /// <summary>Explicit code names qualify exactly without weakening ordinary prose or fuzzy discovery.</summary>
+    [Theory]
+    [InlineData("Explain FindSymbolAsync", true)]
+    [InlineData("Explain FindSymbalAsync", false)]
+    [InlineData("Explain Cancellation", false)]
+    [InlineData("OtherSymbolAsync otherSymbolAsync FindSymbolAsync", true)]
+    public static async Task Exact_code_names_qualify_independently_of_prose(string query, bool expected)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var generator = new TestMemoryEmbeddingGenerator();
+        var service = MemoryTestData.CreateService(fixture, generator);
+        var saved = await service.ExecuteAsync(MemoryTestData.Operation("add", "FindSymbolAsync preserves cancellation."), ct);
+        var resolver = new TestResolver();
+        using var store = new SqliteManagedRepositoryMemoryStore(fixture.ConnectionString, termResolver: resolver);
+        using var search = new HybridRepositoryMemoryRetriever(store, generator);
+        foreach (var prefix in (string[])[string.Empty, string.Join(' ', Enumerable.Range(0, 40).Select(index => $"unrelated{index}")) + " "])
+        {
+            var result = await search.SearchAsync(
+                new RepositoryMemorySearchRequest
+                {
+                    RepositoryIdentity = MemoryTestData.Repository,
+                    Query = prefix + query,
+                    Options = new() { SemanticMinimum = 1, MaximumQueryTerms = 2, Lexical = new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20 } },
+                },
+                ct);
+            Assert.Equal(expected, result.Selected.Any(candidate => candidate.Entry.Id == saved.Id));
+        }
+
+        Assert.DoesNotContain(resolver.Queries, RepositoryMemoryLexicalTerms.IsCodeIdentifier);
+    }
+
     /// <summary>Discovery feeds reranking without coupling consumer settings.</summary>
     [Theory]
     [InlineData(RepositoryMemoryOrigin.Manual, RepositoryMemoryType.Situational, false)]
@@ -104,7 +136,9 @@ public static class MemorySharedDiscoveryTests
         var terms = new[] { "alpha", "beta", "cancelation" };
         var plain = await store.GetSnapshotAsync(MemoryTestData.Repository, terms, ct);
         var expanded = await store.GetSnapshotAsync(MemoryTestData.Repository, terms, new() { FuzzyEnabled = true, FuzzyMaximumDistance = 20, MaximumExpansions = 1 }, ct);
-        Assert.Equal(plain.LexicalMatches, expanded.LexicalMatches.Where(match => !match.IsFuzzy));
+        Assert.Equal(
+            plain.LexicalMatches.Select(match => (match.Id, match.Bm25, Terms: string.Join("|", match.MatchedTerms))),
+            expanded.LexicalMatches.Where(match => !match.IsFuzzy).Select(match => (match.Id, match.Bm25, Terms: string.Join("|", match.MatchedTerms))));
         Assert.Equal(exact.Id, expanded.LexicalMatches[0].Id);
         Assert.Contains(expanded.LexicalMatches, match => match.Id == fuzzy.Id && match.IsFuzzy);
         Assert.DoesNotContain(expanded.LexicalMatches, match => match.Id == oneTerm.Id);

@@ -13,6 +13,7 @@ Many coding agents treat a repository primarily as text and depend on repeated e
 Threadsmith is designed for unfamiliar or large C# solutions, multi-project changes, refactoring, API evolution, and work where dependencies or overloads make text-only editing unreliable. Its core principles are:
 
 - **Compiler-aware evidence** — Roslyn and MSBuild provide symbol, reference, caller, project, and diagnostic context.
+- **Advanced code exploration tools** — Repository Intelligence and Archeology allow the model to ask questions about how the code base is built and why, as well as understand its evolution so as to not repeat past failures. 
 - **Human-governed changes** — mutation policy controls exact-diff review or auto-authorization; models cannot grant themselves write authority.
 - **Transactional mutation** — proposed changes are confined to permitted paths, staged, shown as exact diffs, authorized under host policy, and applied transactionally with source preconditions and committed-byte verification.
 - **Advisory compiler feedback** — versioned findings disclose coverage and omissions, support repairs in the same conversation, and never establish build or test success. A written plan is optional conversation text.

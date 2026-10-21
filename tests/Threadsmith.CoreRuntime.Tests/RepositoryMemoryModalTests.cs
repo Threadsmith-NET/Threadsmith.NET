@@ -99,7 +99,7 @@ public static class RepositoryMemoryModalTests
         modal.HandleKey(KeyEvent.Special(KeyCode.Down));
         modal.HandleKey(KeyEvent.Special(KeyCode.Enter));
         Assert.True(modal.Changes.TryRead(out var edit));
-        Assert.Equal(second.Id, edit.Item.Id);
+        Assert.Equal(second.Id, Assert.IsType<RepositoryMemoryListItem>(edit.Item).Id);
         Assert.False(edit.Delete);
         modal.HandleKey(KeyEvent.Special(KeyCode.Delete));
         Assert.False(modal.Changes.TryRead(out _));
@@ -107,13 +107,13 @@ public static class RepositoryMemoryModalTests
         Assert.Contains("Changed text", Render(modal), StringComparison.Ordinal);
         modal.HandleKey(KeyEvent.Special(KeyCode.Delete));
         Assert.True(modal.Changes.TryRead(out var delete));
-        Assert.Equal(second.Id, delete.Item.Id);
+        Assert.Equal(second.Id, Assert.IsType<RepositoryMemoryListItem>(delete.Item).Id);
         Assert.True(delete.Delete);
         modal.CompleteChange(new([first], []));
         Render(modal);
         modal.HandleKey(KeyEvent.Special(KeyCode.Enter));
         Assert.True(modal.Changes.TryRead(out edit));
-        Assert.Equal(first.Id, edit.Item.Id);
+        Assert.Equal(first.Id, Assert.IsType<RepositoryMemoryListItem>(edit.Item).Id);
     }
 
     /// <summary>Cached rows retain stable identity across removal and content changes.</summary>
@@ -136,7 +136,7 @@ public static class RepositoryMemoryModalTests
         Assert.DoesNotContain("First", rendered, StringComparison.Ordinal);
         modal.HandleKey(KeyEvent.Special(KeyCode.Enter));
         Assert.True(modal.Changes.TryRead(out var selected));
-        Assert.Equal(third.Id, selected.Item.Id);
+        Assert.Equal(third.Id, Assert.IsType<RepositoryMemoryListItem>(selected.Item).Id);
         modal.CompleteChange(new([second with { Text = "Revised second", Revision = 2 }, third], []));
         Assert.DoesNotContain("New warning", Render(modal), StringComparison.Ordinal);
     }

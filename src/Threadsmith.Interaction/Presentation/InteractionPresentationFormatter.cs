@@ -552,8 +552,93 @@ internal static class InteractionPresentationFormatter
 
     private static bool IsBuiltInMemoryTool(ToolInvocationStarted started, ToolActivitySource? source)
     {
-        return string.Equals(started.ToolName, "memories", StringComparison.Ordinal)
+        return started.ToolName is "memories" or "repository_intelligence" or "repository_archeology"
             && source is not { Kind: not ToolActivitySourceKind.BuiltIn };
+    }
+
+    private static string FormatArcheologyOutput(JsonElement root)
+    {
+        var output = new StringBuilder();
+        AppendArcheologyFields(
+            output,
+            root,
+            [("Status", "Status"), ("ReasonCode", "Reason"), ("Message", "Message"),
+             ("TerminationReason", "Termination"), ("ChildRunId", "Child run"), ("Complete", "Complete")]);
+        if (root.TryGetProperty("Investigation", out var details) && details.ValueKind == JsonValueKind.Object)
+        {
+            if (details.TryGetProperty("children", out var children) && children.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var child in children.EnumerateArray())
+                {
+                    AppendArcheologyFields(output, child, [("status", "Child status"), ("summary", "Summary")]);
+                    if (child.TryGetProperty("findings", out var findings) && findings.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var finding in findings.EnumerateArray())
+                        {
+                            AppendArcheologyFields(
+                                output,
+                                finding,
+                                [("title", "Finding"), ("filePath", "Path"), ("line", "Line"), ("symbol", "Symbol"),
+                                 ("evidence", "Evidence"), ("confidence", "Confidence"), ("uncertainty", "Uncertainty"),
+                                 ("category", "Category"), ("severity", "Severity"), ("recommendation", "Recommendation"), ("consequence", "Consequence")]);
+                        }
+                    }
+
+                    AppendArcheologyItems(output, child, "omissions", "Omission");
+                    if (child.TryGetProperty("usage", out var usage))
+                    {
+                        AppendArcheologyFields(output, usage, [("modelTokens", "Model tokens"), ("toolCalls", "Tool calls")]);
+                    }
+                }
+            }
+
+            AppendArcheologyItems(output, details, "omissions", "Omission");
+            AppendArcheologyItems(output, details, "disagreements", "Disagreement");
+        }
+
+        if (root.TryGetProperty("References", out var references) && references.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var reference in references.EnumerateArray())
+            {
+                AppendArcheologyFields(
+                    output,
+                    reference,
+                    [("Id", "Reference"), ("Path", "Path"), ("Revision", "Commit"), ("Source", "Source"), ("SourceIdentifier", "Source identifier")]);
+            }
+        }
+
+        AppendArcheologyItems(output, root, "Limitations", "Limitation");
+        AppendArcheologyFields(output, root, [("OmittedReferences", "Omitted references")]);
+        return output.ToString().TrimEnd();
+    }
+
+    private static void AppendArcheologyFields(StringBuilder output, JsonElement element, IReadOnlyList<(string Field, string Label)> fields)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        foreach (var (field, label) in fields)
+        {
+            if (element.TryGetProperty(field, out var value)
+                && value.ValueKind is JsonValueKind.String or JsonValueKind.Number or JsonValueKind.True or JsonValueKind.False
+                && !string.IsNullOrWhiteSpace(value.ToString()))
+            {
+                output.Append(label).Append(": ").AppendLine(value.ToString());
+            }
+        }
+    }
+
+    private static void AppendArcheologyItems(StringBuilder output, JsonElement element, string field, string label)
+    {
+        if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty(field, out var items) && items.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in items.EnumerateArray().Where(item => item.ValueKind == JsonValueKind.String))
+            {
+                output.Append(label).Append(": ").AppendLine(item.GetString());
+            }
+        }
     }
 
     private static string? GetMemoryOutput(ToolInvocationStarted started, ToolInvocationCompleted completed, int maximumInspectionCharacters)
@@ -575,6 +660,11 @@ internal static class InteractionPresentationFormatter
         {
             using var document = JsonDocument.Parse(completed.ResultJson);
             var root = document.RootElement;
+            if (started.ToolName == "repository_archeology" && root.ValueKind == JsonValueKind.Object)
+            {
+                return PrepareMemoryOutput(FormatArcheologyOutput(root), maximumInspectionCharacters);
+            }
+
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("Outcome", out var outcome)
                 || outcome.ValueKind != JsonValueKind.String
@@ -586,6 +676,14 @@ internal static class InteractionPresentationFormatter
 
             var output = new StringBuilder();
             output.Append("Outcome: ").AppendLine(outcome.GetString());
+            foreach (var field in new[] { "ReasonCode", "Resolution", "IsComplete", "QueryTruncated", "OmittedEntries" })
+            {
+                if (root.TryGetProperty(field, out var value) && value.ValueKind != JsonValueKind.Null)
+                {
+                    output.Append(field).Append(": ").AppendLine(value.ToString());
+                }
+            }
+
             if (root.TryGetProperty("Action", out var action)
                 && action.ValueKind == JsonValueKind.String
                 && action.GetString() is "coverage" or "updateCoverage" or "initializeCoverage")
@@ -649,7 +747,7 @@ internal static class InteractionPresentationFormatter
                     return null;
                 }
 
-                if (memoryType == "standingPreference")
+                if (memoryType == "standingPreference" && started.ToolName != "repository_intelligence")
                 {
                     continue;
                 }
@@ -657,6 +755,16 @@ internal static class InteractionPresentationFormatter
                 output.Append("Memory ").Append(id.GetString()).Append(" [")
                     .Append(memoryType).AppendLine("]:");
                 output.AppendLine(text.GetString());
+                if (started.ToolName == "repository_intelligence" && entry.TryGetProperty("Supports", out var supports) && supports.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var support in supports.EnumerateArray())
+                    {
+                        if (support.TryGetProperty("Path", out var path))
+                        {
+                            output.Append("  Source: ").AppendLine(path.GetString());
+                        }
+                    }
+                }
             }
 
             if (entries.GetArrayLength() == 0)

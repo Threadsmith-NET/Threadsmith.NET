@@ -94,6 +94,22 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             snapshotId,
             parentContext.SessionId,
             parentContext.RunId);
+        return CreateCore(parentContext, registrations, _options);
+    }
+
+    /// <summary>Uses the narrowed snapshot supplied only by the host archeology orchestrator.</summary>
+    internal IAgentAssignmentRunner CreateArcheology(ToolExecutionContext context, IReadOnlyList<ToolRegistration> registrations, DelegateAgentsOptions options)
+    {
+        if (context.Invocation.IsChildAgent || context.Invocation.IntelligenceRun?.Operation != RepositoryIntelligenceOperation.Archeology)
+        {
+            throw new UnauthorizedAccessException("A host-owned archeology scope is required.");
+        }
+
+        return CreateCore(context, registrations, options);
+    }
+
+    private IAgentAssignmentRunner CreateCore(ToolExecutionContext parentContext, IReadOnlyList<ToolRegistration> registrations, DelegateAgentsOptions options)
+    {
         var execution = new ModelExplorerAssignmentRunner(
             _contexts,
             _admission,
@@ -103,7 +119,7 @@ public sealed class ModelExplorerAssignmentRunnerFactory : IExplorerAssignmentRu
             _evidence,
             _instructions,
             _sanitizer,
-            _options,
+            options,
             parentContext,
             registrations,
             _prompts,

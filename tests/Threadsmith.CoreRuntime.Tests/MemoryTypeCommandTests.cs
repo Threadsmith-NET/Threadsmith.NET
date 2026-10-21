@@ -218,6 +218,30 @@ public static class MemoryTypeCommandTests
         Assert.Empty(surface.Snapshots[2].Entries);
     }
 
+    /// <summary>Retained creation routes every tab through the manual host command and refreshes the projection.</summary>
+    [Fact]
+    public static async Task Browser_adds_each_partition()
+    {
+        await using var events = new DomainEventStream();
+        var dispatcher = new MemoryDispatcher(0);
+        var surface = new MemoryBrowserSurface(["/memory", "/quit"]) { AddMemories = true };
+        var coordinator = new InteractionCoordinator(new InteractionPresenter(dispatcher, new EmptyProjectionStore()), events, surface);
+        await coordinator.RunAsync(
+            "memory-command-fixture",
+            requestedTrust: RepositoryTrustLevel.UntrustedInspection,
+            repositoryConfigurationDirectoryExistedAtStartup: true,
+            cancellationToken: TestContext.Current.CancellationToken);
+        var adds = dispatcher.Commands.OfType<RememberRepositoryMemoryCommand>().ToArray();
+        Assert.Equal(3, adds.Length);
+        Assert.Equal(RepositoryMemoryType.StandingPreference, adds[0].MemoryType);
+        Assert.Equal(RepositoryMemoryOwnership.Ordinary, adds[0].Ownership);
+        Assert.Equal(RepositoryMemoryType.Situational, adds[1].MemoryType);
+        Assert.Equal(RepositoryMemoryOwnership.Ordinary, adds[1].Ownership);
+        Assert.Equal(RepositoryMemoryType.Situational, adds[2].MemoryType);
+        Assert.Equal(RepositoryMemoryOwnership.Intelligence, adds[2].Ownership);
+        Assert.Equal(3, surface.Snapshots[^1].Entries.Count);
+    }
+
     private sealed class MemoryBrowserSurface : RecordingSurface, IRepositoryMemoryListSurface
     {
         public MemoryBrowserSurface(IEnumerable<string> inputs)
@@ -229,12 +253,22 @@ public static class MemoryTypeCommandTests
 
         public bool Mutate { get; init; }
 
+        public bool AddMemories { get; init; }
+
         public async Task ManageRepositoryMemoriesAsync(
             RepositoryMemoryListSnapshot snapshot,
             Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+            Func<RepositoryMemoryType, RepositoryMemoryOwnership, string, CancellationToken, Task<RepositoryMemoryListSnapshot>> add,
             CancellationToken cancellationToken = default)
         {
             await ShowRepositoryMemoriesAsync(snapshot, cancellationToken);
+            if (AddMemories)
+            {
+                Snapshots.Add(await add(RepositoryMemoryType.StandingPreference, RepositoryMemoryOwnership.Ordinary, "New preference", cancellationToken));
+                Snapshots.Add(await add(RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Ordinary, "New situation", cancellationToken));
+                Snapshots.Add(await add(RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Intelligence, "New intelligence", cancellationToken));
+            }
+
             if (Mutate)
             {
                 var edited = await change(snapshot.Entries.Single(), "Edited memory", cancellationToken);
@@ -318,7 +352,7 @@ public static class MemoryTypeCommandTests
                 return new RepositoryMemoryOperationResult("reconciliationRequired", null, null, Entries.ToArray(), []);
             }
 
-            var entry = Seed(command.MemoryType ?? RepositoryMemoryType.Situational) with { Text = command.Text };
+            var entry = Seed(command.MemoryType ?? RepositoryMemoryType.Situational) with { Text = command.Text, Ownership = command.Ownership };
             Entries[^1] = entry;
             return new RepositoryMemoryOperationResult("added", entry.Id, entry, [], []);
         }

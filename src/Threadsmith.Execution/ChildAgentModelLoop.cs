@@ -110,7 +110,9 @@ internal sealed class ChildAgentModelLoop
             snapshot => snapshot);
         var deliveredEvidenceIds = context.Evidence.Select(item => item.EvidenceId)
             .Concat(capturedById.Keys).ToHashSet();
-        var registrations = ResolveRegistrations(assignment).ToList();
+        var registrations = ResolveRegistrations(assignment)
+            .Where(registration => registration.Implementation is not IRepositoryFeatureTool feature
+                || feature.CaptureAvailability(childToolContext.RepositoryPath).Ready).ToList();
         if (!childToolContext.DenyAllTools
             && !childToolContext.DeniedToolIds.Contains(ChildAgentEvidenceTool.ToolId, StringComparer.OrdinalIgnoreCase))
         {
@@ -155,6 +157,11 @@ internal sealed class ChildAgentModelLoop
             var maximumRounds = assignment.Budget.EnforceLimits
                 ? Math.Max(1, assignment.Budget.ToolCalls + assignment.Budget.Corrections + 1)
                 : int.MaxValue;
+            if (assignment.Budget.EnforceLimits && assignment.Budget.ModelTurns > 0)
+            {
+                maximumRounds = Math.Min(maximumRounds, assignment.Budget.ModelTurns);
+            }
+
             for (var round = 0; round < maximumRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -357,7 +364,8 @@ internal sealed class ChildAgentModelLoop
                 "child cancellation observed",
                 ledger.Snapshot with { WallTime = stopwatch.Elapsed },
                 model.ProfileId,
-                model.Provenance);
+                model.Provenance,
+                deliveredEvidenceIds.ToArray());
             throw;
         }
         catch (Exception exception)
@@ -368,7 +376,8 @@ internal sealed class ChildAgentModelLoop
                 ResolveSafeFailureReason(exception),
                 ledger.Snapshot with { WallTime = stopwatch.Elapsed },
                 model.ProfileId,
-                model.Provenance);
+                model.Provenance,
+                deliveredEvidenceIds.ToArray());
             throw;
         }
     }
@@ -859,6 +868,8 @@ internal sealed class ChildAgentModelLoop
                     RepositoryPath = repositoryPath,
                     Source = $"tool:{result.ToolId}",
                     SourcePath = source?.Identifier,
+                    RepositoryRevision = source is { Kind: "git-object", Identifier.Length: 40 or 64 }
+                        && source.Identifier.All(Uri.IsHexDigit) ? source.Identifier : null,
                     ToolInvocationId = result.ToolInvocationId,
                     ChildRunId = assignment.ChildRunId,
                     AgentAssignmentId = assignment.AssignmentId,
@@ -1068,7 +1079,8 @@ internal sealed record ChildAgentFailureDetails(
     string SafeReason,
     AgentResourceUsage Usage,
     ModelProfileId ModelProfileId,
-    AgentModelProvenance? ModelSelection)
+    AgentModelProvenance? ModelSelection,
+    IReadOnlyList<EvidenceId> DeliveredEvidenceIds)
 {
     private const string ExceptionDataKey = "Threadsmith.Execution.ChildAgentFailureDetails";
 
@@ -1078,13 +1090,15 @@ internal sealed record ChildAgentFailureDetails(
         string safeReason,
         AgentResourceUsage usage,
         ModelProfileId modelProfileId,
-        AgentModelProvenance? modelSelection = null)
+        AgentModelProvenance? modelSelection = null,
+        IReadOnlyList<EvidenceId>? deliveredEvidenceIds = null)
     {
         exception.Data[ExceptionDataKey] = new ChildAgentFailureDetails(
             safeReason,
             usage,
             modelProfileId,
-            modelSelection);
+            modelSelection,
+            deliveredEvidenceIds ?? []);
     }
 
     /// <summary>Attempts to read attached child failure details.</summary>

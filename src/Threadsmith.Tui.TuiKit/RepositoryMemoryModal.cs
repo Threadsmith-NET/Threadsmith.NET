@@ -20,7 +20,7 @@ internal sealed class RepositoryMemoryModal : Modal
     private readonly Func<bool> _canHandleMouse;
     private readonly CachedTextRun _title = new();
     private readonly CachedTextRun _footer = new();
-    private readonly Channel<(RepositoryMemoryListItem Item, bool Delete)> _changes = Channel.CreateUnbounded<(RepositoryMemoryListItem, bool)>();
+    private readonly Channel<(RepositoryMemoryListItem? Item, bool Delete, int Tab)> _changes = Channel.CreateUnbounded<(RepositoryMemoryListItem?, bool, int)>();
     private Rect _tabBounds;
     private bool _fits;
     private bool _busy;
@@ -28,8 +28,8 @@ internal sealed class RepositoryMemoryModal : Modal
     /// <summary>Gets whether mutation commands are available.</summary>
     internal bool CanManage { get; init; }
 
-    /// <summary>Gets serialized edit and delete requests.</summary>
-    internal ChannelReader<(RepositoryMemoryListItem Item, bool Delete)> Changes => _changes.Reader;
+    /// <summary>Gets serialized add, edit and delete requests; a null item requests creation on the specified tab.</summary>
+    internal ChannelReader<(RepositoryMemoryListItem? Item, bool Delete, int Tab)> Changes => _changes.Reader;
 
     private string? _error;
 
@@ -61,12 +61,17 @@ internal sealed class RepositoryMemoryModal : Modal
             return true;
         }
 
-        if (CanManage && _fits && key.Code is KeyCode.Enter or KeyCode.F4 or KeyCode.Delete)
+        if (CanManage && _fits && key.Code == KeyCode.Insert)
+        {
+            _busy = true;
+            _changes.Writer.TryWrite((null, false, _tabs.ActiveIndex));
+        }
+        else if (CanManage && _fits && key.Code is KeyCode.Enter or KeyCode.F4 or KeyCode.Delete)
         {
             if (_lists[_tabs.ActiveIndex].Selected is { } selected)
             {
                 _busy = true;
-                _changes.Writer.TryWrite((selected, key.Code == KeyCode.Delete));
+                _changes.Writer.TryWrite((selected, key.Code == KeyCode.Delete, _tabs.ActiveIndex));
             }
         }
         else if (key.Code == KeyCode.Escape)
@@ -130,7 +135,7 @@ internal sealed class RepositoryMemoryModal : Modal
         _tabs.ActiveStyle = _style(PresentationTextRole.AgentSelectedTabRole);
         _tabs.InactiveStyle = _style(PresentationTextRole.AgentNotSelectedTabRole);
         _tabs.Render(view.CreateView(new Rect(0, 1, _tabBounds.Width, _tabBounds.Height)));
-        _footer.Draw(view, 0, view.Size.Height - 1, _busy ? "Applying memory change..." : view.Size.Width < 80 ? "Enter: edit Del: delete Tab: tab Esc" : "Tab/Left/Right: category  Up/Down: select  Enter/F4: edit  Del: delete  PgUp/PgDn: scroll  F2: IDs  Esc: close", _style(PresentationTextRole.Status));
+        _footer.Draw(view, 0, view.Size.Height - 1, _busy ? "Applying memory change..." : view.Size.Width < 80 ? "Ins: add Enter: edit Del: delete Esc" : "Ins: add  Enter/F4: edit  Del: delete  Tab: category  Up/Down: select  PgUp/PgDn: scroll  F2: IDs  Esc: close", _style(PresentationTextRole.Status));
     }
 
     /// <summary>Reconciles host results without losing the active tab.</summary>

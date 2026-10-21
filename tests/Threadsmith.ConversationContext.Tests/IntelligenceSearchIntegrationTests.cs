@@ -65,7 +65,7 @@ public static class IntelligenceSearchIntegrationTests
         var before = await store.GetSnapshotAsync(identity, [], ct);
         using var search = new HybridRepositoryMemoryRetriever(store, generator, new MemoryScoreEncoder());
         var memory = new RepositoryMemoryService(store, generator, new SecretOutputSanitizer(), search: search);
-        var tool = new MemoriesTool(memory, options, TestPromptLoader.Instance, new IntelligenceStatus(), search);
+        var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(search, options, new IntelligenceStatus()), options, TestPromptLoader.Instance);
         var invocation = new ToolInvocationContext
         {
             RepositoryPath = fixture.DirectoryPath,
@@ -73,7 +73,7 @@ public static class IntelligenceSearchIntegrationTests
             RequestedBy = "model",
         };
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), invocation);
-        var result = await tool.ExecuteAsync(new MemoriesInput("search", Query: "architecture", Ownership: "intelligence"), context, ct);
+        var result = await tool.ExecuteAsync(new RepositoryIntelligenceInput("architecture"), context, ct);
 
         Assert.Equal("matches", result.Value.Outcome);
         var entry = Assert.Single(result.Value.Entries);
@@ -81,7 +81,7 @@ public static class IntelligenceSearchIntegrationTests
         Assert.Equal("intelligence", entry.Ownership);
         Assert.Equal(type == RepositoryMemoryType.StandingPreference ? "standingPreference" : "situational", entry.MemoryType);
         Assert.Equal(RepositoryMemorySearchBranchStatus.Completed, result.Value.SearchDetails?.Reranker);
-        var absent = await tool.ExecuteAsync(new MemoriesInput("search", Query: "nomatch", Ownership: "intelligence"), context, ct);
+        var absent = await tool.ExecuteAsync(new RepositoryIntelligenceInput("nomatch"), context, ct);
         Assert.Equal("no_matches", absent.Value.Outcome);
         Assert.Empty(absent.Value.Entries);
         var after = await store.GetSnapshotAsync(identity, [], ct);

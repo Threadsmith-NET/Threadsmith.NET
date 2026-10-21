@@ -230,7 +230,13 @@ public static class PromptFileNames
     /// <summary>Gets the stable filename for request-authorized active-turn evidence recovery.</summary>
     public const string ToolReadActiveTurnEvidenceDescription = "Tool-read_active_turn_evidence-Description.md";
 
-    /// <summary>Gets the stable filename for the explicit repository-memory tool description.</summary>
+    /// <summary>Gets the stable filename for explicit stored repository intelligence queries.</summary>
+    public const string ToolRepositoryIntelligenceDescription = "Tool-repository_intelligence-Description.md";
+
+    /// <summary>Bounded repository history investigation tool.</summary>
+    public const string ToolRepositoryArcheologyDescription = "Tool-repository_archeology-Description.md";
+
+    /// <summary>Ordinary memory management tool.</summary>
     public const string ToolMemoriesDescription = "Tool-memories-Description.md";
 
     /// <summary>Gets the stable filename for the write-file description.</summary>
@@ -1039,6 +1045,8 @@ public static class PromptFileNames
         ToolReadActiveTurnEvidenceDescription,
         ToolWriteFileDescription,
         ToolMemoriesDescription,
+        ToolRepositoryIntelligenceDescription,
+        ToolRepositoryArcheologyDescription,
         ToolSearchDescription,
         ToolGitStatusDescription,
         ToolFindSymbolDescription,

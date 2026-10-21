@@ -2170,3 +2170,15 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 **Expected:** Independent automatic/tool routes and unchanged preference/reconciliation contracts. Empty search never starts collection. Do not infer real recall quality from these branch checks.
 
 **Limitations:** Provider-backed steering timing, captured real concept coverage, and held-out recall/latency evaluation require their own evidence; record unassessed cases.
+
+## MTP-REPO-TOOLS — Shared repository tool availability and bounded investigation
+
+**Prerequisites:** A disposable onboarded Git repository, a model supporting native tools, and intelligence automatic recall disabled.
+
+1. Open Tools with intelligence disabled. Verify both repository rows show the shared disabled reason and actual model requests omit them. Enable either row; verify both refresh, automatic recall stays off, and no onboarding begins.
+2. Disable ordinary memories. Ask a focused stored-intelligence question, then a focused historical question. Inspect actual requests, child activity, Git/query calls, evidence references, usage, omissions and the single parent result.
+3. Deny a history reader and a repository path, then repeat with a question asking to escape roots or enable collection. Verify the denied operation never executes.
+4. Disable intelligence during an active investigation. Verify cancellation reaches the child and no work continues after completion. Re-enable and verify another investigation can start; explicit denials remain unchanged.
+5. Inspect a historical memory-search transcript and resume a pending legacy call if available. Verify old results remain readable and the pending call receives migration guidance without executing search.
+
+**Limits:** A bounded investigation can be partial. Missing evidence does not prove no relevant history exists. Run these steps only in the disposable repository; no production feature activation is required for implementation verification.

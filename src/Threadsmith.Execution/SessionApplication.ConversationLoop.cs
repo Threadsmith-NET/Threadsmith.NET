@@ -390,7 +390,7 @@ public sealed partial class SessionApplication
             }
 
             var options = _repositoryMemoryOptions?.Capture(identity) ?? new RepositoryMemoryOptions();
-            var intelligenceEnabled = enabled && options.Intelligence.Enabled
+            var intelligenceEnabled = options.Intelligence.Enabled
                 && _repositoryIntelligence?.Capture(identity).IsEffective == true;
             if (registration.MemoryOptions != options || registration.IntelligenceEnabled != intelligenceEnabled)
             {

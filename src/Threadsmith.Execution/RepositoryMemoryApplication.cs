@@ -33,6 +33,7 @@ public sealed class RepositoryMemoryApplication :
                 RepositoryIdentity = command.RepositoryIdentity,
                 Action = "add",
                 Text = command.Text,
+                Ownership = command.Ownership,
                 MemoryType = command.MemoryType,
                 Kind = command.Kind,
                 Concepts = command.Concepts,

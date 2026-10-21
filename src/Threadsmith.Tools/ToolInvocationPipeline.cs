@@ -212,6 +212,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             preparationError: null,
             preparedRegistration: null,
             returnCancellationResult: false,
+            _timeProvider.GetUtcNow(),
             cancellationToken);
     }
 
@@ -221,67 +222,87 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         bool usePreparedSnapshot,
         CancellationToken cancellationToken)
     {
-        var results = new List<ToolBatchResult>(requests.Count);
+        var admittedAt = _timeProvider.GetUtcNow();
         using var batchCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var tasks = new List<Task<ToolBatchResult>>(requests.Count);
+        Task previousWave = Task.CompletedTask;
         foreach (var wave in waves)
         {
-            ThrowIfCancelledAfterResults(cancellationToken, results);
-            Task<ToolBatchResult>[] tasks = [.. wave.Select(async planned =>
-            {
-                var invocation = usePreparedSnapshot
-                    ? planned.Request.Invocation
-                    : planned.Request.Invocation with
-                    {
-                        ExpectedRegistration = planned.Registration,
-                    };
-                var result = await InvokeCoreAsync(
-                    invocation,
-                    planned.PreparationError,
-                    usePreparedSnapshot ? planned.Registration : null,
-                    returnCancellationResult: true,
-                    batchCancellation.Token);
-                if (_parallelOptions.FailureMode == ToolBatchFailureMode.CancelBatchOnFailure
-                    && !result.Succeeded
-                    && result.ErrorClassification != ToolErrorClassification.Cancelled)
-                {
-                    await batchCancellation.CancelAsync();
-                }
+            var prerequisite = previousWave;
+#pragma warning disable VSTHRD003 // The batch owns and joins every prerequisite wave; these are context-free scheduling dependencies.
+            var waveTasks = wave.Select(planned => InvokeAfterWaveAsync(planned, prerequisite, usePreparedSnapshot, admittedAt, batchCancellation)).ToArray();
+#pragma warning restore VSTHRD003
+            tasks.AddRange(waveTasks);
 
-                return new ToolBatchResult(
-                    planned.Request.Ordinal,
-                    planned.Request.CorrelationId,
-                    result);
-            })];
-            var waveResults = await Task.WhenAll(tasks);
-            results.AddRange(waveResults);
-            if (batchCancellation.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
+            // A queued timeout may finish before its predecessor. Later waves must still
+            // wait for every earlier wave, not merely the expired invocation's result.
+            previousWave = Task.WhenAll(prerequisite, Task.WhenAll(waveTasks));
+        }
+
+        var results = await Task.WhenAll(tasks);
+        var ordered = results.OrderBy(result => result.Ordinal).ToArray();
+        ThrowIfCancelledAfterResults(cancellationToken, ordered);
+        return ordered;
+    }
+
+    private async Task<ToolBatchResult> InvokeAfterWaveAsync(
+        PlannedToolInvocation planned, Task prerequisite, bool usePreparedSnapshot, DateTimeOffset admittedAt, CancellationTokenSource batchCancellation)
+    {
+        var invocation = usePreparedSnapshot ? planned.Request.Invocation
+            : planned.Request.Invocation with { ExpectedRegistration = planned.Registration };
+        try
+        {
+            batchCancellation.Token.ThrowIfCancellationRequested();
+            var deadline = AdmissionDeadline(planned.Registration?.Tool.Definition, admittedAt);
+            if (deadline is { } expires)
             {
-                var completedCorrelationIds = results
-                    .Select(result => result.CorrelationId)
-                    .ToHashSet(StringComparer.Ordinal);
-                results.AddRange(requests
-                    .Where(request => !completedCorrelationIds.Contains(request.CorrelationId))
-                    .Select(request => new ToolBatchResult(
-                        request.Ordinal,
-                        request.CorrelationId,
-                        new ToolInvocationResult
-                        {
-                            ToolInvocationId = ToolInvocationId.New(),
-                            ToolId = request.Invocation.ToolId,
-                            ErrorClassification = ToolErrorClassification.Cancelled,
-                            Error = "Skipped because an earlier sibling tool call failed.",
-                        })));
-                break;
+                var remaining = expires - _timeProvider.GetUtcNow();
+                if (remaining > TimeSpan.Zero)
+                {
+                    await prerequisite.WaitAsync(remaining, _timeProvider, batchCancellation.Token);
+                }
+            }
+            else
+            {
+                await prerequisite.WaitAsync(batchCancellation.Token);
             }
         }
-
-        var ordered = results.OrderBy(result => result.Ordinal).ToArray();
-        if (cancellationToken.IsCancellationRequested)
+        catch (TimeoutException)
         {
-            ThrowIfCancelledAfterResults(cancellationToken, ordered);
+            // Enter the normal pipeline to publish one correlated expired result, without execution.
+        }
+        catch (OperationCanceledException)
+        {
+            return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, new ToolInvocationResult
+            {
+                ToolInvocationId = ToolInvocationId.New(), ToolId = invocation.ToolId,
+                ErrorClassification = ToolErrorClassification.Cancelled, Error = "Skipped because the tool batch was cancelled.",
+            });
         }
 
-        return ordered;
+        var result = await InvokeCoreAsync(invocation, planned.PreparationError, usePreparedSnapshot ? planned.Registration : null, returnCancellationResult: true, admittedAt, batchCancellation.Token);
+        if (_parallelOptions.FailureMode == ToolBatchFailureMode.CancelBatchOnFailure
+            && !result.Succeeded && result.ErrorClassification != ToolErrorClassification.Cancelled)
+        {
+            await batchCancellation.CancelAsync();
+        }
+
+        return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, result);
+    }
+
+    private static DateTimeOffset? AdmissionDeadline(ToolDefinition? definition, DateTimeOffset admittedAt)
+    {
+        if (definition is null || definition.AdmissionTimeout is not { } budget)
+        {
+            return null;
+        }
+
+        if (definition.Timeout > TimeSpan.Zero && definition.Timeout < budget)
+        {
+            budget = definition.Timeout;
+        }
+
+        return admittedAt + budget;
     }
 
     private static void ThrowIfCancelledAfterResults(
@@ -308,6 +329,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         string? preparationError,
         ToolRegistration? preparedRegistration,
         bool returnCancellationResult,
+        DateTimeOffset admittedAt,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -384,10 +406,17 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             Phase = request.Phase,
             InvocationKey = request.InvocationKey,
             MaximumOutputBytes = tool.Definition.MaximumOutputBytes,
+            Deadline = AdmissionDeadline(tool.Definition, admittedAt),
+            TimeProvider = _timeProvider,
         };
         var activityDetail = CreateActivityDetail(tool, input);
         var transientActivityDetail = CreateTransientActivityDetail(tool, input, executionContext);
         await PublishStartedAsync(request, invocationId, startedAt, source, activityDetail, transientActivityDetail);
+
+        if (executionContext.Deadline <= _timeProvider.GetUtcNow())
+        {
+            return await CompleteFailureAsync(request, invocationId, ToolErrorClassification.Timeout, "The tool invocation deadline expired while waiting.", startedAt, source: source);
+        }
 
         ToolPolicyDecision policyDecision;
         try
@@ -573,10 +602,25 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         IReadOnlyList<string> observedConcepts = [];
         try
         {
+            var remaining = executionContext.Deadline is { } expires
+                ? expires - _timeProvider.GetUtcNow() : Timeout.InfiniteTimeSpan;
+            if (executionContext.Deadline is not null && remaining <= TimeSpan.Zero)
+            {
+                throw new TimeoutException("The tool invocation deadline expired while waiting.");
+            }
+
+            using var admissionCancellation = new CancellationTokenSource(remaining, _timeProvider);
+            using var waitingCancellation = CancellationTokenSource.CreateLinkedTokenSource(timeoutCancellation.Token, admissionCancellation.Token);
             using var sourceLease = await _sourceConcurrencyLimiter.AcquireAsync(
                 source,
                 tool.Definition.Scheduling.MaximumSourceConcurrency,
-                timeoutCancellation.Token);
+                waitingCancellation.Token);
+            waitingCancellation.Token.ThrowIfCancellationRequested();
+            if (executionContext.Deadline <= _timeProvider.GetUtcNow())
+            {
+                throw new TimeoutException("The tool invocation deadline expired while waiting.");
+            }
+
             observedConcepts = input is IConceptToolInput conceptInput && ConfiguredTool.Unwrap(tool).GetType().Assembly == typeof(MemoriesTool).Assembly
                 ? MemoryConcepts.Normalize(conceptInput.Concepts).Where(concept => _sanitizer.Sanitize(concept) == concept).ToArray() : [];
             var execution = await tool.ExecuteAsync(

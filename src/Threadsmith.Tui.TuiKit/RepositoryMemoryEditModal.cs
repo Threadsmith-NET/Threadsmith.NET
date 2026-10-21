@@ -40,11 +40,14 @@ internal sealed class RepositoryMemoryEditModal : Modal
         _editor.OnFocusChanged(true);
     }
 
+    /// <summary>Gets the editor heading for creation or editing.</summary>
+    internal string Title { get; init; } = "Edit memory";
+
     /// <summary>Gets serialized save requests.</summary>
     internal ChannelReader<string> Saves => _saves.Reader;
 
     /// <summary>Gets whether the draft differs from the original and can be saved.</summary>
-    internal bool CanSave => !_busy && !string.Equals(_original, _editor.Text, StringComparison.Ordinal);
+    internal bool CanSave => !_busy && !string.IsNullOrWhiteSpace(_editor.Text) && !string.Equals(_original, _editor.Text, StringComparison.Ordinal);
 
     /// <summary>Gets the current text draft.</summary>
     internal string Text => _editor.Text;
@@ -174,7 +177,7 @@ internal sealed class RepositoryMemoryEditModal : Modal
         _editorBounds = new Rect(left, top + 1, view.Size.Width, height);
         _saveBounds = new Rect(left, top + height + 1, 16, 1);
         _cancelBounds = new Rect(left, top + height + 2, 24, 1);
-        _title.Draw(view, 0, 0, "Edit memory | " + (_editor.Overwrite ? "Overwrite" : "Insert"), _style(PresentationTextRole.SelectionPrompt));
+        _title.Draw(view, 0, 0, Title + " | " + (_editor.Overwrite ? "Overwrite" : "Insert"), _style(PresentationTextRole.SelectionPrompt));
         _editor.Style = _style(PresentationTextRole.Default);
         _editor.Render(view.CreateView(new Rect(0, 1, view.Size.Width, height)));
         _save.Draw(view, 0, height + 1, (_focus == 1 ? ">" : " ") + "[Save Changes]" + (CanSave ? string.Empty : " (disabled)"), _style(CanSave ? PresentationTextRole.SelectionPrompt : PresentationTextRole.Status));

@@ -214,8 +214,8 @@ public static class MemoriesToolTests
         var definition = Assert.Single(definitions);
         using var schema = JsonDocument.Parse(definition.ArgumentsJsonSchema);
         var fields = schema.RootElement.GetProperty("properties");
-        Assert.Equal(["action", "afterKey", "afterPath", "concepts", "confirmDistinctFrom", "coverage", "coveredPaths", "expectedRevision", "id", "kind", "memoryType", "ownership", "proposalKey", "proposalOffset", "query", "supportingPaths", "survey", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
-        Assert.Equal(["add", "update", "remove", "list", "search", "changes", "coverChanges", "coverage", "updateCoverage", "initializeCoverage"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.Equal(["action", "afterKey", "afterPath", "concepts", "confirmDistinctFrom", "coverage", "coveredPaths", "expectedRevision", "id", "kind", "memoryType", "proposalKey", "proposalOffset", "supportingPaths", "survey", "text"], fields.EnumerateObject().Select(field => field.Name).OrderBy(name => name));
+        Assert.Equal(["add", "update", "remove", "list", "changes", "coverChanges", "coverage", "updateCoverage", "initializeCoverage"], fields.GetProperty("action").GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
         Assert.False(schema.RootElement.GetProperty("additionalProperties").GetBoolean());
         Assert.Contains("null", fields.GetProperty("id").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
         Assert.Contains("null", fields.GetProperty("text").GetProperty("type").EnumerateArray().Select(value => value.GetString()));
@@ -653,8 +653,8 @@ public static class MemoriesToolTests
         using var body = JsonDocument.Parse(handler.Body);
         var function = Assert.Single(body.RootElement.GetProperty("tools").EnumerateArray()).GetProperty("function");
         var schema = function.GetProperty("parameters");
-        Assert.Equal(18, schema.GetProperty("properties").EnumerateObject().Count());
-        Assert.Equal(10, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
+        Assert.Equal(16, schema.GetProperty("properties").EnumerateObject().Count());
+        Assert.Equal(9, schema.GetProperty("properties").GetProperty("action").GetProperty("enum").GetArrayLength());
         Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
         Assert.DoesNotContain("SubmissionObserver", handler.Body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("MemorySubmission", handler.Body, StringComparison.OrdinalIgnoreCase);
@@ -709,9 +709,9 @@ public static class MemoriesToolTests
         var memory = new MemoryService();
         var search = new IntelligenceSearch();
         var options = new Options { IntelligenceEnabled = enabled };
-        var tool = new MemoriesTool(memory, options, TestPromptLoader.Instance, new IntelligenceStatus(onboarded, fault), search);
+        var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(search, options, new IntelligenceStatus(onboarded, fault)), options, TestPromptLoader.Instance);
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(path));
-        var result = await tool.ExecuteAsync(new MemoriesInput("search", Query: "architecture", Ownership: "intelligence"), context, TestContext.Current.CancellationToken);
+        var result = await tool.ExecuteAsync(new RepositoryIntelligenceInput("architecture"), context, TestContext.Current.CancellationToken);
         Assert.Equal(outcome, result.Value.Outcome);
         Assert.Empty(memory.Actions);
         Assert.Equal(outcome == "no_matches", search.Request is not null);
@@ -725,6 +725,46 @@ public static class MemoriesToolTests
         }
     }
 
+    /// <summary>Bounds full intelligence envelopes without changing retrieval semantics.</summary>
+    [Theory]
+    [InlineData(true, 'x')]
+    [InlineData(true, '"')]
+    [InlineData(true, '\u6f22')]
+    [InlineData(false, 'x')]
+    [InlineData(false, '"')]
+    [InlineData(false, '\u6f22')]
+    public static async Task Intelligence_bounds_complete_response_with_long_query(bool enabled, char character)
+    {
+        var options = new Options { IntelligenceEnabled = enabled };
+        var search = new IntelligenceSearch
+        {
+            Result = new([], []) { SearchDetails = new RepositoryMemorySearchDetails { RerankerInputFailure = new string(character, 8000) } },
+        };
+        var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(search, options, new IntelligenceStatus(true, null)), options, TestPromptLoader.Instance);
+        var registry = new ToolRegistry([tool], runtimeOptions: new ToolRuntimeOptions { Defaults = new ToolRuntimeOverride { MaximumOutputBytes = 4096 } });
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var query = new string(character, 8000);
+        var result = await pipeline.InvokeAsync(
+            new ToolInvocationRequest
+            {
+                SessionId = SessionId.New(), RunId = RunId.New(), ToolId = tool.Definition.Id,
+                ArgumentsJson = JsonSerializer.Serialize(new { query }), Context = Invocation(Path.GetTempPath()),
+            },
+            TestContext.Current.CancellationToken);
+        Assert.True(result.Succeeded, result.Error);
+        Assert.True(result.IsTruncated);
+        Assert.True(System.Text.Encoding.UTF8.GetByteCount(result.ResultJson!) <= 4096);
+        using var document = JsonDocument.Parse(result.ResultJson!);
+        Assert.Equal(enabled ? "no_matches" : "disabled", document.RootElement.GetProperty("Outcome").GetString());
+        Assert.Equal(enabled, document.RootElement.GetProperty("IsComplete").GetBoolean());
+        Assert.True(document.RootElement.GetProperty("QueryTruncated").GetBoolean());
+        if (enabled)
+        {
+            Assert.Equal(query, search.Request!.Query);
+        }
+    }
+
     /// <summary>Verifies independent memory routing and intent eligibility.</summary>
     [Theory]
     [InlineData("ordinary", "architecture")]
@@ -734,9 +774,12 @@ public static class MemoriesToolTests
     {
         var tool = new MemoriesTool(new MemoryService(), new Options(), TestPromptLoader.Instance);
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(Path.GetTempPath()));
-        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => tool.ExecuteAsync(new MemoriesInput("search", Query: query, Ownership: ownership), context, TestContext.Current.CancellationToken));
-        await Assert.ThrowsAsync<ToolArgumentValidationException>(() => tool.ExecuteAsync(new MemoriesInput("search", Query: new string('x', 8001), Ownership: "intelligence"), context, TestContext.Current.CancellationToken));
-        Assert.False(new DefaultPolicyEngine().Evaluate(tool, new MemoriesInput("search", Query: "architecture", Ownership: "intelligence"), context.Invocation with { DenyAllTools = true }).IsAllowed);
+        var result = await tool.ExecuteAsync(new MemoriesInput("search", Query: query, Ownership: ownership), context, TestContext.Current.CancellationToken);
+        Assert.Equal("legacy_search_removed", result.Value.ReasonCode);
+        Assert.Contains("repository_intelligence", result.Value.Resolution, StringComparison.Ordinal);
+        using var schema = JsonDocument.Parse(tool.Definition.InputSchema.JsonSchema);
+        Assert.False(schema.RootElement.GetProperty("properties").TryGetProperty("query", out _));
+        Assert.False(schema.RootElement.GetProperty("properties").TryGetProperty("ownership", out _));
     }
 
     /// <summary>Search preserves incompleteness, ownership isolation, bounds and cancellation.</summary>
@@ -752,9 +795,9 @@ public static class MemoriesToolTests
             Supports = [new RepositoryMemorySupport { Path = "source.cs", ContentHash = "observed", ObservedAt = DateTimeOffset.UnixEpoch, IsDirty = true }],
         };
         var search = new IntelligenceSearch { Result = new([new(entry, 1, 1, null, null)], []) { IsComplete = false } };
-        var tool = new MemoriesTool(memory, new Options { IntelligenceEnabled = true }, TestPromptLoader.Instance, new IntelligenceStatus(true, null), search);
+        var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(search, new Options { IntelligenceEnabled = true }, new IntelligenceStatus(true, null)), new Options { IntelligenceEnabled = true }, TestPromptLoader.Instance);
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(path));
-        var input = new MemoriesInput("search", Query: "architecture", Ownership: "intelligence");
+        var input = new RepositoryIntelligenceInput("architecture");
         var result = await tool.ExecuteAsync(input, context, ct);
         Assert.Equal("incomplete", result.Value.Outcome);
         Assert.False(result.Value.IsComplete);
@@ -776,7 +819,7 @@ public static class MemoriesToolTests
 
     /// <summary>Explicit search honors operator limits above and below the former fixed caps.</summary>
     [Theory]
-    [InlineData(60 * 1024, 25)]
+    [InlineData(60 * 1024, 20)]
     [InlineData(3000, 1)]
     public static async Task Search_honors_configured_result_and_byte_limits(int maximumBytes, int expectedEntries)
     {
@@ -789,12 +832,62 @@ public static class MemoriesToolTests
         }).Select(entry => new RepositoryMemoryRetrievalCandidate(entry, 1, 1, null, null)).ToArray();
         var search = new IntelligenceSearch { Result = new(entries, []) };
         var options = new Options { IntelligenceEnabled = true, SearchMaximumResults = 25, MaximumListBytes = maximumBytes };
-        var tool = new MemoriesTool(memory, options, TestPromptLoader.Instance, new IntelligenceStatus(true, null), search);
+        var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(search, options, new IntelligenceStatus(true, null)), options, TestPromptLoader.Instance);
         var context = new ToolExecutionContext(ToolInvocationId.New(), SessionId.New(), RunId.New(), Invocation(path));
-        var result = await tool.ExecuteAsync(new MemoriesInput("search", Query: "architecture", Ownership: "intelligence"), context, TestContext.Current.CancellationToken);
-        Assert.Equal(25, search.Request!.Options.MaximumResults);
+        var result = await tool.ExecuteAsync(new RepositoryIntelligenceInput("architecture"), context, TestContext.Current.CancellationToken);
+        Assert.Equal(20, search.Request!.Options.MaximumResults);
         Assert.Equal(expectedEntries, result.Value.Entries.Count);
         Assert.Equal(25 - expectedEntries, result.Value.OmittedEntries);
+    }
+
+    /// <summary>Stale legacy payloads reach exactly one correlated rejection without querying.</summary>
+    [Fact]
+    public static async Task Legacy_search_payload_rejects_through_real_pipeline()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var search = new IntelligenceSearch();
+        var memory = new MemoryService();
+        var tool = new MemoriesTool(memory, new Options { IntelligenceEnabled = true }, TestPromptLoader.Instance, new IntelligenceStatus(true, null), search);
+        var registry = new ToolRegistry([tool]);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var persisted = "{\"action\":\"search\",\"query\":\"architecture\",\"ownership\":\"intelligence\"}";
+        var request = new ToolInvocationRequest
+        {
+            SessionId = SessionId.New(), RunId = RunId.New(), ToolId = "memories",
+            ArgumentsJson = persisted, InvocationKey = "persisted-provider-call", Context = Invocation(Path.GetTempPath()),
+        };
+        var result = Assert.Single(await pipeline.InvokeBatchAsync([new ToolBatchRequest(0, "persisted-provider-call", request)], ct));
+        Assert.Equal("persisted-provider-call", result.CorrelationId);
+        Assert.True(result.Result.Succeeded, result.Result.Error);
+        using var json = JsonDocument.Parse(result.Result.ResultJson!);
+        Assert.Equal("legacy_search_removed", json.RootElement.GetProperty("ReasonCode").GetString());
+        Assert.Null(search.Request);
+        Assert.Empty(memory.Actions);
+    }
+
+    /// <summary>Readiness filters actual conversation snapshots independently of the memory tool.</summary>
+    [Theory]
+    [InlineData(false, false, "master_disabled")]
+    [InlineData(true, false, "onboarding_required")]
+    [InlineData(true, true, "ready")]
+    public static async Task Repository_query_advertisement_uses_feature_readiness(bool enabled, bool onboarded, string reason)
+    {
+        var options = new Options { IntelligenceEnabled = enabled };
+        var tool = new RepositoryIntelligenceTool(new RepositoryIntelligenceQuery(new IntelligenceSearch(), options, new IntelligenceStatus(onboarded, null)), options, TestPromptLoader.Instance);
+        var registry = new ToolRegistry([tool]);
+        await using var events = new DomainEventStream();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
+        var invocation = Invocation(Path.GetTempPath());
+        var snapshot = ConversationToolAvailability.CreateSnapshot(pipeline, registry, SessionId.New(), RunId.New(), invocation, false);
+        Assert.Equal(reason == "ready", snapshot.Definitions.Count == 1);
+        Assert.Equal(reason, tool.CaptureAvailability(invocation.RepositoryPath).ReasonCode);
+        Assert.Empty(ConversationToolAvailability.CreateSnapshot(pipeline, registry, SessionId.New(), RunId.New(), invocation with { DeniedToolIds = [tool.Definition.Id] }, false).Definitions);
+        Assert.Single(registry.AllDefinitions);
+        foreach (var invalid in new[] { "{}", "{\"query\":\" \"}", "{\"query\":\"x\",\"ownership\":\"intelligence\"}", "{", JsonSerializer.Serialize(new { query = new string('x', 8001) }) })
+        {
+            Assert.Throws<ToolArgumentValidationException>(() => tool.DeserializeInput(invalid));
+        }
     }
 
     private sealed class IntelligenceStatus : IRepositoryIntelligenceStatusProvider

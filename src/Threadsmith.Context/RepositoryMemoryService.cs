@@ -148,7 +148,8 @@ public sealed class RepositoryMemoryService : IManagedRepositoryMemoryService
         var concepts = request.Concepts is null ? existing?.Concepts ?? [] : MemoryConcepts.Normalize(request.Concepts.Select(_sanitizer.Sanitize).ToArray());
         var memoryType = request.MemoryType ?? existing?.MemoryType ?? RepositoryMemoryType.Situational;
         var supports = request.Supports ?? existing?.Supports ?? [];
-        if (request.Ownership == RepositoryMemoryOwnership.Intelligence && supports.Count == 0)
+        if (request.Ownership == RepositoryMemoryOwnership.Intelligence && supports.Count == 0
+            && (request.Origin != RepositoryMemoryOrigin.Manual || request.Collection is not null))
         {
             throw new ArgumentException("An intelligence assertion requires at least one observed primary support.");
         }

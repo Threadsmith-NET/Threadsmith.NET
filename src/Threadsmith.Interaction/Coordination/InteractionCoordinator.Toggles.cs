@@ -276,11 +276,17 @@ public sealed partial class InteractionCoordinator
                 await manager.EnableAsync(id, cancellationToken);
             }
 
-            return new(manager.IsEnabled(id));
+            var refreshed = manager.GetAllStates();
+            var current = refreshed.Single(item => item.Id == id);
+            return new(current.Enabled, current.AvailabilityReason)
+            {
+                UpdatedOptions = refreshed.Where(item => item.AvailabilityReasonCode is not null)
+                    .Select(item => new InteractionToggleOption(item.Id, item.DisplayName, item.Category.ToString(), item.Enabled, Reason: item.AvailabilityReason)).ToArray(),
+            };
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            return new(manager.IsEnabled(id), "Host rejected the availability change; setting reflects actual state.");
+            return new(manager.GetAllStates().Single(item => item.Id == id).Enabled, "Host rejected the availability change; setting reflects actual state.");
         }
     }
 }

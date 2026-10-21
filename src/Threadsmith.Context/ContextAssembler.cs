@@ -199,7 +199,7 @@ public sealed class ContextAssembler : IContextAssembler
             ? _stableSystemPolicy
             : _stableSystemPolicy + Environment.NewLine + scratchpadPrompt;
         ArgumentNullException.ThrowIfNull(request);
-        if (request.IntelligenceEnabled && request.RepositoryMemoriesEnabled)
+        if (request.IntelligenceEnabled)
         {
             systemPolicy += Environment.NewLine + _prompts.Get(PromptFileNames.SystemRepositoryIntelligenceGuidance);
         }

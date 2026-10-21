@@ -91,6 +91,33 @@ public static class RepositoryMemoryApplicationTests
         Assert.Null(await service.GetEntryAsync(entry.RepositoryIdentity, entry.Id, ct));
     }
 
+    /// <summary>Manual creation persists the tab partition without fabricating repository evidence.</summary>
+    [Theory]
+    [InlineData(RepositoryMemoryType.StandingPreference, RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Intelligence)]
+    public static async Task Manual_add_preserves_tab_partition(RepositoryMemoryType type, RepositoryMemoryOwnership ownership)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = await ConversationFixture.CreateAsync();
+        var service = MemoryTestData.CreateService(fixture, new TestMemoryEmbeddingGenerator());
+        var application = new RepositoryMemoryApplication(service, new TestOptionsProvider());
+        var result = await application.HandleAsync(
+            new RememberRepositoryMemoryCommand(SessionId.New(), "test:repository", "Manually supplied guidance", type) { Ownership = ownership }, ct);
+        Assert.Equal("added", result.Outcome);
+        var entry = Assert.IsType<RepositoryMemoryEntry>(result.Entry);
+        var stored = Assert.IsType<RepositoryMemoryEntry>(await service.GetEntryAsync(entry.RepositoryIdentity, entry.Id, ct));
+        Assert.Equal(type, stored.MemoryType);
+        Assert.Equal(ownership, stored.Ownership);
+        Assert.Equal(RepositoryMemoryOrigin.Manual, stored.Origin);
+        Assert.Empty(stored.Supports);
+        if (ownership == RepositoryMemoryOwnership.Intelligence)
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => service.ExecuteAsync(
+                MemoryTestData.Operation("add", "Model assertion without evidence") with { Ownership = ownership, Origin = RepositoryMemoryOrigin.Model }, ct));
+        }
+    }
+
     private static RepositoryMemoryEntry CreateEntry(RepositoryMemoryId id, string text)
     {
         return new()
@@ -154,12 +181,12 @@ public static class RepositoryMemoryApplicationTests
     {
         public RepositoryMemoryOptions CaptureCurrent()
         {
-            return new();
+            return new() { Intelligence = new RepositoryIntelligenceOptions { ReconciliationEnabled = false } };
         }
 
         public RepositoryMemoryOptions Capture(string repositoryIdentity)
         {
-            return new();
+            return new() { Intelligence = new RepositoryIntelligenceOptions { ReconciliationEnabled = false } };
         }
     }
 }

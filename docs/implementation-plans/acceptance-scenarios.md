@@ -848,3 +848,11 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 5. Restore automatic recall and Off. Former routes return without rewriting memories or embeddings; onboarding publication preserves an explicit automatic-recall false value.
 
 **Verifies:** Independent route controls, conservative concept eligibility, required preference compatibility, ownership isolation, and reversible settings. See MTP-MEMORY-ROUTING.
+
+## Scenario REPO-TOOLS — Explicit repository investigation tools
+
+1. Keep repository intelligence disabled and inspect Tools. Both repository tools remain visible with the shared disabled reason; neither appears in an actual model request. Enable without onboarding and verify the onboarding reason and absence of collection.
+2. With effective intelligence and automatic recall off, use `repository_intelligence(query)` to inspect stored advisory guidance. Disable ordinary memories and verify explicit repository tools remain available. Confirm repository/ownership isolation, support freshness, output omissions and no embedding rebuild or memory writes.
+3. Invoke `repository_archeology(question)` and observe one read-only Explorer child using real pipeline Git readers and intelligence query. Denied paths and tools remain denied; nested delegation, collection and mutations are rejected. Join exactly one correlated parent result with actual usage and evidence references.
+4. Disable intelligence while that child is active. Observe terminal child cleanup before the feature gate releases, both Tools rows refresh, and a stale invocation rejects. Re-enable and run another permitted investigation without changing automatic recall or explicit denials.
+5. Resume a legacy memory-search call and observe one `legacy_search_removed` result pointing to the new query tool; completed historical results remain readable.

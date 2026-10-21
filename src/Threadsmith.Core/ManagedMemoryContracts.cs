@@ -85,7 +85,7 @@ public sealed record RepositoryMemoryOptions
     public int MaximumTextCharacters { get; init; } = 2000;
 
     /// <summary>Maximum retrieval query characters.</summary>
-    public int MaximumQueryCharacters { get; init; } = 8000;
+    public int MaximumQueryCharacters { get; init; } = IRepositoryIntelligenceQuery.MaximumQueryCharacters;
 
     /// <summary>Maximum distinct lexical query terms.</summary>
     public int MaximumQueryTerms { get; init; } = 32;

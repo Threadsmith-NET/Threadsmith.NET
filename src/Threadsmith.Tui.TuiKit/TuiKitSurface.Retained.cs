@@ -30,6 +30,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     public Task ManageRepositoryMemoriesAsync(
         RepositoryMemoryListSnapshot snapshot,
         Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+        Func<RepositoryMemoryType, RepositoryMemoryOwnership, string, CancellationToken, Task<RepositoryMemoryListSnapshot>> add,
         CancellationToken cancellationToken = default)
     {
         var modal = new RepositoryMemoryModal(snapshot, ResolveStyle, _interrupt, () => _app.ToggleMouseCapture(), () => _app.MouseCaptureEnabled) { CanManage = true };
@@ -42,9 +43,19 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             string? error = null;
             try
             {
-                refreshed = request.Delete
-                    ? await change(request.Item, null, token)
-                    : await EditRepositoryMemoryAsync(request.Item, change, token);
+                if (request.Item is { } item)
+                {
+                    refreshed = request.Delete
+                        ? await change(item, null, token)
+                        : await EditRepositoryMemoryAsync(item.Text, "Edit memory", (text, ct) => change(item, text, ct), token);
+                }
+                else
+                {
+                    var type = request.Tab == 0 ? RepositoryMemoryType.StandingPreference : RepositoryMemoryType.Situational;
+                    var ownership = request.Tab == 2 ? RepositoryMemoryOwnership.Intelligence : RepositoryMemoryOwnership.Ordinary;
+                    var category = request.Tab == 0 ? "Preferences" : request.Tab == 1 ? "Situational" : "Intelligence";
+                    refreshed = await EditRepositoryMemoryAsync(string.Empty, "Add memory / " + category, (text, ct) => add(type, ownership, text, ct), token);
+                }
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
@@ -205,11 +216,12 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
     }
 
     private async Task<RepositoryMemoryListSnapshot?> EditRepositoryMemoryAsync(
-        RepositoryMemoryListItem item,
-        Func<RepositoryMemoryListItem, string?, CancellationToken, Task<RepositoryMemoryListSnapshot>> change,
+        string initialText,
+        string title,
+        Func<string, CancellationToken, Task<RepositoryMemoryListSnapshot>> save,
         CancellationToken cancellationToken)
     {
-        var modal = new RepositoryMemoryEditModal(item.Text, ResolveStyle, _limits, () => _app.MouseCaptureEnabled, () => _app.ToggleMouseCapture()) { CopyRequested = Copy };
+        var modal = new RepositoryMemoryEditModal(initialText, ResolveStyle, _limits, () => _app.MouseCaptureEnabled, () => _app.ToggleMouseCapture()) { CopyRequested = Copy, Title = title };
         modal.PasteRequested = () => RequestPaste(modal, () => modal.Text);
         RepositoryMemoryListSnapshot? refreshed = null;
         await RunMemoryModalAsync(
@@ -219,7 +231,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         {
             try
             {
-                refreshed = await change(item, text, token);
+                refreshed = await save(text, token);
                 return true;
             }
             catch (Exception exception) when (exception is not OperationCanceledException)

@@ -183,6 +183,9 @@ public sealed record RepositoryMemoryItem
 public sealed record RememberRepositoryMemoryCommand(SessionId SessionId, string RepositoryIdentity, string Text, RepositoryMemoryType? MemoryType = null)
     : ICommand<RepositoryMemoryOperationResult>
 {
+    /// <summary>Ownership assigned to this manually created memory.</summary>
+    public RepositoryMemoryOwnership Ownership { get; init; } = RepositoryMemoryOwnership.Ordinary;
+
     /// <summary>Exact revisions explicitly confirmed distinct.</summary>
     public IReadOnlyList<RepositoryMemoryInclusion> ConfirmDistinctFrom { get; init; } = [];
 

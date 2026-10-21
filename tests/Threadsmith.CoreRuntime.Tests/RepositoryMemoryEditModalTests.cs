@@ -128,6 +128,7 @@ public static class RepositoryMemoryEditModalTests
                     changes.Add(text);
                     return Task.FromResult(new RepositoryMemoryListSnapshot(text is null ? [] : [item with { Text = text }], []));
                 },
+                    (_, _, _, _) => throw new InvalidOperationException("Unexpected add."),
                     token);
                 await WaitForOutputAsync("Repository memories", surface, backend, token);
                 backend.FeedInput("\r");
@@ -150,6 +151,56 @@ public static class RepositoryMemoryEditModalTests
                 Assert.Equal("Unsent draft", (await resumed).Text);
             },
             ct);
+    }
+
+    /// <summary>Empty tabs create the correct partition, preserve failed drafts, and cancel without writing.</summary>
+    [Theory]
+    [InlineData(0, RepositoryMemoryType.StandingPreference, RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(1, RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Ordinary)]
+    [InlineData(2, RepositoryMemoryType.Situational, RepositoryMemoryOwnership.Intelligence)]
+    public static async Task Surface_adds_from_empty_tabs(int tab, RepositoryMemoryType type, RepositoryMemoryOwnership ownership)
+    {
+        using var backend = new HeadlessBackend(120, 35);
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
+        await surface.RunAsync(
+            async token =>
+        {
+            var saves = 0;
+            var browsing = surface.ManageRepositoryMemoriesAsync(
+                new([], []),
+                (_, _, _) => throw new InvalidOperationException("Unexpected edit."),
+                (actualType, actualOwnership, text, ct) =>
+                {
+                    ct.ThrowIfCancellationRequested();
+                    Assert.Equal(type, actualType);
+                    Assert.Equal(ownership, actualOwnership);
+                    Assert.Equal("New memory", text);
+                    if (++saves == 1)
+                    {
+                        throw new InvalidOperationException("Retry save");
+                    }
+
+                    return Task.FromResult(new RepositoryMemoryListSnapshot(
+                        [new(RepositoryMemoryId.New(), text, RepositoryMemoryOrigin.Manual, actualType, actualOwnership)], []));
+                },
+                token);
+            await WaitForOutputAsync("Repository memories", surface, backend, token);
+            backend.FeedInput(new string('\t', tab) + "\u001b[2~");
+            await WaitForOutputAsync("Add memory", surface, backend, token);
+            backend.FeedInput("Discard this\u001b[27u");
+            await WaitForOutputAsync("Ins: add", surface, backend, token);
+            Assert.Equal(0, saves);
+            backend.FeedInput("\u001b[2~");
+            await WaitForOutputAsync("Add memory", surface, backend, token);
+            backend.FeedInput("New memory\u0013");
+            await WaitForOutputAsync("Retry save", surface, backend, token);
+            backend.FeedInput("\u0013");
+            await WaitForOutputAsync("Ins: add", surface, backend, token);
+            Assert.Equal(2, saves);
+            backend.FeedInput("\u001b[27u");
+            await browsing;
+        },
+            TestContext.Current.CancellationToken);
     }
 
     private static async Task WaitForOutputAsync(string expected, TuiKitSurface surface, HeadlessBackend backend, CancellationToken cancellationToken)

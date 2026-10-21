@@ -23,7 +23,10 @@ internal static class ConversationToolAvailability
         ToolRegistration[] registrations =
         [
             .. (callerRegistrations ?? toolRegistry.GetRegistrations(sessionId, runId, invocationContext))
-                .Where(registration => IsAdvertised(registration.Tool.Definition, invocationContext)),
+                .Where(registration => IsAdvertised(registration.Tool.Definition, invocationContext))
+                .Where(registration => invocationContext is null
+                    || registration.Implementation is not IRepositoryFeatureTool feature
+                    || feature.CaptureAvailability(invocationContext.RepositoryPath).Ready),
         ];
         return new ConversationToolSnapshot(
             registrations.Select(registration => registration.Tool.Definition).ToArray(),

@@ -27,11 +27,13 @@ public sealed partial class SecurityPolicyConfigurationTests
             await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "Case-sensitive APFS" : "APFS", "-volname", "ThreadsmithRoot", rootImage], token);
             await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "APFS" : "Case-sensitive APFS", "-volname", "ThreadsmithChild", childImage], token);
             Directory.Delete(Path.Combine(_paths.RepositoryRoot, ".threadsmith"));
-            await RunDiskImageAsync(["attach", "-nobrowse", "-mountpoint", _paths.RepositoryRoot, rootImage], token);
+            // Nested mountpoints must retain real ownership rather than disk-image
+            // noowners semantics, which macOS rejects for unprivileged attachment.
+            await RunDiskImageAsync(["attach", "-nobrowse", "-owners", "on", "-mountpoint", _paths.RepositoryRoot, rootImage], token);
             rootAttached = true;
             Directory.CreateDirectory(Path.Combine(_paths.RepositoryRoot, ".threadsmith"));
             Directory.CreateDirectory(mount);
-            await RunDiskImageAsync(["attach", "-nobrowse", "-mountpoint", mount, childImage], token);
+            await RunDiskImageAsync(["attach", "-nobrowse", "-owners", "on", "-mountpoint", mount, childImage], token);
             childAttached = true;
             foreach (var directory in new[] { _paths.RepositoryRoot, mount })
             {

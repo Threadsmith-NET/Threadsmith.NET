@@ -48,6 +48,10 @@ jobs:
         shell: pwsh
         run: ./eng/release/Test-SourceDocumentation.ps1
 
+      - name: Verify PR submission gate
+        shell: pwsh
+        run: ./eng/Test-PrSubmission.ps1
+
       - name: Restore
         run: dotnet restore src/Threadsmith.sln
 

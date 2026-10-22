@@ -40,6 +40,7 @@ This file defines repository-wide rules for AI coding agents.
 
 ## PR validation gate
 
+- **Open PRs through `eng/Submit-PullRequest.ps1 -Title <title> -BodyFile <file>`, not a direct `gh pr create`.** It runs the documentation preflight, pushes the clean branch, dispatches the existing three-platform CI workflow, and refuses PR creation unless the exact local and remote revision passed all platforms. Use `-ValidateOnly` to run the same gate for an existing PR. This is the executable submission gate; prose instructions and local Windows tests are not substitutes.
 - **Read the actual CI workflows before preparing a PR or pushing a fix.** `.github/workflows/` is the source of truth; a successful application build or focused test run does not establish that CI will pass.
 - **Run the packaged-documentation preflight before every PR or follow-up push:** `pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1`. This is required even for documentation-only changes. Packaged help must not use relative links to excluded source material such as `docs/implementation-plans`; use source-repository URLs instead. Do not weaken the validator to accommodate a broken link.
 - **Validate the final change set.** Run the CI build/test commands and applicable area checks described in `CONTRIBUTING.md`. Earlier results do not cover later code changes. Record exact commands, results, and unavailable platform checks; never present Windows-only results as macOS/Linux validation.

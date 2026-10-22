@@ -152,7 +152,7 @@ Keep commits reviewable and avoid mixing unrelated work. Conventional prefixes s
 
 1. Review the complete diff and remove unrelated changes, generated files, logs, credentials, and local configuration.
 2. Ensure the solution builds cleanly and relevant automated tests pass.
-3. Push your branch to your fork and open a pull request against `main`.
+3. Use `pwsh -NoProfile -File eng/Submit-PullRequest.ps1 -Title "Describe the change" -BodyFile <description-file>` to push and open the PR only after the existing Windows, Linux, and macOS CI workflow passes for that exact revision. For a fork, pass `-TargetRepository Threadsmith-NET/Threadsmith.NET`; Actions must be enabled in the fork. Use `-ValidateOnly` instead of title/body arguments to validate an existing PR. The script requires a clean, committed feature branch and refuses stale, failed, skipped, or missing platform results.
 4. Explain the problem, solution, important design choices, risks, and verification performed.
 5. Link the tracking issue when applicable (for example, `Closes #42`).
 6. Update documentation and tests when behavior or durable contracts change.

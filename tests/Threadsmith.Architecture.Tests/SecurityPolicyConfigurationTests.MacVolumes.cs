@@ -24,8 +24,8 @@ public sealed partial class SecurityPolicyConfigurationTests
         var processes = new ProcessManager(new SecretOutputSanitizer(), NullLogger<ProcessManager>.Instance);
         try
         {
-            await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "APFSX" : "APFS", "-volname", "ThreadsmithRoot", rootImage], token);
-            await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "APFS" : "APFSX", "-volname", "ThreadsmithChild", childImage], token);
+            await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "Case-sensitive APFS" : "APFS", "-volname", "ThreadsmithRoot", rootImage], token);
+            await RunDiskImageAsync(["create", "-size", "256m", "-type", "SPARSE", "-fs", rootSensitive ? "APFS" : "Case-sensitive APFS", "-volname", "ThreadsmithChild", childImage], token);
             Directory.Delete(Path.Combine(_paths.RepositoryRoot, ".threadsmith"));
             await RunDiskImageAsync(["attach", "-nobrowse", "-mountpoint", _paths.RepositoryRoot, rootImage], token);
             rootAttached = true;
@@ -81,7 +81,7 @@ public sealed partial class SecurityPolicyConfigurationTests
                 Timeout = cancellationToken.CanBeCanceled ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(30),
             };
             var result = await processes.RunAsync(request, cancellationToken);
-            Assert.True(result.ExitCode == 0, result.StandardError + result.StandardOutput);
+            Assert.True(result.ExitCode == 0, $"hdiutil {string.Join(' ', arguments)}: {result.StandardError}{result.StandardOutput}");
         }
     }
 }

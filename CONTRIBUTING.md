@@ -110,7 +110,17 @@ Use `--include` with the changed file paths to focus this check. Correct relevan
 
 ## Testing changes
 
-Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the focused test project covering your change. Before submitting a pull request, run the same product build and test commands used by CI:
+Threadsmith uses xUnit v3 with Microsoft.Testing.Platform. At minimum, run the focused test project covering your change. Before submitting a pull request, inspect the current `.github/workflows/` checks and run the same product build and test commands used by CI:
+
+Run the packaged-documentation preflight before every PR or follow-up push, including documentation-only changes:
+
+```powershell
+pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1
+```
+
+This validates the actual release documentation catalog. Relative links to excluded source material, including implementation plans, break installed help; use source-repository URLs for those references.
+
+For product changes, validate the final code revision with:
 
 ```powershell
 dotnet restore src/Threadsmith.sln

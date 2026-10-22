@@ -394,7 +394,7 @@ public sealed class WebFetchTests
             new Uri("https://example.com"),
             WebFetchSourceKind.DirectUrl,
             new HashSet<string>(StringComparer.Ordinal),
-            TestContext.Current.CancellationToken));
+            cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(WebFetchFailureKind.Timeout, exception.Kind);
         Assert.True(transport.CancellationObserved.IsCompletedSuccessfully);
         Assert.False(transport.ReturnedResponse);
@@ -1740,6 +1740,7 @@ public sealed class WebFetchTests
             Uri uri,
             WebFetchSourceKind sourceKind,
             IReadOnlySet<string> authorizedDirectUrlDigests,
+            ToolInvocationContext? invocation = null,
             CancellationToken cancellationToken = default)
         {
             CallCount++;

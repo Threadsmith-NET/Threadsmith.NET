@@ -214,6 +214,11 @@ public sealed class ParallelAgentTests
             AllowedExecutables = ["dotnet"],
             AllowedNetworkHosts = ["example.test"],
             RequestedBy = "parent",
+            SecurityPolicy = new EffectiveSessionPolicy
+            {
+                BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = Environment.CurrentDirectory, Fingerprint = "parent-policy",
+                AllowedTools = ["read_file", "search"], WriteFolders = [Environment.CurrentDirectory], EditableRoots = [Environment.CurrentDirectory],
+            },
         };
 
         // Act
@@ -229,6 +234,15 @@ public sealed class ParallelAgentTests
         Assert.Contains("search", child.DeniedToolIds);
         Assert.Equal(["dotnet"], child.AllowedExecutables);
         Assert.Empty(child.AllowedNetworkHosts);
+        Assert.NotNull(child.SecurityPolicy);
+        Assert.Equal("parent-policy", child.SecurityPolicy.ParentFingerprint);
+        Assert.Equal(RepositoryTrustLevel.TrustedRead, child.SecurityPolicy.MaximumTrust);
+        Assert.Empty(child.SecurityPolicy.WriteFolders);
+        Assert.Empty(child.SecurityPolicy.EditableRoots);
+        Assert.Empty(child.SecurityPolicy.NetworkHostRestriction);
+        var binding = new SessionPolicyBinding();
+        binding.Publish(parent.SecurityPolicy with { Generation = 2 });
+        Assert.Throws<UnauthorizedAccessException>(() => binding.Validate(child.SecurityPolicy));
     }
 
     /// <summary>Verifies child path scope can only narrow the parent's approved roots.</summary>
@@ -313,6 +327,25 @@ public sealed class ParallelAgentTests
         // Assert
         Assert.True(child.DenyAllTools);
         Assert.Empty(child.AllowedToolIds);
+    }
+
+    /// <summary>Child policies retain distinct path-pattern spellings from both sources.</summary>
+    [Fact]
+    public void ToolPolicy_PreservesCaseDistinctProhibitions()
+    {
+        var assignment = CreateAssignment(AgentRole.Explorer, "src/A.cs") with
+        {
+            Policy = CreatePolicy() with { ProhibitedPaths = ["private/**"] },
+        };
+        var parent = new ToolInvocationContext
+        {
+            RepositoryPath = Environment.CurrentDirectory,
+            TrustLevel = RepositoryTrustLevel.TrustedRead,
+            RequestedBy = "parent",
+            ProhibitedPaths = ["Private/**"],
+        };
+        var child = AgentToolPolicy.Scope(parent, CreatePlan(assignment), assignment, Environment.CurrentDirectory);
+        Assert.Equal(["Private/**", "private/**"], child.ProhibitedPaths);
     }
 
     /// <summary>Verifies hierarchical usage accounting rejects oversubscription atomically.</summary>

@@ -91,7 +91,7 @@ public sealed class PromptAppendLoader : IPromptAppendLoader
             var relativePath = Path.GetRelativePath(repositoryRoot, path).Replace('\\', '/');
             var cacheKey = GetCacheKey(repositoryRoot, path);
             configuredCacheKeys.Add(cacheKey);
-            if (RepositoryPathPolicy.IsProhibited(relativePath, request.ProhibitedPaths))
+            if (RepositoryPathPolicy.IsProhibited(relativePath, request.ProhibitedPaths, repositoryRoot))
             {
                 throw new UnauthorizedAccessException(
                     $"Prompt append path '{configuredPath}' is prohibited.");

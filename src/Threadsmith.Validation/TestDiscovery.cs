@@ -14,14 +14,19 @@ public sealed class TestDiscoverer
     private readonly ValidationResourceLimits _limits;
 
     private readonly IProcessManager _processManager;
+    private readonly SessionPolicyBinding? _policyBinding;
 
     /// <summary>Initializes a new instance of the <see cref="TestDiscoverer"/> class.</summary>
-    public TestDiscoverer(IProcessManager processManager, ValidationResourceLimits? limits = null)
+    public TestDiscoverer(
+        IProcessManager processManager,
+        ValidationResourceLimits? limits = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
         _limits = limits ?? new();
         _limits.Validate();
         _processManager = processManager;
+        _policyBinding = policyBinding;
     }
 
     /// <summary>Discovers supported test projects from the semantic project inventory.</summary>
@@ -55,7 +60,7 @@ public sealed class TestDiscoverer
             }
 
             var normalizedRelative = relative.Replace('\\', '/');
-            if (RepositoryPathPolicy.IsProhibited(normalizedRelative, prohibitedPaths ?? []))
+            if (RepositoryPathPolicy.IsProhibited(normalizedRelative, prohibitedPaths ?? [], root))
             {
                 throw new UnauthorizedAccessException(
                     $"Test discovery project '{normalizedRelative}' is prohibited by repository path policy.");
@@ -147,13 +152,37 @@ public sealed class TestDiscoverer
     }
 
     /// <summary>Enumerates test cases after applying one host-generated framework filter.</summary>
-    public async Task<IReadOnlyList<TestCase>> DiscoverCasesAsync(
+    public Task<IReadOnlyList<TestCase>> DiscoverCasesAsync(
         RunId runId,
         string repositoryPath,
         IReadOnlyList<TestProject> projects,
         string? filter,
         TimeSpan timeout,
         CancellationToken cancellationToken = default)
+    {
+        return DiscoverCasesCoreAsync(runId, repositoryPath, projects, filter, timeout, _policyBinding?.Current, cancellationToken);
+    }
+
+    /// <summary>Enumerates cases under the authority captured by the baseline.</summary>
+    public Task<IReadOnlyList<TestCase>> DiscoverCasesAsync(
+        WorkspaceBaseline baseline,
+        RunId runId,
+        IReadOnlyList<TestProject> projects,
+        TimeSpan timeout,
+        CancellationToken cancellationToken = default)
+    {
+        _policyBinding?.ValidateBaseline(baseline, RepositoryTrustLevel.TrustedBuild);
+        return DiscoverCasesCoreAsync(runId, baseline.RepositoryPath, projects, null, timeout, baseline.SecurityPolicy, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<TestCase>> DiscoverCasesCoreAsync(
+        RunId runId,
+        string repositoryPath,
+        IReadOnlyList<TestProject> projects,
+        string? filter,
+        TimeSpan timeout,
+        EffectiveSessionPolicy? policy,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(projects);
         if (runId == default)
@@ -166,6 +195,16 @@ public sealed class TestDiscoverer
         var cases = new List<TestCase>();
         foreach (var project in projects)
         {
+            if (_policyBinding is not null)
+            {
+                _policyBinding.Validate(policy
+                    ?? throw new UnauthorizedAccessException("PolicyGenerationStale: test discovery requires current authority."));
+                if (policy.MaximumTrust < RepositoryTrustLevel.TrustedBuild)
+                {
+                    throw new UnauthorizedAccessException("Test discovery requires TrustedBuild.");
+                }
+            }
+
             var process = await _processManager.RunAsync(
                 new ProcessExecutionRequest
                 {

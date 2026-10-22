@@ -188,27 +188,24 @@ internal static class ApplicationComposition
         SessionProjection? state,
         IScratchpadSessionCapabilityProvider? scratchpad = null)
     {
-        var configuration = scratchpad is ScratchpadLifecycle lifecycle
-            ? lifecycle.CurrentConfiguration
-            : host.Configuration;
+        var policy = host.PolicyBinding.Current;
         return new ToolInvocationContext
         {
             WorkspaceId = state?.WorkspaceId,
             RepositoryPath = state?.RepositoryPath ?? host.Paths.RepositoryRoot,
+            SecurityPolicy = policy,
+            PolicyBinding = host.PolicyBinding,
             Scratchpad = scratchpad?.Current
                 ?? ScratchpadSessionCapability.Disabled(ScratchpadDisabledReason.NotConfigured),
             TrustLevel = state?.RepositoryTrust ?? RepositoryTrustLevel.UntrustedInspection,
             ApprovedRoots = ["."],
-            ProhibitedPaths = configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [],
-            AllowedExecutables = HostFoundation.ResolveAllowedExecutables(configuration),
-            AllowedNetworkHosts = host.TrustedConfiguration
-                .GetSection("tools:allowedNetworkHosts")
-                .Get<string[]>() ?? [],
-            AllowedToolIds = configuration.GetSection("tools:allow").Get<string[]>() ?? [],
-            DeniedToolIds = configuration.GetSection("tools:deny").Get<string[]>() ?? [],
-            RequireApprovalToolIds = configuration
-                .GetSection("tools:requireApproval")
-                .Get<string[]>() ?? [],
+            ProhibitedPaths = policy.ProhibitedPaths,
+            AllowedExecutables = policy.AllowedExecutables,
+            AllowedNetworkHosts = policy.AllowedNetworkHosts,
+            AllowedToolIds = policy.AllowedTools.IsDefault ? [] : policy.AllowedTools,
+            DenyAllTools = !policy.AllowedTools.IsDefault && policy.AllowedTools.Length == 0,
+            DeniedToolIds = policy.DeniedTools,
+            RequireApprovalToolIds = policy.ReviewTools,
             RequestedBy = "model",
         };
     }
@@ -354,7 +351,8 @@ internal static class ApplicationComposition
         var conversationContextApplication = new ConversationContextApplication(contextAssembler, usage);
         var approvalPolicy = new MutationApprovalPolicyService(
             host.Configuration,
-            host.Paths.RepositoryConfiguration);
+            host.Paths.RepositoryConfiguration,
+            host.PolicyBinding);
         var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);
         var runSteering = new RunSteeringCoordinator(host.ExecutionLimits);
         var validationStages = GetValidationStages(host.Configuration);
@@ -380,10 +378,11 @@ internal static class ApplicationComposition
             host.Events,
             new DiagnosticNormalizer(),
             host.LoggerFactory.CreateLogger<BuildExecutor>(),
-            limits: host.OperationalLimits.Validation);
+            limits: host.OperationalLimits.Validation,
+            policyBinding: host.PolicyBinding);
         var testPipeline = new TestValidationPipeline(
-            new TestDiscoverer(tools.ProcessManager, host.OperationalLimits.Validation),
-            new TestRunner(tools.ProcessManager, host.Events, host.OperationalLimits.Validation),
+            new TestDiscoverer(tools.ProcessManager, host.OperationalLimits.Validation, host.PolicyBinding),
+            new TestRunner(tools.ProcessManager, host.Events, host.OperationalLimits.Validation, host.PolicyBinding),
             host.Events);
         var validationApplication = new ValidationApplication(
             new BaselineBuildCapture(buildExecutor),
@@ -395,7 +394,8 @@ internal static class ApplicationComposition
                 testPipeline,
                 host.Events,
                 semantic.SemanticEngines),
-            tools.HookCoordinator);
+            tools.HookCoordinator,
+            host.PolicyBinding);
         var sourceEdits = new SourceEditApplication(
             mutationCoordinator,
             mutationCoordinator,
@@ -492,7 +492,8 @@ internal static class ApplicationComposition
             memoryOptions,
             repositoryRoot => ConfigurationBootstrap.Build(host.ConfigurationArguments, ConfigurationBootstrap.ResolvePaths(repositoryRoot)),
             intelligence,
-            intelligenceOperations);
+            intelligenceOperations,
+            host.PolicyBinding);
         IDomainEventSubscription? sessionCheckpointSubscription = null;
         DelegateAgentsTool? delegateAgentsTool = null;
         var intelligenceQuery = new RepositoryIntelligenceQuery(memoryRetriever, memoryOptions, intelligence);
@@ -517,7 +518,8 @@ internal static class ApplicationComposition
                 resourceLimits: host.OperationalLimits.Workspace,
                 maximumConfigurationBytes: host.TrustedConfiguration.GetValue("repository:configurationBytes", 1024 * 1024),
                 repositoryOpenWarnings: () => repositoryBindings.LastWarnings,
-                repositoryReady: intelligenceOperations.BindAsync);
+                repositoryReady: intelligenceOperations.BindAsync,
+                policyBinding: host.PolicyBinding);
 
             var delegateAgentsOptions = host.TrustedConfiguration
                 .GetSection("agents:delegation")
@@ -1031,6 +1033,9 @@ internal sealed record HostCompositionInputs
     /// <summary>Gets effective layered configuration.</summary>
     internal required IConfiguration Configuration { get; init; }
 
+    /// <summary>Gets the single host policy publication boundary.</summary>
+    internal SessionPolicyBinding PolicyBinding { get; init; } = new();
+
     /// <summary>Gets host CLI overrides preserved when repository and session layers are rebound.</summary>
     internal string[] ConfigurationArguments { get; init; } = [];
 
@@ -1165,6 +1170,8 @@ internal sealed record IntegrationCompositionInputs
 /// <summary>Atomically rebinds repository-scoped services and restores the prior repository after any failure.</summary>
 internal sealed class RepositoryScopedBindingCoordinator
 {
+    private readonly SessionPolicyBinding? _policyBinding;
+    private readonly Guid _policyBindingId;
     private readonly ActiveModelSelectionService? _activeModels;
     private readonly MutationApprovalPolicyService _approvalPolicy;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -1176,6 +1183,8 @@ internal sealed class RepositoryScopedBindingCoordinator
     private readonly Func<string, IConfigurationRoot>? _memoryConfigurationLoader;
     private readonly RepositoryIntelligenceMonitor? _intelligence;
     private readonly RepositoryIntelligenceOperations? _intelligenceOperations;
+    private readonly string? _startupAuthorityFingerprint;
+    private long _policyGeneration = 1;
     private ClaudeSkillCompatibilityCatalog? _claudeSkills;
     private CompatibleSkillCatalog? _compatibleSkills;
     private string _currentRepositoryRoot;
@@ -1198,7 +1207,8 @@ internal sealed class RepositoryScopedBindingCoordinator
         RepositoryMemoryConfiguration? memoryOptions = null,
         Func<string, IConfigurationRoot>? memoryConfigurationLoader = null,
         RepositoryIntelligenceMonitor? intelligence = null,
-        RepositoryIntelligenceOperations? intelligenceOperations = null)
+        RepositoryIntelligenceOperations? intelligenceOperations = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(initialRepositoryRoot);
         ArgumentNullException.ThrowIfNull(toolState);
@@ -1216,6 +1226,9 @@ internal sealed class RepositoryScopedBindingCoordinator
         _memoryConfigurationLoader = memoryConfigurationLoader;
         _intelligence = intelligence;
         _intelligenceOperations = intelligenceOperations;
+        _policyBinding = policyBinding;
+        _startupAuthorityFingerprint = policyBinding?.Current.StartupAuthorityFingerprint;
+        _policyBindingId = policyBinding?.Current.BindingId ?? Guid.NewGuid();
     }
 
     /// <summary>Attaches the catalogs constructed later in the composition sequence.</summary>
@@ -1271,9 +1284,16 @@ internal sealed class RepositoryScopedBindingCoordinator
             try
             {
                 var nextPaths = ConfigurationBootstrap.ResolvePaths(nextRepositoryRoot);
+                _policyBinding?.Invalidate();
                 var nextConfiguration = (_memoryConfigurationLoader
                     ?? (root => ConfigurationBootstrap.Build([], ConfigurationBootstrap.ResolvePaths(root))))(nextRepositoryRoot);
                 using var nextConfigurationLifetime = nextConfiguration as IDisposable;
+                var candidatePolicy = _policyBinding is null ? null : SecurityPolicyConfigurationLoader.Load(nextPaths, _policyBindingId, ++_policyGeneration);
+                if (candidatePolicy is not null && candidatePolicy.StartupAuthorityFingerprint != _startupAuthorityFingerprint)
+                {
+                    throw new InvalidDataException("PolicyGenerationStale: specialized integration definitions changed; restart Threadsmith to validate and rebuild MCP, hook, skill, provider and secret adapters before continuing.");
+                }
+
                 await RetiredPlanningConfiguration.MigrateFileAsync(nextPaths.RepositoryConfiguration, cancellationToken);
                 await RetiredPlanningConfiguration.MigrateFileAsync(nextPaths.SessionConfiguration, cancellationToken);
                 nextConfiguration.Reload();
@@ -1320,8 +1340,14 @@ internal sealed class RepositoryScopedBindingCoordinator
                     await BindMemoryRepositoryAsync(nextRepositoryRoot, nextConfiguration, cancellationToken);
                 }
 
+                if (candidatePolicy is not null)
+                {
+                    _policyBinding?.Publish(candidatePolicy);
+                }
+
                 _currentRepositoryRoot = nextRepositoryRoot;
                 LastWarnings = [
+                    .. candidatePolicy?.Diagnostics ?? [],
                     .. !sameRepository ? _scratchpad?.LastActivationWarnings ?? [] : [],
                     .. configurationWarning is null ? Array.Empty<string>() : [configurationWarning],
                 ];

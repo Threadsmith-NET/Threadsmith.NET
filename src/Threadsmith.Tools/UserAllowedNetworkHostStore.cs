@@ -90,7 +90,7 @@ public sealed class UserAllowedNetworkHostStore
                     throw new InvalidOperationException("The updated user configuration exceeds the supported size.");
                 }
 
-                return Task.FromResult<RepositorySettingsUpdate?>(new(bytes));
+                return Task.FromResult<RepositorySettingsUpdate?>(new(bytes) { AuthorizedPolicyKeys = ["tools:allowedNetworkHosts"] });
             },
             cancellationToken: cancellationToken);
     }

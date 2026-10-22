@@ -1282,6 +1282,8 @@ public sealed class WebFetchAuthorizationAuthority : IProgressiveToolActivationP
         var builder = new StringBuilder()
             .Append(context.RepositoryPath).Append('\n')
             .Append(context.TrustLevel).Append('\n')
+            .Append(context.SecurityPolicy?.Fingerprint).Append('\n')
+            .Append(context.SecurityPolicy?.Generation).Append('\n')
             .Append(context.DenyAllTools).Append('\n');
         Append(builder, context.AllowedToolIds);
         Append(builder, context.DeniedToolIds);
@@ -1541,11 +1543,22 @@ public sealed class WebFetchTool : Tool<WebFetchRequest, WebFetchResponse>, IHos
 
         cancellationToken.ThrowIfCancellationRequested();
         var authorization = _authorization.Resolve(context, input);
+        if (context.Invocation.SecurityPolicy is { } policy)
+        {
+            context.Invocation.PolicyBinding?.Validate(policy);
+            if (!policy.NetworkHostRestriction.IsDefault
+                && !policy.NetworkHostRestriction.Contains(authorization.Url.IdnHost, StringComparer.OrdinalIgnoreCase))
+            {
+                throw new UnauthorizedAccessException("The mandatory outbound policy denies this host; scoped consent cannot override it.");
+            }
+        }
+
         var response = await _fetcher.FetchAsync(
             authorization.Url,
             authorization.SourceKind,
             authorization.AuthorizedDirectUrlDigests,
-            cancellationToken);
+            cancellationToken: cancellationToken,
+            invocation: context.Invocation);
         var modelResult = new WebFetchModelResult(
             response.Provenance.FinalUrl,
             response.Title,

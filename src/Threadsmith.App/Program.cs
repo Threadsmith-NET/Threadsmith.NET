@@ -100,6 +100,7 @@ public static class Program
         // Build the effective configuration only after bounding untrusted repository-owned files.
         IConfigurationRoot configuration;
         IConfigurationRoot trustedConfiguration;
+        var policyBinding = new SessionPolicyBinding();
         try
         {
             configuration = ConfigurationBootstrap.Build(args, paths);
@@ -111,6 +112,11 @@ public static class Program
             }
 
             trustedConfiguration = ConfigurationBootstrap.BuildTrusted(paths);
+            policyBinding.Publish(SecurityPolicyConfigurationLoader.Load(paths, Guid.NewGuid(), 1));
+            foreach (var diagnostic in policyBinding.Current.Diagnostics)
+            {
+                await Console.Error.WriteLineAsync(diagnostic);
+            }
         }
         catch (Exception exception) when (exception is InvalidDataException or FormatException)
         {
@@ -144,7 +150,8 @@ public static class Program
             trustedConfiguration,
             paths,
             loggerFactory,
-            promptLoader);
+            promptLoader,
+            policyBinding);
 
         // Compose model transport, catalogs, migration, selection, and offline fallback as one owned phase.
         ModelServices composedModels;
@@ -197,6 +204,7 @@ public static class Program
             loggerFactory,
             foundation.PromptLoader,
             foundation.HookCoordinator,
+            policyBinding,
             processCancellation.Token);
 
         // Compose all command applications around one shared context, policy, and mutation coordinator.
@@ -206,6 +214,7 @@ public static class Program
                 Host = new HostCompositionInputs
                 {
                     Configuration = configuration,
+                    PolicyBinding = policyBinding,
                     ConfigurationArguments = [.. args.Where(argument => argument.StartsWith("--set:", StringComparison.Ordinal))],
                     TrustedConfiguration = trustedConfiguration,
                     Paths = paths,

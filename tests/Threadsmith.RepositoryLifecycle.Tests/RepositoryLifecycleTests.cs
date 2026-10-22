@@ -20,6 +20,99 @@ using Xunit;
 /// <summary>Verifies the Milestone 2 repository lifecycle and trust boundary.</summary>
 public static class RepositoryLifecycleTests
 {
+    /// <summary>Trust lookup never exposes a permissive candidate, including a failed lookup.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task PolicyBinding_TrustLookupKeepsExecutionUnavailable(bool failLookup)
+    {
+        await using var repository = await TemporaryRepository.CreateAsync();
+        await using var events = new DomainEventStream();
+        var facts = new GatedFactsStore(failLookup);
+        var binding = new SessionPolicyBinding();
+        var initial = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = repository.RootPath, Fingerprint = "initial",
+            EditableRoots = [repository.RootPath],
+        };
+        binding.Publish(initial);
+        var lifecycle = new RepositoryLifecycle(
+            events,
+            facts,
+            new DotNetEnvironmentResolver(),
+            policyBinding: binding,
+            repositoryOpened: (_, _) =>
+            {
+                binding.Publish(initial with { Generation = 2 });
+                Assert.Equal(RepositoryTrustLevel.UntrustedInspection, binding.Current.MaximumTrust);
+                return Task.CompletedTask;
+            });
+        var ct = TestContext.Current.CancellationToken;
+        var opening = lifecycle.HandleAsync(
+            new OpenRepositoryCommand(SessionId.New(), repository.RootPath, RepositoryTrustLevel.FullyTrustedAutomation)
+            {
+                TrustCeiling = RepositoryTrustLevel.UntrustedInspection,
+            },
+            ct);
+        await facts.Entered.Task.WaitAsync(ct);
+        Assert.Throws<UnauthorizedAccessException>(() => binding.Current);
+        facts.Release.SetResult();
+        if (failLookup)
+        {
+            await Assert.ThrowsAsync<InvalidDataException>(() => opening.WaitAsync(ct));
+            Assert.Throws<UnauthorizedAccessException>(() => binding.Current);
+        }
+        else
+        {
+            Assert.Equal(RepositoryTrustLevel.UntrustedInspection, (await opening).Trust.Level);
+            Assert.Equal(RepositoryTrustLevel.UntrustedInspection, binding.Current.MaximumTrust);
+        }
+
+        Assert.Throws<UnauthorizedAccessException>(() => binding.Validate(initial));
+    }
+
+    /// <summary>Retained workspace sessions cannot use old trust or path authority after a rebind.</summary>
+    [Fact]
+    public static async Task PolicyBinding_RetainedSessionRejectsSelectionAndBaseline()
+    {
+        await using var repository = await TemporaryRepository.CreateAsync();
+        await using var harness = await RepositoryHarness.CreateAsync(repository.RootPath);
+        await using var events = new DomainEventStream();
+        var binding = new SessionPolicyBinding();
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = repository.RootPath,
+            Fingerprint = "initial",
+            EditableRoots = [repository.RootPath],
+        };
+        var lifecycle = new RepositoryLifecycle(
+            events,
+            harness.Facts,
+            new DotNetEnvironmentResolver(),
+            policyBinding: binding,
+            repositoryOpened: (_, _) =>
+            {
+                binding.Publish(policy);
+                return Task.CompletedTask;
+            });
+        var sessionId = SessionId.New();
+        var ct = TestContext.Current.CancellationToken;
+        var opened = await lifecycle.HandleAsync(
+            new OpenRepositoryCommand(sessionId, repository.RootPath, RepositoryTrustLevel.TrustedRead),
+            ct);
+        var baseline = await lifecycle.HandleAsync(new RecordBaselineCommand(sessionId, opened.WorkspaceId), ct);
+        Assert.Same(binding.Current, baseline.SecurityPolicy);
+        binding.Publish(policy with { Generation = 2, MaximumTrust = RepositoryTrustLevel.UntrustedInspection });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => lifecycle.HandleAsync(
+            new SelectSolutionCommand(sessionId, opened.WorkspaceId, repository.SolutionPath),
+            ct));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => lifecycle.HandleAsync(
+            new RecordBaselineCommand(sessionId, opened.WorkspaceId),
+            ct));
+    }
+
     /// <summary>Untrusted inspection discovers safe candidates but blocks trusted-read operations.</summary>
     [Fact]
     public static async Task OpenRepository_UntrustedInspection_BlocksSelectionAndBaseline()
@@ -328,6 +421,13 @@ public static class RepositoryLifecycleTests
         Assert.Equal(RepositoryTrustLevel.TrustedRead, first.Trust.Level);
         Assert.Equal(first.Trust.GrantedAt, reopened.Trust.GrantedAt);
         Assert.Equal(RepositoryTrustLevel.TrustedRead, reopened.Trust.Level);
+
+        var narrowed = await secondLifecycle.HandleAsync(new OpenRepositoryCommand(
+            SessionId.New(), repository.RootPath, RepositoryTrustLevel.UntrustedInspection)
+        {
+            TrustCeiling = RepositoryTrustLevel.UntrustedInspection,
+        });
+        Assert.Equal(RepositoryTrustLevel.UntrustedInspection, narrowed.Trust.Level);
         Assert.NotNull(reopened.Environment);
     }
 
@@ -1523,6 +1623,29 @@ public static class RepositoryLifecycleTests
 
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class GatedFactsStore(bool failLookup) : IRepositoryFactsStore
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task InitializeAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public async Task<RepositoryFacts?> GetAsync(string repositoryPath, CancellationToken cancellationToken = default)
+        {
+            Entered.SetResult();
+            await Release.Task.WaitAsync(cancellationToken);
+            if (failLookup)
+            {
+                throw new InvalidDataException("fixture trust lookup failed");
+            }
+
+            return null;
+        }
+
+        public Task UpsertAsync(RepositoryFacts facts, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class TemporaryRepository : IAsyncDisposable

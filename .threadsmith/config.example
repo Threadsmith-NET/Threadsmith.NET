@@ -390,7 +390,8 @@
       "defaultEntries": 200,
       "maxEntries": 2000
     },
-    // Direct text/report output; machine < user < repo, higher lists replace lower ones.
+    // Direct output: trusted machine < user < environment arrays replace whole arrays.
+    // Repository/session arrays only narrow these grants; they cannot add destinations.
     // Relative folders are under the active repo. Absolute folders may be anywhere
     // on the machine (for example "C:/Reports"). No globs; [] disables all writes.
     "writeFile": { "allowedFolders": [ ".inbox" ] },
@@ -659,6 +660,7 @@
   // /policy saves reviewAll (default), reviewRisky, and alwaysTrustRepo
   // only in this repo config. TrustSession applies only to the running session
   // and leaves the saved policy unchanged.
+  // All preferences remain bounded by trusted mutation:approvalPolicy (default reviewAll).
   "mutation": {
     "approvalPolicy": "reviewAll",
     // ReviewRisky pauses when the exact preview exceeds this many changed lines.

@@ -39,7 +39,7 @@ public static class CompositionBoundariesTests
 
     /// <summary>Each sub-record has one clear responsibility with the expected dependency distribution.</summary>
     [Theory]
-    [InlineData(typeof(HostCompositionInputs), 13)]
+    [InlineData(typeof(HostCompositionInputs), 14)]
     [InlineData(typeof(PersistenceCompositionInputs), 11)]
     [InlineData(typeof(ToolPolicyCompositionInputs), 8)]
     [InlineData(typeof(SemanticCompositionInputs), 5)]

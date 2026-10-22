@@ -3,6 +3,7 @@
 Use the [user guide](../user-guide.md) for the complete product walkthrough. These focused references are useful when configuring or operating one subsystem:
 
 - [Opening a repository](opening-a-repository.md)
+- [Configuration authority and security policy](security-policy.md)
 - [Interactive commands and keys](keyboard-shortcuts.md)
 - [Full-screen agent workspace](agent-workspace.md)
 - [Cache reuse, request reduction, and per-request reporting](cache-optimized-context.md)

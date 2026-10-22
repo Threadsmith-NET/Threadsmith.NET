@@ -105,11 +105,7 @@ internal static class ConfigurationBootstrap
     internal static IConfigurationRoot BuildTrusted(ConfigurationPaths paths)
     {
         ArgumentNullException.ThrowIfNull(paths);
-        return new ConfigurationBuilder()
-            .AddJsonFile(paths.MachineConfiguration, optional: true)
-            .AddJsonFile(paths.UserConfiguration, optional: true)
-            .Add(new NonSecretEnvironmentVariablesConfigurationSource("THREADSMITH_"))
-            .Build();
+        return SecurityPolicyConfigurationLoader.BuildTrusted(paths);
     }
 
     /// <summary>Creates the user configuration from the shipped documented example on first launch.</summary>
@@ -132,7 +128,7 @@ internal static class ConfigurationBootstrap
                     var content = File.Exists(examplePath)
                         ? StripJsonComments(await File.ReadAllTextAsync(examplePath, token))
                         : "{}\n";
-                    return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(content)) { Overwrite = false };
+                    return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(content)) { Overwrite = false, IsHostInitialization = true };
                 },
                 cancellationToken: cancellationToken);
         }
@@ -360,6 +356,13 @@ internal sealed record ConfigurationPaths
 
     /// <summary>Gets the optional user configuration path.</summary>
     internal required string UserConfiguration { get; init; }
+
+    /// <summary>Gets the user-owned secret store shared by policy protection and secret resolution.</summary>
+    internal string UserSecretsConfiguration => Path.Combine(
+        Path.GetDirectoryName(UserConfiguration)
+            ?? throw new InvalidOperationException("The user configuration path has no parent directory."),
+        "secrets",
+        "config.json");
 
     /// <summary>Gets the repository-owned Threadsmith configuration directory.</summary>
     internal required string RepositoryConfigurationDirectory { get; init; }

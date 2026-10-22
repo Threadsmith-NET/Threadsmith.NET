@@ -217,6 +217,48 @@ public sealed class Milestone6Tests
         Assert.Equal(diagnostic.Id, Assert.Single(second).Id);
     }
 
+    /// <summary>Retained and restored baselines cannot authorize build or test execution after a policy transition.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Validation_StaleBaseline_RejectsBeforeExecution(bool restored)
+    {
+        await using var events = new DomainEventStream();
+        var binding = new SessionPolicyBinding();
+        var baseline = CreateBaseline(RepositoryTrustLevel.TrustedBuild);
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = baseline.RepositoryPath,
+            Fingerprint = "captured",
+        };
+        binding.Publish(policy);
+        baseline = baseline with { SecurityPolicy = restored ? null : binding.Current };
+        binding.Publish(policy with { Generation = 2, MaximumTrust = RepositoryTrustLevel.TrustedRead });
+        var executor = new BuildExecutor(
+            events,
+            new DiagnosticNormalizer(),
+            NullLogger<BuildExecutor>.Instance,
+            policyBinding: binding);
+        var request = new BuildValidationRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            Baseline = baseline,
+            Confidence = SemanticConfidenceLevel.FullSemantic,
+        };
+        var ct = TestContext.Current.CancellationToken;
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => executor.ExecuteAsync(request, ct));
+        var discoverer = new TestDiscoverer(new UnusedProcessManager(), policyBinding: binding);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => discoverer.DiscoverCasesAsync(
+            baseline,
+            request.RunId,
+            [],
+            TimeSpan.FromSeconds(30),
+            ct));
+    }
+
     /// <summary>Build execution rejects repositories that have not granted build trust.</summary>
     [Fact]
     public async Task BuildExecutor_TrustedRead_RejectsBeforeExecution()

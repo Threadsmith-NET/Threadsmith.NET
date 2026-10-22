@@ -57,6 +57,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         "threadsmith.tool.rejections");
 
     private readonly ToolPresentationLimits _presentationLimits;
+    private readonly SessionPolicyBinding? _policyBinding;
     private readonly IApprovalPolicy _approvalPolicy;
     private readonly IBudget? _budget;
     private readonly IDomainEventStream _events;
@@ -84,7 +85,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         TimeProvider? timeProvider = null,
         IHookCoordinator? hooks = null,
         ToolParallelOptions? parallelOptions = null,
-        ToolPresentationLimits? presentationLimits = null)
+        ToolPresentationLimits? presentationLimits = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(policy);
@@ -93,6 +95,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
         _presentationLimits = presentationLimits ?? new();
+        _policyBinding = policyBinding;
         _presentationLimits.Validate();
         _registry = registry;
         _policy = policy;
@@ -110,6 +113,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     public ToolBatchPreflightResult PreflightBatch(IReadOnlyList<ToolBatchRequest> requests)
     {
         ArgumentNullException.ThrowIfNull(requests);
+        requests = requests.Select(item => item with { Invocation = CapturePolicy(item.Invocation) }).ToArray();
         if (requests.Count == 0)
         {
             return ToolBatchPreflightResult.Success;
@@ -132,7 +136,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             };
         }
 
-        var planner = new ToolConflictPlanner(_registry, _parallelOptions);
+        var planner = new ToolConflictPlanner(_registry, CaptureParallelOptions(requests));
         var waves = planner.Plan(requests);
         foreach (var planned in waves.SelectMany(static wave => wave).OrderBy(item => item.Request.Ordinal))
         {
@@ -179,6 +183,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(requests);
+        requests = requests.Select(item => item with { Invocation = CapturePolicy(item.Invocation) }).ToArray();
         if (requests.Count == 0)
         {
             return [];
@@ -189,7 +194,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             throw new ToolArgumentValidationException("Sibling tool-call correlation identifiers must be unique.");
         }
 
-        var planner = new ToolConflictPlanner(_registry, _parallelOptions);
+        var planner = new ToolConflictPlanner(_registry, CaptureParallelOptions(requests));
         var waves = planner.Plan(requests);
         return await InvokePlannedWavesAsync(
             requests,
@@ -207,6 +212,8 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ToolId);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ArgumentsJson);
         ArgumentNullException.ThrowIfNull(request.Context);
+
+        request = CapturePolicy(request);
         return await InvokeCoreAsync(
             request,
             preparationError: null,
@@ -214,6 +221,32 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
             returnCancellationResult: false,
             _timeProvider.GetUtcNow(),
             cancellationToken);
+    }
+
+    private ToolInvocationRequest CapturePolicy(ToolInvocationRequest request)
+    {
+        return _policyBinding is not null && request.Context.SecurityPolicy is null
+            ? request with { Context = request.Context with { SecurityPolicy = _policyBinding.Current, PolicyBinding = _policyBinding } }
+            : request;
+    }
+
+    private ToolParallelOptions CaptureParallelOptions(IReadOnlyList<ToolBatchRequest> requests)
+    {
+        var options = _parallelOptions;
+        foreach (var request in requests)
+        {
+            if (request.Invocation.Context.SecurityPolicy is { } policy)
+            {
+                request.Invocation.Context.PolicyBinding?.Validate(policy);
+                options = options with
+                {
+                    Enabled = options.Enabled && policy.ParallelToolsEnabled,
+                    MaximumConcurrency = Math.Min(options.MaximumConcurrency, policy.ResourceLimits["tools:parallel:maximumConcurrency"]),
+                };
+            }
+        }
+
+        return options;
     }
 
     private async Task<IReadOnlyList<ToolBatchResult>> InvokePlannedWavesAsync(
@@ -387,6 +420,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 ?? request.ExpectedRegistration?.Tool
                 ?? _registry.Get(request.ToolId);
             input = tool.DeserializeInput(request.ArgumentsJson);
+            tool = ToolRuntimePolicy.ApplyCeiling(tool, request.Context.SecurityPolicy);
         }
         catch (Exception exception) when (exception is KeyNotFoundException
             or ToolArgumentValidationException
@@ -616,6 +650,11 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 tool.Definition.Scheduling.MaximumSourceConcurrency,
                 waitingCancellation.Token);
             waitingCancellation.Token.ThrowIfCancellationRequested();
+            if (request.Context.SecurityPolicy is { } capturedPolicy)
+            {
+                request.Context.PolicyBinding?.Validate(capturedPolicy);
+            }
+
             if (executionContext.Deadline <= _timeProvider.GetUtcNow())
             {
                 throw new TimeoutException("The tool invocation deadline expired while waiting.");

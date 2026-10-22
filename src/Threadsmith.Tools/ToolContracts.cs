@@ -323,6 +323,16 @@ public sealed record ToolInvocationContext
     /// <summary>Normalized repository root.</summary>
     public required string RepositoryPath { get; init; }
 
+    /// <summary>Immutable authority captured at the host invocation boundary.</summary>
+    public EffectiveSessionPolicy? SecurityPolicy { get; init; }
+
+    /// <summary>Host-owned publication fence used to reject stale queued effects.</summary>
+    [JsonIgnore]
+    public SessionPolicyBinding? PolicyBinding { get; init; }
+
+    /// <summary>Whether the assignment permits direct artifact writes.</summary>
+    public bool AllowDirectWrites { get; init; } = true;
+
     /// <summary>Effective repository trust.</summary>
     public RepositoryTrustLevel TrustLevel { get; init; }
 

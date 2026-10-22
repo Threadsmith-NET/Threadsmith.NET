@@ -706,6 +706,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
             var inspectedEntries = 0;
             var inspectedFiles = 0;
             var prohibitedPaths = request.ProhibitedPaths ?? [];
+            var prohibitedPathCaseContext = new RepositoryPathCaseContext(request.RepositoryPath);
             while (pending.Count > 0
                 && inspectedEntries < _resourceLimits.MaximumFallbackEntries
                 && inspectedFiles < _resourceLimits.MaximumFallbackFiles
@@ -766,7 +767,7 @@ public sealed partial class SemanticEngine : ISemanticEngine
                     }
 
                     var relative = Path.GetRelativePath(request.RepositoryPath, entry).Replace('\\', '/');
-                    if (RepositoryPathPolicy.IsProhibited(relative, prohibitedPaths))
+                    if (RepositoryPathPolicy.IsProhibited(relative, prohibitedPaths, request.RepositoryPath, prohibitedPathCaseContext))
                     {
                         continue;
                     }
@@ -1667,7 +1668,8 @@ public sealed partial class SemanticEngine : ISemanticEngine
             .Replace(Path.DirectorySeparatorChar, '/');
         return !RepositoryPathPolicy.IsProhibited(
             relativePath,
-            request.ProhibitedPaths ?? []);
+            request.ProhibitedPaths ?? [],
+            request.RepositoryPath);
     }
 
     private static bool IsSemanticRefreshInputPathAllowed(

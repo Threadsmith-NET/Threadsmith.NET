@@ -10,18 +10,21 @@ public sealed class ValidationApplication :
     private readonly BaselineBuildCapture _baselineCapture;
     private readonly IHookCoordinator? _hooks;
     private readonly ValidationPipeline _pipeline;
+    private readonly SessionPolicyBinding? _policyBinding;
 
     /// <summary>Initializes a new instance of the <see cref="ValidationApplication"/> class.</summary>
     public ValidationApplication(
         BaselineBuildCapture baselineCapture,
         ValidationPipeline pipeline,
-        IHookCoordinator? hooks = null)
+        IHookCoordinator? hooks = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(baselineCapture);
         ArgumentNullException.ThrowIfNull(pipeline);
         _baselineCapture = baselineCapture;
         _pipeline = pipeline;
         _hooks = hooks;
+        _policyBinding = policyBinding;
     }
 
     /// <inheritdoc />
@@ -31,7 +34,9 @@ public sealed class ValidationApplication :
     {
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(command.Request);
+        _policyBinding?.ValidateBaseline(command.Request.Baseline, RepositoryTrustLevel.TrustedRead);
         await InvokeBeforeAsync(command.Request, "baseline", cancellationToken);
+        _policyBinding?.ValidateBaseline(command.Request.Baseline, RepositoryTrustLevel.TrustedRead);
         BaselineCapture result;
         if (RequiresBuildValidation(command.Request))
         {
@@ -60,7 +65,9 @@ public sealed class ValidationApplication :
         ArgumentNullException.ThrowIfNull(command);
         ArgumentNullException.ThrowIfNull(command.Request);
         ArgumentNullException.ThrowIfNull(command.MutationSet);
+        _policyBinding?.ValidateBaseline(command.Request.Baseline, RepositoryTrustLevel.TrustedRead);
         await InvokeBeforeAsync(command.Request, "mutation", cancellationToken);
+        _policyBinding?.ValidateBaseline(command.Request.Baseline, RepositoryTrustLevel.TrustedRead);
         var result = await _pipeline.ValidateAsync(
             command.Request,
             command.BaselineCapture,
@@ -124,6 +131,7 @@ public sealed class ValidationApplication :
             return;
         }
 
+        _policyBinding?.ValidateBaseline(request.Baseline, RepositoryTrustLevel.TrustedRead);
         _ = await _hooks.InvokeAsync(
             HookPoint.AfterValidation,
             request.SessionId,

@@ -58,6 +58,14 @@ public sealed record MutationRiskAssessment
 /// <summary>Determines whether staged mutations require approval and enforces invariant guardrails.</summary>
 public interface IMutationApprovalPolicy
 {
+    /// <summary>Gets the immutable authority captured by newly staged mutations.</summary>
+    EffectiveSessionPolicy? SecurityPolicy => null;
+
+    /// <summary>Rejects approvals staged under an obsolete authority generation.</summary>
+    void ValidatePolicyGeneration(EffectiveSessionPolicy? capturedPolicy)
+    {
+    }
+
     /// <summary>Gets the effective policy for the current process session.</summary>
     MutationApprovalPolicy CurrentPolicy { get; }
 

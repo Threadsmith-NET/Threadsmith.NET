@@ -461,7 +461,7 @@ internal sealed class ScratchpadLifecycle : IScratchpadSessionCapabilityProvider
 
         var relative = Path.GetRelativePath(repository, root).Replace('\\', '/');
         var prohibited = _configuration.GetSection("prohibitedPaths").Get<string[]>() ?? [];
-        if (IsStrictChild(root, repository) && RepositoryPathPolicy.IsProhibited(relative, prohibited))
+        if (IsStrictChild(root, repository) && RepositoryPathPolicy.IsProhibited(relative, prohibited, repository))
         {
             throw new UnauthorizedAccessException("The configured scratchpad matches a prohibited path.");
         }

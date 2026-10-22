@@ -8,8 +8,6 @@ public sealed class WriteFileConfiguration
     /// <summary>Ordinary configuration key for the replacing folder list.</summary>
     public const string AllowedFoldersKey = "tools:writeFile:allowedFolders";
 
-    private readonly string _initialRepository;
-    private readonly string[] _initialFolders;
     private readonly string[] _fallbackFolders;
     private Snapshot _current;
 
@@ -18,10 +16,9 @@ public sealed class WriteFileConfiguration
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(fallbackConfiguration);
-        _initialRepository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
+        var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
         _fallbackFolders = LoadAllowedFolders(fallbackConfiguration);
-        _initialFolders = LoadAllowedFolders(configuration);
-        _current = new Snapshot(_initialRepository, _initialFolders);
+        _current = new Snapshot(repository, NarrowFolders(repository, LoadAllowedFolders(configuration, _fallbackFolders)));
     }
 
     /// <summary>Reads only the highest-precedence list, including an explicitly empty list.</summary>
@@ -64,9 +61,7 @@ public sealed class WriteFileConfiguration
     public void BindRepository(string repositoryPath, IConfiguration repositoryConfiguration)
     {
         var repository = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
-        var folders = string.Equals(repository, _initialRepository, PathComparison)
-            ? _initialFolders
-            : LoadAllowedFolders(repositoryConfiguration, _fallbackFolders);
+        var folders = NarrowFolders(repository, LoadAllowedFolders(repositoryConfiguration, _fallbackFolders));
         Volatile.Write(ref _current, new Snapshot(repository, folders));
     }
 
@@ -83,6 +78,14 @@ public sealed class WriteFileConfiguration
     }
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
+    private string[] NarrowFolders(string repository, string[] restrictions)
+    {
+        return [.. _fallbackFolders.Select(folder => Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder, repository)))
+            .SelectMany(parent => restrictions.Select(folder => Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder, repository)))
+                .Select(child => ToolPathRules.IsSameOrChild(child, parent) ? child : ToolPathRules.IsSameOrChild(parent, child) ? parent : null))
+            .OfType<string>().Distinct()];
+    }
 
     private static string ValidateFolder(string? value)
     {

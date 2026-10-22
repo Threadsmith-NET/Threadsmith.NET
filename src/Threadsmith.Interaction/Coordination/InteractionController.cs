@@ -615,20 +615,20 @@ public class InteractionController
         }
 
         var cancelled = await _presenter.CancelAsync(sessionId.Value, runId.Value, cancellationToken);
-        if (!cancelled)
+        if (cancelled)
         {
-            return false;
+            try
+            {
+                _ = await _presenter.WaitAsync(runId.Value, cancellationToken);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // A cancelled run reports its terminal state through the wait boundary by throwing.
+            }
         }
 
-        try
-        {
-            _ = await _presenter.WaitAsync(runId.Value, cancellationToken);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            // A cancelled run reports its terminal state through the wait boundary by throwing.
-        }
-
+        // A false result means this session's run is already terminal or was reaped by its waiter.
+        // The submission token can cancel the engine before the UI reaches this boundary.
         lock (_gate)
         {
             if (_activeRunId == runId)
@@ -642,7 +642,7 @@ public class InteractionController
             }
         }
 
-        return true;
+        return cancelled;
     }
 
     /// <summary>Requests one idempotent steering pause for the active run.</summary>

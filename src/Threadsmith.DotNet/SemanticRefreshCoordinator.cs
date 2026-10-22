@@ -2608,7 +2608,8 @@ public sealed class SemanticRefreshCoordinator :
                 || Path.IsPathRooted(relativePath)
                 || RepositoryPathPolicy.IsProhibited(
                     relativePath.Replace('\\', '/'),
-                    request.ProhibitedPaths ?? []))
+                    request.ProhibitedPaths ?? [],
+                    request.RepositoryPath))
             {
                 return null;
             }
@@ -3200,6 +3201,7 @@ public sealed class SemanticRefreshCoordinator :
 
         private IReadOnlyList<string> GetWatcherRoots()
         {
+            var prohibitedPathCaseContext = new RepositoryPathCaseContext(Request.RepositoryPath);
             var roots = new List<string>();
             var scheduled = new HashSet<string>(PathComparer);
             var pending = new Stack<string>();
@@ -3217,7 +3219,9 @@ public sealed class SemanticRefreshCoordinator :
                         if (SemanticRefreshPathPolicy.IsIgnoredDirectorySegment(Path.GetFileName(directory))
                             || RepositoryPathPolicy.IsProhibited(
                                 relative,
-                                Request.ProhibitedPaths ?? [])
+                                Request.ProhibitedPaths ?? [],
+                                Request.RepositoryPath,
+                                prohibitedPathCaseContext)
                             || IsReparsePoint(directory))
                         {
                             continue;
@@ -3315,7 +3319,8 @@ public sealed class SemanticRefreshCoordinator :
                 && !Path.IsPathRooted(relative)
                 && !RepositoryPathPolicy.IsProhibited(
                     relative,
-                    Request.ProhibitedPaths ?? [])
+                    Request.ProhibitedPaths ?? [],
+                    Request.RepositoryPath)
                 && Directory.Exists(directory)
                 && !IsReparsePoint(directory);
         }

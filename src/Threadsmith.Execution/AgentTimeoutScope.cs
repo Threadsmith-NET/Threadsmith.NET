@@ -1,18 +1,25 @@
 namespace Threadsmith.Execution;
 
-using System.Diagnostics;
-
 /// <summary>Owns caller-linked cancellation with optional timeouts beyond the runtime timer interval.</summary>
 internal sealed class AgentTimeoutScope : IAsyncDisposable
 {
     private static readonly TimeSpan _maximumTimerDelay = TimeSpan.FromMilliseconds(uint.MaxValue - 1d);
     private readonly CancellationTokenSource _timerStop = new();
     private readonly Task _timerTask;
+    private readonly TimeProvider _timeProvider;
     private int _timedOut;
 
     /// <summary>Initializes a new instance of the <see cref="AgentTimeoutScope"/> class.</summary>
     public AgentTimeoutScope(TimeSpan timeout, CancellationToken cancellationToken)
+        : this(timeout, TimeProvider.System, cancellationToken)
     {
+    }
+
+    /// <summary>Initializes a new instance of the <see cref="AgentTimeoutScope"/> class using the scheduler clock.</summary>
+    public AgentTimeoutScope(TimeSpan timeout, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _timeProvider = timeProvider;
         ArgumentOutOfRangeException.ThrowIfLessThan(timeout, TimeSpan.Zero);
         Source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _timerTask = Task.CompletedTask;
@@ -50,18 +57,18 @@ internal sealed class AgentTimeoutScope : IAsyncDisposable
 
     private async Task CancelAfterTimeoutAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
-        var started = Stopwatch.GetTimestamp();
+        var started = _timeProvider.GetTimestamp();
         try
         {
-            while (Stopwatch.GetElapsedTime(started) < timeout)
+            while (_timeProvider.GetElapsedTime(started) < timeout)
             {
-                var remaining = timeout - Stopwatch.GetElapsedTime(started);
+                var remaining = timeout - _timeProvider.GetElapsedTime(started);
                 if (remaining <= TimeSpan.Zero)
                 {
                     break;
                 }
 
-                await Task.Delay(remaining < _maximumTimerDelay ? remaining : _maximumTimerDelay, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(remaining < _maximumTimerDelay ? remaining : _maximumTimerDelay, _timeProvider, cancellationToken).ConfigureAwait(false);
             }
 
             cancellationToken.ThrowIfCancellationRequested();

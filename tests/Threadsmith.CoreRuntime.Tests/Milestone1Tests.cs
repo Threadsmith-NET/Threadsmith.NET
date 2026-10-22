@@ -989,6 +989,41 @@ public static partial class Milestone1Tests
         Assert.Equal(nameof(RunPhase.Cancelled), snapshot.Status);
     }
 
+    /// <summary>Cancellation reconciles the UI marker when the engine has already reaped the run.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task InteractionController_CancelAlreadyTerminalRun_AllowsNextSubmission(bool cancel)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var harness = await SessionHarness.CreateAsync(
+            new ScriptedSession { Turns = [new ScriptedTurn { Text = "response" }] },
+            modelProvider: cancel ? new GatedAnswerModelProvider() : null);
+        var controller = new InteractionController(new InteractionPresenter(harness.Dispatcher, harness.Projections));
+        using var operation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        await controller.OpenAsync("TUI", ct);
+        var runId = await controller.SubmitAsync("request", operation.Token);
+
+        // Reproduce the engine reaching its terminal boundary before the UI cancellation handler.
+        if (cancel)
+        {
+            await operation.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId), ct));
+        }
+        else
+        {
+            Assert.True(await harness.Dispatcher.DispatchAsync(new WaitForRunCommand(runId), ct));
+        }
+
+        Assert.False(await controller.CancelActiveRunAsync(ct));
+        Assert.Null(controller.ActiveRunId);
+        Assert.Equal(runId, controller.LatestRunId);
+        var nextRunId = await controller.SubmitAsync("next request", ct);
+        Assert.NotEqual(runId, nextRunId);
+        await controller.CancelActiveRunAsync(ct);
+    }
+
     /// <summary>Repository and semantic responses append through one boundary without clearing prior turns.</summary>
     [Fact]
     public static void ConversationTranscript_RepositoryResponses_PreserveExistingConversation()

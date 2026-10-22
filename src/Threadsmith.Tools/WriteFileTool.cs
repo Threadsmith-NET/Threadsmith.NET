@@ -152,9 +152,27 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
     {
         var repository = Path.GetFullPath(context.RepositoryPath);
         var destination = Path.GetFullPath(path, repository);
+        if (!context.AllowDirectWrites)
+        {
+            throw new UnauthorizedAccessException("The child assignment does not permit direct artifact writes.");
+        }
+
+        if (context.SecurityPolicy is { } policy)
+        {
+            context.PolicyBinding?.Validate(policy);
+        }
+
+        AuthorityControlPathGuard.Validate(destination, repository, context.SecurityPolicy?.ControlPaths);
+        if (context.IsChildAgent && !context.ApprovedRoots.Any(root =>
+                ToolPathRules.IsSameOrChild(destination, Path.TrimEndingDirectorySeparator(Path.GetFullPath(root, repository)))))
+        {
+            throw new UnauthorizedAccessException("The direct write is outside the child assignment scope.");
+        }
+
         var scratchpadDestination = ToolPathRules.IsWithinScratchpad(destination, context);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        var allowed = scratchpadDestination || _configuration.GetAllowedFolders(repository).Any(folder =>
+        IReadOnlyList<string> folders = context.SecurityPolicy is { } effective ? effective.WriteFolders : _configuration.GetAllowedFolders(repository);
+        var allowed = scratchpadDestination || folders.Any(folder =>
         {
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder, repository));
             var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
@@ -166,13 +184,13 @@ public sealed class WriteFileTool : Tool<WriteFileInput, WriteFileOutput>
         }
 
         var relative = Path.GetRelativePath(repository, destination).Replace('\\', '/');
-        if (!scratchpadDestination && RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths))
+        if (!scratchpadDestination && RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths, repository))
         {
             throw new UnauthorizedAccessException("write_file destination matches a prohibited path.");
         }
 
         var segments = destination.Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries);
-        if (!scratchpadDestination && (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase) || segment.Equals(".threadsmith", StringComparison.OrdinalIgnoreCase))
+        if (!scratchpadDestination && (segments.Any(segment => segment.Equals(".git", StringComparison.OrdinalIgnoreCase))
             || Path.GetFileName(destination).Equals("AGENTS.md", StringComparison.OrdinalIgnoreCase))
             )
         {

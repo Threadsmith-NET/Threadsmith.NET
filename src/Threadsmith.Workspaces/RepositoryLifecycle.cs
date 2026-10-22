@@ -72,6 +72,7 @@ public sealed class RepositoryLifecycle :
     private readonly IMutationApprovalPolicy? _mutationApprovalPolicy;
 
     private readonly Func<string, CancellationToken, Task>? _repositoryOpened;
+    private readonly SessionPolicyBinding? _policyBinding;
     private readonly Func<IReadOnlyList<string>>? _repositoryOpenWarnings;
     private readonly Func<SessionId, string, CancellationToken, Task>? _repositoryReady;
 
@@ -93,7 +94,8 @@ public sealed class RepositoryLifecycle :
         WorkspaceResourceLimits? resourceLimits = null,
         int maximumConfigurationBytes = 1024 * 1024,
         Func<IReadOnlyList<string>>? repositoryOpenWarnings = null,
-        Func<SessionId, string, CancellationToken, Task>? repositoryReady = null)
+        Func<SessionId, string, CancellationToken, Task>? repositoryReady = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(factsStore);
@@ -111,6 +113,7 @@ public sealed class RepositoryLifecycle :
         _repositoryOpened = repositoryOpened;
         _repositoryOpenWarnings = repositoryOpenWarnings;
         _repositoryReady = repositoryReady;
+        _policyBinding = policyBinding;
     }
 
     /// <inheritdoc />
@@ -164,15 +167,28 @@ public sealed class RepositoryLifecycle :
             throw new InvalidOperationException("Repository roots cannot be symbolic links or junctions.");
         }
 
+        _policyBinding?.Invalidate();
         var persisted = await _factsStore.GetAsync(repositoryPath, cancellationToken);
         var effectiveTrust = persisted is not null && persisted.Trust.Level > command.RequestedTrust
             ? persisted.Trust.Level
             : command.RequestedTrust;
+        var rememberedTrust = effectiveTrust;
+        if (command.TrustCeiling is { } ceiling && effectiveTrust > ceiling)
+        {
+            effectiveTrust = ceiling;
+        }
+
         var grantedAt = persisted is not null && persisted.Trust.Level == effectiveTrust
             ? persisted.Trust.GrantedAt
             : DateTimeOffset.UtcNow;
         var trust = new RepositoryTrustState(repositoryPath, effectiveTrust, grantedAt);
+        if (_policyBinding is not null && _repositoryOpened is not null)
+        {
+            _policyBinding.PrepareRepositoryTrust(effectiveTrust);
+            await _repositoryOpened(repositoryPath, cancellationToken);
+        }
 
+        var openingPolicy = _policyBinding?.Current;
         var configPath = NormalizeUnderRoot(
             repositoryPath,
             Path.Combine(".threadsmith", "config.json"));
@@ -200,6 +216,13 @@ public sealed class RepositoryLifecycle :
             .Select(item => item.Value)
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Select(item => item ?? string.Empty)];
+        if (_policyBinding is not null)
+        {
+            var policy = _policyBinding.Current;
+            approvedRoots = [.. policy.EditableRoots.Select(root => Path.GetRelativePath(repositoryPath, root))];
+            prohibitedPaths = [.. policy.ProhibitedPaths];
+        }
+
         foreach (var approvedRoot in approvedRoots)
         {
             var approvedPath = NormalizeUnderRoot(repositoryPath, approvedRoot);
@@ -273,11 +296,16 @@ public sealed class RepositoryLifecycle :
             await _mutationApprovalPolicy.BindRepositoryAsync(repositoryPath, cancellationToken);
         }
 
+        if (openingPolicy is not null)
+        {
+            _policyBinding?.Validate(openingPolicy);
+        }
+
         var workspaceId = WorkspaceId.New();
         var facts = new RepositoryFacts(
             workspaceId,
             repositoryPath,
-            trust,
+            trust with { Level = rememberedTrust },
             persisted?.SolutionPath,
             persisted?.TargetFrameworks.ToArray() ?? [],
             environment ?? persisted?.Environment);
@@ -290,7 +318,10 @@ public sealed class RepositoryLifecycle :
             config,
             environment,
             persisted?.SolutionPath,
-            persisted?.TargetFrameworks.ToArray() ?? []);
+            persisted?.TargetFrameworks.ToArray() ?? [])
+        {
+            SecurityPolicy = openingPolicy,
+        };
         lock (_sessionGate)
         {
             if (_workspacesBySession.Remove(command.SessionId, out var previousWorkspaceId))
@@ -314,7 +345,7 @@ public sealed class RepositoryLifecycle :
                 SchemaVersion = 2,
             },
             cancellationToken);
-        if (_repositoryOpened is not null)
+        if (_repositoryOpened is not null && _policyBinding is null)
         {
             await _repositoryOpened(repositoryPath, cancellationToken);
         }
@@ -354,6 +385,7 @@ public sealed class RepositoryLifecycle :
             throw new InvalidOperationException("The workspace is not open for this session.");
         }
 
+        ValidateSessionPolicy(session);
         if (session.Trust.Level < RepositoryTrustLevel.TrustedRead)
         {
             throw new UnauthorizedAccessException(
@@ -431,6 +463,7 @@ public sealed class RepositoryLifecycle :
                 continue;
             }
 
+            ValidateSessionPolicy(session);
             var project = XDocument.Load(projectPath, LoadOptions.None);
             foreach (var property in project.Descendants()
                 .Where(element => element.Name.LocalName is "TargetFramework" or "TargetFrameworks"))
@@ -446,6 +479,7 @@ public sealed class RepositoryLifecycle :
         var environment = session.Environment;
         if (session.Trust.Level >= RepositoryTrustLevel.TrustedBuild && environment is not null)
         {
+            ValidateSessionPolicy(session);
             environment = await DotNetEnvironmentResolver.RestoreAsync(
                 environment,
                 session.RepositoryPath,
@@ -454,6 +488,7 @@ public sealed class RepositoryLifecycle :
                 cancellationToken);
         }
 
+        ValidateSessionPolicy(session);
         var updated = session with
         {
             SolutionPath = solutionPath,
@@ -474,6 +509,7 @@ public sealed class RepositoryLifecycle :
             .Replace('\\', '/');
         try
         {
+            ValidateSessionPolicy(session);
             await PersistSolutionPreferenceAsync(
                 session.RepositoryPath,
                 rememberedSolutionPath,
@@ -488,6 +524,7 @@ public sealed class RepositoryLifecycle :
                 exception.Message);
         }
 
+        ValidateSessionPolicy(session);
         await _factsStore.UpsertAsync(
             new RepositoryFacts(
                 updated.WorkspaceId,
@@ -525,6 +562,7 @@ public sealed class RepositoryLifecycle :
             throw new InvalidOperationException("The workspace is not open for this session.");
         }
 
+        ValidateSessionPolicy(session);
         if (session.Trust.Level < RepositoryTrustLevel.TrustedRead)
         {
             throw new UnauthorizedAccessException(
@@ -570,6 +608,7 @@ public sealed class RepositoryLifecycle :
             },
             async (candidate, token) =>
             {
+                ValidateSessionPolicy(session);
                 var (path, length) = candidate;
                 var info = new FileInfo(path);
                 if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
@@ -610,10 +649,12 @@ public sealed class RepositoryLifecycle :
         stopwatch.Stop();
         _baselineDuration.Record(stopwatch.Elapsed.TotalMilliseconds);
         _baselineFiles.Add(files.LongLength);
+        ValidateSessionPolicy(session);
         var gitRevision = await RunGitQueryAsync(
             session.RepositoryPath,
             ["rev-parse", "HEAD"],
             cancellationToken);
+        ValidateSessionPolicy(session);
         var gitStatus = await RunGitQueryAsync(
             session.RepositoryPath,
             ["status", "--short", "--untracked-files=normal"],
@@ -622,6 +663,7 @@ public sealed class RepositoryLifecycle :
             .Split('\n', StringSplitOptions.RemoveEmptyEntries)
             .Take(_resourceLimits.MaximumBaselineStatusLines)
             .ToArray() ?? [];
+        ValidateSessionPolicy(session);
         var baseline = new WorkspaceBaseline(
             command.WorkspaceId,
             session.RepositoryPath,
@@ -634,7 +676,10 @@ public sealed class RepositoryLifecycle :
             session.Environment?.Configuration ?? "Debug",
             session.Environment?.Platform ?? "AnyCPU",
             session.Trust.Level,
-            session.Configuration.ProhibitedPaths.ToArray());
+            session.Configuration.ProhibitedPaths.ToArray())
+        {
+            SecurityPolicy = session.SecurityPolicy,
+        };
         if (_mutationCoordinator is not null)
         {
             await _mutationCoordinator.RegisterBaselineAsync(
@@ -655,6 +700,8 @@ public sealed class RepositoryLifecycle :
         bool requireComplete,
         CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
+        var prohibitedPathCaseContext = new RepositoryPathCaseContext(repositoryPath);
         foreach (var approvedRoot in approvedRoots)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -667,7 +714,7 @@ public sealed class RepositoryLifecycle :
             foreach (var path in EnumerateSafeFiles(root, requireComplete, cancellationToken))
             {
                 if ((_baselineExtensions.Contains(Path.GetExtension(path)) || _baselineFileNames.Contains(Path.GetFileName(path)))
-                    && !IsProhibited(repositoryPath, path, prohibitedPaths))
+                    && !IsProhibited(repositoryPath, path, prohibitedPaths, prohibitedPathCaseContext))
                 {
                     yield return path;
                 }
@@ -868,10 +915,11 @@ public sealed class RepositoryLifecycle :
     private static bool IsProhibited(
         string repositoryPath,
         string path,
-        IReadOnlyList<string> prohibitedPaths)
+        IReadOnlyList<string> prohibitedPaths,
+        RepositoryPathCaseContext? caseContext = null)
     {
         var relative = Path.GetRelativePath(repositoryPath, path).Replace('\\', '/');
-        return RepositoryPathPolicy.IsProhibited(relative, prohibitedPaths);
+        return RepositoryPathPolicy.IsProhibited(relative, prohibitedPaths, repositoryPath, caseContext);
     }
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows()
@@ -951,6 +999,12 @@ public sealed class RepositoryLifecycle :
         ? StringComparer.OrdinalIgnoreCase
         : StringComparer.Ordinal;
 
+    private void ValidateSessionPolicy(RepositorySession session)
+    {
+        _policyBinding?.Validate(session.SecurityPolicy
+            ?? throw new UnauthorizedAccessException("PolicyGenerationStale: reopen the repository."));
+    }
+
     private sealed record RepositorySession(
         SessionId SessionId,
         WorkspaceId WorkspaceId,
@@ -959,7 +1013,10 @@ public sealed class RepositoryLifecycle :
         RepositoryConfigurationSnapshot Configuration,
         MsBuildEnvironmentSnapshot? Environment,
         string? SolutionPath,
-        IReadOnlyList<string> TargetFrameworks);
+        IReadOnlyList<string> TargetFrameworks)
+    {
+        public EffectiveSessionPolicy? SecurityPolicy { get; init; }
+    }
 
     private static class WorkspaceMetrics
     {

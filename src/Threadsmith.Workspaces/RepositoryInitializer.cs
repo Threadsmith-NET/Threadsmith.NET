@@ -74,7 +74,7 @@ public static class RepositoryInitializer
                 configurationPath,
                 _ => Task.FromResult<RepositorySettingsUpdate?>(File.Exists(configurationPath)
                     ? null
-                    : new(Encoding.UTF8.GetBytes(InitialConfiguration + Environment.NewLine)) { Overwrite = false }),
+                    : new(Encoding.UTF8.GetBytes(InitialConfiguration + Environment.NewLine)) { Overwrite = false, IsHostInitialization = true }),
                 cancellationToken: cancellationToken);
         }
         catch (IOException) when (File.Exists(configurationPath))

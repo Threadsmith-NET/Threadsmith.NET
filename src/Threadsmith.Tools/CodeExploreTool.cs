@@ -2157,6 +2157,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
         private readonly ToolExecutionContext _executionContext;
         private readonly ToolInvocationContext _context;
+        private readonly RepositoryPathCaseContext _prohibitedPathCaseContext;
         private readonly IProcessManager? _processManager;
         private readonly Dictionary<string, CodeExploreArtifactDirectoryInventory> _artifactInventories = new(HostPathComparer);
 
@@ -2169,6 +2170,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
             _options = options;
             _executionContext = context;
             _context = context.Invocation;
+            _prohibitedPathCaseContext = new RepositoryPathCaseContext(_context.RepositoryPath);
             _processManager = processManager;
         }
 
@@ -2390,7 +2392,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
         {
             var relative = Path.GetRelativePath(_context.RepositoryPath, normalized).Replace('\\', '/');
             if (relative.StartsWith("..", StringComparison.Ordinal)
-                || ToolPathRules.IsProhibited(relative, _context.ProhibitedPaths))
+                || ToolPathRules.IsProhibited(relative, _context.ProhibitedPaths, _context.RepositoryPath, _prohibitedPathCaseContext))
             {
                 return "path is outside the approved repository scope or is prohibited by invocation policy.";
             }
@@ -2434,7 +2436,7 @@ public sealed class CodeExploreTool : Tool<CodeExploreInput, CodeExploreResult>
 
             var relative = Path.GetRelativePath(_context.RepositoryPath, normalizedDirectory).Replace('\\', '/');
             if (relative.StartsWith("..", StringComparison.Ordinal)
-                || ToolPathRules.IsProhibited(relative, _context.ProhibitedPaths))
+                || ToolPathRules.IsProhibited(relative, _context.ProhibitedPaths, _context.RepositoryPath, _prohibitedPathCaseContext))
             {
                 return false;
             }

@@ -612,8 +612,9 @@ public static class WriteFileTests
 
         public WriteFileTool Tool(IConfiguration? configuration = null, ConversationStore? store = null)
         {
+            var trusted = configuration ?? JsonConfig("{}");
             return new(
-            new WriteFileConfiguration(configuration ?? JsonConfig("{}"), JsonConfig("{}"), Repository), store ?? new ConversationStore(), TestPromptLoader.Instance);
+            new WriteFileConfiguration(trusted, trusted, Repository), store ?? new ConversationStore(), TestPromptLoader.Instance);
         }
 
         public void Dispose()

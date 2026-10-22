@@ -82,7 +82,7 @@ public sealed class RepositoryInstructionResolver : IRepositoryInstructionResolv
 
             EnsureNotReparse(path, "AGENTS.md");
             var relativePath = Path.GetRelativePath(root, path).Replace('\\', '/');
-            if (RepositoryPathPolicy.IsProhibited(relativePath, prohibitedPaths))
+            if (RepositoryPathPolicy.IsProhibited(relativePath, prohibitedPaths, root))
             {
                 throw new UnauthorizedAccessException(
                     $"Repository instruction path '{relativePath}' is prohibited.");

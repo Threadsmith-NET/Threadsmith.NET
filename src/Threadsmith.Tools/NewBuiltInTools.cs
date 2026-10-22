@@ -151,6 +151,18 @@ public sealed class CSharpScriptEngine : ICSharpScriptEngine
         var maximumAssemblies = _toolConfig.Get("csharp_script", "max_assemblies", 32);
         var maximumAssemblyNameCharacters = _toolConfig.Get("csharp_script", "max_assembly_name_characters", 128);
         var maximumAssemblySettingCharacters = _toolConfig.Get("csharp_script", "max_assembly_setting_characters", 4096);
+        if (context.Invocation.SecurityPolicy is { } policy)
+        {
+            context.Invocation.PolicyBinding?.Validate(policy);
+            timeoutMilliseconds = policy.ResourceLimits["tools:config:csharp_script:timeout_ms"];
+            maximumOutputBytes = policy.ResourceLimits["tools:config:csharp_script:max_output_bytes"];
+            maximumCodeCharacters = policy.ResourceLimits["tools:config:csharp_script:max_code_characters"];
+            maximumAssemblies = policy.ResourceLimits["tools:config:csharp_script:max_assemblies"];
+            maximumAssemblyNameCharacters = policy.ResourceLimits["tools:config:csharp_script:max_assembly_name_characters"];
+            maximumAssemblySettingCharacters = policy.ResourceLimits["tools:config:csharp_script:max_assembly_setting_characters"];
+            allowedAssemblies = string.Join(',', policy.ScriptAssemblies);
+        }
+
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(timeoutMilliseconds);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumOutputBytes);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumOutputBytes, (int.MaxValue - 4096) / 6);

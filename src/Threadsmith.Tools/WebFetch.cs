@@ -285,6 +285,32 @@ public sealed record WebFetchOptions
     }
 
     /// <summary>Validates compiled/narrowed limits.</summary>
+    public static WebFetchOptions FromPolicy(EffectiveSessionPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        var options = new WebFetchOptions
+        {
+            MaximumUrlCharacters = policy.ResourceLimits["webFetch:maximumUrlCharacters"],
+            MaximumRedirects = policy.ResourceLimits["webFetch:maximumRedirects"],
+            Timeout = TimeSpan.FromSeconds(policy.ResourceLimits["webFetch:timeoutSeconds"]),
+            MaximumCompressedBytes = policy.ResourceLimits["webFetch:maximumCompressedBytes"],
+            MaximumDecodedBytes = policy.ResourceLimits["webFetch:maximumDecodedBytes"],
+            MaximumExtractedCharacters = policy.ResourceLimits["webFetch:maximumExtractedCharacters"],
+            MaximumHtmlTokens = policy.ResourceLimits["webFetch:maximumHtmlTokens"],
+            MaximumHtmlDepth = policy.ResourceLimits["webFetch:maximumHtmlDepth"],
+            MaximumJsonTokens = policy.ResourceLimits["webFetch:maximumJsonTokens"],
+            MaximumJsonDepth = policy.ResourceLimits["webFetch:maximumJsonDepth"],
+            MaximumStringCharacters = policy.ResourceLimits["webFetch:maximumStringCharacters"],
+            MaximumScannedUserCharacters = policy.ResourceLimits["webFetch:maximumScannedUserCharacters"],
+            MaximumUserUrlCandidates = policy.ResourceLimits["webFetch:maximumUserUrlCandidates"],
+            MaximumReferences = policy.ResourceLimits["webFetch:maximumReferences"],
+            ReferenceLifetime = TimeSpan.FromSeconds(policy.ResourceLimits["webFetch:referenceLifetimeSeconds"]),
+        };
+        options.Validate();
+        return options;
+    }
+
+    /// <summary>Validates compiled/narrowed limits.</summary>
     public void Validate()
     {
         var maximumSerializedBytes = (MaximumExtractedCharacters * 6m)
@@ -312,12 +338,16 @@ public sealed record WebFetchOptions
             throw new InvalidOperationException("Web-fetch limits are invalid.");
         }
     }
+
+    /// <summary>Captured host authority for transport admission and every redirect.</summary>
+    internal ToolInvocationContext? Invocation { get; init; }
 }
 
 /// <summary>Thread-safe effective fetch limits that can follow the active repository.</summary>
 public sealed class WebFetchOptionsState
 {
     private readonly IConfiguration? _trustedConfiguration;
+    private readonly SessionPolicyBinding? _policyBinding;
     private WebFetchOptions _current;
 
     /// <summary>Initializes a new instance of the <see cref="WebFetchOptionsState"/> class with fixed effective limits.</summary>
@@ -330,26 +360,32 @@ public sealed class WebFetchOptionsState
     }
 
     /// <summary>Initializes a new instance of the <see cref="WebFetchOptionsState"/> class from layered configuration.</summary>
-    public WebFetchOptionsState(IConfiguration configuration, IConfiguration trustedConfiguration)
+    public WebFetchOptionsState(IConfiguration configuration, IConfiguration trustedConfiguration, SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
         _trustedConfiguration = trustedConfiguration;
+        _policyBinding = policyBinding;
         TrustedCeiling = WebFetchOptions.FromConfiguration(trustedConfiguration, trustedConfiguration);
-        _current = WebFetchOptions.FromConfiguration(configuration, trustedConfiguration);
+        _current = policyBinding is null ? WebFetchOptions.FromConfiguration(configuration, trustedConfiguration) : WebFetchOptions.FromPolicy(policyBinding.Current);
     }
 
     /// <summary>Gets the stable repository-excluding ceiling used for immutable enforcement metadata.</summary>
     public WebFetchOptions TrustedCeiling { get; }
 
     /// <summary>Gets one immutable effective snapshot for an authorization or retrieval operation.</summary>
-    public WebFetchOptions Current => Volatile.Read(ref _current);
+    public WebFetchOptions Current => _policyBinding is null ? Volatile.Read(ref _current) : WebFetchOptions.FromPolicy(_policyBinding.Current);
 
     /// <summary>Rebinds effective narrowing values to the specified repository configuration.</summary>
     public Task BindRepositoryAsync(string repositoryRoot, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repositoryRoot);
         cancellationToken.ThrowIfCancellationRequested();
+        if (_policyBinding is not null)
+        {
+            return Task.CompletedTask;
+        }
+
         if (_trustedConfiguration is null)
         {
             throw new InvalidOperationException("Fixed web-fetch options cannot be rebound to another repository.");
@@ -402,6 +438,7 @@ public interface IWebContentFetcher
         Uri uri,
         WebFetchSourceKind sourceKind,
         IReadOnlySet<string> authorizedDirectUrlDigests,
+        ToolInvocationContext? invocation = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -586,6 +623,16 @@ public sealed class PublicHttpsWebContentTransport : IWebContentTransport
         for (var hop = 0; ; hop++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (options.Invocation?.SecurityPolicy is { } policy)
+            {
+                options.Invocation.PolicyBinding?.Validate(policy);
+                if (!policy.NetworkHostRestriction.IsDefault
+                    && !policy.NetworkHostRestriction.Contains(current.IdnHost, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new WebFetchException(WebFetchFailureKind.RedirectDenied, "The mandatory outbound policy denies this host.");
+                }
+            }
+
             if (sourceKind is WebFetchSourceKind.DirectUrl
                     or WebFetchSourceKind.CurrentUserMessage
                     or WebFetchSourceKind.ExplicitDirectGroup
@@ -1085,9 +1132,10 @@ public sealed class WebContentFetcher : IWebContentFetcher
         Uri uri,
         WebFetchSourceKind sourceKind,
         IReadOnlySet<string> authorizedDirectUrlDigests,
+        ToolInvocationContext? invocation = null,
         CancellationToken cancellationToken = default)
     {
-        var options = _options.Current;
+        var options = (invocation?.SecurityPolicy is { } policy ? WebFetchOptions.FromPolicy(policy) : _options.Current) with { Invocation = invocation };
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(options.Timeout);
         WebFetchTransportResponse transport;

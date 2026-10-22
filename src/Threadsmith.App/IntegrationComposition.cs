@@ -48,31 +48,11 @@ internal static class IntegrationComposition
             return extensionHost;
         }
 
-        // Extension failures are isolated so one optional integration cannot prevent the shell from starting.
+        cancellationToken.ThrowIfCancellationRequested();
         var startupLogger = loggerFactory.CreateLogger("Threadsmith.Startup.Extensions");
-        await extensionHost.DiscoverAsync(cancellationToken);
-        foreach (var extensionId in selection.AutoLoad)
-        {
-            try
-            {
-                await ((IExtensionManager)extensionHost).LoadAsync(
-                    extensionId,
-                    SessionId.New(),
-                    cancellationToken);
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                // The host also publishes ExtensionLoadFailed, while this log gives immediate startup context.
-                startupLogger.LogError(
-                    exception,
-                    "Extension '{ExtensionId}' failed to load: {Message}",
-                    extensionId,
-                    exception.Message);
-                await Console.Out.WriteLineAsync(
-                    $"Extension '{extensionId}' failed to load: {exception.Message}");
-            }
-        }
-
+        const string diagnostic = "ExtensionAutoloadNotAuthorized: repository extension selection does not authorize code execution. Autoload was skipped before discovery or construction. Use explicit manual extension loading only after reviewing the code; moving the selection file does not grant authority.";
+        startupLogger.LogWarning("{Diagnostic} Source: {SelectionPath}", diagnostic, selectionPath);
+        await Console.Error.WriteLineAsync(diagnostic);
         return extensionHost;
     }
 
@@ -89,6 +69,7 @@ internal static class IntegrationComposition
         ILoggerFactory loggerFactory,
         IPromptLoader prompts,
         IHookCoordinator? hookCoordinator = null,
+        SessionPolicyBinding? policyBinding = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
@@ -157,8 +138,10 @@ internal static class IntegrationComposition
             maximumConcurrentConnections: trustedConfiguration.GetValue("mcp:maximumConcurrentConnections", 4),
             limits: resourceLimits,
             connectedCallback: connectedCallback,
+            policyBinding: policyBinding,
             explicitReadAuthorizer: async (profile, capability, token) =>
             {
+                var capturedPolicy = policyBinding?.Current;
                 var policyTool = new McpExplicitReadPolicyTool(profile, capability, prompts);
                 var decision = await toolPipeline.InvokeAsync(
                     new ToolInvocationRequest
@@ -175,10 +158,13 @@ internal static class IntegrationComposition
                         ArgumentsJson = "{}",
                         Context = new ToolInvocationContext
                         {
-                            RepositoryPath = repositoryRoot,
-                            TrustLevel = RepositoryTrustLevel.TrustedRead,
+                            RepositoryPath = capturedPolicy?.RepositoryPath ?? repositoryRoot,
+                            SecurityPolicy = capturedPolicy,
+                            PolicyBinding = policyBinding,
+                            TrustLevel = capturedPolicy is { MaximumTrust: < RepositoryTrustLevel.TrustedRead }
+                                ? capturedPolicy.MaximumTrust : RepositoryTrustLevel.TrustedRead,
                             ApprovedRoots = ["."],
-                            AllowedNetworkHosts = trustedConfiguration
+                            AllowedNetworkHosts = capturedPolicy?.AllowedNetworkHosts.ToArray() ?? trustedConfiguration
                                 .GetSection("tools:allowedNetworkHosts").Get<string[]>() ?? [],
                             AllowedToolIds = trustedConfiguration.GetSection("tools:allow").Get<string[]>() ?? [],
                             DeniedToolIds = trustedConfiguration.GetSection("tools:deny").Get<string[]>() ?? [],

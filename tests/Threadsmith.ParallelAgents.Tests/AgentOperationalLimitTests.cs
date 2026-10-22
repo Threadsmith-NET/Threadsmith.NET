@@ -164,10 +164,15 @@ public sealed partial class AgentOperationalLimitTests
     [InlineData(true)]
     public async Task Scheduler_DeadlineIsFailureAndPreservesUsage(bool returnAfterCancellation)
     {
-        var plan = CreatePlan(1, TimeSpan.FromMilliseconds(200));
+        var plan = CreatePlan(1, TimeSpan.FromSeconds(1));
+        var clock = new DeadlineClock(plan.AcceptedAt);
         var runner = new DeadlineRunner(returnAfterCancellation);
-        await using var scheduler = new AgentRunScheduler();
-        var outcome = Assert.Single(await scheduler.RunAsync(plan, runner).WaitAsync(TimeSpan.FromSeconds(5)));
+        await using var scheduler = new AgentRunScheduler(timeProvider: clock);
+        var ct = TestContext.Current.CancellationToken;
+        var running = scheduler.RunAsync(plan, runner, ct);
+        await runner.Started.Task.WaitAsync(ct);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        var outcome = Assert.Single(await running.WaitAsync(ct));
 
         Assert.Equal(AgentRunStatus.Failed, outcome.Status);
         Assert.Equal("child timed out: assignment deadline elapsed", outcome.Reason);
@@ -191,6 +196,79 @@ public sealed partial class AgentOperationalLimitTests
         Assert.Equal(AgentRunStatus.Cancelled, outcome.Status);
         Assert.Equal("child cancellation observed", outcome.Reason);
         Assert.Equal(17, outcome.Usage.ModelTokens);
+    }
+
+    private sealed class DeadlineClock : TimeProvider
+    {
+        private readonly DateTimeOffset _initial;
+        private long _ticks;
+        private DeadlineTimer? _timer;
+
+        public DeadlineClock(DateTimeOffset initial)
+        {
+            _initial = initial;
+        }
+
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
+        public override long GetTimestamp() => Interlocked.Read(ref _ticks);
+
+        public override DateTimeOffset GetUtcNow() => _initial + TimeSpan.FromTicks(GetTimestamp());
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Assert.Equal(Timeout.InfiniteTimeSpan, period);
+            var timer = new DeadlineTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            _timer = timer;
+            return timer;
+        }
+
+        public void Advance(TimeSpan elapsed)
+        {
+            Interlocked.Add(ref _ticks, elapsed.Ticks);
+            _timer?.Fire();
+        }
+
+        private sealed class DeadlineTimer : ITimer
+        {
+            private readonly DeadlineClock _clock;
+            private readonly TimerCallback _callback;
+            private readonly object? _state;
+            private long _due;
+            private bool _disposed;
+
+            public DeadlineTimer(DeadlineClock clock, TimerCallback callback, object? state)
+            {
+                _clock = clock;
+                _callback = callback;
+                _state = state;
+            }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                Assert.Equal(Timeout.InfiniteTimeSpan, period);
+                _due = dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : _clock.GetTimestamp() + dueTime.Ticks;
+                return !_disposed;
+            }
+
+            public void Fire()
+            {
+                if (!_disposed && _clock.GetTimestamp() >= _due)
+                {
+                    _due = long.MaxValue;
+                    _callback(_state);
+                }
+            }
+
+            public void Dispose() => _disposed = true;
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed class DeadlineRunner(bool returnAfterCancellation) : IAgentAssignmentRunner

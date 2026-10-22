@@ -42,7 +42,19 @@ internal static class ConversationToolAvailability
             return true;
         }
 
+        if (context.SecurityPolicy is { } captured)
+        {
+            context.PolicyBinding?.Validate(captured);
+        }
+
         if (!RepositoryIntelligenceToolPolicy.IsAllowed(definition, context))
+        {
+            return false;
+        }
+
+        if (context.SecurityPolicy is { } policy
+            && (policy.DeniedTools.Contains(definition.Id, StringComparer.OrdinalIgnoreCase)
+                || (!policy.AllowedTools.IsDefault && !policy.AllowedTools.Contains(definition.Id, StringComparer.OrdinalIgnoreCase))))
         {
             return false;
         }
@@ -50,7 +62,8 @@ internal static class ConversationToolAvailability
         var scratchpadEligible = context.Scratchpad.IsActive
             && definition.Id is "search" or "read_file" or "write_file"
             && definition.Source.Equals("Built-in", StringComparison.OrdinalIgnoreCase);
-        if ((!scratchpadEligible && context.TrustLevel < definition.RequiredTrust)
+        if ((!scratchpadEligible && (context.TrustLevel < definition.RequiredTrust
+                || (context.SecurityPolicy is { } trustPolicy && trustPolicy.MaximumTrust < definition.RequiredTrust)))
             || context.DenyAllTools
             || context.DeniedToolIds.Contains(definition.Id, StringComparer.OrdinalIgnoreCase)
             || (context.AllowedToolIds.Count > 0

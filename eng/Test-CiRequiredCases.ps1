@@ -42,6 +42,7 @@ else {
     }
 }
 if ($RunnerOS -eq 'macOS') {
+    $required['Threadsmith.Architecture.Tests.SecurityPolicyConfigurationTests.MacVolumesEnforceProhibitionsAcrossCaseBoundaries'] = 2
     $required['Threadsmith.ModelTooling.Tests.MacFileHandlePathTests.GetPath_FollowsHeldFileAfterRenameAsync'] = 1
 }
 if ($RunnerOS -eq 'Linux') {

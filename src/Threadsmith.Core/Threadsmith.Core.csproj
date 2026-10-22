@@ -6,6 +6,10 @@
     <Description>Threadsmith.NET core domain types, identifiers, results, policies, commands, events, and state-machine contracts. References no UI, no Roslyn, no terminal library, no model-provider SDK, no extension implementations (strategy §8.1).</Description>
   </PropertyGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Threadsmith.Architecture.Tests" />
+  </ItemGroup>
+
   <!-- Threadsmith.Core intentionally has NO project or package references. -->
 
 </Project>

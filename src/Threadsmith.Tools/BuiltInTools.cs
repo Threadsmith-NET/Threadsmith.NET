@@ -80,6 +80,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
         var root = ToolPathRules.NormalizeAndValidate(input.Path, context.Invocation);
         var maximumEntries = ResolveMaximumEntries(input);
         var files = new List<RepositoryFileEntry>();
+        var prohibitedPathCaseContext = new RepositoryPathCaseContext(context.Invocation.RepositoryPath);
         var truncated = false;
         var options = new EnumerationOptions
         {
@@ -103,7 +104,7 @@ public sealed class ListFilesTool : Tool<ListFilesInput, ListFilesOutput>
                 continue;
             }
 
-            if (ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths))
+            if (ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths, context.Invocation.RepositoryPath, prohibitedPathCaseContext))
             {
                 continue;
             }
@@ -635,6 +636,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
         CancellationToken cancellationToken = default)
     {
         var matches = new List<TextSearchMatch>();
+        var prohibitedPathCaseContext = new RepositoryPathCaseContext(context.Invocation.RepositoryPath);
         var sources = new List<ToolProvenanceSource>();
         var truncated = false;
         var regex = input.UseRegularExpression
@@ -681,7 +683,7 @@ public sealed class SearchTextTool : Tool<SearchTextInput, SearchTextOutput>
                 .Replace('\\', '/');
             if (relative.Split('/').Any(IsManagedSearchExcludedDirectory)
                 || ToolPathRules.ContainsReservedWindowsDeviceName(relative)
-                || ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths)
+                || ToolPathRules.IsProhibited(relative, context.Invocation.ProhibitedPaths, context.Invocation.RepositoryPath, prohibitedPathCaseContext)
                 || IsUnsupportedSearchFile(path)
                 || !MatchesSearchGlob(input.Glob, relative))
             {
@@ -1400,7 +1402,8 @@ public sealed class GitStatusTool : Tool<GitStatusInput, GitStatusOutput>
         entries = [.. entries
             .Where(line => !ToolPathRules.IsProhibited(
                 line.Length > 3 ? line[3..].Trim('"') : line,
-                context.Invocation.ProhibitedPaths))];
+                context.Invocation.ProhibitedPaths,
+                context.Invocation.RepositoryPath))];
         var truncated = result.StandardOutputTruncated || result.StandardErrorTruncated;
         return new ToolExecution<GitStatusOutput>(
             new GitStatusOutput(branch, entries, truncated),
@@ -1862,6 +1865,13 @@ public sealed partial class RunProcessTool : Tool<RunProcessInput, ProcessExecut
             ".",
             context.Invocation);
         var timeoutSeconds = ResolveTimeoutSeconds(input);
+        if (context.Invocation.SecurityPolicy is { } policy)
+        {
+            timeoutSeconds = input.TimeoutSeconds > 0
+                ? Math.Min(input.TimeoutSeconds, policy.ResourceLimits["tools:runProcess:maxTimeoutSeconds"])
+                : policy.ResourceLimits["tools:runProcess:defaultTimeoutSeconds"];
+        }
+
         var result = await _processManager.RunAsync(
             new ProcessExecutionRequest
             {

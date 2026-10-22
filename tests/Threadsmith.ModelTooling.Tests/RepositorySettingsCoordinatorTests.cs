@@ -9,6 +9,24 @@ using Xunit;
 /// <summary>Repository settings writes cannot reuse repository-controlled temporary entries.</summary>
 public static class RepositorySettingsCoordinatorTests
 {
+    /// <summary>Ordinary settings preserve authority, while a generic settings update cannot grant tools.</summary>
+    [Fact]
+    public static async Task Semantic_authority_guard_allows_preferences_and_rejects_grants()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var fixture = new Fixture();
+        await File.WriteAllTextAsync(fixture.ConfigurationPath, """{"tools":{"allow":["read_file"]},"theme":"old"}""", ct);
+        await PublishAsync(fixture.ConfigurationPath, """{"theme":"new","tools":{"allow":["read_file"]}}"""u8.ToArray(), true, ct);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => PublishAsync(
+            fixture.ConfigurationPath,
+            """{"theme":"new","tools":{"allow":["read_file","write_file"]}}"""u8.ToArray(),
+            true,
+            ct));
+        var saved = JsonNode.Parse(await File.ReadAllTextAsync(fixture.ConfigurationPath, ct));
+        Assert.Equal("new", saved!["theme"]!.GetValue<string>());
+        Assert.Single(saved["tools"]!["allow"]!.AsArray());
+    }
+
     /// <summary>Activation and deactivation preserve both an old temp entry and an external link target.</summary>
     [Theory]
     [InlineData(false, false)]
@@ -165,7 +183,7 @@ public static class RepositorySettingsCoordinatorTests
     {
         var ct = TestContext.Current.CancellationToken;
         using var fixture = new Fixture();
-        var original = "original"u8.ToArray();
+        var original = "{\"value\":\"original\"}"u8.ToArray();
         await File.WriteAllBytesAsync(fixture.ConfigurationPath, original, ct);
 
         var published = await RepositorySettingsCoordinator.UpdateAsync(
@@ -177,12 +195,12 @@ public static class RepositorySettingsCoordinatorTests
                     await File.WriteAllTextAsync(fixture.ConfigurationPath, "external", token);
                 }
 
-                return new RepositorySettingsUpdate("updated"u8.ToArray()) { ExpectedContent = original };
+                return new RepositorySettingsUpdate("{\"value\":\"updated\"}"u8.ToArray()) { ExpectedContent = original };
             },
             cancellationToken: ct);
 
         Assert.Equal(!externalChange, published);
-        Assert.Equal(externalChange ? "external" : "updated", await File.ReadAllTextAsync(fixture.ConfigurationPath, ct));
+        Assert.Equal(externalChange ? "external" : "{\"value\":\"updated\"}", await File.ReadAllTextAsync(fixture.ConfigurationPath, ct));
         Assert.Empty(Directory.GetFiles(fixture.SettingsDirectory, "*.tmp"));
     }
 

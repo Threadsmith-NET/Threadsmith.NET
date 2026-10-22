@@ -337,13 +337,15 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
     private readonly SemaphoreSlim? _implementers;
     private readonly ConcurrentDictionary<RunId, ParentLimiter> _parents = new();
     private readonly AgentSchedulerOptions _options;
+    private readonly TimeProvider _timeProvider;
     private readonly CancellationTokenSource _shutdown = new();
     private long _admittedOrQueued;
     private int _stopped;
 
     /// <summary>Initializes a new instance of the <see cref="AgentRunScheduler"/> class.</summary>
-    public AgentRunScheduler(AgentSchedulerOptions? options = null)
+    public AgentRunScheduler(AgentSchedulerOptions? options = null, TimeProvider? timeProvider = null)
     {
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _options = options ?? new AgentSchedulerOptions();
         _options.Validate();
         _global = CreateLimiter(_options.MaximumActiveChildren);
@@ -601,7 +603,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
         SemaphoreSlim? parent,
         CancellationToken cancellationToken)
     {
-        var remaining = assignment.Deadline - DateTimeOffset.UtcNow;
+        var remaining = assignment.Deadline - _timeProvider.GetUtcNow();
         if (remaining <= TimeSpan.Zero)
         {
             return CreateTerminal(
@@ -618,7 +620,7 @@ public sealed class AgentRunScheduler : IAgentRunScheduler, IAsyncDisposable
             timeout = assignment.Budget.WallTime;
         }
 
-        await using var deadline = new AgentTimeoutScope(timeout, cancellationToken);
+        await using var deadline = new AgentTimeoutScope(timeout, _timeProvider, cancellationToken);
         _children[(plan.DelegationId, assignment.AssignmentId)] = deadline.Source;
         var lease = new ActiveChildLease(
             plan.Provenance.SessionId,

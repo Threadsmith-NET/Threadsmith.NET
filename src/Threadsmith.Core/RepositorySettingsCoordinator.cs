@@ -1,6 +1,7 @@
 namespace Threadsmith.Core;
 
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Text.Json;
 
 /// <summary>Coordinates atomic read-modify-replace operations for repository settings files.</summary>
@@ -35,6 +36,9 @@ public static class RepositorySettingsCoordinator
         try
         {
             EnsureUnlinkedRepositorySettingsPath(path);
+            var isMixedConfiguration = Path.GetFileName(path).Equals("config.json", StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(path).Equals("session.json", StringComparison.OrdinalIgnoreCase);
+            var existed = File.Exists(path);
             var update = await prepareAsync(cancellationToken);
             if (update is null)
             {
@@ -42,6 +46,12 @@ public static class RepositorySettingsCoordinator
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            if (isMixedConfiguration && !(update.IsHostInitialization && !existed && !update.Overwrite))
+            {
+                var previous = update.ExpectedContent ?? (existed ? await ReadForComparisonAsync(path, cancellationToken) : "{}"u8.ToArray());
+                AuthoritySettingsChangeGuard.Validate(previous, update.Content, update.AuthorizedPolicyKeys);
+            }
+
             var directory = Path.GetDirectoryName(path)
                 ?? throw new InvalidOperationException("Repository configuration has no parent directory.");
             EnsureUnlinkedRepositorySettingsPath(path);
@@ -70,7 +80,7 @@ public static class RepositorySettingsCoordinator
                 {
                     // Migration preserves destination metadata and avoids replacing a file
                     // that an external writer changed while the update was prepared.
-                    var current = await File.ReadAllBytesAsync(path, cancellationToken);
+                    var current = await ReadForComparisonAsync(path, cancellationToken);
                     if (!expected.Span.SequenceEqual(current))
                     {
                         return false;
@@ -118,6 +128,24 @@ public static class RepositorySettingsCoordinator
         RejectReparsePointIfPresent(normalizedPath);
     }
 
+    private static async Task<byte[]> ReadForComparisonAsync(string path, CancellationToken cancellationToken)
+    {
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
+        if (stream.Length > 16 * 1024 * 1024)
+        {
+            throw new InvalidDataException("AuthoritySettingReviewRequired: settings exceed the 16 MiB semantic-update limit; edit this file manually.");
+        }
+
+        var content = new byte[(int)stream.Length];
+        await stream.ReadExactlyAsync(content, cancellationToken);
+        if (stream.ReadByte() != -1)
+        {
+            throw new IOException("Settings changed during semantic comparison; retry the update.");
+        }
+
+        return content;
+    }
+
     private static void RejectReparsePointIfPresent(string path)
     {
         if (!Directory.Exists(path) && !File.Exists(path))
@@ -140,6 +168,12 @@ public static class RepositorySettingsCoordinator
 /// <summary>Prepared configuration bytes and publication semantics; the coordinator owns all filesystem mutations.</summary>
 public sealed record RepositorySettingsUpdate(ReadOnlyMemory<byte> Content)
 {
+    /// <summary>Exact authority keys owned by an existing specifically authorized settings operation.</summary>
+    public ImmutableArray<string> AuthorizedPolicyKeys { get; init; } = [];
+
+    /// <summary>Whether host scaffolding may create a missing configuration; never permits replacing one.</summary>
+    public bool IsHostInitialization { get; init; }
+
     /// <summary>Whether an existing destination may be replaced; false is used for first-run scaffolding.</summary>
     public bool Overwrite { get; init; } = true;
 

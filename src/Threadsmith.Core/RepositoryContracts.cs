@@ -152,7 +152,12 @@ public sealed record WorkspaceBaseline(
     string Configuration = "Debug",
     string Platform = "AnyCPU",
     RepositoryTrustLevel TrustLevel = RepositoryTrustLevel.TrustedRead,
-    IReadOnlyList<string>? ProhibitedPaths = null);
+    IReadOnlyList<string>? ProhibitedPaths = null)
+{
+    /// <summary>Gets the transient authority captured with this baseline; persisted data cannot restore authority.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public EffectiveSessionPolicy? SecurityPolicy { get; init; }
+}
 
 /// <summary>Durable repository facts used to reopen trusted repositories.</summary>
 /// <param name="WorkspaceId">Most recently allocated workspace identity.</param>
@@ -196,7 +201,11 @@ public sealed record GetRepositoryTrustCommand(
 public sealed record OpenRepositoryCommand(
     SessionId SessionId,
     string RepositoryPath,
-    RepositoryTrustLevel RequestedTrust) : ICommand<RepositoryOpenResult>;
+    RepositoryTrustLevel RequestedTrust) : ICommand<RepositoryOpenResult>
+{
+    /// <summary>Optional explicit host ceiling, distinct from the legacy remembered-trust request.</summary>
+    public RepositoryTrustLevel? TrustCeiling { get; init; }
+}
 
 /// <summary>Inspects whether a repository should be offered Threadsmith configuration scaffolding.</summary>
 /// <param name="RepositoryPath">Repository root to inspect.</param>

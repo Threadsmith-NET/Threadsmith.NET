@@ -125,6 +125,7 @@ public sealed class BuildExecutor
         "threadsmith.validation.diagnostics.count");
 
     private readonly TimeSpan _cancellationBackstop;
+    private readonly SessionPolicyBinding? _policyBinding;
     private readonly DiagnosticNormalizer _normalizer;
     private readonly IDomainEventStream _events;
     private readonly ILogger<BuildExecutor> _logger;
@@ -135,7 +136,8 @@ public sealed class BuildExecutor
         DiagnosticNormalizer normalizer,
         ILogger<BuildExecutor> logger,
         TimeSpan? cancellationBackstop = null,
-        ValidationResourceLimits? limits = null)
+        ValidationResourceLimits? limits = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(normalizer);
@@ -149,6 +151,7 @@ public sealed class BuildExecutor
         resourceLimits.Validate();
         _maximumCapturedCharacters = resourceLimits.MaximumBuildOutputCharacters;
         _events = events;
+        _policyBinding = policyBinding;
         _normalizer = normalizer;
         _logger = logger;
         _cancellationBackstop = cancellationBackstop ?? TimeSpan.FromSeconds(2);
@@ -169,6 +172,7 @@ public sealed class BuildExecutor
             throw new ArgumentException("Build ownership ids cannot be default.", nameof(request));
         }
 
+        _policyBinding?.ValidateBaseline(request.Baseline, RepositoryTrustLevel.TrustedBuild);
         if (request.Baseline.TrustLevel < RepositoryTrustLevel.TrustedBuild)
         {
             throw new UnauthorizedAccessException("Build validation requires TrustedBuild or stronger repository trust.");
@@ -207,7 +211,8 @@ public sealed class BuildExecutor
             var relativeTarget = Path.GetRelativePath(root, invocation.Target).Replace('\\', '/');
             if (RepositoryPathPolicy.IsProhibited(
                 relativeTarget,
-                request.Baseline.ProhibitedPaths ?? []))
+                request.Baseline.ProhibitedPaths ?? [],
+                root))
             {
                 throw new UnauthorizedAccessException(
                     $"Build target '{relativeTarget}' is prohibited by repository path policy.");
@@ -259,6 +264,7 @@ public sealed class BuildExecutor
             }
 
             process.StartInfo.Environment["DOTNET_NOLOGO"] = "1";
+            _policyBinding?.ValidateBaseline(request.Baseline, RepositoryTrustLevel.TrustedBuild);
             if (!process.Start())
             {
                 throw new InvalidOperationException($"Could not start dotnet build for '{invocation.Target}'.");

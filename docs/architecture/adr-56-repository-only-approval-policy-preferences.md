@@ -23,3 +23,9 @@ Repository configuration now fully expresses saved approval preferences without 
 ## Direct-editing amendment (2026-10-05)
 
 `/plan-policy`, planning approval settings and plan-specific trust writers are removed. `/policy` retains supported mutation policies. Legacy `TrustPlan` is read conservatively as exact review and cannot be newly selected; narrowly known retired planning keys are removed or ignored with a diagnostic. See [the current conversation flow](../operations/conversation-loop.md), [mutation ownership](mutation-model.md), and [recovery contract](../operations/execution-resumption.md). The original decision remains historical architectural rationale.
+
+## Authority amendment (2026-10-22)
+
+Repository policy values are preferences beneath an independently resolved trusted automatic-application ceiling. The default ceiling is `reviewAll`; trusted user policy may deliberately select `reviewRisky` or broader automatic application. Repository values and transient `/policy` overrides cannot weaken that ceiling. Both the preference and ceiling must allow automatic application; `reviewRisky` is evaluated against actual risk categories, not enum ordering. Repository large-diff thresholds may lower the trusted threshold but cannot raise it.
+
+The existing repository persistence and session override workflow remains: persistence must succeed before changing the live preference, and session overrides do not write configuration. Saved `alwaysTrustRepo` alone no longer grants authority. No saved value is automatically moved into trusted configuration. This changes mutation approval only; it does not introduce new blanket shell approval prompts.

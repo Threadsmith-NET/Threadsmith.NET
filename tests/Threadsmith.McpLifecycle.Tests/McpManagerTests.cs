@@ -16,6 +16,46 @@ using Xunit;
 /// <summary>Focused deterministic Plan-59 lifecycle authority coverage.</summary>
 public sealed class McpManagerTests
 {
+    /// <summary>A policy change during manual authorization cannot admit the underlying adapter effect.</summary>
+    [Theory]
+    [InlineData(McpManagementAction.ReadResource, "server:resource:fixture")]
+    [InlineData(McpManagementAction.GetPrompt, "server:prompt:review")]
+    public async Task ExplicitRead_RejectsPolicyGenerationChangedDuringAuthorization(McpManagementAction action, string capabilityId)
+    {
+        var policy = new EffectiveSessionPolicy
+        {
+            BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = Environment.CurrentDirectory, Fingerprint = "fixture",
+        };
+        var binding = new SessionPolicyBinding();
+        binding.Publish(policy);
+        var adapter = new FakeAdapter();
+        await using var manager = new McpManager(
+            [Profile("server")],
+            adapter,
+            new FakeToolStateManager(),
+            new FakeIdentityManager(),
+            new IdentitySanitizer(),
+            NullLogger<McpManager>.Instance,
+            policyBinding: binding,
+            explicitReadAuthorizer: (_, _, _) =>
+            {
+                binding.Publish(policy with { Generation = 2 });
+                return Task.FromResult(true);
+            });
+        var ct = TestContext.Current.CancellationToken;
+        _ = await manager.ExecuteAsync(new McpManagementRequest { Action = McpManagementAction.Connect, ProfileId = "server" }, ct);
+        var result = await manager.ExecuteAsync(
+            new McpManagementRequest
+            {
+                Action = action, ProfileId = "server", CapabilityId = capabilityId,
+                Arguments = action == McpManagementAction.GetPrompt ? new Dictionary<string, string> { ["name"] = "sample" } : new Dictionary<string, string>(),
+            },
+            ct);
+        Assert.False(result.Succeeded);
+        Assert.Contains("PolicyGenerationStale", result.Message, StringComparison.Ordinal);
+        Assert.Equal(0, adapter.ExplicitReadCalls);
+    }
+
     /// <summary>Profile loading records a safe source class and accepts the complete closed capability vocabulary.</summary>
     [Fact]
     public static void ProfileLoader_ProjectsSafeSourceAndResourceTemplateKind()
@@ -1540,6 +1580,8 @@ public sealed class McpManagerTests
 
     private sealed class FakeAdapter : IMcpAdapter
     {
+        internal int ExplicitReadCalls { get; private set; }
+
         private readonly Dictionary<string, McpConnectionStatus> _connections = new(StringComparer.Ordinal);
         private int _activeConnects;
 
@@ -1684,6 +1726,7 @@ public sealed class McpManagerTests
             IReadOnlyDictionary<string, string> arguments,
             CancellationToken cancellationToken = default)
         {
+            ExplicitReadCalls++;
             return Task.FromResult(new McpTransportContentResult
             {
                 Content = [new McpTransportContentItem { Label = ResourceLabel, Text = "untrusted-resource", MimeType = ResourceMimeType }],
@@ -1697,6 +1740,7 @@ public sealed class McpManagerTests
             IReadOnlyDictionary<string, string> arguments,
             CancellationToken cancellationToken = default)
         {
+            ExplicitReadCalls++;
             return Task.FromResult(new McpTransportContentResult
             {
                 Content = [new McpTransportContentItem { Label = "user", Text = "untrusted-prompt" }],

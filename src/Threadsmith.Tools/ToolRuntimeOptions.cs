@@ -2,6 +2,7 @@ namespace Threadsmith.Tools;
 
 using System.Collections.Frozen;
 using System.Runtime.CompilerServices;
+using Threadsmith.Core;
 
 /// <summary>Overrides the declared runtime limits of built-in and dynamically registered tools.</summary>
 public sealed record ToolRuntimeOptions
@@ -58,6 +59,36 @@ public sealed record ToolRuntimeToolOverride : ToolRuntimeOverride
 /// <summary>Applies immutable configuration while preserving registration identity and tool behavior.</summary>
 internal sealed class ToolRuntimePolicy
 {
+    /// <summary>Applies the captured session ceiling after trusted registration overrides.</summary>
+    internal static ITool ApplyCeiling(ITool tool, EffectiveSessionPolicy? policy)
+    {
+        if (policy is null)
+        {
+            return tool;
+        }
+
+        int Limit(string name, int fallback) => policy.ResourceLimits.GetValueOrDefault(
+            "tools:runtime:byTool:" + tool.Definition.Id + ":" + name,
+            policy.ResourceLimits.GetValueOrDefault("tools:runtime:defaults:" + name, fallback));
+        var milliseconds = Limit("timeoutMilliseconds", -1);
+        var timeout = tool.Definition.Timeout;
+        if (milliseconds != -1 && (timeout == Timeout.InfiniteTimeSpan || timeout.TotalMilliseconds > milliseconds))
+        {
+            timeout = TimeSpan.FromMilliseconds(milliseconds);
+        }
+
+        var definition = tool.Definition with
+        {
+            Timeout = timeout,
+            MaximumOutputBytes = Math.Min(tool.Definition.MaximumOutputBytes, Limit("maximumOutputBytes", int.MaxValue)),
+            Scheduling = tool.Definition.Scheduling with
+            {
+                MaximumSourceConcurrency = Math.Min(tool.Definition.Scheduling.MaximumSourceConcurrency, Limit("maximumSourceConcurrency", int.MaxValue)),
+            },
+        };
+        return new ConfiguredTool(ConfiguredTool.Unwrap(tool), definition);
+    }
+
     private readonly ToolRuntimeOverride _defaults;
     private readonly FrozenDictionary<string, ToolRuntimeOverride> _byTool;
     private readonly ConditionalWeakTable<ITool, ITool> _configured = [];

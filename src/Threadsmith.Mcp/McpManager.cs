@@ -26,6 +26,7 @@ public sealed class McpManager :
     ICommandHandler<ExecuteMcpManagementCommand, McpManagementResult>
 {
     private readonly McpResourceLimits _limits;
+    private readonly SessionPolicyBinding? _policyBinding;
     private readonly IMcpAdapter _adapter;
     private readonly Func<McpConnectionResult, CancellationToken, Task>? _connectedCallback;
     private readonly SemaphoreSlim _connectionLimiter;
@@ -51,7 +52,8 @@ public sealed class McpManager :
         int maximumConcurrentConnections = 4,
         Func<McpConnectionResult, CancellationToken, Task>? connectedCallback = null,
         Func<McpConnectionProfile, McpImportedCapability, CancellationToken, Task<bool>>? explicitReadAuthorizer = null,
-        McpResourceLimits? limits = null)
+        McpResourceLimits? limits = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(profiles);
         ArgumentNullException.ThrowIfNull(adapter);
@@ -60,6 +62,7 @@ public sealed class McpManager :
         ArgumentNullException.ThrowIfNull(sanitizer);
         ArgumentNullException.ThrowIfNull(logger);
         _limits = limits ?? new();
+        _policyBinding = policyBinding;
         _limits.Validate();
         if (maximumConcurrentConnections < 1)
         {
@@ -566,6 +569,7 @@ public sealed class McpManager :
         McpManagementRequest request,
         CancellationToken cancellationToken)
     {
+        var capturedPolicy = _policyBinding?.Current;
         var state = GetState(request);
         var capability = GetCapability(state, request);
         if (capability.Kind is not (McpCapabilityKind.Resource or McpCapabilityKind.ResourceTemplate))
@@ -603,6 +607,11 @@ public sealed class McpManager :
 
         var generation = state.Generation;
         var started = _timeProvider.GetTimestamp();
+        if (capturedPolicy is not null)
+        {
+            _policyBinding?.Validate(capturedPolicy);
+        }
+
         var result = await _adapter.ReadResourceAsync(
             state.Profile.Id,
             capability.Id,
@@ -622,6 +631,7 @@ public sealed class McpManager :
         McpManagementRequest request,
         CancellationToken cancellationToken)
     {
+        var capturedPolicy = _policyBinding?.Current;
         var state = GetState(request);
         var capability = GetCapability(state, request);
         if (capability.Kind != McpCapabilityKind.Prompt)
@@ -643,6 +653,11 @@ public sealed class McpManager :
 
         var generation = state.Generation;
         var started = _timeProvider.GetTimestamp();
+        if (capturedPolicy is not null)
+        {
+            _policyBinding?.Validate(capturedPolicy);
+        }
+
         var result = await _adapter.GetPromptAsync(
             state.Profile.Id,
             capability.Id,

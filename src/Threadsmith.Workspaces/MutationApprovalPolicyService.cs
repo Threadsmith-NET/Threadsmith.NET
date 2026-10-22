@@ -100,6 +100,7 @@ public static class MutationRiskCalculator
 /// <summary>Repository-backed session mutation policy with invariant path and secret guardrails.</summary>
 public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
 {
+    private readonly SessionPolicyBinding? _policyBinding;
     private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
     private readonly SemaphoreSlim _gate = new(1, 1);
     private string? _repositoryConfigurationPath;
@@ -109,10 +110,13 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     /// <summary>Initializes a new instance of the <see cref="MutationApprovalPolicyService"/> class.</summary>
     /// <param name="configuration">Effective layered configuration.</param>
     /// <param name="repositoryConfigurationPath">Repository config path used for saved policy choices.</param>
+    /// <param name="policyBinding">Optional host security ceiling and generation owner.</param>
     public MutationApprovalPolicyService(
         IConfiguration? configuration = null,
-        string? repositoryConfigurationPath = null)
+        string? repositoryConfigurationPath = null,
+        SessionPolicyBinding? policyBinding = null)
     {
+        _policyBinding = policyBinding;
         if (repositoryConfigurationPath is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(repositoryConfigurationPath);
@@ -126,7 +130,16 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     public MutationApprovalPolicy CurrentPolicy => _currentPolicy;
 
     /// <inheritdoc />
-    public int LargeDiffThreshold => _largeDiffThreshold;
+    public EffectiveSessionPolicy? SecurityPolicy => _policyBinding?.Current;
+
+    /// <inheritdoc />
+    public void ValidatePolicyGeneration(EffectiveSessionPolicy? capturedPolicy)
+    {
+        _policyBinding?.Validate(capturedPolicy ?? throw new MutationPolicyException("PolicyGenerationStale: the mutation has no captured policy."));
+    }
+
+    /// <inheritdoc />
+    public int LargeDiffThreshold => Math.Min(_largeDiffThreshold, _policyBinding?.Current.LargeDiffThreshold ?? 500);
 
     /// <inheritdoc />
     public async Task BindRepositoryAsync(
@@ -192,6 +205,12 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
     public bool RequiresApproval(MutationRiskAssessment risk)
     {
         ArgumentNullException.ThrowIfNull(risk);
+        if (_policyBinding?.Current.MutationCeiling is { } ceiling
+            && (ceiling == MutationApprovalPolicy.ReviewAll || (ceiling == MutationApprovalPolicy.ReviewRisky && risk.IsRisky)))
+        {
+            return true;
+        }
+
         return _currentPolicy switch
         {
             MutationApprovalPolicy.ReviewAll => true,
@@ -245,6 +264,28 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
             }
 
             var normalizedPath = Path.GetRelativePath(fullRoot, fullPath).Replace('\\', '/');
+            var policy = _policyBinding?.Current;
+            try
+            {
+                AuthorityControlPathGuard.Validate(fullPath, fullRoot, policy?.ControlPaths);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                throw new MutationPolicyException(exception.Message);
+            }
+
+            if (policy is not null && (!policy.EditableRoots.Any(root =>
+                {
+                    var relativeRoot = Path.GetRelativePath(policy.RepositoryPath, root);
+                    var workspaceRoot = relativeRoot == ".." || relativeRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relativeRoot)
+                        ? root : Path.GetFullPath(relativeRoot, fullRoot);
+                    return fullPath.Equals(workspaceRoot, PathComparison) || fullPath.StartsWith(Path.TrimEndingDirectorySeparator(workspaceRoot) + Path.DirectorySeparatorChar, PathComparison);
+                })
+                || RepositoryPathPolicy.IsProhibited(normalizedPath, policy.ProhibitedPaths, fullRoot)))
+            {
+                throw new MutationPolicyException("The effective security policy prohibits this mutation path.");
+            }
+
             var fileName = Path.GetFileName(normalizedPath);
             var isSecretPath = normalizedPath.StartsWith(".threadsmith/secrets/", StringComparison.OrdinalIgnoreCase)
                 || fileName.Equals(".env", StringComparison.OrdinalIgnoreCase)
@@ -315,7 +356,10 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                     _ => throw new ArgumentOutOfRangeException(nameof(policy)),
                 };
 
-                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(_jsonOptions) + Environment.NewLine));
+                return new RepositorySettingsUpdate(Encoding.UTF8.GetBytes(root.ToJsonString(_jsonOptions) + Environment.NewLine))
+                {
+                    AuthorizedPolicyKeys = ["mutation:approvalPolicy"],
+                };
             },
             cancellationToken: cancellationToken);
     }

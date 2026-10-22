@@ -390,6 +390,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     var fullPath = ResolveConfinedPath(file.RelativePath, mustExist: false);
                     var directory = Path.GetDirectoryName(fullPath)
                         ?? throw new InvalidOperationException("A mutation target has no parent directory.");
+                    _mutationApprovalPolicy.ValidatePolicyGeneration(state.SecurityPolicy);
                     Directory.CreateDirectory(directory);
                     var temporaryPath = Path.Combine(
                         directory,
@@ -398,6 +399,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                         MutationTransactionPoint.BeforeTemporaryWrite,
                         file.RelativePath,
                         cancellationToken);
+                    _mutationApprovalPolicy.ValidatePolicyGeneration(state.SecurityPolicy);
                     temporaryFiles[file.RelativePath] = temporaryPath;
                     await File.WriteAllBytesAsync(
                         temporaryPath,
@@ -431,6 +433,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                         file.RelativePath,
                         cancellationToken);
                     await VerifyCurrentIdentityAsync(file.RelativePath, file.Original?.Sha256, cancellationToken);
+                    _mutationApprovalPolicy.ValidatePolicyGeneration(state.SecurityPolicy);
                     File.Delete(ResolveConfinedPath(file.RelativePath, mustExist: false));
                     ownedEndpoints[file.RelativePath] = null;
                     changed.Add(file.RelativePath);
@@ -448,6 +451,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                         MutationTransactionPoint.BeforeFinalPublication,
                         file.RelativePath,
                         cancellationToken);
+                    _mutationApprovalPolicy.ValidatePolicyGeneration(state.SecurityPolicy);
                     File.Move(temporaryFiles[file.RelativePath], fullPath, overwrite: false);
                     temporaryFiles.Remove(file.RelativePath);
                     ownedEndpoints[file.RelativePath] = file.FinalSha256;
@@ -1084,6 +1088,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
                     $"Mutation set '{mutationSet.MutationSetId}' is already staged.");
             }
 
+            var securityPolicy = _mutationApprovalPolicy.SecurityPolicy;
             _mutationApprovalPolicy.Validate(mutationSet, Isolation.RepositoryPath);
             var mutationIds = new HashSet<MutationId>();
             foreach (var mutation in mutationSet.Mutations)
@@ -1124,7 +1129,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             };
             var approvalId = ApprovalId.New();
             var report = new ConflictReport(mutationSet.MutationSetId, conflicts);
-            var state = new StagingState(mutationSet, files, preview, report, approvalId);
+            _mutationApprovalPolicy.ValidatePolicyGeneration(securityPolicy);
+            var state = new StagingState(mutationSet, files, preview, report, approvalId) { SecurityPolicy = securityPolicy };
             _staging.Add(mutationSet.MutationSetId, state);
             _mutationSize.Record(mutationSet.Mutations.Sum(item =>
                 (long)(item.Content?.Text.Length ?? item.ReplacementText.Length)));
@@ -1322,6 +1328,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
 
     private Mutation[] SelectAuthorizedMutations(StagingState state, MutationApproval approval)
     {
+        _mutationApprovalPolicy.ValidatePolicyGeneration(state.SecurityPolicy);
         if (!Enum.IsDefined(approval.Level))
         {
             throw new UnauthorizedAccessException("The mutation approval level is invalid.");
@@ -1687,7 +1694,7 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
             throw new UnauthorizedAccessException("Mutation paths cannot traverse outside the repository.");
         }
 
-        if (RepositoryPathPolicy.IsProhibited(normalized, Baseline.ProhibitedPaths ?? []))
+        if (RepositoryPathPolicy.IsProhibited(normalized, Baseline.ProhibitedPaths ?? [], Isolation.RepositoryPath))
         {
             throw new UnauthorizedAccessException($"Path '{normalized}' is prohibited by repository policy.");
         }
@@ -1978,6 +1985,8 @@ public sealed class TransactionalWorkspace : ITransactionalWorkspace
         }
 
         public ApprovalId ApprovalId { get; }
+
+        public EffectiveSessionPolicy? SecurityPolicy { get; init; }
 
         public IReadOnlyList<MutationId> AppliedMutations { get; set; } = [];
 

@@ -323,7 +323,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         IConfiguration trustedConfiguration,
         ConfigurationPaths paths,
         ILoggerFactory loggerFactory,
-        IPromptLoader promptLoader)
+        IPromptLoader promptLoader,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(configuration);
         ArgumentNullException.ThrowIfNull(trustedConfiguration);
@@ -428,11 +429,6 @@ internal sealed class HostFoundation : IAsyncDisposable
                 configuration.GetValue<int>("budget:calls", 1000),
                 TimeSpan.FromSeconds(configuration.GetValue("budget:wallClockSeconds", 3600)),
                 configuration.GetValue<decimal>("budget:cost", 0)));
-            var userSecretsPath = Path.Combine(
-                Path.GetDirectoryName(paths.UserConfiguration)
-                    ?? throw new InvalidOperationException("The user configuration path has no parent directory."),
-                "secrets",
-                "config.json");
             var secretLimits = trustedConfiguration.GetSection("secretResolution:limits").Get<SecretResourceLimits>(options => options.ErrorOnUnknownConfiguration = true) ?? new();
             secretLimits.Validate();
             var repositorySecretProvider = new RepositorySecretProvider(paths.RepositoryRoot, secretLimits);
@@ -440,7 +436,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 [
                     new EnvironmentSecretProvider(secretLimits),
                     repositorySecretProvider,
-                    new UserFileSecretProvider(userSecretsPath, secretLimits),
+                    new UserFileSecretProvider(paths.UserSecretsConfiguration, secretLimits),
                 ],
                 secretLimits);
             semanticEngines = new SemanticEngineRegistry(events, loggerFactory, promptLoader, resourceLimits: operationalLimits.Semantic);
@@ -542,7 +538,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 operationalLimits,
                 sanitizer,
                 jiraTool,
-                prFetchTool);
+                prFetchTool,
+                policyBinding);
             directFetchApprovalPrompt = approvalPrompt;
             webFetchLifecycleSubscription = events.Subscribe(
                 (domainEvent, _) =>
@@ -562,7 +559,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 loggerFactory.CreateLogger<CapabilityRegistry>(),
                 toolRegistry);
             var parallelOptions = CreateToolParallelOptions(
-                configuration,
+                policyBinding is null ? configuration : trustedConfiguration,
                 trustedConfiguration);
             var toolPipeline = new ToolInvocationPipeline(
                 toolRegistry,
@@ -574,7 +571,8 @@ internal sealed class HostFoundation : IAsyncDisposable
                 budget,
                 hooks: hookCoordinator,
                 parallelOptions: parallelOptions,
-                presentationLimits: configuration.GetSection("tools:runtime:presentation").Get<ToolPresentationLimits>(options => options.ErrorOnUnknownConfiguration = true));
+                presentationLimits: configuration.GetSection("tools:runtime:presentation").Get<ToolPresentationLimits>(options => options.ErrorOnUnknownConfiguration = true),
+                policyBinding: policyBinding);
             return new HostFoundation(
                 events,
                 projections,
@@ -1004,7 +1002,8 @@ internal sealed class HostFoundation : IAsyncDisposable
         OperationalLimits operationalLimits,
         IOutputSanitizer sanitizer,
         JiraTool? jiraTool,
-        PrFetchTool? prFetchTool)
+        PrFetchTool? prFetchTool,
+        SessionPolicyBinding? policyBinding)
     {
         var workerExecutableName = OperatingSystem.IsWindows()
             ? "Threadsmith.Scripting.Worker.exe"
@@ -1020,10 +1019,10 @@ internal sealed class HostFoundation : IAsyncDisposable
             : ripgrepExecutableName;
         var scriptEngine = new CSharpScriptEngine(
             processManager,
-            new ToolConfig(configuration),
+            new ToolConfig(trustedConfiguration),
             workerPath);
         var webSearchOptions = WebSearchOptions.FromConfiguration(trustedConfiguration);
-        var webFetchOptions = new WebFetchOptionsState(configuration, trustedConfiguration);
+        var webFetchOptions = new WebFetchOptionsState(configuration, trustedConfiguration, policyBinding);
         var webFetchAuthorization = new WebFetchAuthorizationAuthority(
             webFetchOptions,
             TimeProvider.System,
@@ -1049,7 +1048,6 @@ internal sealed class HostFoundation : IAsyncDisposable
             promptLoader);
         var defaultShellExecutable = OperatingSystem.IsWindows() ? "powershell" : "bash";
         var writeFileConfiguration = new WriteFileConfiguration(configuration, trustedConfiguration, paths.RepositoryRoot);
-        var allowedExecutables = ResolveAllowedExecutables(configuration);
         var requireRunProcessApproval = trustedConfiguration.GetValue(
             "tools:runProcess:requireApproval",
             true);
@@ -1129,7 +1127,7 @@ internal sealed class HostFoundation : IAsyncDisposable
                 tools,
                 stateManager,
                 webFetchAuthorization,
-                configuration.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true)),
+                trustedConfiguration.GetSection("tools:runtime").Get<ToolRuntimeOptions>(options => options.ErrorOnUnknownConfiguration = true)),
             webFetchAuthorization,
             directFetchApprovalPrompt);
     }

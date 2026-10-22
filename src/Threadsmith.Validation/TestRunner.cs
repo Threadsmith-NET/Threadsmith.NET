@@ -104,15 +104,21 @@ public sealed class TestRunner
 
     private readonly IDomainEventStream _events;
     private readonly IProcessManager _processManager;
+    private readonly SessionPolicyBinding? _policyBinding;
 
     /// <summary>Initializes a new instance of the <see cref="TestRunner"/> class.</summary>
-    public TestRunner(IProcessManager processManager, IDomainEventStream events, ValidationResourceLimits? limits = null)
+    public TestRunner(
+        IProcessManager processManager,
+        IDomainEventStream events,
+        ValidationResourceLimits? limits = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(processManager);
         ArgumentNullException.ThrowIfNull(events);
         _limits = limits ?? new();
         _limits.Validate();
         _processManager = processManager;
+        _policyBinding = policyBinding;
         _events = events;
     }
 
@@ -139,6 +145,7 @@ public sealed class TestRunner
             throw new ArgumentException("Test execution ownership ids cannot be default.", nameof(sessionId));
         }
 
+        _policyBinding?.ValidateBaseline(baseline, RepositoryTrustLevel.TrustedBuild);
         if (baseline.TrustLevel < RepositoryTrustLevel.TrustedBuild)
         {
             throw new UnauthorizedAccessException(
@@ -169,7 +176,7 @@ public sealed class TestRunner
                     $"Test target '{project.FilePath}' must exist under the repository root.");
             }
 
-            if (RepositoryPathPolicy.IsProhibited(relativeTarget, baseline.ProhibitedPaths ?? []))
+            if (RepositoryPathPolicy.IsProhibited(relativeTarget, baseline.ProhibitedPaths ?? [], baseline.RepositoryPath))
             {
                 throw new UnauthorizedAccessException(
                     $"Test target '{relativeTarget}' is prohibited by repository path policy.");
@@ -181,6 +188,7 @@ public sealed class TestRunner
                 relativeTarget,
                 "Test target");
 
+            _policyBinding?.ValidateBaseline(baseline, RepositoryTrustLevel.TrustedBuild);
             var process = await _processManager.RunAsync(
                 new ProcessExecutionRequest
                 {
@@ -317,8 +325,8 @@ public sealed class TestValidationPipeline
         }
 
         var cases = await _discoverer.DiscoverCasesAsync(
+            request.Baseline,
             request.RunId,
-            request.Baseline.RepositoryPath,
             selection.Projects,
             timeout,
             cancellationToken);

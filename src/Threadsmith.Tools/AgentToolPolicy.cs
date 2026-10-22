@@ -1,5 +1,8 @@
 namespace Threadsmith.Tools;
 
+using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using Threadsmith.Core;
 
 /// <summary>Creates assignment-scoped tool contexts that can only narrow parent authority.</summary>
@@ -64,13 +67,11 @@ public static class AgentToolPolicy
                 "The assignment scope does not intersect the parent approved roots.");
         }
 
-        var pathComparer = OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
-
         return parent with
         {
+            SecurityPolicy = DerivePolicy(),
             IsChildAgent = true,
+            AllowDirectWrites = parent.AllowDirectWrites && frozenAssignment.Mode == AgentRunMode.SharedWorkspace,
             RepositoryPath = Path.GetFullPath(repositoryPath),
             TrustLevel = trust,
             ApprovedRoots = approvedRoots,
@@ -79,7 +80,7 @@ public static class AgentToolPolicy
             DeniedToolIds = denied,
             ProhibitedPaths = parent.ProhibitedPaths
                 .Concat(frozenAssignment.Policy.ProhibitedPaths)
-                .Distinct(pathComparer)
+                .Distinct(StringComparer.Ordinal)
                 .ToArray(),
             AllowedExecutables = parent.AllowedExecutables,
             AllowedNetworkHosts = frozenAssignment.Policy.AllowNetwork ? parent.AllowedNetworkHosts : [],
@@ -92,6 +93,42 @@ public static class AgentToolPolicy
             RequestedBy = $"agent:{plan.DelegationId.Value:D}:{frozenAssignment.AssignmentId.Value:D}",
             ActivityOrigin = parent.ActivityOrigin ?? $"agent:{plan.DelegationId.Value:D}:{frozenAssignment.AssignmentId.Value:D}",
         };
+
+        EffectiveSessionPolicy? DerivePolicy()
+        {
+            if (parent.SecurityPolicy is not { } policy)
+            {
+                return null;
+            }
+
+            parent.PolicyBinding?.Validate(policy);
+            var childRoot = Path.GetFullPath(repositoryPath);
+            var scope = approvedRoots.Select(root => Path.GetFullPath(root, childRoot)).ToArray();
+            ImmutableArray<string> NarrowRoots(ImmutableArray<string> roots) =>
+            [
+                .. roots.Select(root => RepositoryPathPolicy.ContainsPath(policy.RepositoryPath, root)
+                        ? Path.GetFullPath(Path.GetRelativePath(policy.RepositoryPath, root), childRoot) : root)
+                    .SelectMany(root => scope.Select(restriction => RepositoryPathPolicy.ContainsPath(root, restriction)
+                        ? restriction : RepositoryPathPolicy.ContainsPath(restriction, root) ? root : null))
+                    .OfType<string>().Distinct(RepositoryPathPolicy.GetPathComparer(childRoot)),
+            ];
+            return policy with
+            {
+                ParentFingerprint = policy.Fingerprint,
+                MaximumTrust = trust < policy.MaximumTrust ? trust : policy.MaximumTrust,
+                Fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+                    policy.Fingerprint + ":" + plan.DelegationId.Value + ":" + frozenAssignment.AssignmentId.Value))),
+                RepositoryPath = childRoot,
+                AllowedTools = denyAllTools ? [] : policy.AllowedTools.IsDefault
+                    ? [.. parentAllowed] : [.. policy.AllowedTools.Intersect(parentAllowed, StringComparer.OrdinalIgnoreCase)],
+                DeniedTools = [.. policy.DeniedTools.Concat(denied).Distinct(StringComparer.OrdinalIgnoreCase)],
+                ProhibitedPaths = [.. policy.ProhibitedPaths.Concat(frozenAssignment.Policy.ProhibitedPaths).Distinct(StringComparer.Ordinal)],
+                WriteFolders = parent.AllowDirectWrites && frozenAssignment.Mode == AgentRunMode.SharedWorkspace ? NarrowRoots(policy.WriteFolders) : [],
+                EditableRoots = frozenAssignment.Mode is AgentRunMode.ReadOnlyBaseline or AgentRunMode.ReadOnlyReview ? [] : NarrowRoots(policy.EditableRoots),
+                NetworkHostRestriction = frozenAssignment.Policy.AllowNetwork ? policy.NetworkHostRestriction : [],
+                AllowedNetworkHosts = frozenAssignment.Policy.AllowNetwork ? policy.AllowedNetworkHosts : [],
+            };
+        }
     }
 
     private static string[] IntersectApprovedRoots(
@@ -105,7 +142,7 @@ public static class AgentToolPolicy
         var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repositoryPath));
         string[] normalizedParents =
         [
-            .. parentRoots.DefaultIfEmpty(".").Select(root => NormalizeRoot(root, repositoryRoot)),
+            .. parentRoots.Select(root => NormalizeRoot(root, repositoryRoot)),
         ];
         string[] normalizedChildren =
         [

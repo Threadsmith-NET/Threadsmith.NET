@@ -30,6 +30,32 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(context);
+        if (context.SecurityPolicy is { } policy)
+        {
+            if (!context.IsChildAgent && !string.Equals(
+                    Path.TrimEndingDirectorySeparator(Path.GetFullPath(context.RepositoryPath)),
+                    policy.RepositoryPath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            {
+                return new ToolPolicyDecision(false, ApprovalLevel.None, "PolicyGenerationStale: the invocation belongs to another repository.");
+            }
+
+            try
+            {
+                context.PolicyBinding?.Validate(policy);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                return new ToolPolicyDecision(false, ApprovalLevel.None, exception.Message);
+            }
+
+            if (policy.DeniedTools.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase)
+                || (!policy.AllowedTools.IsDefault && !policy.AllowedTools.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase)))
+            {
+                return new ToolPolicyDecision(false, ApprovalLevel.None, "The effective security policy denies this tool.");
+            }
+        }
+
         if ((tool.Definition.Id == "repository_archeology" && (context.IsChildAgent || context.IntelligenceRun is not null))
             || !RepositoryIntelligenceToolPolicy.IsAllowed(tool.Definition, context)
             || (context.IntelligenceRun?.Operation == RepositoryIntelligenceOperation.Archeology
@@ -38,7 +64,10 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             return new ToolPolicyDecision(false, ApprovalLevel.None, "Intelligence work permits repository/history reads and host-authorized intelligence memory operations only.");
         }
 
-        var requiredApproval = tool.Definition.RequiredApproval == ApprovalLevel.User
+        var requiredApproval = (tool.Definition.RequiredApproval == ApprovalLevel.User
+                && !(tool.Definition.Id == "run_process" && context.SecurityPolicy is not null))
+            || (context.SecurityPolicy?.ReviewTools.Contains(tool.Definition.Id, StringComparer.OrdinalIgnoreCase) ?? false)
+            || (tool.Definition.Id == "run_process" && context.SecurityPolicy?.RequireShellApproval == true)
             || context.RequireApprovalToolIds.Contains(
                 tool.Definition.Id,
                 StringComparer.OrdinalIgnoreCase)
@@ -71,7 +100,8 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
                 "Only the built-in search, read_file, and write_file tools may access the active scratchpad.");
         }
 
-        if (context.TrustLevel < tool.Definition.RequiredTrust && !scratchpadAccess)
+        if ((context.TrustLevel < tool.Definition.RequiredTrust
+                || (context.SecurityPolicy is { } trustPolicy && trustPolicy.MaximumTrust < tool.Definition.RequiredTrust)) && !scratchpadAccess)
         {
             var reason = $"{tool.Definition.Id} requires {tool.Definition.RequiredTrust}; "
                 + $"current trust is {context.TrustLevel}.";
@@ -109,7 +139,9 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
             }
 
             var basename = Path.GetFileNameWithoutExtension(executable);
-            if (!context.AllowedExecutables.Contains(basename, StringComparer.OrdinalIgnoreCase))
+            if (!context.AllowedExecutables.Contains(basename, StringComparer.OrdinalIgnoreCase)
+                || (context.SecurityPolicy is { } executablePolicy
+                    && !executablePolicy.AllowedExecutables.Contains(basename, StringComparer.OrdinalIgnoreCase)))
             {
                 return new ToolPolicyDecision(
                     false,
@@ -142,9 +174,17 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
         foreach (var networkHost in networkHosts)
         {
+            if (context.SecurityPolicy is { NetworkHostRestriction.IsDefault: false } networkPolicy
+                && !networkPolicy.NetworkHostRestriction.Contains(networkHost, StringComparer.OrdinalIgnoreCase))
+            {
+                return new ToolPolicyDecision(false, requiredApproval, "The mandatory outbound policy denies this host; scoped consent cannot override it.");
+            }
+
             var configuredHost = context.AllowedNetworkHosts.Contains(
                 networkHost,
-                StringComparer.OrdinalIgnoreCase);
+                StringComparer.OrdinalIgnoreCase)
+                && (context.SecurityPolicy is not { } staticHostPolicy
+                    || staticHostPolicy.AllowedNetworkHosts.Contains(networkHost, StringComparer.OrdinalIgnoreCase));
             var hostAuthorized = ConfiguredTool.Unwrap(tool) is IHostAuthorizedNetworkClaims scopedClaims
                 && scopedClaims.IsNetworkHostAuthorized(input, context, networkHost);
             if (!configuredHost && !hostAuthorized)
@@ -158,7 +198,7 @@ public sealed class DefaultPolicyEngine : IPolicyEngine
 
         return new ToolPolicyDecision(
             true,
-            scratchpadAccess ? ApprovalLevel.None : requiredApproval,
+            requiredApproval,
             "Allowed by repository trust and tool policy.");
     }
 
@@ -312,7 +352,7 @@ internal static class ToolPathRules
         }
 
         var relative = Path.GetRelativePath(repositoryRoot, normalized).Replace('\\', '/');
-        if (RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths))
+        if (RepositoryPathPolicy.IsProhibited(relative, context.ProhibitedPaths, repositoryRoot))
         {
             throw new UnauthorizedAccessException("Tool path matches a prohibited repository pattern.");
         }
@@ -394,11 +434,13 @@ internal static class ToolPathRules
     /// <summary>Returns whether a normalized relative path matches any configured glob.</summary>
     internal static bool IsProhibited(
         string relativePath,
-        IReadOnlyList<string> prohibitedPatterns)
+        IReadOnlyList<string> prohibitedPatterns,
+        string repositoryPath,
+        RepositoryPathCaseContext? caseContext = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
         ArgumentNullException.ThrowIfNull(prohibitedPatterns);
-        return RepositoryPathPolicy.IsProhibited(relativePath, prohibitedPatterns);
+        return RepositoryPathPolicy.IsProhibited(relativePath, prohibitedPatterns, repositoryPath, caseContext);
     }
 
     private static bool IsReservedWindowsDeviceName(string segment)

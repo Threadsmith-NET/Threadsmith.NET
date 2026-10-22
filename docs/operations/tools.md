@@ -63,7 +63,7 @@ While a tool runs, its owner’s output pane shows a live block with an independ
 
 `write_file` creates text artifacts directly during a conversation. It avoids change planning, mutation proposals, builds, and tests. For an existing answer, use `{"path":".inbox/report.md","useLastResponse":true}`: the host copies the latest archived assistant answer from the current session exactly. Missing/removed answer bodies produce an error instead of a substituted report. For new content, supply `content` instead of `useLastResponse`.
 
-Configure the folder list in machine, user, or repository `config.json`:
+Configure grants in designated machine or user `config.json`; repository/session arrays only narrow them:
 
 ```json
 {
@@ -75,7 +75,7 @@ Configure the folder list in machine, user, or repository `config.json`:
 }
 ```
 
-The default list is `[".inbox"]`. Higher-precedence lists replace lower lists completely; `[]` or `null` permits no writes. Relative entries resolve under the active repository; outside folders must be absolute. Entries are literal folders, include descendants, and do not accept globs or relative `..` escapes. Absolute paths may identify folders elsewhere on the machine. Repository settings can grant these destinations as requested by the operator; an allowlisted folder is direct file-write authority. Restart after configuration edits. Opening another repository rebinds its folder grants without inheriting the former repository's overrides.
+The default list is `[".inbox"]`. Trusted arrays replace lower trusted arrays; repository and session arrays intersect that ceiling. `[]` permits no writes; null is invalid. Relative folders resolve under the active repository. External folders require deliberate trusted absolute grants. Reopen the repository or restart after policy edits. See [Configuration authority](security-policy.md) for migration and reload boundaries.
 
 Parent folders are created as needed. Files use UTF-8 without a BOM and preserve supplied text and line endings. Existing files are preserved unless the call explicitly sets `overwrite:true`; replacement publishes a completed sibling temporary file. Supported extensions are `.txt`, `.md`, `.markdown`, `.json`, `.csv`, `.tsv`, `.yaml`, `.yml`, `.xml`, `.log`, and `.rst`. Both content modes have a 1 MiB UTF-8 limit. Source/project changes retain the mutation workflow. Git metadata, `.threadsmith` settings, `AGENTS.md`, prohibited paths, and symlink/junction traversal are rejected even under an allowed folder. Ordinary read tools do not inherit access to external write folders.
 

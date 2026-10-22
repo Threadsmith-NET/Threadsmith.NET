@@ -12,12 +12,23 @@ using Xunit;
 [Collection("Security policy environment")]
 public sealed partial class SecurityPolicyConfigurationTests : IDisposable
 {
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "threadsmith-policy-" + Guid.NewGuid().ToString("N"));
+    private readonly string _root;
     private readonly ConfigurationPaths _paths;
 
     /// <summary>Initializes a new instance of the <see cref="SecurityPolicyConfigurationTests"/> class.</summary>
     public SecurityPolicyConfigurationTests()
     {
+        // macOS temporary paths may traverse /var -> /private/var. Use the physical
+        // directory so positive write controls do not trip the production link guard.
+        var temporary = Path.GetFullPath(Path.GetTempPath());
+        var physical = Path.GetPathRoot(temporary)!;
+        foreach (var segment in temporary[physical.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var directory = new DirectoryInfo(Path.Combine(physical, segment));
+            physical = directory.ResolveLinkTarget(true)?.FullName ?? directory.FullName;
+        }
+
+        _root = Path.Combine(physical, "threadsmith-policy-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
         var repository = Path.Combine(_root, "repository");
         Directory.CreateDirectory(Path.Combine(repository, ".threadsmith"));

@@ -75,6 +75,7 @@ public sealed partial class SecurityPolicyConfigurationTests
                 ToolInvocationId = ToolInvocationId.New(),
                 RunId = RunId.New(),
                 FileName = "/usr/bin/hdiutil",
+                Origin = ProcessRequestOrigin.Host,
                 Arguments = arguments,
                 WorkingDirectory = _root,
                 Timeout = cancellationToken.CanBeCanceled ? Timeout.InfiniteTimeSpan : TimeSpan.FromSeconds(30),

@@ -77,4 +77,4 @@ Prohibited globs use each path component's parent-directory case behavior, inclu
 
 ## Validation scope
 
-Implementation status, exact test commands/results and unavailable platform coverage are recorded in the [active maintenance plan](../implementation-plans/Threadsmith-security-policy-implementation-plan.md). Application checks do not prove OS containment or general filesystem race safety. macOS/Linux and alternative filesystem case modes require their own actual runners; Windows results cannot stand in for them.
+Implementation status, exact test commands/results and unavailable platform coverage are recorded in the [source-repository maintenance plan](https://github.com/Threadsmith-NET/Threadsmith.NET/blob/main/docs/implementation-plans/Threadsmith-security-policy-implementation-plan.md). Application checks do not prove OS containment or general filesystem race safety. macOS/Linux and alternative filesystem case modes require their own actual runners; Windows results cannot stand in for them.

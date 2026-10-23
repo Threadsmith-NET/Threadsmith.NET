@@ -280,6 +280,7 @@ public sealed partial class InteractionCoordinator
             var current = refreshed.Single(item => item.Id == id);
             return new(current.Enabled, current.AvailabilityReason)
             {
+                UpdatedOption = new(current.Id, current.DisplayName, current.Category.ToString(), current.Enabled, Reason: current.AvailabilityReason),
                 UpdatedOptions = refreshed.Where(item => item.AvailabilityReasonCode is not null)
                     .Select(item => new InteractionToggleOption(item.Id, item.DisplayName, item.Category.ToString(), item.Enabled, Reason: item.AvailabilityReason)).ToArray(),
             };

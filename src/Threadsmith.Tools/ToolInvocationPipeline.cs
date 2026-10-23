@@ -10,6 +10,13 @@ using Threadsmith.Core;
 /// <summary>Validates, authorizes, executes, bounds, and records every tool request.</summary>
 public interface IToolInvocationPipeline
 {
+    /// <summary>Completes an admitted live suspension without invoking its tool again.</summary>
+    Task<ToolInvocationResult> CompleteSuspensionAsync(ToolInvocationRequest request, ToolInvocationResult suspended, UserQuestionResult answer, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(suspended with { Suspension = null, Succeeded = true, ResultJson = JsonSerializer.Serialize(answer) });
+    }
+
     /// <summary>Invokes a registered tool through the complete host policy pipeline.</summary>
     Task<ToolInvocationResult> InvokeAsync(
         ToolInvocationRequest request,
@@ -73,6 +80,58 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     /// <summary>Gets the registry used to resolve and identity-fence dynamic registrations.</summary>
     public IToolRegistry Registry => _registry;
 
+    /// <inheritdoc />
+    public async Task<ToolInvocationResult> CompleteSuspensionAsync(ToolInvocationRequest request, ToolInvocationResult suspended, UserQuestionResult answer, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(suspended);
+        ArgumentNullException.ThrowIfNull(answer);
+        if (suspended.Suspension is not { } question || !string.Equals(request.ToolId, "ask_user", StringComparison.OrdinalIgnoreCase) || question.RunId != request.RunId || question.SessionId != request.SessionId)
+        {
+            throw new InvalidOperationException("The continuation does not own this question.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var succeeded = answer.Status != UserQuestionStatus.Interrupted;
+        if (succeeded && request.Context.SecurityPolicy is { } policy)
+        {
+            request.Context.PolicyBinding?.Validate(policy);
+        }
+
+        var maximumOutputBytes = suspended.SuspensionMaximumOutputBytes
+            ?? throw new InvalidOperationException("The continuation has no captured output bound.");
+        var json = JsonSerializer.Serialize(answer);
+        if (Encoding.UTF8.GetByteCount(json) > maximumOutputBytes)
+        {
+            return await CompleteFailureAsync(
+                request,
+                suspended.ToolInvocationId,
+                ToolErrorClassification.OutputLimitExceeded,
+                "The tool result exceeded its declared output bound.",
+                question.CreatedAt,
+                isTruncated: true,
+                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration));
+        }
+
+        json = JsonOutputSanitizer.Sanitize(json, _sanitizer);
+        if (Encoding.UTF8.GetByteCount(json) > maximumOutputBytes)
+        {
+            return await CompleteFailureAsync(
+                request,
+                suspended.ToolInvocationId,
+                ToolErrorClassification.OutputLimitExceeded,
+                "The sanitized tool result exceeded its declared output bound.",
+                question.CreatedAt,
+                isTruncated: true,
+                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration));
+        }
+
+        var error = succeeded ? null : "Clarification was interrupted before delivery.";
+        await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)) { RunId = request.RunId }, cancellationToken);
+        await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : ToolErrorClassification.Cancelled.ToString(), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
+        return suspended with { ToolId = request.ToolId, Suspension = null, Succeeded = succeeded, ResultJson = json, Error = error, ErrorClassification = succeeded ? default : ToolErrorClassification.Cancelled };
+    }
+
     /// <summary>Initializes a new instance of the <see cref="ToolInvocationPipeline"/> class.</summary>
     public ToolInvocationPipeline(
         IToolRegistry registry,
@@ -114,6 +173,17 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
     {
         ArgumentNullException.ThrowIfNull(requests);
         requests = requests.Select(item => item with { Invocation = CapturePolicy(item.Invocation) }).ToArray();
+        if (requests.Count > 1 && requests.FirstOrDefault(item => item.Invocation.ToolId.Equals("ask_user", StringComparison.OrdinalIgnoreCase)) is { } question)
+        {
+            return new ToolBatchPreflightResult
+            {
+                FailedOrdinal = question.Ordinal,
+                FailedToolId = question.Invocation.ToolId,
+                ErrorClassification = ToolErrorClassification.InvalidArguments,
+                SafeReason = "ask_user must be the sole call in a tool batch. No sibling calls were executed.",
+            };
+        }
+
         if (requests.Count == 0)
         {
             return ToolBatchPreflightResult.Success;
@@ -315,7 +385,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
         var result = await InvokeCoreAsync(invocation, planned.PreparationError, usePreparedSnapshot ? planned.Registration : null, returnCancellationResult: true, admittedAt, batchCancellation.Token);
         if (_parallelOptions.FailureMode == ToolBatchFailureMode.CancelBatchOnFailure
-            && !result.Succeeded && result.ErrorClassification != ToolErrorClassification.Cancelled)
+            && result.Suspension is null && !result.Succeeded && result.ErrorClassification != ToolErrorClassification.Cancelled)
         {
             await batchCancellation.CancelAsync();
         }
@@ -667,6 +737,23 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                 executionContext,
                 timeoutCancellation.Token);
             var executionDuration = _timeProvider.GetElapsedTime(executionStarted);
+            if (execution.Suspension is { } suspension)
+            {
+                if (ConfiguredTool.Unwrap(tool) is not AskUserTool)
+                {
+                    throw new InvalidOperationException("Only the compiled clarification tool may suspend a conversation.");
+                }
+
+                return new ToolInvocationResult
+                {
+                    ToolInvocationId = invocationId,
+                    ToolId = tool.Definition.Id,
+                    Suspension = suspension,
+                    SuspensionMaximumOutputBytes = tool.Definition.MaximumOutputBytes,
+                    Duration = executionDuration,
+                };
+            }
+
             var authoritativeElapsedMilliseconds = execution.AuthoritativeElapsedMilliseconds
                 ?? ToElapsedMilliseconds(executionDuration);
             var serializationCancellationToken = execution.Failure?.Classification == ToolErrorClassification.Cancelled

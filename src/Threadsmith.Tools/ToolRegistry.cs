@@ -135,9 +135,8 @@ public sealed class ToolRegistry : IToolRegistry
         lock (_gate)
         {
             return _tools.Values
-                .Where(tool => IsIntelligenceHistoryReader(tool, context)
-                    || ((_stateManager is null || _stateManager.IsEnabled(tool.Definition.Id))
-                        && (_activationPolicy is null || _activationPolicy.IsActive(tool.Definition.Id, sessionId, runId))))
+                .Where(tool => (_stateManager is null || _stateManager.IsEnabled(tool.Definition.Id))
+                    && (_activationPolicy is null || _activationPolicy.IsActive(tool.Definition.Id, sessionId, runId)))
                 .OrderBy(tool => tool.Definition.Id, StringComparer.Ordinal)
                 .Select(tool => new ToolRegistration(tool, GetSourceUnsafe(tool.Definition.Id)))
                 .ToArray();
@@ -149,15 +148,7 @@ public sealed class ToolRegistry : IToolRegistry
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(toolId);
         ArgumentNullException.ThrowIfNull(context);
-        lock (_gate)
-        {
-            if (_tools.TryGetValue(toolId, out var tool) && IsIntelligenceHistoryReader(tool, context))
-            {
-                return new ToolRegistration(tool, GetSourceUnsafe(toolId));
-            }
-
-            return GetRegistration(toolId);
-        }
+        return GetRegistration(toolId);
     }
 
     /// <inheritdoc />
@@ -181,14 +172,7 @@ public sealed class ToolRegistry : IToolRegistry
         ArgumentException.ThrowIfNullOrWhiteSpace(toolId);
         lock (_gate)
         {
-            if (!_tools.TryGetValue(toolId, out var resolved))
-            {
-                throw new KeyNotFoundException($"Tool '{toolId}' is not registered.");
-            }
-
-            return _stateManager is null || _stateManager.IsEnabled(toolId)
-                ? resolved
-                : throw new KeyNotFoundException($"Tool '{toolId}' is disabled.");
+            return GetEnabledTool(toolId);
         }
     }
 
@@ -322,13 +306,6 @@ public sealed class ToolRegistry : IToolRegistry
             _stateManager?.Unregister(toolId);
             return true;
         }
-    }
-
-    private static bool IsIntelligenceHistoryReader(ITool tool, ToolInvocationContext? context)
-    {
-        return context?.IntelligenceRun is { Operation: RepositoryIntelligenceOperation.Onboard or RepositoryIntelligenceOperation.Archeology } run
-            && !run.CancellationToken.IsCancellationRequested
-            && ConfiguredTool.Unwrap(tool) is GitLogTool or GitShowTool or GitDiffTool;
     }
 
     private ITool GetEnabledTool(string toolId)

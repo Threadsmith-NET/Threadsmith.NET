@@ -165,6 +165,9 @@ public sealed record SessionProjection : IProjection
     /// <summary>Approvals that have been requested but not granted.</summary>
     public IReadOnlyList<ApprovalProjection> PendingApprovals { get; init; } = [];
 
+    /// <summary>Most recent clarification state, separate from permission approvals.</summary>
+    public UserQuestionProjection? UserQuestion { get; init; }
+
     /// <summary>Explicit task acceptance criteria.</summary>
     public IReadOnlyList<AcceptanceCriterion> AcceptanceCriteria { get; init; } = [];
 

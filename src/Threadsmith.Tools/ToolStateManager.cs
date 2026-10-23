@@ -87,7 +87,8 @@ public sealed class ToolStateManager : IToolStateManager
 {
     private static readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true };
 
-    private readonly ConcurrentDictionary<string, (IRepositoryFeatureTool Tool, Func<bool, CancellationToken, Task> Toggle)> _features = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, IRepositoryFeatureTool> _features = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SessionPolicyBinding? _policyBinding;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, ToolDefinition> _definitions;
     private readonly Lock _definitionsGate = new();
@@ -111,7 +112,8 @@ public sealed class ToolStateManager : IToolStateManager
         string? mcpApprovalPath = null,
         WebFetchAuthorizationAuthority? fetchAuthorization = null,
         WriteFileConfiguration? writeFileConfiguration = null,
-        PolicyStoreResourceLimits? policyStoreLimits = null)
+        PolicyStoreResourceLimits? policyStoreLimits = null,
+        SessionPolicyBinding? policyBinding = null)
     {
         ArgumentNullException.ThrowIfNull(definitions);
         ArgumentNullException.ThrowIfNull(configuration);
@@ -125,6 +127,7 @@ public sealed class ToolStateManager : IToolStateManager
         _mcpApprovals = new McpToolApprovalStore(mcpApprovalPath, policyStoreLimits);
         _fetchAuthorization = fetchAuthorization;
         _writeFileConfiguration = writeFileConfiguration;
+        _policyBinding = policyBinding;
         _fetchAuthorization?.SetCurrentMessageConsentEvaluator(
             repositoryRoot => _consentStore.HasCurrentMessageUrlConsent(repositoryRoot));
         var enabledSection = configuration.GetSection("tools:enabled");
@@ -150,14 +153,13 @@ public sealed class ToolStateManager : IToolStateManager
             StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>Routes feature rows through their shared lifecycle control instead of per-tool persistence.</summary>
-    public void RegisterFeature(string toolId, IRepositoryFeatureTool tool, Func<bool, CancellationToken, Task> toggle)
+    /// <summary>Registers readiness metadata independently of the common tool preference.</summary>
+    public void RegisterFeature(string toolId, IRepositoryFeatureTool tool)
     {
         ArgumentNullException.ThrowIfNull(tool);
-        ArgumentNullException.ThrowIfNull(toggle);
         lock (_definitionsGate)
         {
-            _features[toolId] = (tool, toggle);
+            _features[toolId] = tool;
         }
     }
 
@@ -300,12 +302,6 @@ public sealed class ToolStateManager : IToolStateManager
     /// <inheritdoc />
     public async Task DisableAsync(string toolId, CancellationToken cancellationToken = default)
     {
-        if (_features.TryGetValue(toolId, out var feature))
-        {
-            await feature.Toggle(false, cancellationToken);
-            return;
-        }
-
         var definition = GetDefinition(toolId);
         if (definition.Essential)
         {
@@ -364,15 +360,17 @@ public sealed class ToolStateManager : IToolStateManager
                 .Select(definition =>
                 {
                     var availability = GetFeatureAvailability(definition);
+                    var policyReason = GetPolicyRestriction(definition.Id);
+                    var defaultDisabled = !definition.EnabledByDefault && !IsEnabledCore(definition);
                     return new ToolStateEntry
                     {
                         Id = definition.Id,
                         DisplayName = definition.DisplayName,
                         Category = definition.Category,
                         Source = definition.Source,
-                        Enabled = IsEnabledCore(definition) && availability?.ReasonCode != "master_disabled",
-                        AvailabilityReason = availability?.Message,
-                        AvailabilityReasonCode = availability?.ReasonCode,
+                        Enabled = IsEnabledCore(definition),
+                        AvailabilityReason = policyReason ?? availability?.Message ?? (defaultDisabled ? "Disabled by default. Press Space in Tools to enable; ordinary tool policy still applies." : null),
+                        AvailabilityReasonCode = policyReason is not null ? "policy_denied" : availability?.ReasonCode ?? (defaultDisabled ? "default_disabled" : null),
                         Essential = definition.Essential,
                         ConsentRequired = definition.RequiresOutboundConsent
                             && !_consentStore.HasValidConsent(definition.Id, _repositoryRoot),
@@ -409,12 +407,6 @@ public sealed class ToolStateManager : IToolStateManager
         string? expectedVersion,
         CancellationToken cancellationToken)
     {
-        if (_features.TryGetValue(toolId, out var feature))
-        {
-            await feature.Toggle(true, cancellationToken);
-            return;
-        }
-
         var definition = GetDefinition(toolId);
         if (expectedVersion is not null
             && !string.Equals(definition.Version, expectedVersion, StringComparison.Ordinal))
@@ -485,7 +477,7 @@ public sealed class ToolStateManager : IToolStateManager
             return null;
         }
 
-        var availability = feature.Tool.CaptureAvailability(_repositoryRoot);
+        var availability = feature.CaptureAvailability(_repositoryRoot);
         return availability.ReasonCode == "master_disabled" || IsEnabledCore(definition) ? availability
             : new(false, "policy_denied", "Tool settings deny this capability; shared enablement does not override that denial.");
     }
@@ -496,6 +488,19 @@ public sealed class ToolStateManager : IToolStateManager
                 || IsAvailabilityRequested(definition))
                 && (!definition.RequiresOutboundConsent
                     || _consentStore.HasValidConsent(definition.Id, _repositoryRoot));
+    }
+
+    private string? GetPolicyRestriction(string toolId)
+    {
+        try
+        {
+            return _policyBinding is not null && !_policyBinding.Current.AllowsTool(toolId)
+                ? "Security policy denies this tool (tools.allow/tools.deny). The checkbox saves a preference; it cannot grant permission." : null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return "Security policy is unavailable. Reopen the repository after correcting configuration; the saved preference does not grant permission.";
+        }
     }
 
     private bool IsAvailabilityRequested(ToolDefinition definition)

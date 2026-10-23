@@ -80,6 +80,7 @@ public sealed partial class InteractionCoordinator
     private readonly IGitQueryService? _gitQueries;
     private readonly WebFetchAuthorizationAuthority? _webFetchAuthorization;
     private readonly DirectFetchApprovalPromptRouter? _directFetchApprovalPrompt;
+    private readonly SemaphoreSlim _modalGate = new(1, 1);
     private readonly IFrontendCommandContribution? _frontendCommands;
     private readonly SemanticStartupProgress? _semanticStartupProgress;
 
@@ -2332,11 +2333,19 @@ public sealed partial class InteractionCoordinator
         }
     }
 
-    private Task<DirectFetchApprovalOutcome> PromptForDirectFetchApprovalAsync(
+    private async Task<DirectFetchApprovalOutcome> PromptForDirectFetchApprovalAsync(
         DirectFetchApprovalRequest request,
         CancellationToken cancellationToken)
     {
-        return DirectFetchApprovalInteraction.RequestAsync(_surface, request, cancellationToken);
+        await _modalGate.WaitAsync(cancellationToken);
+        try
+        {
+            return await DirectFetchApprovalInteraction.RequestAsync(_surface, request, cancellationToken);
+        }
+        finally
+        {
+            _modalGate.Release();
+        }
     }
 
     private async Task<bool> ManageModelsAsync(CancellationToken cancellationToken)

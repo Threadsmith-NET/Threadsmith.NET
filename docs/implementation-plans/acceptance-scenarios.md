@@ -856,3 +856,15 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 3. Invoke `repository_archeology(question)` and observe one read-only Explorer child using real pipeline Git readers and intelligence query. Denied paths and tools remain denied; nested delegation, collection and mutations are rejected. Join exactly one correlated parent result with actual usage and evidence references.
 4. Disable intelligence while that child is active. Observe terminal child cleanup before the feature gate releases, both Tools rows refresh, and a stale invocation rejects. Re-enable and run another permitted investigation without changing automatic recall or explicit denials.
 5. Resume a legacy memory-search call and observe one `legacy_search_removed` result pointing to the new query tool; completed historical results remain readable.
+
+## Scenario ASK-USER - Explicit terminal clarification
+
+1. Ask a parent to resolve a material ambiguity. Observe one question modal after model streaming stops. No sibling tool runs in a mixed question batch and no model request occurs while unanswered.
+2. Show the heading The Assistant Has a Question followed by one blank line. Choices include a harness-owned numbered Other; only selecting Other opens its text editor. No-choice questions open an editor directly. Arrows/numbers select; Enter submits. Escape/Cancel returns The user declined to answer and resumes once; no hidden pending state remains.
+3. Cancel with F5 and inspect the correlated cancellation result. Cancel the run with Ctrl+C and confirm the modal closes and no continuation effects occur.
+4. Opt in to the host bell; observe one cue per request, none on reopen. F10 mutes subsequent cues. Repository configuration cannot enable the cue.
+5. Restart with a pending or accepted-but-undelivered question. Observe Interrupted history and no automatic replay. Children, headless callers, and a parent with live delegation cannot create a wait.
+
+**Verifies:** Bounded explicit answers, shared modal ownership, resource release, cancellation, and interrupted recovery. See MTP-ASK-USER. Automated results do not establish physical terminal/audio behavior.
+
+ASK-USER opt-in addendum: a fresh/default host omits ask_user from model advertisement and rejects forced invocation before persistence. Tools retains a disabled entry with shared Tools enablement guidance. The shared repository tool preference must be enabled, and ordinary trusted tool policy must independently allow it. Disabling restores normal uninterrupted model work.

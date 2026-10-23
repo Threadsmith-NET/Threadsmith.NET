@@ -102,6 +102,8 @@ internal sealed class InteractionOperationActivities
                 return true;
             case ToolInvocationCompleted completed:
                 return _entries.Remove(completed.ToolInvocationId);
+            case UserQuestionStateChanged question when question.Result.Status == UserQuestionStatus.Pending:
+                return _entries.Remove(question.Request.ToolInvocationId);
             case RunCompleted completed:
                 var keys = _entries.Where(pair => pair.Value.RunId == completed.RunId).Select(pair => pair.Key).ToArray();
                 foreach (var key in keys)

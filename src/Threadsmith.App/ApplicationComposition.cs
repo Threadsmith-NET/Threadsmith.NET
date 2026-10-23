@@ -355,6 +355,7 @@ internal static class ApplicationComposition
             host.PolicyBinding);
         var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);
         var runSteering = new RunSteeringCoordinator(host.ExecutionLimits);
+        var userQuestions = new UserQuestionCoordinator(host.Events, runSteering, host.PolicyBinding, host.Sanitizer);
         var validationStages = GetValidationStages(host.Configuration);
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? resolvedFallbackSelector = null;
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectResolvedFallback =
@@ -474,7 +475,8 @@ internal static class ApplicationComposition
             sourceEdits: sourceEdits,
             repositoryIntelligence: intelligence,
             intelligenceOperations: intelligenceOperations,
-            imageArtifacts: persistence.ArtifactStore);
+            imageArtifacts: persistence.ArtifactStore,
+            userQuestions: userQuestions);
 
         // The foundation-owned coordinator may prepare work before session composition, but publication
         // delegates to this sole run-lifetime authority once it exists.
@@ -503,7 +505,7 @@ internal static class ApplicationComposition
         try
         {
             tools.ToolRegistry.RegisterOrReplace(intelligenceTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-intelligence"));
-            tools.ToolStateManager.RegisterFeature(intelligenceTool.Definition.Id, intelligenceTool, intelligenceOperations.SetEnabledAsync);
+            tools.ToolStateManager.RegisterFeature(intelligenceTool.Definition.Id, intelligenceTool);
             tools.ToolRegistry.RegisterOrReplace(memoriesTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "memories"));
             tools.ToolRegistry.RegisterOrReplace(sourceEditTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "source-edit"));
             repositoryBindings.AttachScratchpad(scratchpad);
@@ -623,7 +625,7 @@ internal static class ApplicationComposition
                 host.PromptLoader,
                 runSteering);
             tools.ToolRegistry.RegisterOrReplace(archeologyTool, new ToolActivitySource(ToolActivitySourceKind.BuiltIn, "repository-archeology"));
-            tools.ToolStateManager.RegisterFeature(archeologyTool.Definition.Id, archeologyTool, intelligenceOperations.SetEnabledAsync);
+            tools.ToolStateManager.RegisterFeature(archeologyTool.Definition.Id, archeologyTool);
 
             // Skill discovery remains metadata-only until an explicit verify or invoke boundary.
             var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
@@ -841,6 +843,7 @@ internal static class ApplicationComposition
                 });
             var handlers = new List<object>
             {
+                userQuestions,
                 intelligenceOperations,
                 intelligenceAutomation,
                 sessionApplication,
@@ -911,7 +914,8 @@ internal static class ApplicationComposition
                 intelligence,
                 intelligenceOperations,
                 new EffectiveConfigurationPreflight(
-                    integration.Models.ActiveModels, childModelSelection, delegateAgentsOptions.EffectiveChildBudget));
+                    integration.Models.ActiveModels, childModelSelection, delegateAgentsOptions.EffectiveChildBudget),
+                userQuestions);
         }
         catch
         {
@@ -1506,10 +1510,12 @@ internal sealed class ApplicationServices : IAsyncDisposable
         ScratchpadLifecycle scratchpad,
         RepositoryIntelligenceMonitor intelligence,
         RepositoryIntelligenceOperations intelligenceOperations,
-        EffectiveConfigurationPreflight configurationPreflight)
+        EffectiveConfigurationPreflight configurationPreflight,
+        UserQuestionCoordinator userQuestions)
     {
         ArgumentNullException.ThrowIfNull(configurationPreflight);
         ConfigurationPreflight = configurationPreflight;
+        UserQuestions = userQuestions;
         ArgumentNullException.ThrowIfNull(claudeSkillCatalog);
         ArgumentNullException.ThrowIfNull(sessionCheckpointSubscription);
         ArgumentNullException.ThrowIfNull(validationStages);
@@ -1546,6 +1552,9 @@ internal sealed class ApplicationServices : IAsyncDisposable
 
     /// <summary>Gets the dispatcher exposed to terminal command surfaces.</summary>
     internal CommandDispatcher Dispatcher { get; }
+
+    /// <summary>Gets live clarification coordination shared with the interactive frontend.</summary>
+    internal UserQuestionCoordinator UserQuestions { get; }
 
     /// <summary>Gets the effective mutation approval policy service.</summary>
     internal MutationApprovalPolicyService MutationApprovalPolicy { get; }
@@ -1616,6 +1625,11 @@ internal sealed class ApplicationServices : IAsyncDisposable
         });
         await DisposeStepAsync(async () => await _skillWorkflow.DisposeAsync());
         await DisposeStepAsync(async () => await _agentScheduler.DisposeAsync());
+        await DisposeStepAsync(() =>
+        {
+            UserQuestions.Dispose();
+            return Task.CompletedTask;
+        });
         await DisposeStepAsync(async () => await _mutationCoordinator.DisposeAsync());
         await DisposeStepAsync(async () => await ((IAsyncDisposable)_scratchpad).DisposeAsync());
         await DisposeStepAsync(() =>

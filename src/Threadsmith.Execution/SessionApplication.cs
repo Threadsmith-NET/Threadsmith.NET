@@ -59,6 +59,7 @@ public sealed partial class SessionApplication :
     private readonly ConcurrentDictionary<RunId, RunRegistration> _runs = new();
     private readonly ConcurrentDictionary<SemanticAdmissionKey, SemaphoreSlim> _semanticAdmissionGates = new();
     private readonly RunSteeringCoordinator _steering;
+    private readonly UserQuestionCoordinator? _userQuestions;
     private readonly IOutputSanitizer _sanitizer;
     private readonly ConcurrentDictionary<SessionId, byte> _sessions = new();
     private readonly Func<SessionId, CancellationToken, Task<ToolInvocationContext>>?
@@ -162,7 +163,8 @@ public sealed partial class SessionApplication :
         SourceEditApplication? sourceEdits = null,
         IRepositoryIntelligenceStatusProvider? repositoryIntelligence = null,
         IRepositoryIntelligenceOperations? intelligenceOperations = null,
-        IImageArtifactStore? imageArtifacts = null)
+        IImageArtifactStore? imageArtifacts = null,
+        UserQuestionCoordinator? userQuestions = null)
     {
         ArgumentNullException.ThrowIfNull(events);
         ArgumentNullException.ThrowIfNull(model);
@@ -179,6 +181,7 @@ public sealed partial class SessionApplication :
         }
 
         _events = events;
+        _userQuestions = userQuestions;
         _model = model;
         _imageArtifacts = imageArtifacts;
         _budgetFactory = budgetFactory ?? budget switch
@@ -728,6 +731,19 @@ public sealed partial class SessionApplication :
         {
             _sourceEdits?.CompleteRun(runId);
             _steering.CompleteRun(command.SessionId, runId);
+            if (_userQuestions is not null)
+            {
+                try
+                {
+                    await _userQuestions.EndRunAsync(command.SessionId, runId, CancellationToken.None);
+                }
+                catch (Exception exception)
+                {
+                    failure ??= exception;
+                    _logger.LogError(exception, "Question cleanup failed for {RunId}", runId.Value);
+                }
+            }
+
             try
             {
                 if (registration.IntelligenceRun is { } intelligenceRun)

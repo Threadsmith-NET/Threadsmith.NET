@@ -6,6 +6,8 @@ using System.Text.Json.Serialization;
 /// <summary>Base contract for versioned immutable domain events.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
 [JsonDerivedType(typeof(SessionCreated), "sessionCreated")]
+[JsonDerivedType(typeof(UserQuestionStateChanged), "userQuestionStateChanged")]
+[JsonDerivedType(typeof(UserQuestionReady), "userQuestionReady")]
 [JsonDerivedType(typeof(RepositoryOpened), "repositoryOpened")]
 [JsonDerivedType(typeof(SolutionLoaded), "solutionLoaded")]
 [JsonDerivedType(typeof(TaskIntentRecorded), "taskIntentRecorded")]
@@ -890,6 +892,8 @@ public static class DomainEventJson
         new Dictionary<string, Type>(StringComparer.Ordinal)
         {
             ["sessionCreated"] = typeof(SessionCreated),
+            ["userQuestionStateChanged"] = typeof(UserQuestionStateChanged),
+            ["userQuestionReady"] = typeof(UserQuestionReady),
             ["repositoryOpened"] = typeof(RepositoryOpened),
             ["solutionLoaded"] = typeof(SolutionLoaded),
             ["taskIntentRecorded"] = typeof(TaskIntentRecorded),

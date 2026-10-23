@@ -27,6 +27,38 @@ public sealed class RunSteeringCoordinator
 
     private readonly ConcurrentDictionary<RunId, RunState> _runs = new();
 
+    /// <summary>Checks the established parent owner for a quiescent clarification boundary.</summary>
+    public bool TryBeginQuestion(SessionId sessionId, RunId runId)
+    {
+        if (!_runs.TryGetValue(runId, out var state) || state.SessionId != sessionId)
+        {
+            return false;
+        }
+
+        lock (state.Gate)
+        {
+            if (state.IsComplete || state.Delegation is not null || state.CurrentPause is not null || state.QuestionPending)
+            {
+                return false;
+            }
+
+            state.QuestionPending = true;
+            return true;
+        }
+    }
+
+    /// <summary>Releases the clarification wait reason on the existing run owner.</summary>
+    public void EndQuestion(SessionId sessionId, RunId runId)
+    {
+        if (_runs.TryGetValue(runId, out var state) && state.SessionId == sessionId)
+        {
+            lock (state.Gate)
+            {
+                state.QuestionPending = false;
+            }
+        }
+    }
+
     /// <summary>Registers one newly active conversation run.</summary>
     public void RegisterRun(SessionId sessionId, RunId runId)
     {
@@ -95,7 +127,7 @@ public sealed class RunSteeringCoordinator
 
         lock (state.Gate)
         {
-            if (state.Delegation is not null)
+            if (state.Delegation is not null || state.QuestionPending)
             {
                 throw new InvalidOperationException("The run already has an active steering delegation.");
             }
@@ -166,7 +198,7 @@ public sealed class RunSteeringCoordinator
 
         lock (state.Gate)
         {
-            if (state.IsComplete)
+            if (state.IsComplete || state.QuestionPending)
             {
                 return new RunSteeringPauseRequestResult(
                     RunSteeringPauseRequestStatus.TooLate,
@@ -498,6 +530,8 @@ public sealed class RunSteeringCoordinator
         public DelegationState? Delegation { get; set; }
 
         public bool IsComplete { get; set; }
+
+        public bool QuestionPending { get; set; }
 
         public long LastSequence { get; set; }
 

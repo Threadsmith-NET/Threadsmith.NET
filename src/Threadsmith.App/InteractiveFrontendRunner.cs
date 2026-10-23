@@ -27,7 +27,18 @@ internal static class InteractiveFrontendRunner
     {
         await using var surface = new TuiKitSurface(themes.ActiveTheme, processCancellation.Cancel, limits: display.Limits, images: context.ImageArtifacts);
         var coordinator = CreateCoordinator(context, themes, display, surface, surface.SetThemeAsync);
-        await surface.RunAsync(token => RunCoordinatorAsync(coordinator, context, token), processCancellation.Token);
+        var trusted = ConfigurationBootstrap.BuildTrusted(context.Paths);
+        using var trustedLifetime = trusted as IDisposable;
+        surface.QuestionBellEnabled = trusted["tui:questions:audio"]?.Equals("bell", StringComparison.OrdinalIgnoreCase) == true;
+        context.Applications.UserQuestions.Attach(coordinator.PresentUserQuestionAsync);
+        try
+        {
+            await surface.RunAsync(token => RunCoordinatorAsync(coordinator, context, token), processCancellation.Token);
+        }
+        finally
+        {
+            context.Applications.UserQuestions.Detach();
+        }
     }
 
     private static InteractionCoordinator CreateCoordinator(

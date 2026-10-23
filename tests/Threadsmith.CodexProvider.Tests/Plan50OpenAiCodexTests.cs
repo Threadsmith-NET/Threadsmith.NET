@@ -3,9 +3,11 @@ namespace Threadsmith.CodexProvider.Tests;
 using System.Net;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Threadsmith.Core;
 using Threadsmith.Models;
 using Threadsmith.Models.OpenAiCodex;
+using Threadsmith.Tools;
 using Xunit;
 
 /// <summary>Plan 50 native Codex provider and OAuth acceptance coverage.</summary>
@@ -13,6 +15,52 @@ public sealed class Plan50OpenAiCodexTests
 {
     private const string ProviderInstructions =
         "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.";
+
+    /// <summary>Common preferences refresh the real Codex HTTP schema without replacing the provider or run.</summary>
+    [Theory]
+    [InlineData("ask_user")]
+    [InlineData("ordinary_default_off")]
+    public async Task CommonToggleRefreshesOutboundSchemaWithoutRestart(string toolId)
+    {
+        var token = TestContext.Current.CancellationToken;
+        var root = Path.Combine(Path.GetTempPath(), "codex-tool-toggle-" + Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(root, ".threadsmith", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        try
+        {
+            var definition = new ToolDefinition { Id = toolId, Version = "1", Description = "Synthetic fixture", InputSchema = new("input", 1, "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}"), OutputSchema = new("output", 1, "{\"type\":\"string\"}"), EnabledByDefault = false };
+            var state = new ToolStateManager([definition], new ConfigurationBuilder().Build(), path);
+            var handler = new RecordingHandler(_ => StreamingResponse());
+            var provider = await CreateProviderAsync(handler, "synthetic-token");
+            var request = CreateStreamRequest();
+            foreach (var enabled in new[] { false, true, false, true })
+            {
+                if (enabled)
+                {
+                    await state.EnableAsync(toolId, token);
+                }
+                else
+                {
+                    await state.DisableAsync(toolId, token);
+                }
+
+                request = WithCapacity(request with { Tools = state.IsEnabled(toolId) ? [new ModelToolDefinition { Name = definition.Id, Description = definition.Description, ArgumentsJsonSchema = definition.InputSchema.JsonSchema }] : [] });
+                _ = await provider.StreamAsync(request, token).ToListAsync(token);
+                using var body = JsonDocument.Parse(handler.RequestBody!);
+                Assert.Equal(enabled, body.RootElement.TryGetProperty("tools", out var tools));
+                if (enabled)
+                {
+                    Assert.Equal(toolId, Assert.Single(tools.EnumerateArray()).GetProperty("name").GetString());
+                }
+            }
+
+            Assert.Equal(4, handler.RequestCount);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 
     /// <summary>Authenticated discovery projects every distinct model returned by the backend.</summary>
     [Fact]

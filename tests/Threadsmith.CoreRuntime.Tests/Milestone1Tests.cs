@@ -5745,9 +5745,12 @@ public static partial class Milestone1Tests
     {
         var sessionId = SessionId.New();
         var occurredAt = DateTimeOffset.UtcNow;
+        var question = new UserQuestionRequest(Guid.NewGuid(), sessionId, RunId.New(), ToolInvocationId.New(), "question-call", "repository", 0, [new("q", "Which output?", [])], occurredAt);
         return
         [
             new SessionCreated(sessionId, occurredAt, "test"),
+            new UserQuestionStateChanged(sessionId, occurredAt, question, new(UserQuestionStatus.Pending, [])),
+            new UserQuestionReady(sessionId, occurredAt, question.RunId, question.RequestId),
             new MemoriesIncluded(
                 sessionId,
                 occurredAt,

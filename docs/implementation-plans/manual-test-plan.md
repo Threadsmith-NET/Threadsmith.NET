@@ -2182,3 +2182,17 @@ Expected: the host exposes the decision and the model/user chooses superseding o
 5. Inspect a historical memory-search transcript and resume a pending legacy call if available. Verify old results remain readable and the pending call receives migration guidance without executing search.
 
 **Limits:** A bounded investigation can be partial. Missing evidence does not prove no relevant history exists. Run these steps only in the disposable repository; no production feature activation is required for implementation verification.
+
+## MTP-ASK-USER - Terminal clarification and attention
+
+**Prerequisites:** An interactive Threadsmith host, disposable session, deliberate enablement through `/tools` plus ordinary policy allowing `ask_user`, and a material ambiguity. Verify the default-off Tools entry first and restore disabled after the test. Record OS, terminal emulator, terminal dimensions, and model/provider path.
+
+1. Verify the exact heading The Assistant Has a Question and one blank line. Test arrows, Space and digits, including eight model choices plus ninth Other. Only Other reveals free text; no-choice questions show it directly. Enter submits from choices/editor. Pasted newlines must not submit, and digits in the editor must stay text. Check multiple questions, missing-answer feedback, full F2 details, narrow sizes and resize.
+2. Escape from choices, Other editor and details must decline with The user declined to answer and resume once. Repeat with explicit Cancel and F5. Confirm the composer becomes usable and F4 cannot resurrect the request. Test late clipboard completion, Unicode and required-answer validation.
+3. Exercise a web approval followed by a question; verify one modal input owner. Cancel the active run and switch session/repository through the existing transition; late answers cannot resume the former run.
+4. With host audio off, verify no bell. Enable `tui:questions:audio=bell`, repaint/resize repeatedly, then use F10. Verify one initial cue and no repeated/muted cue. Record muted/flashing/ignored behavior rather than assuming audible delivery.
+5. Restart while pending and after accepting an answer before delivery where a test fixture permits it. Verify Interrupted history and no effects or automatic provider continuation.
+
+**Evidence:** Record actual Windows/macOS/Linux terminal and SSH/tmux checks separately. Native notifications are deferred. Do not claim screen-reader support or cross-platform validation without running those checks.
+
+Approval-modal regression: use a benign long unbroken URL prompt without fetching it. Verify wrapped origin/path text, F2 full details and PgUp/PgDn scroll, 40x12/80x24/160x40 dimensions and resize, unchanged Deny/approval selection, and a wider frame only where margins permit. Query-value redaction remains unchanged.

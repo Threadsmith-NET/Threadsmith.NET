@@ -40,6 +40,16 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         };
     }
 
+    /// <summary>Ordinary tool preferences cannot broaden the trusted tool allowlist.</summary>
+    [Fact]
+    public void QuestionToolPreferenceCannotBroadenPolicy()
+    {
+        File.WriteAllText(_paths.UserConfiguration, """{"tools":{"allow":["datetime"]}}""");
+        File.WriteAllText(_paths.RepositoryConfiguration, """{"tools":{"defaultEnabledOverrides":["ask_user"]}}""");
+        Assert.DoesNotContain("ask_user", Load().AllowedTools);
+        Assert.Contains("datetime", Load().AllowedTools);
+    }
+
     /// <summary>Distinguishes absent authority from explicit denial.</summary>
     [Fact]
     public void MissingAndExplicitEmptyToolListsHaveDifferentAuthority()
@@ -50,7 +60,13 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Empty(Load().AllowedTools);
         File.WriteAllText(_paths.RepositoryConfiguration, "{}");
         File.WriteAllText(_paths.UserConfiguration, """{"tools":{"allow":[]}}""");
-        Assert.Empty(Load().AllowedTools);
+        var denied = Load();
+        Assert.Empty(denied.AllowedTools);
+        Assert.Contains(denied.Diagnostics, diagnostic => diagnostic.Contains("PolicyMigrationRequired", StringComparison.Ordinal)
+            && diagnostic.Contains("ALL model tools", StringComparison.Ordinal)
+            && diagnostic.Contains(_paths.UserConfiguration, StringComparison.Ordinal));
+        File.WriteAllText(_paths.UserConfiguration, "{}");
+        Assert.True(Load().AllowedTools.IsDefault);
     }
 
     /// <summary>Rejects indexed blending and widening across source boundaries.</summary>

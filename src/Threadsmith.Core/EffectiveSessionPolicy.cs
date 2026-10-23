@@ -43,6 +43,10 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets mandatory tool denials.</summary>
     public ImmutableArray<string> DeniedTools { get; init; } = [];
 
+    /// <summary>Checks the shared immutable tool-name ceiling for presentation and execution.</summary>
+    public bool AllowsTool(string toolId) => !DeniedTools.Contains(toolId, StringComparer.OrdinalIgnoreCase)
+        && (AllowedTools.IsDefault || AllowedTools.Contains(toolId, StringComparer.OrdinalIgnoreCase));
+
     /// <summary>Gets mandatory tool approval requirements.</summary>
     public ImmutableArray<string> ReviewTools { get; init; } = [];
 

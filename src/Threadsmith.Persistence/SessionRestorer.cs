@@ -2,6 +2,7 @@ namespace Threadsmith.Persistence;
 
 using Microsoft.Extensions.Logging;
 using Threadsmith.Core;
+using Threadsmith.Telemetry;
 
 /// <summary>Rebuilds projections from the durable event stream with schema-version tolerance (strategy §19.4, gap #3).</summary>
 /// <remarks>
@@ -16,13 +17,15 @@ public sealed class SessionRestorer : ISessionRestorer
     private readonly DomainEventMigrationRegistry _migrationRegistry;
     private readonly IConversationStore? _conversationStore;
     private readonly ILogger<SessionRestorer> _logger;
+    private readonly IOutputSanitizer _sanitizer;
 
     /// <summary>Initializes a new instance of the <see cref="SessionRestorer"/> class.</summary>
     public SessionRestorer(
         SqliteEventStore eventStore,
         DomainEventMigrationRegistry migrationRegistry,
         ILogger<SessionRestorer> logger,
-        IConversationStore? conversationStore = null)
+        IConversationStore? conversationStore = null,
+        IOutputSanitizer? sanitizer = null)
     {
         ArgumentNullException.ThrowIfNull(eventStore);
         ArgumentNullException.ThrowIfNull(migrationRegistry);
@@ -31,6 +34,7 @@ public sealed class SessionRestorer : ISessionRestorer
         _migrationRegistry = migrationRegistry;
         _logger = logger;
         _conversationStore = conversationStore;
+        _sanitizer = sanitizer ?? new SecretOutputSanitizer();
     }
 
     /// <inheritdoc />
@@ -47,6 +51,7 @@ public sealed class SessionRestorer : ISessionRestorer
         var migrated = 0;
         var legacy = 0;
         var warnings = new List<string>();
+        var questions = new Dictionary<Guid, UserQuestionStateChanged>();
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -70,6 +75,12 @@ public sealed class SessionRestorer : ISessionRestorer
             IDomainEvent domainEvent;
             try
             {
+                if (row.Discriminator == "userQuestionStateChanged"
+                    && System.Text.Encoding.UTF8.GetByteCount(outcome.PayloadJson) > 64 * 1024)
+                {
+                    throw new InvalidDataException("The persisted question envelope exceeds its bounded payload.");
+                }
+
                 domainEvent = DomainEventJson.Deserialize(
                     row.Discriminator,
                     outcome.SchemaVersion,
@@ -80,12 +91,40 @@ public sealed class SessionRestorer : ISessionRestorer
                 // Never throw mid-restore (gap #3). Skip the unparseable event and record a warning.
                 legacy++;
                 warnings.Add(
-                    $"Event '{row.Discriminator}' at schema {outcome.SchemaVersion} failed to deserialize: {exception.Message}");
+                    $"Event '{row.Discriminator}' at schema {outcome.SchemaVersion} failed to deserialize: {(row.Discriminator == "userQuestionStateChanged" ? "Invalid clarification payload." : exception.Message)}");
                 continue;
             }
 
             try
             {
+                if (domainEvent is UserQuestionStateChanged question)
+                {
+                    var safeRequest = UserQuestionSanitizer.Sanitize(question.Request, _sanitizer);
+                    question = question with { Request = safeRequest, Result = UserQuestionSanitizer.Sanitize(safeRequest, question.Result, _sanitizer) };
+                    domainEvent = question;
+                    if (question.Request.SessionId != sessionId || question.SessionId != sessionId
+                        || question.Request.RequestId == Guid.Empty || !Enum.IsDefined(question.Result.Status)
+                        || (question.Result.Status != UserQuestionStatus.Answered && question.Result.Answers.Count != 0))
+                    {
+                        throw new InvalidDataException("The persisted question lifecycle is invalid.");
+                    }
+
+                    UserQuestionValidation.ValidateQuestions(question.Request.Questions);
+                    if (question.Result.Status == UserQuestionStatus.Answered)
+                    {
+                        UserQuestionValidation.ValidateAnswers(question.Request.Questions, question.Result.Answers);
+                    }
+
+                    if (!question.Consumed && question.Result.Status is UserQuestionStatus.Pending or UserQuestionStatus.Answered)
+                    {
+                        questions[question.Request.RequestId] = question;
+                    }
+                    else
+                    {
+                        questions.Remove(question.Request.RequestId);
+                    }
+                }
+
                 await projectionStore.ApplyAsync(domainEvent, cancellationToken);
                 replayed++;
             }
@@ -94,8 +133,16 @@ public sealed class SessionRestorer : ISessionRestorer
                 // A projection that throws on one event must not abort the whole restore.
                 legacy++;
                 warnings.Add(
-                    $"Projection failed to apply event '{row.Discriminator}': {exception.Message}");
+                    $"Projection failed to apply event '{row.Discriminator}': {(row.Discriminator == "userQuestionStateChanged" ? "Invalid clarification payload." : exception.Message)}");
             }
+        }
+
+        foreach (var question in questions.Values)
+        {
+            var interrupted = question with { OccurredAt = DateTimeOffset.UtcNow, Result = new(UserQuestionStatus.Interrupted, []) };
+            await _eventStore.AppendAsync(interrupted, cancellationToken);
+            await projectionStore.ApplyAsync(interrupted, cancellationToken);
+            warnings.Add($"Question {question.Request.RequestId:D} was interrupted. Its prior tool call will not resume; start a fresh turn explicitly.");
         }
 
         if (legacy > 0)

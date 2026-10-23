@@ -49,6 +49,11 @@ public sealed class InMemoryProjectionStore : IProjectionStore
                     Error = null,
                     Activity = [],
                 },
+                UserQuestionStateChanged question when existing is not null => existing with
+                {
+                    UserQuestion = new UserQuestionProjection(question.Request.RequestId, question.Request.RunId, question.Result.Status, question.Consumed),
+                    Activity = AppendActivity(existing.Activity, $"Question {question.Request.RequestId:D}: {question.Result.Status}."),
+                },
                 AcceptanceCriteriaRecorded criteria when existing is not null => existing with
                 {
                     AcceptanceCriteria = criteria.Criteria.ToArray(),

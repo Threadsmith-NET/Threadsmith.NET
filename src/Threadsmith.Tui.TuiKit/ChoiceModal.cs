@@ -21,7 +21,7 @@ internal sealed class ChoiceModal : Modal
     private readonly Dictionary<string, CachedTextRun> _optionRuns = new(StringComparer.Ordinal);
     private readonly CachedTextRun _plainPrefixRun = new();
     private readonly CachedTextRun _selectionPrefixRun = new();
-    private readonly CachedTextRun _titleRun = new();
+    private readonly TranscriptView _prompt;
     private readonly string _title;
     private readonly Choice[] _options;
     private readonly int _contentWidth;
@@ -43,6 +43,9 @@ internal sealed class ChoiceModal : Modal
         _limits.Validate();
         _filter = new ComposerBuffer(_limits);
         _title = title;
+        _prompt = new TranscriptView(_limits);
+        _prompt.Present(new PresentationBatch([new PresentationTextItem([new(title, PresentationTextRole.SelectionPrompt)])]));
+        _prompt.HandleKey(KeyEvent.Special(KeyCode.Home));
         _options = [.. options];
         _matches = _options;
         if (_options.Length <= 2)
@@ -113,15 +116,9 @@ internal sealed class ChoiceModal : Modal
             if (_details)
             {
                 _detail = new TranscriptView(_limits) { ResolveStyle = ResolveStyle };
-                if (_matches.Length > 0)
-                {
-                    _detail.Present(new PresentationBatch([
-                        new PresentationTextItem([
-                            new(_matches[_selected].Label, PresentationTextRole.Default),
-                        ]),
-                    ]));
-                    _detail.HandleKey(KeyEvent.Special(KeyCode.Home));
-                }
+                var selectedDetail = _matches.Length > 0 ? "\n\nSelected option: " + _matches[_selected].Label : string.Empty;
+                _detail.Present(new PresentationBatch([new PresentationTextItem([new(_title + selectedDetail, PresentationTextRole.Default)])]));
+                _detail.HandleKey(KeyEvent.Special(KeyCode.Home));
             }
             else
             {
@@ -197,9 +194,9 @@ internal sealed class ChoiceModal : Modal
     {
         // Leave the shared status row visible even when the modal needs the full width.
         _fits = ModalFrame.Fits(surface.Size);
-        Size? preferredSize = !_details && _options.Length <= 2
+        Size? preferredSize = !_details && _options.Length <= 2 && _title.Length < 80
             ? new Size(Math.Min(90, Math.Max(_contentWidth + Math.Max(2, _selectionPrefixWidth), UnicodeWidth.GetWidth(_filterHint)) + 4), _options.Length + 7)
-            : null;
+            : new Size(120, 26);
         var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default), preferredSize: preferredSize);
         if (frame is null)
         {
@@ -208,12 +205,19 @@ internal sealed class ChoiceModal : Modal
 
         var area = new Rect(0, 0, frame.Size.Width, frame.Size.Height);
         var view = frame.CreateView(area);
-        _titleRun.Draw(view, 0, 0, _title, ResolveStyle(PresentationTextRole.SelectionPrompt));
-        _hintRun.Draw(view, 0, 2, _details ? "Details: PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint, ResolveStyle(PresentationTextRole.Status));
-        _height = Math.Max(1, area.Height - 4);
+        var promptHeight = _details ? 0 : Math.Min(Math.Max(1, area.Height - 7), Math.Min(6, Math.Max(1, (UnicodeWidth.GetWidth(TranscriptView.Safe(_title)) + area.Width - 1) / area.Width)));
+        if (promptHeight > 0)
+        {
+            _prompt.ResolveStyle = ResolveStyle;
+            _prompt.Render(view.CreateView(new Rect(0, 0, area.Width, promptHeight)));
+        }
+
+        _hintRun.Draw(view, 0, promptHeight + 1, _details ? "PgUp/PgDn scroll; F2 back; Esc cancels" : _filterHint, ResolveStyle(PresentationTextRole.Status));
+        var contentTop = promptHeight + 3;
+        _height = Math.Max(1, area.Height - contentTop);
         if (_details)
         {
-            _detail?.Render(view.CreateView(new Rect(0, 4, area.Width, _height)));
+            _detail?.Render(view.CreateView(new Rect(0, contentTop, area.Width, _height)));
             return;
         }
 
@@ -223,7 +227,7 @@ internal sealed class ChoiceModal : Modal
             var selected = index == _selected;
             var prefix = selected ? _selectionPrefix : "  ";
             var style = selected ? ResolveStyle(PresentationTextRole.SelectionHighlight) : ResolveStyle(PresentationTextRole.Default);
-            var row = index - top + 4;
+            var row = index - top + contentTop;
             (selected ? _selectionPrefixRun : _plainPrefixRun).Draw(view, 0, row, prefix, style);
             GetOptionRun(_matches[index]).Draw(view, selected ? _selectionPrefixWidth : 2, row, _matches[index].Label, style);
         }

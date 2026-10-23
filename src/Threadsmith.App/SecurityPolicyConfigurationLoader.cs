@@ -238,6 +238,7 @@ internal static class SecurityPolicyConfigurationLoader
             {
                 if (ReadList(source, key) is { } configured)
                 {
+                    WarnEmptyLegacyToolFilter(source, key, configured);
                     value = configured;
                 }
             }
@@ -253,6 +254,8 @@ internal static class SecurityPolicyConfigurationLoader
                 {
                     continue;
                 }
+
+                WarnEmptyLegacyToolFilter(source, key, filter);
 
                 if (pathsAreRoots)
                 {
@@ -272,6 +275,14 @@ internal static class SecurityPolicyConfigurationLoader
 
             var comparer = pathsAreRoots ? RepositoryPathPolicy.GetPathComparer(repository) : StringComparer.OrdinalIgnoreCase;
             return value is null ? default : [.. value.Distinct(comparer).Order(comparer)];
+        }
+
+        void WarnEmptyLegacyToolFilter(Source source, string key, string[] values)
+        {
+            if (key == "tools:allow" && values.Length == 0)
+            {
+                diagnostics.Add($"PolicyMigrationRequired: {key}, {source.Kind} '{source.Location}', generation {generation}: explicit [] denies ALL model tools, even checked Tools preferences. Older versions treated this as unrestricted. If this is an obsolete empty filter, deliberately remove only tools.allow to restore inheritance; otherwise keep the denial. No configuration was changed.");
+            }
         }
 
         ImmutableArray<string> Union(string key, StringComparer comparer) =>

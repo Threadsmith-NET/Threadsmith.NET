@@ -51,6 +51,11 @@
   // replace a matching id as a whole or append in declared order. Theme data
   // is bounded presentation data and cannot contain terminal control sequences.
   "tui": {
+    // Personal host setting only: repository/session copies cannot enable attention audio.
+    // off (default) or bell; F10 mutes for this process. Reopening does not repeat the cue.
+    "questions": {
+      "audio": "off"
+    },
     // Presentation names: explicit role list > shared defaultNames > compiled role defaults.
     // Each list replaces the complete lower-priority list, including indexed CLI/env overrides.
     // Optional shared list: "defaultNames": ["Avery", "Jordan", "Morgan"].
@@ -352,6 +357,7 @@
   "scratchpad": { "path": null },
 
   "tools": {
+    // ask_user defaults off. Enable deliberately through /tools; normal tool policy still applies.
     // Optional outer tool overrides. byTool entries carry toolId, including colon-qualified MCP IDs.
     // timeoutMilliseconds: positive, or -1 for no outer deadline.
     "runtime": { "defaults": {}, "byTool": [] },

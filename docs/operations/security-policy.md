@@ -1,5 +1,7 @@
 # Configuration authority
 
+An explicit `tools.allow: []` excludes all model tools, including checked Tools preferences. Earlier versions treated this empty array as unrestricted. The loader emits `PolicyMigrationRequired` with the responsible source; if it is an obsolete legacy filter, remove only that key deliberately to restore inheritance. Missing configuration uses the unrestricted internal tool filter, while an explicit empty filter continues to deny all. No migration silently broadens authority.
+
 Threadsmith resolves application authorization separately from ordinary configuration. `DefaultPolicyEngine` and the existing mutation, fetch, MCP, hook, skill and secret validators remain the enforcement paths. This is not an OS sandbox: admitted shells, builds, tests, extensions and local servers retain the user's ambient OS authority, including access to same-user policy files and network destinations beyond typed-tool checks.
 
 ## Sources and presence

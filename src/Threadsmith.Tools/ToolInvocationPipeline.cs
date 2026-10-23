@@ -100,39 +100,44 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
         var maximumOutputBytes = suspended.SuspensionMaximumOutputBytes
             ?? throw new InvalidOperationException("The continuation has no captured output bound.");
+        var completion = suspended.SuspensionCompletion
+            ?? throw new InvalidOperationException("The continuation has no terminal publication owner.");
         var json = JsonSerializer.Serialize(answer);
         if (Encoding.UTF8.GetByteCount(json) > maximumOutputBytes)
         {
-            return await CompleteFailureAsync(
+            return await completion.CompleteAsync(() => CompleteFailureAsync(
                 request,
                 suspended.ToolInvocationId,
                 ToolErrorClassification.OutputLimitExceeded,
                 "The tool result exceeded its declared output bound.",
                 question.CreatedAt,
                 isTruncated: true,
-                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration));
+                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)));
         }
 
         json = JsonOutputSanitizer.Sanitize(json, _sanitizer);
         if (Encoding.UTF8.GetByteCount(json) > maximumOutputBytes)
         {
-            return await CompleteFailureAsync(
+            return await completion.CompleteAsync(() => CompleteFailureAsync(
                 request,
                 suspended.ToolInvocationId,
                 ToolErrorClassification.OutputLimitExceeded,
                 "The sanitized tool result exceeded its declared output bound.",
                 question.CreatedAt,
                 isTruncated: true,
-                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration));
+                elapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)));
         }
 
         var error = succeeded ? null : "Clarification was interrupted before delivery.";
         cancellationToken.ThrowIfCancellationRequested();
 
-        // Once publication begins, finish the terminal event and hook despite run cancellation.
-        await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)) { RunId = request.RunId }, CancellationToken.None);
-        await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : ToolErrorClassification.Cancelled.ToString(), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
-        return suspended with { ToolId = request.ToolId, Suspension = null, Succeeded = succeeded, ResultJson = json, Error = error, ErrorClassification = succeeded ? default : ToolErrorClassification.Cancelled };
+        // Once publication begins, retain that attempt even if publication or hook audit fails.
+        return await completion.CompleteAsync(async () =>
+        {
+            await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)) { RunId = request.RunId }, CancellationToken.None);
+            await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : ToolErrorClassification.Cancelled.ToString(), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
+            return suspended with { ToolId = request.ToolId, Suspension = null, Succeeded = succeeded, ResultJson = json, Error = error, ErrorClassification = succeeded ? default : ToolErrorClassification.Cancelled };
+        });
     }
 
     /// <summary>Initializes a new instance of the <see cref="ToolInvocationPipeline"/> class.</summary>
@@ -754,6 +759,7 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
                     ToolId = tool.Definition.Id,
                     Suspension = suspension,
                     SuspensionMaximumOutputBytes = tool.Definition.MaximumOutputBytes,
+                    SuspensionCompletion = new ToolSuspensionCompletion(),
                     Duration = executionDuration,
                 };
             }

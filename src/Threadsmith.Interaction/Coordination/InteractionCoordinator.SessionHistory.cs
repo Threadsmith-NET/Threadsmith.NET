@@ -17,10 +17,11 @@ public sealed partial class InteractionCoordinator
         var warnings = restorationWarnings.Length == 0
             ? string.Empty
             : "\nWarning: " + string.Join(" ", restorationWarnings);
-        var role = restorationWarnings.Length == 0 ? PresentationTextRole.Status : PresentationTextRole.Warning;
+        var availability = transition.ActiveSession.IsWritable ? string.Empty : " (read-only; new requests are unavailable)";
+        var role = restorationWarnings.Length == 0 && transition.ActiveSession.IsWritable ? PresentationTextRole.Status : PresentationTextRole.Warning;
         var output = new List<PresentationItem>
         {
-            new PresentationTextItem([new($"Threadsmith: Resumed session {history.SessionId.Value:D}.{warnings}\n", role)]),
+            new PresentationTextItem([new($"Threadsmith: Resumed session {history.SessionId.Value:D}{availability}.{warnings}\n", role)]),
         };
         foreach (var message in history.Messages)
         {

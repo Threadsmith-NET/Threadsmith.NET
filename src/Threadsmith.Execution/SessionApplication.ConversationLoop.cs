@@ -1419,6 +1419,8 @@ public sealed partial class SessionApplication
                 }
                 catch
                 {
+                    // Pre-delivery failures interrupt the invocation. If terminal publication
+                    // already began, the pipeline rethrows that attempt without another outcome or hook.
                     await _toolPipeline.CompleteSuspensionAsync(requests.Single().Invocation, result, new(UserQuestionStatus.Interrupted, []), CancellationToken.None);
                     throw;
                 }

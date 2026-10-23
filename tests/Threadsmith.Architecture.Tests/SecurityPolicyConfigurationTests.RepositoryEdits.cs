@@ -9,15 +9,86 @@ using Xunit;
 
 public sealed partial class SecurityPolicyConfigurationTests
 {
-    /// <summary>Legacy template roots cannot deny ordinary edits or authorize protected-store mutations.</summary>
+    /// <summary>Explicit trusted grants and repository filters survive upgrades, even with automatic application.</summary>
+    [Theory]
+    [InlineData("[]", false)]
+    [InlineData("[\"src/\"]", false)]
+    [InlineData("[]", true)]
+    [InlineData("[\"src/\"]", true)]
+    public async Task ExplicitRootsConstrainBaselineAndMutationEnforcement(string roots, bool repositoryFilter)
+    {
+        var token = TestContext.Current.CancellationToken;
+        await File.WriteAllTextAsync(
+            _paths.UserConfiguration,
+            "{\"mutation\":{\"approvalPolicy\":\"alwaysTrustRepo\"},\"editableRoots\":" + (repositoryFilter ? "[\".\"]" : roots) + "}",
+            token);
+        if (repositoryFilter)
+        {
+            await File.WriteAllTextAsync(_paths.RepositoryConfiguration, "{\"editableRoots\":" + roots + "}", token);
+        }
+
+        var policy = Load();
+        var expectedRoots = roots == "[]" ? Array.Empty<string>() : [Path.Combine(_paths.RepositoryRoot, "src")];
+        Assert.Equal(expectedRoots, policy.EditableRoots);
+        Assert.Equal(expectedRoots, policy.MutationRoots);
+        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, policy.MutationCeiling);
+        var binding = new SessionPolicyBinding();
+        binding.Publish(policy);
+        await using var events = new DomainEventStream();
+        var lifecycle = new RepositoryLifecycle(
+            events,
+            new EditFactsStore(),
+            new DotNetEnvironmentResolver(),
+            repositoryOpened: (_, _) =>
+            {
+                binding.Publish(policy);
+                return Task.CompletedTask;
+            },
+            policyBinding: binding);
+        var session = SessionId.New();
+        var opened = await lifecycle.HandleAsync(new OpenRepositoryCommand(session, _paths.RepositoryRoot, RepositoryTrustLevel.TrustedMutation), token);
+        var baseline = await lifecycle.HandleAsync(new RecordBaselineCommand(session, opened.WorkspaceId), token);
+        Assert.Equal(roots == "[]" ? [] : new[] { "src" }, baseline.ApprovedRoots);
+        await using var workspace = await TransactionalWorkspace.CreateAsync(
+            baseline,
+            events,
+            mutationApprovalPolicy: new MutationApprovalPolicyService(policyBinding: binding),
+            cancellationToken: token);
+        var set = new MutationSet
+        {
+            MutationSetId = MutationSetId.New(),
+            SessionId = session,
+            RunId = RunId.New(),
+            WorkspaceId = baseline.WorkspaceId,
+            BaselineCapturedAt = baseline.CapturedAt,
+            BaselineRevision = baseline.GitRevision,
+            Rationale = "Upgrade restriction regression",
+            Mutations = [new Mutation { MutationId = MutationId.New(), Type = MutationType.CreateFile, RelativePath = "tests/outside.cs", ReplacementText = "blocked" }],
+        };
+        await Assert.ThrowsAsync<MutationPolicyException>(() => workspace.StageAsync(set, token));
+        if (roots == "[]")
+        {
+            await Assert.ThrowsAsync<MutationPolicyException>(() => workspace.StageAsync(
+                set with { Mutations = [set.Mutations[0] with { RelativePath = "src/inside.cs" }] },
+                token));
+        }
+        else
+        {
+            workspace.ValidateEditPaths(["src/inside.cs"]);
+            var staged = await workspace.StageAsync(set with { Mutations = [set.Mutations[0] with { RelativePath = "src/inside.cs" }] }, token);
+            Assert.False(staged.Conflicts.HasConflicts);
+        }
+    }
+
+    /// <summary>Absent root configuration permits repository edits while protecting authority stores.</summary>
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task LegacyTemplateRootsAllowRepositoryEditsButPreserveProtectedStores(bool repositoryTemplate)
+    public async Task DefaultRootsAllowRepositoryEditsButPreserveProtectedStores(bool repositoryTemplate)
     {
         var token = TestContext.Current.CancellationToken;
         const string legacy = """
-            {"editableRoots":["src/"],"prohibitedPaths":[".threadsmith/secrets/","**/*.env","**/*.snk"]}
+            {"prohibitedPaths":[".threadsmith/secrets/","**/*.env","**/*.snk"]}
             """;
         await File.WriteAllTextAsync(_paths.UserConfiguration, legacy, token);
         if (repositoryTemplate)
@@ -26,7 +97,7 @@ public sealed partial class SecurityPolicyConfigurationTests
         }
 
         var policy = Load();
-        Assert.Equal([Path.Combine(_paths.RepositoryRoot, "src")], policy.EditableRoots);
+        Assert.Equal([_paths.RepositoryRoot], policy.EditableRoots);
         Assert.Equal([_paths.RepositoryRoot], policy.MutationRoots);
         var binding = new SessionPolicyBinding();
         binding.Publish(policy);
@@ -57,7 +128,7 @@ public sealed partial class SecurityPolicyConfigurationTests
             WorkspaceId = baseline.WorkspaceId,
             BaselineCapturedAt = baseline.CapturedAt,
             BaselineRevision = baseline.GitRevision,
-            Rationale = "Legacy template repository-edit regression",
+            Rationale = "Default repository-edit regression",
             Mutations = ordinary.Select(path => new Mutation
             {
                 MutationId = MutationId.New(),

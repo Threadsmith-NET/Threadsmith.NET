@@ -68,11 +68,12 @@ public static class SessionResumePresentationTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public static async Task Empty_or_expired_history_still_replaces_output(bool expired)
+    [InlineData(false, true)]
+    public static async Task Empty_or_expired_history_still_replaces_output(bool expired, bool readOnly = false)
     {
         var token = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
-        var dispatcher = new HistoryDispatcher(false) { Empty = !expired, Expired = expired };
+        var dispatcher = new HistoryDispatcher(false) { Empty = !expired, Expired = expired, ReadOnly = readOnly };
         var surface = new HistorySurface($"/resume {dispatcher.Target.Value:D}");
         var coordinator = new InteractionCoordinator(
             new InteractionPresenter(dispatcher, new EmptyProjectionStore()),
@@ -86,6 +87,7 @@ public static class SessionResumePresentationTests
         Assert.DoesNotContain("previous output", surface.Output, StringComparison.Ordinal);
         Assert.Equal(expired, surface.Output.Contains("Saved message content is no longer available", StringComparison.Ordinal));
         Assert.Contains("Resumed session", surface.Output, StringComparison.Ordinal);
+        Assert.Equal(readOnly, surface.Output.Contains("read-only; new requests are unavailable", StringComparison.Ordinal));
     }
 
     /// <summary>Rejected transitions leave the visible conversation available.</summary>
@@ -127,6 +129,8 @@ public static class SessionResumePresentationTests
 
         internal bool Fail { get; init; }
 
+        internal bool ReadOnly { get; init; }
+
         internal GetConversationStateCommand? HistoryQuery { get; private set; }
 
         public Task<TResponse> DispatchAsync<TResponse>(ICommand<TResponse> command, CancellationToken cancellationToken = default)
@@ -148,7 +152,11 @@ public static class SessionResumePresentationTests
                         throw new InvalidOperationException("Session unavailable");
                     }
 
-                    result = new SessionTransitionResult { Kind = SessionTransitionKind.Resume, ActiveSession = Entry(Target) };
+                    result = new SessionTransitionResult
+                    {
+                        Kind = SessionTransitionKind.Resume,
+                        ActiveSession = Entry(Target) with { IsWritable = !ReadOnly, State = ReadOnly ? SessionLifecycleState.Legacy : SessionLifecycleState.Active },
+                    };
                     break;
                 case GetConversationStateCommand history:
                     HistoryQuery = history;

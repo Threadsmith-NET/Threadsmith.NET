@@ -55,9 +55,19 @@ internal sealed class InteractionSessionSurface
     }
 
     /// <summary>Selects one ordered option and validates the returned stable identity.</summary>
+    internal Task<int> SelectAsync(
+        string title,
+        IReadOnlyList<string> choices,
+        CancellationToken cancellationToken = default)
+    {
+        return SelectAsync(title, choices, details: null, cancellationToken);
+    }
+
+    /// <summary>Selects an option while retaining review evidence in the same selection surface.</summary>
     internal async Task<int> SelectAsync(
         string title,
         IReadOnlyList<string> choices,
+        string? details,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
@@ -71,7 +81,7 @@ internal sealed class InteractionSessionSurface
             .Select((label, index) => new InteractionSelectionOption(index.ToString(System.Globalization.CultureInfo.InvariantCulture), label))
             .ToArray();
         var result = await _surface.SelectAsync(
-            new InteractionSelectionRequest(title, options),
+            new InteractionSelectionRequest(title, options) { Details = details },
             cancellationToken);
         if (result.IsCancelled)
         {

@@ -99,20 +99,12 @@ public sealed class SessionRestorer : ISessionRestorer
             {
                 if (domainEvent is UserQuestionStateChanged question)
                 {
-                    var safeRequest = UserQuestionSanitizer.Sanitize(question.Request, _sanitizer);
-                    question = question with { Request = safeRequest, Result = UserQuestionSanitizer.Sanitize(safeRequest, question.Result, _sanitizer) };
+                    question = UserQuestionSanitizer.Sanitize(question, _sanitizer);
                     domainEvent = question;
                     if (question.Request.SessionId != sessionId || question.SessionId != sessionId
-                        || question.Request.RequestId == Guid.Empty || !Enum.IsDefined(question.Result.Status)
-                        || (question.Result.Status != UserQuestionStatus.Answered && question.Result.Answers.Count != 0))
+                        || question.Request.RequestId == Guid.Empty)
                     {
                         throw new InvalidDataException("The persisted question lifecycle is invalid.");
-                    }
-
-                    UserQuestionValidation.ValidateQuestions(question.Request.Questions);
-                    if (question.Result.Status == UserQuestionStatus.Answered)
-                    {
-                        UserQuestionValidation.ValidateAnswers(question.Request.Questions, question.Result.Answers);
                     }
 
                     if (!question.Consumed && question.Result.Status is UserQuestionStatus.Pending or UserQuestionStatus.Answered)

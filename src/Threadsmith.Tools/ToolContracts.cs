@@ -535,6 +535,10 @@ public sealed record ToolInvocationResult
     /// <summary>Captured effective output ceiling for a live continuation.</summary>
     [JsonIgnore]
     internal int? SuspensionMaximumOutputBytes { get; init; }
+
+    /// <summary>One live terminal attempt, shared by copies of the suspended result.</summary>
+    [JsonIgnore]
+    internal ToolSuspensionCompletion? SuspensionCompletion { get; init; }
 }
 
 /// <summary>Dynamic tool contract used by the registry and model invocation pipeline.</summary>

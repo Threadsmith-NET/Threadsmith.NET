@@ -10,7 +10,11 @@ public sealed record InteractionSelectionOption(string Id, string Label);
 /// <param name="Options">Ordered immutable choices.</param>
 public sealed record InteractionSelectionRequest(
     string Title,
-    IReadOnlyList<InteractionSelectionOption> Options);
+    IReadOnlyList<InteractionSelectionOption> Options)
+{
+    /// <summary>Gets bounded review evidence shown by the existing full-details view.</summary>
+    public string? Details { get; init; }
+}
 
 /// <summary>Represents a selected stable identity or fail-closed cancellation.</summary>
 /// <param name="SelectedOptionId">Selected identity, or <see langword="null" /> when cancelled.</param>

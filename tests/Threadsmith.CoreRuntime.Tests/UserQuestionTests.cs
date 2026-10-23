@@ -257,12 +257,36 @@ public static class UserQuestionTests
         Assert.Equal(1, draft.QuestionIndex);
         modal.Render(new BufferSurface(cells));
         Assert.Contains("Answer question 2", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        Assert.Contains("Explain why", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
         modal.HandleKey(KeyEvent.Char('1'));
         modal.HandleKey(KeyEvent.Char('2'));
         modal.HandleKey(KeyEvent.Special(KeyCode.Enter));
         Assert.True(modal.IsClosed);
         Assert.Equal("12", draft.Editors[1].Text);
         Assert.Equal("b", draft.SelectedOptions[0]);
+    }
+
+    /// <summary>Prompt layout is rebuilt after resizing and changing question pages.</summary>
+    [Fact]
+    public static void PromptLayoutTracksWidthAndQuestion()
+    {
+        var request = CreateRequest() with
+        {
+            Questions = [new("q", string.Concat(Enumerable.Repeat("word ", 9)) + "WRAPPED_END", []), new("next", "Second prompt", [])],
+        };
+        var limits = new TuiResourceLimits();
+        var modal = new QuestionModal(new QuestionDraft(request, limits), limits);
+        var narrow = new CellBuffer(40, 24);
+        modal.Render(new BufferSurface(narrow));
+        Assert.DoesNotContain("WRAPPED_END", TUIKit.Testing.Snapshot.ToText(narrow), StringComparison.Ordinal);
+        var wide = new CellBuffer(100, 30);
+        modal.Render(new BufferSurface(wide));
+        Assert.Contains("WRAPPED_END", TUIKit.Testing.Snapshot.ToText(wide), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.PageDown));
+        wide = new CellBuffer(100, 30);
+        modal.Render(new BufferSurface(wide));
+        Assert.Contains("Second prompt", TUIKit.Testing.Snapshot.ToText(wide), StringComparison.Ordinal);
+        Assert.DoesNotContain("WRAPPED_END", TUIKit.Testing.Snapshot.ToText(wide), StringComparison.Ordinal);
     }
 
     /// <summary>Free-text questions directly focus editing; empty Enter stays open and Cancel never submits the draft.</summary>

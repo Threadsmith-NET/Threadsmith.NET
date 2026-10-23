@@ -53,7 +53,7 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets normalized direct artifact write roots.</summary>
     public ImmutableArray<string> WriteFolders { get; init; } = [];
 
-    /// <summary>Gets normalized legacy root preferences retained for configuration compatibility, not mutation authorization.</summary>
+    /// <summary>Gets normalized source-edit roots admitted by trusted policy and repository restrictions.</summary>
     public ImmutableArray<string> EditableRoots { get; init; } = [];
 
     /// <summary>Gets host-owned source mutation roots, narrowed by child assignment scope independently of discovery configuration.</summary>
@@ -71,8 +71,8 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets whether independent tool calls may execute concurrently.</summary>
     public bool ParallelToolsEnabled { get; init; } = true;
 
-    /// <summary>Gets the trusted mutation automatic-application ceiling.</summary>
-    public MutationApprovalPolicy MutationCeiling { get; init; } = MutationApprovalPolicy.ReviewAll;
+    /// <summary>Gets an explicit trusted automatic-application restriction; absence preserves the selected policy.</summary>
+    public MutationApprovalPolicy MutationCeiling { get; init; } = MutationApprovalPolicy.AlwaysTrustRepo;
 
     /// <summary>Gets the effective large-diff risk threshold.</summary>
     public int LargeDiffThreshold { get; init; } = 500;

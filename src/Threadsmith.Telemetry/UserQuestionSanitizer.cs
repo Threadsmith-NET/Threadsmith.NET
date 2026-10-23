@@ -11,46 +11,100 @@ public static class UserQuestionSanitizer
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(sanitizer);
         UserQuestionValidation.ValidateQuestions(request.Questions);
-        foreach (var question in request.Questions)
+        var safe = CopyRequest(request, sanitizer, out var changed);
+        if (changed)
         {
-            ValidateIdentity(question.Id, sanitizer);
-            foreach (var option in question.Options)
-            {
-                ValidateIdentity(option.Id, sanitizer);
-            }
+            UserQuestionValidation.ValidateQuestions(safe.Questions);
         }
 
-        var safe = request with
-        {
-            Questions = request.Questions.Select(question => question with
-            {
-                Prompt = sanitizer.Sanitize(question.Prompt),
-                Options = question.Options.Select(option => option with { Label = sanitizer.Sanitize(option.Label) }).ToArray(),
-            }).ToArray(),
-        };
-        UserQuestionValidation.ValidateQuestions(safe.Questions);
         return safe;
     }
 
     /// <summary>Sanitizes submitted answers before terminal selection, publication or retention.</summary>
     public static UserQuestionResult Sanitize(UserQuestionRequest request, UserQuestionResult result, IOutputSanitizer sanitizer)
     {
+        ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(result);
         ArgumentNullException.ThrowIfNull(sanitizer);
-        if (result.Status != UserQuestionStatus.Answered)
+        ValidateResult(request, result);
+        var safe = CopyResult(result, sanitizer, out var changed);
+        if (changed)
         {
-            if (!Enum.IsDefined(result.Status) || result.Answers.Count != 0)
-            {
-                throw new ArgumentException("Invalid clarification outcome.", nameof(result));
-            }
-
-            return result with { Answers = [] };
+            ValidateResult(request, safe);
         }
 
-        UserQuestionValidation.ValidateAnswers(request.Questions, result.Answers);
-        var safe = result with { Answers = result.Answers.Select(answer => answer with { Text = answer.Text is null ? null : sanitizer.Sanitize(answer.Text) }).ToArray() };
-        UserQuestionValidation.ValidateAnswers(request.Questions, safe.Answers);
         return safe;
+    }
+
+    /// <summary>Validates and sanitizes a replayed lifecycle once, rechecking bounds only when text changes.</summary>
+    public static UserQuestionStateChanged Sanitize(UserQuestionStateChanged state, IOutputSanitizer sanitizer)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(state.Request);
+        ArgumentNullException.ThrowIfNull(state.Result);
+        ArgumentNullException.ThrowIfNull(sanitizer);
+        ValidateResult(state.Request, state.Result);
+        var request = CopyRequest(state.Request, sanitizer, out var requestChanged);
+        var result = CopyResult(state.Result, sanitizer, out var resultChanged);
+        if (requestChanged || resultChanged)
+        {
+            ValidateResult(request, result);
+        }
+
+        return state with { Request = request, Result = result };
+    }
+
+    private static void ValidateResult(UserQuestionRequest request, UserQuestionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result.Answers);
+        if (!Enum.IsDefined(result.Status) || (result.Status != UserQuestionStatus.Answered && result.Answers.Count != 0))
+        {
+            throw new ArgumentException("Invalid clarification outcome.", nameof(result));
+        }
+
+        // Answer validation includes request validation, including both serialized byte bounds.
+        if (result.Status == UserQuestionStatus.Answered)
+        {
+            UserQuestionValidation.ValidateAnswers(request.Questions, result.Answers);
+        }
+        else
+        {
+            UserQuestionValidation.ValidateQuestions(request.Questions);
+        }
+    }
+
+    private static UserQuestionRequest CopyRequest(UserQuestionRequest request, IOutputSanitizer sanitizer, out bool changed)
+    {
+        var textChanged = false;
+        var questions = request.Questions.Select(question =>
+        {
+            ValidateIdentity(question.Id, sanitizer);
+            var prompt = sanitizer.Sanitize(question.Prompt);
+            textChanged |= prompt != question.Prompt;
+            var options = question.Options.Select(option =>
+            {
+                ValidateIdentity(option.Id, sanitizer);
+                var label = sanitizer.Sanitize(option.Label);
+                textChanged |= label != option.Label;
+                return option with { Label = label };
+            }).ToArray();
+            return question with { Prompt = prompt, Options = options };
+        }).ToArray();
+        changed = textChanged;
+        return request with { Questions = questions };
+    }
+
+    private static UserQuestionResult CopyResult(UserQuestionResult result, IOutputSanitizer sanitizer, out bool changed)
+    {
+        var textChanged = false;
+        var answers = result.Answers.Select(answer =>
+        {
+            var text = answer.Text is null ? null : sanitizer.Sanitize(answer.Text);
+            textChanged |= text != answer.Text;
+            return answer with { Text = text };
+        }).ToArray();
+        changed = textChanged;
+        return result with { Answers = answers };
     }
 
     private static void ValidateIdentity(string identity, IOutputSanitizer sanitizer)

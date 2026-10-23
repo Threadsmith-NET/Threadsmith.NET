@@ -4719,13 +4719,12 @@ public sealed partial class InteractionCoordinator
                 "The staged mutation review does not match its review-ready event.");
         }
 
-        var mutationInput = await InteractionInputReader.ReadSecondaryAsync(
-            _surface,
-            "Mutation review: 1 apply approved set, 2 discard\n",
-            PresentationTextRole.Status,
-            ComposerPurpose.Secondary,
+        var selected = await _surface.SelectAsync(
+            $"Mutation review: apply {staged.MutationSet.Mutations.Count} staged changes?",
+            ["Apply approved set", "Discard"],
+            staged.Preview.UnifiedDiff,
             cancellationToken);
-        if (mutationInput.IsSubmitted && mutationInput.Text.Trim() == "1")
+        if (selected == 0)
         {
             _ = await controller.CommitMutationSetAsync(
                 mutationSetId,

@@ -74,6 +74,8 @@ public static class AskUserConversationTests
 
         // Completion must retain the admitted ceiling even without the original policy context.
         var result = await pipeline.CompleteSuspensionAsync(request with { Context = CreateContext() }, suspended, answer, token);
+        var repeated = await pipeline.CompleteSuspensionAsync(request, suspended, new(UserQuestionStatus.Interrupted, []), token);
+        Assert.Same(result, repeated);
 
         var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
         Assert.Equal(suspended.ToolInvocationId, result.ToolInvocationId);
@@ -121,7 +123,9 @@ public static class AskUserConversationTests
     [InlineData(false, true, false, "ask_user", 1)]
     [InlineData(false, false, false, "ask_user", 2)]
     [InlineData(false, true, false, "ask_user", 2)]
-    public static async Task LiveWaitReleasesResourcesAndResumesOriginalCallExactlyOnce(bool cancelled, bool native, bool stopRun, string toolName, int cancellationBoundary = 0)
+    [InlineData(false, false, false, "ask_user", 0, true)]
+    [InlineData(false, true, false, "ask_user", 0, true)]
+    public static async Task LiveWaitReleasesResourcesAndResumesOriginalCallExactlyOnce(bool cancelled, bool native, bool stopRun, string toolName, int cancellationBoundary = 0, bool failAfterHookAudit = false)
     {
         var token = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
@@ -156,7 +160,7 @@ public static class AskUserConversationTests
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, prompts, modelResolver: resolver);
         var budget = new ExecutionBudget(new BudgetDimensions(100000, 20, TimeSpan.MaxValue));
         var registry = new ToolRegistry([new AskUserTool(prompts), new DateTimeTool(prompts)]);
-        var hooks = new RecordingHooks();
+        var hooks = new RecordingHooks { FailQuestionAudit = failAfterHookAudit };
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget, hooks: hooks);
         var model = new QuestionProvider { Native = native, ToolName = toolName };
         var steering = new RunSteeringCoordinator();
@@ -223,6 +227,17 @@ public static class AskUserConversationTests
         }
 
         answer.TrySetResult(cancelled ? new(UserQuestionStatus.Cancelled, []) : new(UserQuestionStatus.Answered, [new("q", "a", null)]));
+        if (failAfterHookAudit)
+        {
+            var failure = await Assert.ThrowsAnyAsync<Exception>(() => completedRun.WaitAsync(token));
+            Assert.Contains("Synthetic after-tool audit failure", failure.ToString(), StringComparison.Ordinal);
+            var questionId = observed.OfType<UserQuestionStateChanged>().First().Request.ToolInvocationId;
+            Assert.True(Assert.Single(observed.OfType<ToolInvocationCompleted>(), item => item.ToolInvocationId == questionId).Succeeded);
+            Assert.Equal(bool.TrueString, Assert.Single(hooks.AfterInvocations, item => item.OperationId == questionId.Value).Succeeded);
+            Assert.Single(model.Requests);
+            return;
+        }
+
         if (cancellationBoundary != 0)
         {
             try
@@ -429,6 +444,8 @@ public static class AskUserConversationTests
 
     private sealed class RecordingHooks : IHookCoordinator
     {
+        public bool FailQuestionAudit { get; init; }
+
         public IReadOnlyList<HookHandlerDescriptor> Handlers => [];
 
         public List<(Guid OperationId, string Succeeded)> AfterInvocations { get; } = [];
@@ -443,6 +460,10 @@ public static class AskUserConversationTests
             if (point == HookPoint.AfterToolInvocation)
             {
                 AfterInvocations.Add((operationId, payload!["succeeded"]));
+                if (FailQuestionAudit && payload["toolId"].Equals("ask_user", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException("Synthetic after-tool audit failure");
+                }
             }
 
             return Task.FromResult(new HookBoundaryDecision(HookDecisionKind.Continue, [], []));

@@ -1,5 +1,7 @@
 namespace Threadsmith.Persistence;
 
+using Threadsmith.Core;
+
 /// <summary>Migrates one domain event discriminator from an older schema version to the current (gap #3).</summary>
 /// <remarks>
 /// Session restore must tolerate event/schema-version drift: a persisted session with older event
@@ -31,7 +33,7 @@ public sealed class DomainEventMigrationRegistry
 
     /// <summary>Initializes a new instance of the <see cref="DomainEventMigrationRegistry"/> class.</summary>
     /// <param name="migrators">The registered migrators.</param>
-    /// <param name="currentVersion">The current event schema version the host understands.</param>
+    /// <param name="currentVersion">The common migration target; event-specific compatible versions are owned by the event reader.</param>
     public DomainEventMigrationRegistry(IEnumerable<IDomainEventMigrator> migrators, int currentVersion)
     {
         ArgumentNullException.ThrowIfNull(migrators);
@@ -53,7 +55,8 @@ public sealed class DomainEventMigrationRegistry
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(discriminator);
         ArgumentException.ThrowIfNullOrWhiteSpace(payloadJson);
-        if (schemaVersion == CurrentVersion)
+        if (schemaVersion == CurrentVersion
+            || (schemaVersion > CurrentVersion && DomainEventJson.SupportsSchemaVersion(discriminator, schemaVersion)))
         {
             return new EventMigrationOutcome(LegacyState.Current, schemaVersion, payloadJson);
         }

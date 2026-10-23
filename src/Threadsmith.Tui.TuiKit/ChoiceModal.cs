@@ -23,6 +23,7 @@ internal sealed class ChoiceModal : Modal
     private readonly CachedTextRun _selectionPrefixRun = new();
     private readonly TranscriptView _prompt;
     private readonly string _title;
+    private readonly string? _reviewDetails;
     private readonly Choice[] _options;
     private readonly int _contentWidth;
     private Choice[] _matches;
@@ -37,12 +38,13 @@ internal sealed class ChoiceModal : Modal
     private TranscriptView? _detail;
 
     /// <summary>Initializes a new instance of the <see cref="ChoiceModal"/> class.</summary>
-    internal ChoiceModal(string title, IReadOnlyList<Choice> options, TuiResourceLimits? limits = null)
+    internal ChoiceModal(string title, IReadOnlyList<Choice> options, TuiResourceLimits? limits = null, string? reviewDetails = null)
     {
         _limits = limits ?? new();
         _limits.Validate();
         _filter = new ComposerBuffer(_limits);
         _title = title;
+        _reviewDetails = reviewDetails;
         _prompt = new TranscriptView(_limits);
         _prompt.Present(new PresentationBatch([new PresentationTextItem([new(title, PresentationTextRole.SelectionPrompt)])]));
         _prompt.HandleKey(KeyEvent.Special(KeyCode.Home));
@@ -117,7 +119,8 @@ internal sealed class ChoiceModal : Modal
             {
                 _detail = new TranscriptView(_limits) { ResolveStyle = ResolveStyle };
                 var selectedDetail = _matches.Length > 0 ? "\n\nSelected option: " + _matches[_selected].Label : string.Empty;
-                _detail.Present(new PresentationBatch([new PresentationTextItem([new(_title + selectedDetail, PresentationTextRole.Default)])]));
+                var reviewDetails = _reviewDetails is null ? string.Empty : "\n\n" + _reviewDetails;
+                _detail.Present(new PresentationBatch([new PresentationTextItem([new(_title + reviewDetails + selectedDetail, PresentationTextRole.Default)])]));
                 _detail.HandleKey(KeyEvent.Special(KeyCode.Home));
             }
             else

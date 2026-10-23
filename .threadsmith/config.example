@@ -221,8 +221,8 @@
   },
 
   // ── Editable roots (§21.2) ─────────────────────────────────────────────
-  // Legacy root preference retained for compatibility. This is not a source-edit
-  // authorization boundary: ordinary edits may target repository-contained paths.
+  // Source-edit authority: omitted defaults to the repository; [] denies edits.
+  // Trusted arrays replace inherited roots; repository arrays only narrow them.
   // Protected control files, secret stores and prohibitedPaths remain blocked.
   "editableRoots": [ "src/" ],
 
@@ -666,7 +666,8 @@
   // /policy saves reviewAll (default), reviewRisky, and alwaysTrustRepo
   // only in this repo config. TrustSession applies only to the running session
   // and leaves the saved policy unchanged.
-  // All preferences remain bounded by trusted mutation:approvalPolicy (default reviewAll).
+  // An explicitly configured trusted mutation:approvalPolicy may restrict these
+  // choices. An absent trusted setting preserves the selected repository policy.
   "mutation": {
     "approvalPolicy": "reviewAll",
     // ReviewRisky pauses when the exact preview exceeds this many changed lines.

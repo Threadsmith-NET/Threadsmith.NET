@@ -9,6 +9,28 @@ using Xunit;
 [Collection("TUIKit terminal")]
 public static class ChoicePromptTests
 {
+    /// <summary>Mutation review evidence is available in the existing details view before selecting an outcome.</summary>
+    [Fact]
+    public static void ReviewDetailsRemainVisibleBeforeSelection()
+    {
+        var modal = new ChoiceModal(
+            "Mutation review",
+            [new("apply", "Apply approved set"), new("discard", "Discard")],
+            reviewDetails: "--- Example.cs\n+++ Example.cs\n- class Example { }\n+ class Changed { }\u001b[31m");
+        var cells = new CellBuffer(100, 30);
+        modal.Render(new BufferSurface(cells));
+        Assert.Contains("Apply approved set", TUIKit.Testing.Snapshot.ToText(cells), StringComparison.Ordinal);
+        modal.HandleKey(KeyEvent.Special(KeyCode.F2));
+        modal.Render(new BufferSurface(cells));
+        var details = TUIKit.Testing.Snapshot.ToText(cells);
+        Assert.Contains("class Example", details, StringComparison.Ordinal);
+        Assert.Contains("class Changed", details, StringComparison.Ordinal);
+        Assert.DoesNotContain('\u001b', details);
+        Assert.False(modal.IsClosed);
+        modal.HandleKey(KeyEvent.Special(KeyCode.Escape));
+        Assert.True(modal.IsClosed);
+    }
+
     /// <summary>Details wrap unbroken targets, survive resize, and never approve through scrolling.</summary>
     [Theory]
     [InlineData(40, 12)]

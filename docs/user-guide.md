@@ -582,6 +582,8 @@ See [conversation flow](operations/conversation-loop.md), [recovery](operations/
 
 Trust-based choices print a warning. Every policy still requires `TrustedMutation`, preserves the exact diff in events/projections, validates baseline hashes and approved roots, rejects prohibited/secret-bearing paths and `.git` metadata, and never commits, pushes, resets, cleans, or otherwise performs destructive Git operations. Build and test validation runs only when the model or user invokes the corresponding tools.
 
+A saved auto-apply choice remains effective when no independent trusted mutation restriction is configured. Explicit trusted `ReviewAll` or `ReviewRisky` restrictions still apply. Required reviews open the normal Apply/Discard selection modal; F2 shows the staged diff and Escape declines the edit without applying it.
+
 Optional Git-worktree isolation may be used by configured workflows, but Threadsmith does not treat Git as a transaction mechanism and does not perform destructive Git operations.
 
 ### Structured file lifecycle mutations

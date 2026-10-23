@@ -13,6 +13,59 @@ public static class UserQuestionSanitizationTests
 {
     private const string Sentinel = "synthetic-question-credential-90348";
 
+    /// <summary>The combined replay boundary preserves input validation and validates expanded sanitized text.</summary>
+    [Theory]
+    [InlineData("original-prompt")]
+    [InlineData("original-answer")]
+    [InlineData("expanded-prompt")]
+    [InlineData("expanded-answer")]
+    [InlineData("identity")]
+    [InlineData("outcome")]
+    public static void ReplayRejectsInvalidOriginalAndSanitizedPayloads(string invalid)
+    {
+        var request = Request() with { Questions = [new("q", "Ordinary prompt", [])] };
+        var result = new UserQuestionResult(UserQuestionStatus.Answered, [new("q", null, "Ordinary answer")]);
+        IOutputSanitizer sanitizer = new SecretOutputSanitizer();
+        if (invalid == "original-prompt")
+        {
+            request = request with { Questions = [new("q", new string('x', 2001), [])] };
+        }
+        else if (invalid == "original-answer")
+        {
+            result = result with { Answers = [new("q", null, new string('x', 8001))] };
+        }
+        else if (invalid is "expanded-prompt" or "expanded-answer")
+        {
+            sanitizer = new ExpandingSanitizer(invalid == "expanded-prompt" ? "Ordinary prompt" : "Ordinary answer");
+        }
+        else if (invalid == "identity")
+        {
+            request = request with { Questions = [new("password=" + Sentinel, "Ordinary prompt", [])] };
+            result = new(UserQuestionStatus.Pending, []);
+        }
+        else
+        {
+            result = result with { Status = UserQuestionStatus.Cancelled };
+        }
+
+        var state = new UserQuestionStateChanged(request.SessionId, DateTimeOffset.UtcNow, request, result);
+        Assert.Throws<ArgumentException>(() => UserQuestionSanitizer.Sanitize(state, sanitizer));
+    }
+
+    /// <summary>Unchanged sanitized text still receives detached lists at the replay trust boundary.</summary>
+    [Fact]
+    public static void ReplayDetachesValidatedCollections()
+    {
+        var request = Request() with { Questions = [new("q", "Ordinary prompt", [new("a", "First"), new("b", "Second")])] };
+        var result = new UserQuestionResult(UserQuestionStatus.Answered, [new("q", "a", null)]);
+        var state = new UserQuestionStateChanged(request.SessionId, DateTimeOffset.UtcNow, request, result);
+        var safe = UserQuestionSanitizer.Sanitize(state, new SecretOutputSanitizer());
+        Assert.NotSame(request.Questions, safe.Request.Questions);
+        Assert.NotSame(request.Questions[0].Options, safe.Request.Questions[0].Options);
+        Assert.NotSame(result.Answers, safe.Result.Answers);
+        Assert.Equal(JsonSerializer.Serialize(state), JsonSerializer.Serialize(safe));
+    }
+
     /// <summary>All terminal outcomes retain only sanitized content.</summary>
     [Theory]
     [InlineData(UserQuestionStatus.Answered)]
@@ -137,5 +190,14 @@ public static class UserQuestionSanitizationTests
 
         public Task<TProjection?> GetAsync<TProjection>(ProjectionKey key, CancellationToken cancellationToken = default)
             where TProjection : class, IProjection => Task.FromResult<TProjection?>(null);
+    }
+
+    private sealed class ExpandingSanitizer : IOutputSanitizer
+    {
+        private readonly string _target;
+
+        internal ExpandingSanitizer(string target) => _target = target;
+
+        public string Sanitize(string value) => value == _target ? new string('x', 8001) : value;
     }
 }

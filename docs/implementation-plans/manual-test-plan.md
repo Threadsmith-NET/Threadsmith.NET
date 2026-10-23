@@ -1338,15 +1338,16 @@ Current limitation: live-provider smoke verification is operator-initiated and r
 
 1. Request a change requiring two supporting reads outside the target file.
 2. Confirm the model inspects source and invokes `edit_source` without required planning/approval of a plan.
-3. Review the exact diff, authorize it, and verify committed bytes and the applied receipt.
+3. With `ReviewAll`, confirm the Apply/Discard selection modal opens after the exact diff is presented. Open F2 and inspect the staged diff before choosing Apply. Verify committed bytes and the applied receipt. Repeat with Discard and Escape and confirm neither writes.
 4. Continue related repairs in the ordinary loop, then inspect the cumulative disk diff. Confirm edit-only completion starts no build/tests; explicitly invoke validation when requested and inspect its actual results.
+5. Remove only a disposable fixture's trusted mutation ceiling, retain its saved `AlwaysTrustRepo`, restart, and confirm eligible edits apply without a review prompt. Repeat with `TrustSession`. With no saved/selected preference, confirm the default remains `ReviewAll`. Explicit trusted `ReviewAll` or `ReviewRisky` settings must still constrain the choice.
 
 ### MTP-161 — Source denial and policy invariants
 
 1. Exercise malformed instructions, protected/secret/Git-metadata paths, insufficient trust, conflicting move destinations and stale exact anchors.
 2. Decline an exact review and confirm no write and no completion claim.
 3. Verify supporting evidence never expands write authority and legacy planning settings cannot auto-authorize edits.
-4. Retain the old template `editableRoots: ["src/"]` in user configuration, then authorize ordinary edits beneath `container/source/`, `tests/`, `docs/` and `.inbox/`. Confirm all apply through the shared edit path. Confirm the same session still rejects generic writes to configuration, policy and secret stores, prohibited paths and Git metadata; child assignments remain confined to their assigned scope.
+4. In a disposable user configuration, set `editableRoots: ["src/"]` and confirm edits outside `src/` are rejected even with automatic application enabled. Set `[]` and confirm all source edits are denied. Remove the key and any repository filters, then confirm ordinary edits beneath `container/source/`, `tests/`, `docs/` and `.inbox/` use the shared edit path. Configuration, policy and secret stores, prohibited paths and Git metadata remain protected; child assignments remain confined to their assigned scope.
 
 ### MTP-162 — Compiler repair and final validation
 
@@ -1864,6 +1865,7 @@ Expected: missing counters remain unavailable rather than zero; reported values 
 3. Confirm repository, trust, solution, enabled tools, and policy remain while the new request contains no prior-session conversation, usage, run, inspection, or provider continuation; explicit repository notes remain eligible by relevance/mode and retired automatic snapshots stay absent.
 4. Detach output scrolling and select some existing output. Run `/resume <recorded-id>` and confirm restored conversation mode, usage, model/reasoning, and status. Verify the output is replaced with chronological saved user messages and assistant replies, positioned at the latest exchange with selection cleared. Press Home and resize; previous-session output must remain absent and restored messages must remain correctly styled.
 5. Repeat through `/resume` selection, including the current session, and with an empty archive, expired message bodies, and history beyond the output retention limits. Verify empty history clears output, missing bodies receive placeholders, omissions are reported, and historical tools/reasoning/progress are not replayed. Attempt a missing or other-repository ID and confirm existing output remains intact.
+6. Using disposable history fixtures, resume supported schema-2 repository/approval/mutation events, including a previously read-only catalog entry, then submit a fresh request. Confirm normal continuation, the currently opened workspace/trust/solution binding, and no historical tool, approval or write replay. With no current binding, historical runtime identities and compiler readiness must be cleared until an explicit repository open. With a genuinely unsupported future event, confirm an explicit read-only banner and actionable new-request rejection rather than a missing-session error. Repeating resume must re-evaluate the history while retaining that restriction if it remains unsupported.
 
 Expected: transitions complete only at a safe boundary and status contains no values retained from the session being left.
 

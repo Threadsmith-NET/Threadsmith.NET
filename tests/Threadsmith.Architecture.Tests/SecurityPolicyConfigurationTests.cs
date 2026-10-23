@@ -140,17 +140,30 @@ public sealed partial class SecurityPolicyConfigurationTests : IDisposable
         Assert.Empty(restricted.NetworkHostRestriction);
     }
 
-    /// <summary>Repository preferences cannot authorize automatic application.</summary>
+    /// <summary>Saved automatic application survives absent ceilings, while explicit trusted restrictions remain enforced.</summary>
     [Fact]
     public void MutationPreferenceCannotRaiseTrustedCeilingOrThreshold()
     {
         File.WriteAllText(_paths.RepositoryConfiguration, """{"mutation":{"approvalPolicy":"alwaysTrustRepo","largeDiffThreshold":10000}}""");
         var policy = Load();
-        Assert.Equal(MutationApprovalPolicy.ReviewAll, policy.MutationCeiling);
+        Assert.Equal(MutationApprovalPolicy.AlwaysTrustRepo, policy.MutationCeiling);
         Assert.Equal(500, policy.LargeDiffThreshold);
+        var binding = new SessionPolicyBinding();
+        binding.Publish(policy);
+        Assert.True(new MutationApprovalPolicyService(policyBinding: binding).RequiresApproval(new MutationRiskAssessment()));
+        var preference = new ConfigurationBuilder().AddJsonFile(_paths.RepositoryConfiguration).Build();
+        var approval = new MutationApprovalPolicyService(preference, policyBinding: binding);
+        Assert.False(approval.RequiresApproval(new MutationRiskAssessment()));
+        Assert.False(approval.RequiresApproval(new MutationRiskAssessment { HasLargeDiff = true }));
+        File.WriteAllText(_paths.UserConfiguration, """{"mutation":{"approvalPolicy":"reviewAll"}}""");
+        binding.Publish(Load());
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment()));
         File.WriteAllText(_paths.UserConfiguration, """{"mutation":{"approvalPolicy":"reviewRisky","largeDiffThreshold":200}}""");
         Assert.Equal(MutationApprovalPolicy.ReviewRisky, Load().MutationCeiling);
         Assert.Equal(200, Load().LargeDiffThreshold);
+        binding.Publish(Load());
+        Assert.False(approval.RequiresApproval(new MutationRiskAssessment()));
+        Assert.True(approval.RequiresApproval(new MutationRiskAssessment { HasLargeDiff = true }));
     }
 
     /// <summary>Captured immutable authority cannot survive a generation change.</summary>

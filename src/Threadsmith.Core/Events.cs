@@ -991,6 +991,18 @@ public static class DomainEventJson
         return JsonSerializer.Serialize(domainEvent, domainEvent.GetType());
     }
 
+    /// <summary>Reports whether the current event reader supports an allow-listed event and schema version.</summary>
+    public static bool SupportsSchemaVersion(string discriminator, int schemaVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(discriminator);
+        return RegisteredTypes.ContainsKey(discriminator)
+            && schemaVersion >= 0
+            && (schemaVersion <= 1
+                || (schemaVersion == 2
+                    && discriminator is "repositoryOpened" or "planProposed" or "approvalRequested"
+                        or "mutationSetProposed" or "mutationApplied"));
+    }
+
     /// <summary>Deserializes an allow-listed event with a supported schema version.</summary>
     public static IDomainEvent Deserialize(string discriminator, int schemaVersion, string json)
     {
@@ -1001,14 +1013,7 @@ public static class DomainEventJson
             throw new InvalidDataException($"Unknown domain event type '{discriminator}'.");
         }
 
-        if (schemaVersion < 0
-            || (schemaVersion > 1
-                && !(schemaVersion == 2
-                    && (string.Equals(discriminator, "repositoryOpened", StringComparison.Ordinal)
-                        || string.Equals(discriminator, "planProposed", StringComparison.Ordinal)
-                        || string.Equals(discriminator, "approvalRequested", StringComparison.Ordinal)
-                        || string.Equals(discriminator, "mutationSetProposed", StringComparison.Ordinal)
-                        || string.Equals(discriminator, "mutationApplied", StringComparison.Ordinal)))))
+        if (!SupportsSchemaVersion(discriminator, schemaVersion))
         {
             throw new NotSupportedException($"Unsupported event schema version {schemaVersion}.");
         }

@@ -297,7 +297,10 @@ internal static class SecurityPolicyConfigurationLoader
 
         var requireShellApproval = true;
         var parallelEnabled = true;
-        var mutationCeiling = MutationApprovalPolicy.ReviewAll;
+
+        // ReviewAll remains the ordinary preference default. An absent independent
+        // ceiling must not silently override a saved or interactive auto-apply choice.
+        var mutationCeiling = MutationApprovalPolicy.AlwaysTrustRepo;
         var threshold = 500;
         foreach (var source in trusted)
         {
@@ -364,6 +367,7 @@ internal static class SecurityPolicyConfigurationLoader
             throw new InvalidDataException("PolicyValueInvalid: tools:allowedNetworkHosts requires exact hostnames, without URL paths or wildcard grants.");
         }
 
+        var editableRoots = ResolveList("editableRoots", ["."], pathsAreRoots: true);
         var policy = new EffectiveSessionPolicy
         {
             BindingId = bindingId,
@@ -376,8 +380,8 @@ internal static class SecurityPolicyConfigurationLoader
             DeniedTools = Union("tools:deny", StringComparer.OrdinalIgnoreCase),
             ReviewTools = Union("tools:requireApproval", StringComparer.OrdinalIgnoreCase),
             WriteFolders = ResolveList("tools:writeFile:allowedFolders", [".inbox"], pathsAreRoots: true),
-            EditableRoots = ResolveList("editableRoots", ["."], pathsAreRoots: true),
-            MutationRoots = [repository],
+            EditableRoots = editableRoots,
+            MutationRoots = editableRoots,
             ProhibitedPaths = Union("prohibitedPaths", StringComparer.Ordinal),
             AllowedNetworkHosts = [.. hosts.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],
             NetworkHostRestriction = hostFilter is null ? default : [.. hostFilter.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)],

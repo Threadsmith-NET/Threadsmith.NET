@@ -6,7 +6,7 @@ Threadsmith stores repository-bound session metadata in the configured SQLite da
 
 - `/new` checkpoints the current session and activates an empty independent session. Repository trust, solution, configuration, tools, and mutation policy remain effective.
 - `/resume <session-id>` restores an exact session for the open repository.
-- `/resume` opens a newest-first numbered repository session selector. The current session is marked; selecting it is idempotent.
+- `/resume` opens a newest-first numbered repository session selector. The current session is marked; selecting a writable current session is idempotent, while read-only history is re-evaluated.
 - `/clone` checkpoints the current session and atomically copies its sanitized reconstructible conversation and governed evidence into a new top-level session. The confirmation prints `/resume <source-session-id>` on a copyable line.
 
 Transitions require a complete safe boundary. Finish or cancel active model, tool, mutation, validation, skill, hook, or delegated work before retrying.
@@ -14,6 +14,10 @@ Transitions require a complete safe boundary. Finish or cancel active model, too
 ## Restoration and compatibility
 
 Resume combines tolerant event replay with the conversation archive and persisted session model/reasoning snapshot. Unknown legacy state is reported and is not fabricated. If an exact persisted reasoning level is no longer supported it resets visibly to `none`; a missing or incompatible model reports `/models` guidance rather than silently assigning repository defaults.
+
+Compatibility follows the event reader's per-event schema support, including supported schema-2 repository, approval, plan and mutation events. A prior read-only catalog mark is re-evaluated on resume; it does not permanently prevent recovery after the host gains support for that history. Truly unsupported or unreadable events remain inspectable only, with an explicit read-only status and rejection of new turns rather than a misleading missing-session error. Replaying history does not repeat tools, grant approvals or apply staged changes.
+
+Workspace identity, effective trust, selected solution and compiler readiness come from the currently opened repository through the same binding path used by new and cloned sessions. Persisted workspace IDs are historical data. Without a current binding, they are cleared and repository tools require an explicit repository open.
 
 Interactive resume replaces the entire retained output with a bounded recent window of saved user messages and assistant replies in chronological order, positioned at the latest exchange. This also applies when selecting the current session. User messages use the ordinary input style and assistant replies follow the current Markdown setting. Earlier output from the session being left is discarded, including selection and scroll position; Home cannot recover it. Empty archives still clear the output, unavailable saved bodies receive a placeholder, and omitted history is reported. Failed transitions leave the existing output intact.
 

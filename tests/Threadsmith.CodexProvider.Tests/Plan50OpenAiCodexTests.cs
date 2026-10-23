@@ -16,6 +16,58 @@ public sealed class Plan50OpenAiCodexTests
     private const string ProviderInstructions =
         "You are Threadsmith.NET's coding model. Follow the host-owned tool and repository policy.";
 
+    /// <summary>Expired-token refresh propagates cancellation after the HTTP request has started.</summary>
+    [Fact]
+    public async Task TokenRefresh_HangingEndpoint_ObservesBoundedCancellation()
+    {
+        var token = TestContext.Current.CancellationToken;
+        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-cancel-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var path = Path.Combine(root, "token.json");
+            await File.WriteAllTextAsync(path, "{\"AccessToken\":\"old\",\"RefreshToken\":\"refresh\",\"ExpiresAt\":\"2020-01-01T00:00:00Z\"}", token);
+            using var handler = new HangingHandler();
+            using var oauth = new OpenAiCodexOAuthManager(new HttpClient(handler), path);
+            using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
+            var refresh = oauth.GetAccessTokenAsync(caller.Token);
+            await handler.Started.Task.WaitAsync(token);
+            await caller.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => refresh.WaitAsync(token));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>Response body timeout failures remain distinct from explicit caller cancellation.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Provider_ResponseStreamClassifiesTimeoutAndCallerCancellation(bool callerCancels)
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var stream = new WaitingResponseStream { SimulateTimeout = !callerCancels };
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(stream) });
+        var provider = await CreateProviderAsync(handler, "token");
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(token);
+        var response = provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token).AsTask();
+        await stream.Started.Task.WaitAsync(token);
+        if (callerCancels)
+        {
+            await caller.CancelAsync();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => response.WaitAsync(token));
+        }
+        else
+        {
+            var failure = await Assert.ThrowsAsync<ModelProviderTimeoutException>(() => response.WaitAsync(token));
+            Assert.Contains("timed out", failure.Message, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(1, handler.RequestCount);
+    }
+
     /// <summary>Common preferences refresh the real Codex HTTP schema without replacing the provider or run.</summary>
     [Theory]
     [InlineData("ask_user")]
@@ -1227,6 +1279,37 @@ public sealed class Plan50OpenAiCodexTests
             Encoding.UTF8,
             "text/event-stream"),
         };
+    }
+
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Started.TrySetResult();
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            throw new InvalidOperationException("A cancelled request cannot return a response.");
+        }
+    }
+
+    private sealed class WaitingResponseStream : MemoryStream
+    {
+        public bool SimulateTimeout { get; init; }
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            Started.TrySetResult();
+            if (SimulateTimeout)
+            {
+                throw new OperationCanceledException("Synthetic response body timeout.");
+            }
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0;
+        }
     }
 
     private static async Task<IModelProvider> CreateProviderAsync(

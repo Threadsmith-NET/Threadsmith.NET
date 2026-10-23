@@ -47,6 +47,9 @@ internal sealed class QuestionModal : Modal
     private readonly CachedTextRun _choice = new();
     private readonly CachedTextRun _actions = new();
     private readonly List<CachedTextRun> _optionRows = [];
+    private int _promptQuestionIndex = -1;
+    private int _promptWidth;
+    private string[] _promptRows = [];
     private TranscriptView _details;
     private bool _showDetails;
     private int _focus;
@@ -243,10 +246,17 @@ internal sealed class QuestionModal : Modal
         _fits = ModalFrame.Fits(surface.Size) && surface.Size.Height >= 15;
         var question = _draft.Request.Questions[_draft.QuestionIndex];
         var contentWidth = Math.Max(1, Math.Min(90, surface.Size.Width - 4) - 4);
-        var promptRows = TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(question.Prompt)), contentWidth);
+        if (_promptQuestionIndex != _draft.QuestionIndex || _promptWidth != contentWidth)
+        {
+            _promptRows = [.. TextWrapper.Wrap(StyledText.From(TranscriptView.Safe(question.Prompt)), contentWidth)
+                .Select(row => row.ToPlainString())];
+            _promptQuestionIndex = _draft.QuestionIndex;
+            _promptWidth = contentWidth;
+        }
+
         var choiceCount = question.Options.Count == 0 ? 0 : question.Options.Count + 1;
         var showEditor = _draft.OtherSelected[_draft.QuestionIndex];
-        var desiredHeight = Math.Min(4, promptRows.Count) + choiceCount + (showEditor ? 12 : 9);
+        var desiredHeight = Math.Min(4, _promptRows.Length) + choiceCount + (showEditor ? 12 : 9);
         var frame = ModalFrame.Create(surface, ResolveStyle(PresentationTextRole.Default), preferredSize: new Size(90, _showDetails ? 26 : desiredHeight));
         if (frame is null)
         {
@@ -268,10 +278,10 @@ internal sealed class QuestionModal : Modal
             return;
         }
 
-        var promptHeight = Math.Min(promptRows.Count, Math.Max(1, Math.Min(4, frame.Size.Height - (showEditor ? 10 : 7))));
+        var promptHeight = Math.Min(_promptRows.Length, Math.Max(1, Math.Min(4, frame.Size.Height - (showEditor ? 10 : 7))));
         for (var index = 0; index < promptHeight; index++)
         {
-            DrawRow(frame, index, 2 + index, promptRows[index].ToPlainString(), PresentationTextRole.SelectionPrompt);
+            DrawRow(frame, index, 2 + index, _promptRows[index], PresentationTextRole.SelectionPrompt);
         }
 
         var optionTop = promptHeight + 2;

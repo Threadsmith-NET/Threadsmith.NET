@@ -49,7 +49,7 @@ public sealed partial class SourceEditApplicationTests
         var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new UnexpectedApproval(), fixture.Events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance);
         var provider = new DirectEditProvider
         {
-            BeforeFinalAnswer = feedbackDuringFinalAnswer ? () => analyzer.PublishLateFeedback = true : null,
+            BeforeFinalAnswer = feedbackDuringFinalAnswer ? analyzer.PublishLateFeedbackAsync : null,
         };
         var sanitizer = new SecretOutputSanitizer();
         var evidence = new EvidenceStore(fixture.Events, sanitizer);
@@ -279,6 +279,8 @@ public sealed partial class SourceEditApplicationTests
     {
         private readonly ISourceEditAnalyzer _inner;
         private readonly IDomainEventStream _events;
+        private ApplySourceEditCommand? _latestCommand;
+        private SourceEditAnalysis? _lateFeedback;
 
         public CompletingAnalyzer(ISourceEditAnalyzer inner, IDomainEventStream events)
         {
@@ -293,10 +295,13 @@ public sealed partial class SourceEditApplicationTests
 
         public async Task<SourceEditAnalysis?> AnalyzeCandidateAsync(ApplySourceEditCommand command, string repositoryPath, MutationEffectSnapshot snapshot, TimeSpan immediateAllowance, CancellationToken cancellationToken = default)
         {
+            _latestCommand = command;
             var completed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             await using var subscription = _events.Subscribe((item, _) =>
             {
-                if (item is SemanticCheckCompleted check && check.RunId == command.RunId && check.CheckName == "advisory edit analysis")
+                if (item is SemanticCheckCompleted { Phase: SemanticCheckPhase.PreMutation } check
+                    && check.SessionId == command.SessionId && check.RunId == command.RunId && check.Analysis?.EffectId == command.EffectId
+                    && check.CheckName == "advisory edit analysis")
                 {
                     completed.TrySetResult();
                 }
@@ -312,21 +317,43 @@ public sealed partial class SourceEditApplicationTests
             return admitted;
         }
 
-        public bool PublishLateFeedback { get; set; }
+        public async Task PublishLateFeedbackAsync(CancellationToken cancellationToken)
+        {
+            var command = _latestCommand ?? throw new InvalidOperationException("No candidate was analyzed.");
+            var completed = new TaskCompletionSource<SourceEditAnalysis>(TaskCreationOptions.RunContinuationsAsynchronously);
+            await using var subscription = _events.Subscribe((item, _) =>
+            {
+                if (item is SemanticCheckCompleted { Phase: SemanticCheckPhase.PostMutation, Analysis: { Pending: false, Obsolete: false, CommittedGeneration: not null } analysis } check
+                    && check.SessionId == command.SessionId && check.RunId == command.RunId && analysis.EffectId == command.EffectId)
+                {
+                    completed.TrySetResult(analysis);
+                }
+
+                return Task.CompletedTask;
+            });
+            var latest = _inner.GetLatestAnalysis(command.SessionId, command.RunId, command.WorkspaceId, command.EffectId);
+            if (latest is not { Pending: false, Obsolete: false, CommittedGeneration: not null })
+            {
+                latest = await completed.Task.WaitAsync(cancellationToken);
+            }
+
+            // Inject a stable, committed result during the final answer, independently
+            // of background refresh scheduling and later compiler revisions.
+            _lateFeedback = latest with
+            {
+                Revision = latest.Revision + 100,
+                CurrentErrors = 1,
+                NewErrors = 0,
+                Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial")],
+            };
+        }
 
         public SourceEditAnalysis? GetLatestAnalysis(SessionId sessionId, RunId runId, WorkspaceId workspaceId, Guid effectId)
         {
-            var latest = _inner.GetLatestAnalysis(sessionId, runId, workspaceId, effectId);
-            return PublishLateFeedback && latest is not null
-                ? latest with
-                {
-                    Revision = latest.Revision + 100,
-                    Pending = false,
-                    CurrentErrors = 1,
-                    NewErrors = 0,
-                    Diagnostics = [new("CS5001", "Missing entry point", null, null, "Example.Tests", "net10.0", "initial")],
-                }
-                : latest;
+            return _latestCommand is { } command && command.SessionId == sessionId && command.RunId == runId
+                && command.WorkspaceId == workspaceId && _lateFeedback is { } feedback && feedback.EffectId == effectId
+                ? feedback
+                : _inner.GetLatestAnalysis(sessionId, runId, workspaceId, effectId);
         }
 
         public void ConfirmApplied(WorkspaceId workspaceId, Guid effectId)
@@ -354,7 +381,7 @@ public sealed partial class SourceEditApplicationTests
     {
         private readonly ModelProfileId _profileId = ModelProfileId.New();
 
-        public Action? BeforeFinalAnswer { get; init; }
+        public Func<CancellationToken, Task>? BeforeFinalAnswer { get; init; }
 
         public List<ModelStreamRequest> Requests { get; } = [];
 
@@ -380,7 +407,11 @@ public sealed partial class SourceEditApplicationTests
 
             if (ordinal == 6)
             {
-                BeforeFinalAnswer?.Invoke();
+                if (BeforeFinalAnswer is not null)
+                {
+                    await BeforeFinalAnswer(cancellationToken);
+                }
+
                 yield return new() { Text = "The field is repaired. Build and tests were not run.", FinishReason = ModelFinishReason.Stop };
                 yield break;
             }

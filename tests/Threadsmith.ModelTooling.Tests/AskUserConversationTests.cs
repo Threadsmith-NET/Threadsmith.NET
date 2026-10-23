@@ -117,15 +117,25 @@ public static class AskUserConversationTests
     [InlineData(true, true, false, "AsK_UsEr")]
     [InlineData(false, false, true, "AsK_UsEr")]
     [InlineData(false, true, true, "AsK_UsEr")]
-    public static async Task LiveWaitReleasesResourcesAndResumesOriginalCallExactlyOnce(bool cancelled, bool native, bool stopRun, string toolName)
+    [InlineData(false, false, false, "ask_user", 1)]
+    [InlineData(false, true, false, "ask_user", 1)]
+    [InlineData(false, false, false, "ask_user", 2)]
+    [InlineData(false, true, false, "ask_user", 2)]
+    public static async Task LiveWaitReleasesResourcesAndResumesOriginalCallExactlyOnce(bool cancelled, bool native, bool stopRun, string toolName, int cancellationBoundary = 0)
     {
         var token = TestContext.Current.CancellationToken;
         await using var events = new DomainEventStream();
         var observed = new ConcurrentQueue<IDomainEvent>();
-        await using var subscription = events.Subscribe((value, _) =>
+        Func<Task>? cancelDuringHandoff = null;
+        await using var subscription = events.Subscribe(async (value, cancellationToken) =>
         {
             observed.Enqueue(value);
-            return Task.CompletedTask;
+            if (cancellationBoundary == 2 && value is ToolInvocationCompleted completed
+                && observed.OfType<UserQuestionStateChanged>().Any(question => question.Request.ToolInvocationId == completed.ToolInvocationId))
+            {
+                await cancelDuringHandoff!();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
         });
         var sanitizer = new SecretOutputSanitizer();
         var prompts = TestPromptLoader.Instance;
@@ -146,7 +156,8 @@ public static class AskUserConversationTests
         var assembler = new ContextAssembler(evidence, new TokenEstimator(), new ContextPolicy(), new PromptAppendLoader(sanitizer), sanitizer, events, prompts, modelResolver: resolver);
         var budget = new ExecutionBudget(new BudgetDimensions(100000, 20, TimeSpan.MaxValue));
         var registry = new ToolRegistry([new AskUserTool(prompts), new DateTimeTool(prompts)]);
-        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget);
+        var hooks = new RecordingHooks();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, sanitizer, NullLogger<ToolInvocationPipeline>.Instance, budget, hooks: hooks);
         var model = new QuestionProvider { Native = native, ToolName = toolName };
         var steering = new RunSteeringCoordinator();
         using var questions = new UserQuestionCoordinator(events, steering);
@@ -169,7 +180,19 @@ public static class AskUserConversationTests
             ready.TrySetResult();
             return await answer.Task.WaitAsync(cancellationToken);
         });
-        var application = new SessionApplication(events, model, budget, sanitizer, NullLogger<SessionApplication>.Instance, pipeline, (_, _) => Task.FromResult(CreateContext()), assembler, evidence, registry, steering: steering, correctiveMessages: new CorrectiveMessageFactory(prompts), prompts: prompts, userQuestions: questions);
+        async Task<ToolInvocationContext> CreateHandoffContextAsync(SessionId sessionId, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationBoundary == 1 && observed.OfType<UserQuestionStateChanged>().Any(question => question.Request.SessionId == sessionId && question.Result.Status == UserQuestionStatus.Answered))
+            {
+                // Cancel as the refreshed context is returned, after the human wait has ended.
+                await cancelDuringHandoff!();
+            }
+
+            return CreateContext();
+        }
+
+        var application = new SessionApplication(events, model, budget, sanitizer, NullLogger<SessionApplication>.Instance, pipeline, CreateHandoffContextAsync, assembler, evidence, registry, steering: steering, correctiveMessages: new CorrectiveMessageFactory(prompts), prompts: prompts, userQuestions: questions);
         var dispatcher = new CommandDispatcher([application]);
         var session = await dispatcher.DispatchAsync(new CreateSessionCommand("Question test"), token);
         var run = await dispatcher.DispatchAsync(new SubmitRequestCommand(session, "Ask which output to use."), token);
@@ -178,6 +201,7 @@ public static class AskUserConversationTests
         Assert.True(first == ready.Task, string.Join("\n", observed.OfType<DiagnosticObserved>().Select(value => value.Message)));
         Assert.Single(model.Requests);
         Assert.DoesNotContain(observed.OfType<ToolInvocationCompleted>(), value => value.ToolInvocationId == observed.OfType<UserQuestionStateChanged>().First().Request.ToolInvocationId);
+        cancelDuringHandoff = async () => Assert.True(await dispatcher.DispatchAsync(new CancelRunCommand(session, run), token));
         if (stopRun)
         {
             Assert.True(await dispatcher.DispatchAsync(new CancelRunCommand(session, run), token));
@@ -199,6 +223,27 @@ public static class AskUserConversationTests
         }
 
         answer.TrySetResult(cancelled ? new(UserQuestionStatus.Cancelled, []) : new(UserQuestionStatus.Answered, [new("q", "a", null)]));
+        if (cancellationBoundary != 0)
+        {
+            try
+            {
+                await completedRun;
+                Assert.Fail("The cancelled run completed normally.");
+            }
+            catch (OperationCanceledException)
+            {
+                Assert.True(completedRun.IsCanceled);
+            }
+
+            Assert.Single(model.Requests);
+            var questionId = observed.OfType<UserQuestionStateChanged>().First().Request.ToolInvocationId;
+            var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>(), value => value.ToolInvocationId == questionId);
+            Assert.Equal(cancellationBoundary == 2, completed.Succeeded);
+            var afterHook = Assert.Single(hooks.AfterInvocations, item => item.OperationId == questionId.Value);
+            Assert.Equal(completed.Succeeded.ToString(), afterHook.Succeeded);
+            return;
+        }
+
         Assert.True(await completedRun);
         Assert.Equal(2, model.Requests.Count);
         var result = Assert.Single(model.Requests[1].Messages, message => message.Role == ModelMessageRole.Tool && message.ToolName == toolName);
@@ -212,6 +257,58 @@ public static class AskUserConversationTests
         Assert.True(observed.OfType<UserQuestionStateChanged>().Last().Consumed);
         var invocationId = observed.OfType<UserQuestionStateChanged>().First().Request.ToolInvocationId;
         Assert.True(Assert.Single(observed.OfType<ToolInvocationCompleted>(), value => value.ToolInvocationId == invocationId).Succeeded);
+    }
+
+    /// <summary>A cancelled batch must finish admitted suspensions before returning its partial results.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public static async Task CancellationAfterAdmissionFinalizesBatchSuspension(bool prepared)
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(token);
+        await using var events = new DomainEventStream();
+        var observed = new ConcurrentQueue<IDomainEvent>();
+        await using var subscription = events.Subscribe((value, _) =>
+        {
+            observed.Enqueue(value);
+            return Task.CompletedTask;
+        });
+        var steering = new RunSteeringCoordinator();
+        using var questions = new UserQuestionCoordinator(events, steering);
+        questions.Attach((_, _) => throw new InvalidOperationException("A cancelled batch must not present a question."));
+        var registry = new ToolRegistry([new AskUserTool(TestPromptLoader.Instance)]);
+        var hooks = new RecordingHooks();
+        var pipeline = new ToolInvocationPipeline(registry, new DefaultPolicyEngine(), new DenyApprovalPolicy(), events, new SecretOutputSanitizer(), NullLogger<ToolInvocationPipeline>.Instance, hooks: hooks);
+        var request = new ToolInvocationRequest
+        {
+            SessionId = SessionId.New(),
+            RunId = RunId.New(),
+            ToolId = "ask_user",
+            ArgumentsJson = Arguments,
+            Context = CreateContext() with { UserQuestions = new CancellingQuestionAdmission(questions, cancellation) },
+        };
+        steering.RegisterRun(request.SessionId, request.RunId);
+        ToolBatchRequest[] batch = [new(0, "question", request)];
+
+        var exception = await Assert.ThrowsAsync<ToolBatchCancelledException>(() => prepared
+            ? pipeline.InvokePreparedBatchAsync(pipeline.PreflightBatch(batch).Preparation!, cancellation.Token)
+            : pipeline.InvokeBatchAsync(batch, cancellation.Token));
+        await questions.EndRunAsync(request.SessionId, request.RunId, token);
+
+        var result = Assert.Single(exception.Results).Result;
+        Assert.Null(result.Suspension);
+        Assert.False(result.Succeeded);
+        Assert.Equal(ToolErrorClassification.Cancelled, result.ErrorClassification);
+        var started = Assert.Single(observed.OfType<ToolInvocationStarted>());
+        var completed = Assert.Single(observed.OfType<ToolInvocationCompleted>());
+        Assert.Equal(started.ToolInvocationId, completed.ToolInvocationId);
+        Assert.Equal(result.ToolInvocationId, completed.ToolInvocationId);
+        Assert.False(completed.Succeeded);
+        Assert.Equal(UserQuestionStatus.Interrupted, observed.OfType<UserQuestionStateChanged>().Last().Result.Status);
+        var hook = Assert.Single(hooks.AfterInvocations);
+        Assert.Equal(completed.ToolInvocationId.Value, hook.OperationId);
+        Assert.Equal(bool.FalseString, hook.Succeeded);
     }
 
     /// <summary>Batch and caller admission reject unsupported waits before registration.</summary>
@@ -308,6 +405,52 @@ public static class AskUserConversationTests
     }
 
     private static ToolInvocationContext CreateContext() => new() { RepositoryPath = Path.GetTempPath(), TrustLevel = RepositoryTrustLevel.TrustedRead, RequestedBy = "model" };
+
+    private sealed class CancellingQuestionAdmission : IUserQuestionAdmission
+    {
+        private readonly IUserQuestionAdmission _inner;
+        private readonly CancellationTokenSource _cancellation;
+
+        internal CancellingQuestionAdmission(IUserQuestionAdmission inner, CancellationTokenSource cancellation)
+        {
+            _inner = inner;
+            _cancellation = cancellation;
+        }
+
+        public bool IsAvailable => _inner.IsAvailable;
+
+        public async Task<UserQuestionRequest> AdmitAsync(UserQuestionRequest request, CancellationToken cancellationToken = default)
+        {
+            var admitted = await _inner.AdmitAsync(request, cancellationToken);
+            await _cancellation.CancelAsync();
+            return admitted;
+        }
+    }
+
+    private sealed class RecordingHooks : IHookCoordinator
+    {
+        public IReadOnlyList<HookHandlerDescriptor> Handlers => [];
+
+        public List<(Guid OperationId, string Succeeded)> AfterInvocations { get; } = [];
+
+        public HookHandlerDescriptor? GetHandler(HookHandlerId handlerId) => null;
+
+        public bool SetEnabled(HookHandlerId handlerId, bool enabled) => false;
+
+        public Task<HookBoundaryDecision> InvokeAsync(HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (point == HookPoint.AfterToolInvocation)
+            {
+                AfterInvocations.Add((operationId, payload!["succeeded"]));
+            }
+
+            return Task.FromResult(new HookBoundaryDecision(HookDecisionKind.Continue, [], []));
+        }
+
+        public Task<HookBoundaryDecision> InvokeHandlerAsync(HookHandlerId handlerId, HookPoint point, SessionId sessionId, RunId? runId, string? repositoryIdentity, Guid operationId, int generation, IReadOnlyDictionary<string, string>? payload = null, IReadOnlyList<ExecutionArtifactReference>? artifacts = null, IReadOnlyList<string>? callChain = null, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException();
+    }
 
     private sealed class ExpandingSanitizer : IOutputSanitizer
     {

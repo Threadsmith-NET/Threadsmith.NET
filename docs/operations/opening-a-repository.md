@@ -50,7 +50,7 @@ The supported trust names are `UntrustedInspection`, `TrustedRead`, `TrustedBuil
 
 - Configured, selected, and solution-referenced paths must stay inside the normalized repository root. Every existing component beneath that root is checked, so a symbolic-link or junction ancestor cannot redirect a read outside it.
 - Repository roots and approved baseline roots cannot be symbolic links or junctions; nested reparse points, inaccessible entries, and Windows reserved-name entries encountered during discovery and baseline enumeration are skipped and counted by workspace telemetry.
-- Baselines include source and project/build metadata beneath configured `editableRoots`, excluding `.git`, `bin`, `obj`, prohibited paths, and reparse points.
+- Baselines include source and project/build metadata beneath host-approved repository roots, excluding `.git`, `bin`, `obj`, prohibited paths, and reparse points.
 - `prohibitedPaths` uses slash-normalized glob syntax: `*` and `?` stay within one path segment, `**` spans directory boundaries, and a trailing `/` excludes all descendants.
 - Repository configuration is treated as data and is never executed.
 - Filesystem notifications do not grant read authority. Refresh revalidates confinement, prohibited paths, and reparse-point policy before reading a candidate.

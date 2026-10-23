@@ -12,18 +12,21 @@ public sealed class UserQuestionCoordinator : IUserQuestionAdmission, ICommandHa
     private readonly RunSteeringCoordinator _steering;
     private readonly SessionPolicyBinding? _policyBinding;
     private readonly IOutputSanitizer _sanitizer;
+    private readonly ExecutionLimits _limits;
     private readonly ConcurrentDictionary<SessionId, PendingQuestion> _pending = new();
     private readonly ConcurrentDictionary<Guid, PendingQuestion> _requests = new();
     private readonly SemaphoreSlim _admission = new(1, 1);
     private Func<UserQuestionRequest, CancellationToken, Task<UserQuestionResult>>? _present;
 
     /// <summary>Initializes a new instance of the <see cref="UserQuestionCoordinator"/> class.</summary>
-    public UserQuestionCoordinator(IDomainEventStream events, RunSteeringCoordinator steering, SessionPolicyBinding? policyBinding = null, IOutputSanitizer? sanitizer = null)
+    public UserQuestionCoordinator(IDomainEventStream events, RunSteeringCoordinator steering, SessionPolicyBinding? policyBinding = null, IOutputSanitizer? sanitizer = null, ExecutionLimits? limits = null)
     {
         _events = events ?? throw new ArgumentNullException(nameof(events));
         _steering = steering ?? throw new ArgumentNullException(nameof(steering));
         _policyBinding = policyBinding;
         _sanitizer = sanitizer ?? new SecretOutputSanitizer();
+        _limits = limits ?? ExecutionLimits.Default;
+        _limits.Validate();
     }
 
     /// <inheritdoc />
@@ -78,7 +81,8 @@ public sealed class UserQuestionCoordinator : IUserQuestionAdmission, ICommandHa
                 return prior.Request;
             }
 
-            if (_requests.Values.Count(item => item.Request.RunId == request.RunId) >= ExecutionLimits.Default.MaxRetainedToolCalls)
+            if (_limits.MaxRetainedToolCalls > 0
+                && _requests.Values.Count(item => item.Request.RunId == request.RunId) >= _limits.MaxRetainedToolCalls)
             {
                 throw new InvalidOperationException("The run has reached its retained clarification limit.");
             }

@@ -31,7 +31,6 @@ internal sealed class ChildAgentModelLoop
     private readonly IOutputSanitizer _sanitizer;
     private readonly IPromptLoader _prompts;
     private readonly SessionUsageProjection? _sessionUsage;
-    private readonly RunSteeringCoordinator? _steering;
     private readonly IToolInvocationPipeline _tools;
     private readonly IConversationToolSnapshotStore _snapshots;
     private readonly AgentDisplayStream? _display;
@@ -47,7 +46,6 @@ internal sealed class ChildAgentModelLoop
         IReadOnlyList<ToolRegistration> parentRegistrations,
         IPromptLoader prompts,
         SessionUsageProjection? sessionUsage = null,
-        RunSteeringCoordinator? steering = null,
         AgentModelSelector? selection = null,
         IModelProvider? trustedModels = null,
         ActiveTurnCompactionCandidateProfile? compactionProfile = null,
@@ -71,7 +69,6 @@ internal sealed class ChildAgentModelLoop
         _prompts = prompts;
         _parentRegistrations = parentRegistrations.ToArray();
         _sessionUsage = sessionUsage;
-        _steering = steering;
         _selection = selection;
         _trustedModels = trustedModels;
         _compactionProfile = compactionProfile;
@@ -165,19 +162,6 @@ internal sealed class ChildAgentModelLoop
             for (var round = 0; round < maximumRounds; round++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (_steering is not null)
-                {
-                    var steering = await _steering.PauseChildAtBoundaryAsync(
-                        plan.Provenance.SessionId,
-                        plan.Provenance.ParentRunId,
-                        assignment.ChildRunId,
-                        cancellationToken);
-                    if (steering.Count > 0)
-                    {
-                        messages.AddRange(steering.Select(prompt.CreateSteeringMessage));
-                    }
-                }
-
                 childToolContext = childToolContext with
                 {
                     AdmittedImageIds = childToolContext.AdmittedImageIds.Concat(messages.SelectMany(message => message.Content)
@@ -247,41 +231,6 @@ internal sealed class ChildAgentModelLoop
 
                     if (response.ToolRequests.Count > 0)
                     {
-                        if (_steering is not null)
-                        {
-                            var steering = await _steering.PauseChildAtBoundaryAsync(
-                                plan.Provenance.SessionId,
-                                plan.Provenance.ParentRunId,
-                                assignment.ChildRunId,
-                                cancellationToken);
-                            if (steering.Count > 0)
-                            {
-                                if (transientState.HasResponses)
-                                {
-                                    var cancelledExchangeStart = messages.Count;
-                                    for (var ordinal = 0; ordinal < response.ToolRequests.Count; ordinal++)
-                                    {
-                                        var call = response.ToolRequests[ordinal];
-                                        var correlationId = CreateToolCallId(assignment, round, ordinal);
-                                        transientState.BindToolCall(round, ordinal, correlationId);
-                                        messages.Add(ChildAgentPrompt.CreateToolCallMessage(correlationId, call, round));
-                                        messages.Add(ChildAgentPrompt.CreateToolResultMessage(
-                                            correlationId,
-                                            call.ToolName,
-                                            JsonSerializer.Serialize(new { error = "cancelledByUserSteering" }),
-                                            round,
-                                            isError: true));
-                                    }
-
-                                    transientState.SealRound(round, messages.ToArray());
-                                    history.RecordExchange(cancelledExchangeStart, round, []);
-                                }
-
-                                messages.AddRange(steering.Select(prompt.CreateSteeringMessage));
-                                continue;
-                            }
-                        }
-
                         var exchangeStart = messages.Count;
                         IReadOnlyList<EvidenceId> exchangeEvidence = [];
                         try

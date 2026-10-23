@@ -9,7 +9,7 @@ public static class Plan96RunSteeringTests
 {
     /// <summary>Repeated Enter requests reuse one pause and one submitted message.</summary>
     [Fact]
-    public static async Task RequestPause_RepeatedRequest_IsIdempotentAcrossChildBarrier()
+    public static async Task RequestPause_DuringDelegation_ReadiesWithoutChildrenAndDeliversOnlyToParent()
     {
         var coordinator = new RunSteeringCoordinator();
         var sessionId = SessionId.New();
@@ -26,12 +26,6 @@ public static class Plan96RunSteeringTests
 
         var firstRequest = coordinator.RequestPause(sessionId, parentRunId);
         var repeatedRequest = coordinator.RequestPause(sessionId, parentRunId);
-        var firstChildBoundary = coordinator.PauseChildAtBoundaryAsync(
-            sessionId,
-            parentRunId,
-            firstChildRunId,
-            CancellationToken.None);
-        coordinator.CompleteChild(sessionId, parentRunId, secondChildRunId);
         var ready = await coordinator.WaitForPauseAsync(
             sessionId,
             parentRunId,
@@ -47,14 +41,15 @@ public static class Plan96RunSteeringTests
             parentRunId,
             firstRequest.PauseId,
             "inspect the parser boundary");
-        var delivered = await firstChildBoundary;
+        await coordinator.PauseDelegationAtJoinBoundaryAsync(sessionId, parentRunId, delegationId, TestContext.Current.CancellationToken);
+        var delivered = await coordinator.PauseParentAtBoundaryAsync(sessionId, parentRunId, TestContext.Current.CancellationToken);
         var summary = coordinator.GetDelegationSummary(sessionId, parentRunId, delegationId);
 
         Assert.Equal(RunSteeringSubmissionStatus.Accepted, submitted.Status);
         Assert.Equal(1, submitted.Sequence);
         Assert.Single(delivered);
         Assert.Equal("inspect the parser boundary", delivered[0].Text);
-        Assert.Equal(new DelegationSteeringSummary(1, 1, 1), summary);
+        Assert.Equal(new DelegationSteeringSummary(1, 0, 0), summary);
 
         coordinator.CompleteDelegation(sessionId, parentRunId, delegationId);
         coordinator.CompleteRun(sessionId, parentRunId);

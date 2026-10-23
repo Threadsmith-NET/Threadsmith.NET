@@ -91,6 +91,47 @@ public static class UserQuestionTests
         Assert.Equal(RunSteeringPauseRequestStatus.Accepted, steering.RequestPause(request.SessionId, request.RunId).Status);
     }
 
+    /// <summary>Clarification uses the configured retention cap, including zero to disable it.</summary>
+    [Theory]
+    [InlineData(null, 256)]
+    [InlineData(2, 2)]
+    [InlineData(300, 300)]
+    [InlineData(0, 300)]
+    public static async Task RetentionHonorsExecutionLimits(int? configuredLimit, int admittedCount)
+    {
+        var token = TestContext.Current.CancellationToken;
+        await using var events = new DomainEventStream();
+        var steering = new RunSteeringCoordinator();
+        using var coordinator = new UserQuestionCoordinator(events, steering, limits: configuredLimit is { } limit ? new ExecutionLimits { MaxRetainedToolCalls = limit } : null);
+        coordinator.Attach((_, _) => Task.FromResult(new UserQuestionResult(UserQuestionStatus.Cancelled, [])));
+        var request = CreateRequest();
+        steering.RegisterRun(request.SessionId, request.RunId);
+        for (var index = 0; index < admittedCount; index++)
+        {
+            request = request with { RequestId = Guid.NewGuid(), ToolInvocationId = ToolInvocationId.New(), InvocationKey = $"call-{index}" };
+            Assert.Equal(request.RequestId, (await coordinator.AdmitAsync(request, token)).RequestId);
+            await coordinator.WaitAsync(request, token);
+            await coordinator.ConsumeAsync(request, token);
+        }
+
+        // Idempotent retries still resolve the original request at the limit.
+        Assert.Equal(request.RequestId, (await coordinator.AdmitAsync(request with { RequestId = Guid.NewGuid() }, token)).RequestId);
+        var next = request with { RequestId = Guid.NewGuid(), InvocationKey = "next" };
+        if (configuredLimit != 0)
+        {
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => coordinator.AdmitAsync(next, token));
+            Assert.Contains("retained clarification limit", error.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(next.RequestId, (await coordinator.AdmitAsync(next, token)).RequestId);
+        }
+
+        await coordinator.EndRunAsync(request.SessionId, request.RunId, token);
+        Assert.Equal(next.RequestId, (await coordinator.AdmitAsync(next, token)).RequestId);
+        await coordinator.EndRunAsync(request.SessionId, request.RunId, token);
+    }
+
     /// <summary>Nonquiescent runs and failed durable admission cannot open a modal.</summary>
     [Fact]
     public static async Task ActiveDelegationAndPersistenceFailurePreventPresentation()

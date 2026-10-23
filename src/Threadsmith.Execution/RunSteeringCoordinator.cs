@@ -132,7 +132,12 @@ public sealed class RunSteeringCoordinator
                 throw new InvalidOperationException("The run already has an active steering delegation.");
             }
 
-            state.Delegation = new DelegationState(delegationId, children);
+            state.Delegation = new DelegationState(delegationId);
+            if (state.CurrentPause is { } pause)
+            {
+                pause.ReadyStatus = RunSteeringPauseWaitStatus.Ready;
+                pause.Ready.TrySetResult(RunSteeringPauseWaitStatus.Ready);
+            }
         }
     }
 
@@ -151,31 +156,7 @@ public sealed class RunSteeringCoordinator
                 return;
             }
 
-            foreach (var childRunId in delegation.ChildRunIds)
-            {
-                delegation.TerminalChildRunIds.Add(childRunId);
-            }
-
-            TryReadyPause(state);
             state.Delegation = null;
-        }
-    }
-
-    /// <summary>Records that one child reached a terminal state.</summary>
-    public void CompleteChild(SessionId sessionId, RunId parentRunId, RunId childRunId)
-    {
-        if (!_runs.TryGetValue(parentRunId, out var state) || state.SessionId != sessionId)
-        {
-            return;
-        }
-
-        lock (state.Gate)
-        {
-            if (state.Delegation is { } delegation && delegation.ChildRunIds.Contains(childRunId))
-            {
-                delegation.TerminalChildRunIds.Add(childRunId);
-                TryReadyPause(state);
-            }
         }
     }
 
@@ -214,9 +195,15 @@ public sealed class RunSteeringCoordinator
 
             var pause = new PauseState(
                 SteeringPauseId.New(),
-                state.Delegation?.DelegationId,
-                state.Delegation?.ChildRunIds.ToHashSet() ?? []);
+                state.Delegation?.DelegationId);
             state.CurrentPause = pause;
+            if (state.Delegation is not null)
+            {
+                // The parent is awaiting its delegation; children continue independently.
+                pause.ReadyStatus = RunSteeringPauseWaitStatus.Ready;
+                pause.Ready.TrySetResult(RunSteeringPauseWaitStatus.Ready);
+            }
+
             return new RunSteeringPauseRequestResult(
                 RunSteeringPauseRequestStatus.Accepted,
                 pause.PauseId);
@@ -315,8 +302,7 @@ public sealed class RunSteeringCoordinator
                     sequence = checked(++state.LastSequence);
                     state.Messages.Add(new SteeringDelivery(
                         new RunSteeringMessage(sequence.Value, DateTimeOffset.UtcNow, text),
-                        pause.DelegationId,
-                        pause.ChildRunIds));
+                        pause.DelegationId));
                 }
             }
             finally
@@ -347,10 +333,7 @@ public sealed class RunSteeringCoordinator
         Task? release = null;
         lock (state.Gate)
         {
-            if (state.CurrentPause is { } pause
-                && (pause.DelegationId is null
-                    || state.Delegation is null
-                    || state.Delegation.DelegationId != pause.DelegationId))
+            if (state.CurrentPause is { } pause)
             {
                 pause.ReadyStatus = RunSteeringPauseWaitStatus.Ready;
                 pause.Ready.TrySetResult(RunSteeringPauseWaitStatus.Ready);
@@ -369,41 +352,6 @@ public sealed class RunSteeringCoordinator
         }
     }
 
-    /// <summary>Pauses one child before its next provider operation.</summary>
-    internal async Task<IReadOnlyList<RunSteeringMessage>> PauseChildAtBoundaryAsync(
-        SessionId sessionId,
-        RunId parentRunId,
-        RunId childRunId,
-        CancellationToken cancellationToken)
-    {
-        if (!_runs.TryGetValue(parentRunId, out var state) || state.SessionId != sessionId)
-        {
-            return [];
-        }
-
-        Task? release = null;
-        lock (state.Gate)
-        {
-            if (state.CurrentPause is { DelegationId: not null } pause
-                && pause.ChildRunIds.Contains(childRunId))
-            {
-                pause.PausedChildRunIds.Add(childRunId);
-                TryReadyPause(state);
-                release = pause.Release.Task;
-            }
-        }
-
-        if (release is not null)
-        {
-            await release.WaitAsync(cancellationToken);
-        }
-
-        lock (state.Gate)
-        {
-            return DrainForChild(state, childRunId);
-        }
-    }
-
     /// <summary>Pauses a joined delegation before its tool result can return to the parent.</summary>
     internal async Task PauseDelegationAtJoinBoundaryAsync(
         SessionId sessionId,
@@ -419,16 +367,6 @@ public sealed class RunSteeringCoordinator
         Task? release = null;
         lock (state.Gate)
         {
-            if (state.Delegation is { } delegation && delegation.DelegationId == delegationId)
-            {
-                foreach (var childRunId in delegation.ChildRunIds)
-                {
-                    delegation.TerminalChildRunIds.Add(childRunId);
-                }
-
-                TryReadyPause(state);
-            }
-
             if (state.CurrentPause is { } pause && pause.DelegationId == delegationId)
             {
                 release = pause.Release.Task;
@@ -467,27 +405,8 @@ public sealed class RunSteeringCoordinator
                 .ToArray();
             return new DelegationSteeringSummary(
                 deliveries.Length,
-                deliveries.Sum(message => message.DeliveredChildRunIds.Count),
-                deliveries.Sum(message =>
-                    message.TargetChildRunIds.Count - message.DeliveredChildRunIds.Count));
-        }
-    }
-
-    private static void TryReadyPause(RunState state)
-    {
-        if (state.CurrentPause is not { DelegationId: not null } pause
-            || state.Delegation is not { } delegation
-            || delegation.DelegationId != pause.DelegationId)
-        {
-            return;
-        }
-
-        if (pause.ChildRunIds.All(childRunId =>
-            pause.PausedChildRunIds.Contains(childRunId)
-            || delegation.TerminalChildRunIds.Contains(childRunId)))
-        {
-            pause.ReadyStatus = RunSteeringPauseWaitStatus.Ready;
-            pause.Ready.TrySetResult(RunSteeringPauseWaitStatus.Ready);
+                0,
+                0);
         }
     }
 
@@ -500,22 +419,6 @@ public sealed class RunSteeringCoordinator
         foreach (var message in messages)
         {
             message.DeliveredToParent = true;
-        }
-
-        return messages.Select(message => message.Message).ToArray();
-    }
-
-    private static IReadOnlyList<RunSteeringMessage> DrainForChild(RunState state, RunId childRunId)
-    {
-        var messages = state.Messages
-            .Where(message => message.DelegationId is not null
-                && message.TargetChildRunIds.Contains(childRunId)
-                && !message.DeliveredChildRunIds.Contains(childRunId))
-            .OrderBy(message => message.Message.Sequence)
-            .ToArray();
-        foreach (var message in messages)
-        {
-            message.DeliveredChildRunIds.Add(childRunId);
         }
 
         return messages.Select(message => message.Message).ToArray();
@@ -540,25 +443,16 @@ public sealed class RunSteeringCoordinator
         public PauseState? CurrentPause { get; set; }
     }
 
-    private sealed class DelegationState(DelegationId delegationId, HashSet<RunId> childRunIds)
+    private sealed class DelegationState(DelegationId delegationId)
     {
         public DelegationId DelegationId { get; } = delegationId;
-
-        public HashSet<RunId> ChildRunIds { get; } = childRunIds;
-
-        public HashSet<RunId> TerminalChildRunIds { get; } = [];
     }
 
     private sealed class PauseState(
         SteeringPauseId pauseId,
-        DelegationId? delegationId,
-        HashSet<RunId> childRunIds)
+        DelegationId? delegationId)
     {
-        public HashSet<RunId> ChildRunIds { get; } = childRunIds;
-
         public DelegationId? DelegationId { get; } = delegationId;
-
-        public HashSet<RunId> PausedChildRunIds { get; } = [];
 
         public SteeringPauseId PauseId { get; } = pauseId;
 
@@ -575,17 +469,12 @@ public sealed class RunSteeringCoordinator
 
     private sealed class SteeringDelivery(
         RunSteeringMessage message,
-        DelegationId? delegationId,
-        HashSet<RunId> targetChildRunIds)
+        DelegationId? delegationId)
     {
-        public HashSet<RunId> DeliveredChildRunIds { get; } = [];
-
         public bool DeliveredToParent { get; set; }
 
         public DelegationId? DelegationId { get; } = delegationId;
 
         public RunSteeringMessage Message { get; } = message;
-
-        public HashSet<RunId> TargetChildRunIds { get; } = targetChildRunIds;
     }
 }

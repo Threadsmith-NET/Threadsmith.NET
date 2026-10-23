@@ -32,8 +32,12 @@ public static class RepositoryLifecycleTests
         var binding = new SessionPolicyBinding();
         var initial = new EffectiveSessionPolicy
         {
-            BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = repository.RootPath, Fingerprint = "initial",
+            BindingId = Guid.NewGuid(),
+            Generation = 1,
+            RepositoryPath = repository.RootPath,
+            Fingerprint = "initial",
             EditableRoots = [repository.RootPath],
+            MutationRoots = [repository.RootPath],
         };
         binding.Publish(initial);
         var lifecycle = new RepositoryLifecycle(
@@ -86,6 +90,7 @@ public static class RepositoryLifecycleTests
             RepositoryPath = repository.RootPath,
             Fingerprint = "initial",
             EditableRoots = [repository.RootPath],
+            MutationRoots = [repository.RootPath],
         };
         var lifecycle = new RepositoryLifecycle(
             events,

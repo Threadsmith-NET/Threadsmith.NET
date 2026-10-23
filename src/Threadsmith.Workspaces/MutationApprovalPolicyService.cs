@@ -274,7 +274,7 @@ public sealed class MutationApprovalPolicyService : IMutationApprovalPolicy
                 throw new MutationPolicyException(exception.Message);
             }
 
-            if (policy is not null && (!policy.EditableRoots.Any(root =>
+            if (policy is not null && (!policy.MutationRoots.Any(root =>
                 {
                     var relativeRoot = Path.GetRelativePath(policy.RepositoryPath, root);
                     var workspaceRoot = relativeRoot == ".." || relativeRoot.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relativeRoot)

@@ -80,13 +80,15 @@ internal sealed class ActiveInputLease : IActiveRunInputLease
     }
 
     /// <summary>Requests one steering prompt per active-run lease.</summary>
-    internal void Steer()
+    internal bool Steer()
     {
         if (!_steered)
         {
             _steered = true;
-            _signals.Writer.TryWrite(ActiveRunInputSignal.SteeringRequested);
+            return _signals.Writer.TryWrite(ActiveRunInputSignal.SteeringRequested);
         }
+
+        return false;
     }
 
     /// <summary>Admits a read-only context action without entering steering.</summary>

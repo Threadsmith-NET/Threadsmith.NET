@@ -159,6 +159,141 @@ public static class UserQuestionSurfaceTests
             token);
     }
 
+    /// <summary>A retained context map owns input until it closes, even when a queued question is cancelled.</summary>
+    [Theory(Timeout = 30000)]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public static async Task QuestionQueuesBehindContextMap(bool cancelQuestion, bool cancelMap)
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var backend = new ObservedBackend();
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
+        await surface.RunAsync(
+            async lifetime =>
+        {
+            await using var lease = surface.BeginActiveRunInput(TimeProvider.System);
+            using var mapLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+            var mapShown = backend.ExpectOutputAsync("Context usage");
+            var map = surface.ShowContextUsageAsync(null, mapLifetime.Token);
+            await mapShown.WaitAsync(lifetime);
+            using var questionLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+            var request = new UserQuestionRequest(Guid.NewGuid(), SessionId.New(), RunId.New(), ToolInvocationId.New(), "call", "repo", 0, [new("q", "Choose", [new("a", "First"), new("b", "Second")])], DateTimeOffset.UtcNow);
+            var pending = surface.AskAsync(request, questionLifetime.Token);
+            Assert.False(pending.IsCompleted);
+            if (cancelQuestion)
+            {
+                await questionLifetime.CancelAsync();
+                try
+                {
+                    await pending;
+                    Assert.Fail("The queued question was not cancelled.");
+                }
+                catch (OperationCanceledException) when (questionLifetime.IsCancellationRequested)
+                {
+                    Assert.True(pending.IsCanceled);
+                }
+
+                Assert.False(map.IsCompleted);
+                pending = surface.AskAsync(request with { RequestId = Guid.NewGuid() }, lifetime);
+            }
+
+            var questionShown = backend.ExpectOutputAsync("The Assistant Has a Question");
+            if (cancelMap)
+            {
+                await mapLifetime.CancelAsync();
+                try
+                {
+                    await map;
+                    Assert.Fail("The retained modal was not cancelled.");
+                }
+                catch (OperationCanceledException) when (mapLifetime.IsCancellationRequested)
+                {
+                    Assert.True(map.IsCanceled);
+                }
+            }
+            else
+            {
+                backend.Input.FeedInput("\u001b[27u");
+                await map;
+            }
+
+            await questionShown.WaitAsync(lifetime);
+            backend.Input.FeedInput("\r");
+            Assert.Equal("a", Assert.Single((await pending).Answers).OptionId);
+        },
+            token);
+    }
+
+    /// <summary>A retained modal arriving during a question waits without stealing its input.</summary>
+    [Fact(Timeout = 30000)]
+    public static async Task ContextMapQueuesBehindQuestion()
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var backend = new ObservedBackend();
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
+        await surface.RunAsync(
+            async lifetime =>
+        {
+            var shown = backend.ExpectOutputAsync("The Assistant Has a Question");
+            var request = new UserQuestionRequest(Guid.NewGuid(), SessionId.New(), RunId.New(), ToolInvocationId.New(), "call", "repo", 0, [new("q", "Choose", [])], DateTimeOffset.UtcNow);
+            var pending = surface.AskAsync(request, lifetime);
+            await shown.WaitAsync(lifetime);
+            var mapShown = backend.ExpectOutputAsync("Context usage");
+            var map = surface.ShowContextUsageAsync(null, lifetime);
+            Assert.False(map.IsCompleted);
+            backend.Input.FeedInput("\u001b[27u");
+            Assert.Equal(UserQuestionStatus.Cancelled, (await pending).Status);
+            await mapShown.WaitAsync(lifetime);
+            backend.Input.FeedInput("\u001b[27u");
+            await map;
+        },
+            token);
+    }
+
+    /// <summary>Nested retained editors release their parent's input lease only after cancellation cleanup.</summary>
+    [Fact(Timeout = 30000)]
+    public static async Task QuestionWaitsForNestedMemoryEditorCleanup()
+    {
+        var token = TestContext.Current.CancellationToken;
+        using var backend = new ObservedBackend();
+        await using var surface = new TuiKitSurface(BuiltInThemes.Create()[0], () => { }, backend);
+        await surface.RunAsync(
+            async lifetime =>
+        {
+            using var memoryLifetime = CancellationTokenSource.CreateLinkedTokenSource(lifetime);
+            var memoryShown = backend.ExpectOutputAsync("Repository memories");
+            var memories = surface.ManageRepositoryMemoriesAsync(
+                new([], []),
+                (_, _, _) => throw new InvalidOperationException("Unexpected edit."),
+                (_, _, _, _) => throw new InvalidOperationException("Cancelled drafts must not be saved."),
+                memoryLifetime.Token);
+            await memoryShown.WaitAsync(lifetime);
+            var editorShown = backend.ExpectOutputAsync("Add memory");
+            backend.Input.FeedInput("\u001b[2~");
+            await editorShown.WaitAsync(lifetime);
+            var request = new UserQuestionRequest(Guid.NewGuid(), SessionId.New(), RunId.New(), ToolInvocationId.New(), "call", "repo", 0, [new("q", "Choose", [])], DateTimeOffset.UtcNow);
+            var pending = surface.AskAsync(request, lifetime);
+            Assert.False(pending.IsCompleted);
+            var questionShown = backend.ExpectOutputAsync("The Assistant Has a Question");
+            await memoryLifetime.CancelAsync();
+            try
+            {
+                await memories;
+                Assert.Fail("The memory editor was not cancelled.");
+            }
+            catch (OperationCanceledException) when (memoryLifetime.IsCancellationRequested)
+            {
+                Assert.True(memories.IsCanceled);
+            }
+
+            await questionShown.WaitAsync(lifetime);
+            backend.Input.FeedInput("\u001b[27u");
+            Assert.Equal(UserQuestionStatus.Cancelled, (await pending).Status);
+        },
+            token);
+    }
+
     private sealed class ObservedBackend : ITerminalBackend
     {
         private Expectation? _expectation;

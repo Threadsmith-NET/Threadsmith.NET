@@ -10,7 +10,7 @@ Threadsmith resolves application authorization separately from ordinary configur
 
 Repository `.threadsmith/config.json` and `.threadsmith/session.json` are independent untrusted restrictions. Neither is a trusted host-session source. Security `--set:` values cannot grant authority. Ordinary preferences retain their existing merged precedence and lifecycle.
 
-Absent grant keys use the defaults below. Trusted arrays replace whole lower arrays. Repository/session arrays intersect grants; denial/review arrays union. Explicit `[]` grants none, including `tools:allow` and `editableRoots`. Only the absent/compiled default tool allow filter is unrestricted. Null, malformed types and duplicate case-variant keys fail policy loading. Missing optional files are allowed; unreadable existing files are not treated as missing. Wider well-formed requests produce a diagnostic and retain only the intersection.
+Absent grant keys use the defaults below. Trusted arrays replace whole lower arrays. Repository/session arrays intersect grants; denial/review arrays union. Explicit `[]` grants none, including `tools:allow`. Only the absent/compiled default tool allow filter is unrestricted. Null, malformed types and duplicate case-variant keys fail policy loading. Missing optional files are allowed; unreadable existing files are not treated as missing. Wider well-formed requests produce a diagnostic and retain only the intersection.
 
 ## Key and consumer catalog
 
@@ -24,7 +24,7 @@ Absent grant keys use the defaults below. Trusted arrays replace whole lower arr
 | `tools:allow` | Narrow; absent unrestricted, explicit empty deny-all | Advertisement, `DefaultPolicyEngine`, child policy |
 | `tools:deny`, `tools:requireApproval` | Union restrictions; empty | Advertisement and invocation |
 | `tools:allowedNetworkHosts` | Trusted static grants default empty; repository/session exact-host mandatory filters default unrestricted | `DefaultPolicyEngine`, fetch transport/redirect checks, manual MCP reads |
-| `editableRoots` | Narrow; `.`; empty denies mutations | Repository discovery, `MutationApprovalPolicyService`, child snapshot |
+| `editableRoots` | Legacy root preference; retained and validated, not a source-edit grant | Configuration compatibility |
 | `prohibitedPaths` | Union restrictions; empty | Repository discovery, typed path policy, mutation validation |
 | `tools:writeFile:allowedFolders` | Narrow; `.inbox`; directory containment intersection | `WriteFileTool`; read-only children receive no direct-write roots |
 | `scratchpad:path` | Existing confined repository selector; external locations require trusted source | `ScratchpadLifecycle`; separate cleanup capability retained |
@@ -65,11 +65,13 @@ MCP profile/schema approval, skill identity/revocation and exact fetch consent r
 
 ## Control files and migration
 
+Ordinary source edits use host-owned repository containment, independently of legacy `editableRoots`. In particular, the shipped `editableRoots: ["src/"]` preference does not deny edits beneath `container/source/`, `tests/`, `docs/`, or `.inbox/`. Repository baselines use the same host-owned mutation roots. Child assignments narrow those roots and read-only children receive no mutation roots. `prohibitedPaths`, protected configuration/policy/secret stores, trust, exact-diff approval, and policy-generation checks remain enforced. This compatibility repair does not rewrite user configuration or relax direct artifact export grants.
+
 Direct and transactional mutation routes share `AuthorityControlPathGuard`. It covers exact machine/user policy, repository config/session/provider/extension selection, secret stores, user MCP/skill approval stores and application outbound-consent/repository-trust stores, plus containing-directory operations. Prefix siblings and ordinary memory/state files remain writable within applicable grants. Existing reparse checks remain; Windows ambiguous trailing-dot/space and alternate-stream aliases are rejected. This does not eliminate hard-link or filesystem check/use races.
 
 The coordinated settings writer compares authority keys semantically, allowing ordinary memory activation and existing exact `/policy`/host-hostname authorization operations. It preserves unrelated JSON. Generic whole-file mutation is not permission to edit policy. Semantic settings updates are bounded at 16 MiB; larger files require manual edits.
 
-Review existing explicit empty `tools:allow`/`editableRoots` lists: remove an obsolete empty filter to inherit the documented default, or retain it to deny that scope. Review saved repository `alwaysTrustRepo`: it remains a preference but cannot exceed the trusted default `reviewAll`. Broader automatic mutation requires a deliberate user-policy change; no automatic promotion occurs.
+Review existing explicit empty `tools:allow` lists: remove an obsolete empty filter to inherit the documented default, or retain it to deny that scope. Review saved repository `alwaysTrustRepo`: it remains a preference but cannot exceed the trusted default `reviewAll`. Broader automatic mutation requires a deliberate user-policy change; no automatic promotion occurs.
 
 Repository export paths no longer grant direct writes. For a disposable example, deliberately put `{"tools":{"writeFile":{"allowedFolders":[".inbox","C:/Reports"]}}}` in the designated user configuration on Windows. The repository can then narrow to `[".inbox"]` or a contained subdirectory. Use a suitable absolute path on other platforms. Do not copy unreviewed repository requests into trusted policy.
 

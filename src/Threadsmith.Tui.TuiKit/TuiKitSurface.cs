@@ -94,6 +94,7 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
     private IReadOnlyList<InteractionActivity> _toolActivities = [];
     private ActiveInputLease? _activeInput;
     private string _prompt = DefaultPrompt;
+    private string? _submittedSteering;
     private string _notice = string.Empty;
     private string _statusText = string.Empty;
     private string? _statusSeparator;
@@ -266,6 +267,21 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             if (request.Purpose != ComposerPurpose.Conversation)
             {
                 _composer.Text = string.Empty;
+            }
+
+            if (_submittedSteering is { } submitted)
+            {
+                if (request.Purpose == ComposerPurpose.Steering)
+                {
+                    _submittedSteering = null;
+                    completion.TrySetResult(new InteractionInput(true, submitted, cancellationToken));
+                }
+                else if (request.Purpose == ComposerPurpose.Conversation)
+                {
+                    // A run that finished before pausing must not lose the submitted draft.
+                    _composer.Text = submitted + _composer.Text;
+                    _submittedSteering = null;
+                }
             }
 
             _composer.OnFocusChanged(true);
@@ -897,7 +913,11 @@ internal sealed partial class TuiKitSurface : IInteractionSurface, IAgentWorkspa
             case SubmitDecision.Submit:
                 if (_read is null)
                 {
-                    lease?.Steer();
+                    if (lease?.Steer() == true && !string.IsNullOrWhiteSpace(_composer.Text))
+                    {
+                        _submittedSteering = _composer.Text;
+                        CommitComposerInput(_submittedSteering);
+                    }
 
                     return true;
                 }

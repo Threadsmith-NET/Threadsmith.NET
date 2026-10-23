@@ -21,6 +21,7 @@ These stable scenarios are end-to-end product-behavior specifications. Active im
 
 1. Ask for a repository change that requires reading two supporting files outside the write set.
 2. Confirm one ordinary conversation inspects the evidence and invokes `edit_source` with related ordered operations.
+   Retain the legacy template `editableRoots: ["src/"]` and include targets beneath `container/source/`, `tests/`, `docs/` and `.inbox/`; ordinary repository-contained edits remain available while protected configuration, policy and secret stores remain blocked.
 3. Review the exact diff when mutation policy requires it; approve the intended operations.
 4. Confirm committed bytes, applied receipt and versioned advisory diagnostics reach the conversation.
 5. Complete related repairs and confirm the final cumulative diff reflects actual disk effects. Verify edit-only completion launches no build/test work; explicitly invoke checks and report their actual results when validation is requested.
@@ -868,3 +869,13 @@ Follow [the agent workspace procedure](../operations/agent-workspace.md#verifica
 **Verifies:** Bounded explicit answers, shared modal ownership, resource release, cancellation, and interrupted recovery. See MTP-ASK-USER. Automated results do not establish physical terminal/audio behavior.
 
 ASK-USER opt-in addendum: a fresh/default host omits ask_user from model advertisement and rejects forced invocation before persistence. Tools retains a disabled entry with shared Tools enablement guidance. The shared repository tool preference must be enabled, and ordinary trusted tool policy must independently allow it. Disabling restores normal uninterrupted model work.
+
+## Scenario MAIN-STEERING — Main-conversation steering during delegation
+
+1. Start two delegated children and submit multiline steering in MAIN with one Enter.
+2. Confirm children continue through model and tool boundaries and complete without receiving steering text.
+3. Confirm the parent receives the exact message once before its next model request, after joining the delegation.
+4. Open steering with an empty draft and leave it pending while children complete; their progress stays visible. Dismiss or submit and confirm the parent resumes.
+5. Race submission with run completion; text that cannot be admitted returns to the ordinary composer.
+
+**Verifies:** parent-only steering, independent child progress, one-submission delivery, and preservation of undelivered drafts.

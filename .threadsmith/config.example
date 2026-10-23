@@ -221,9 +221,9 @@
   },
 
   // ── Editable roots (§21.2) ─────────────────────────────────────────────
-  // File-system roots the model may propose mutations within. Paths are
-  // relative to the repository root. Mutations outside these roots are rejected
-  // by policy (§5.4, plan-10).
+  // Legacy root preference retained for compatibility. This is not a source-edit
+  // authorization boundary: ordinary edits may target repository-contained paths.
+  // Protected control files, secret stores and prohibitedPaths remain blocked.
   "editableRoots": [ "src/" ],
 
   // ── Prohibited paths (§21.2) ───────────────────────────────────────────

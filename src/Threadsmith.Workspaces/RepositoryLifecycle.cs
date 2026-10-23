@@ -219,7 +219,7 @@ public sealed class RepositoryLifecycle :
         if (_policyBinding is not null)
         {
             var policy = _policyBinding.Current;
-            approvedRoots = [.. policy.EditableRoots.Select(root => Path.GetRelativePath(repositoryPath, root))];
+            approvedRoots = [.. policy.MutationRoots.Select(root => Path.GetRelativePath(repositoryPath, root))];
             prohibitedPaths = [.. policy.ProhibitedPaths];
         }
 

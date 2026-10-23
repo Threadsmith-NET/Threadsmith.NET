@@ -65,6 +65,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
             await EnqueueAsync(() => modal.CompleteChange(refreshed, error), token);
             return false;
         },
+            nested: false,
             cancellationToken);
     }
 
@@ -240,6 +241,7 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
                 return false;
             }
         },
+            nested: true,
             cancellationToken);
         return refreshed;
     }
@@ -249,10 +251,18 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         Modal modal,
         ChannelReader<T> requests,
         Func<T, CancellationToken, Task<bool>> apply,
+        bool nested,
         CancellationToken cancellationToken)
     {
+        if (!nested)
+        {
+            await _interactionModalGate.WaitAsync(cancellationToken);
+        }
+
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        var completion = ShowRetainedModalAsync(modal, lifetime.Token);
+
+        // Nested editors retain their parent's input lease through cancellation cleanup.
+        var completion = ShowRetainedModalCoreAsync(modal, lifetime.Token);
         try
         {
             while (!completion.IsCompleted)
@@ -289,18 +299,41 @@ internal sealed partial class TuiKitSurface : IStartupProgressSurface, IInteract
         }
         finally
         {
-            await lifetime.CancelAsync();
             try
             {
-                await completion;
+                await lifetime.CancelAsync();
+                try
+                {
+                    await completion;
+                }
+                catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+                {
+                }
             }
-            catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+            finally
             {
+                if (!nested)
+                {
+                    _interactionModalGate.Release();
+                }
             }
         }
     }
 
     private async Task ShowRetainedModalAsync(Modal modal, CancellationToken cancellationToken)
+    {
+        await _interactionModalGate.WaitAsync(cancellationToken);
+        try
+        {
+            await ShowRetainedModalCoreAsync(modal, cancellationToken);
+        }
+        finally
+        {
+            _interactionModalGate.Release();
+        }
+    }
+
+    private async Task ShowRetainedModalCoreAsync(Modal modal, CancellationToken cancellationToken)
     {
         Task<string?>? completion = null;
         await EnqueueAsync(

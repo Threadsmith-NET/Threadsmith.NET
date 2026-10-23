@@ -216,8 +216,14 @@ public sealed class ParallelAgentTests
             RequestedBy = "parent",
             SecurityPolicy = new EffectiveSessionPolicy
             {
-                BindingId = Guid.NewGuid(), Generation = 1, RepositoryPath = Environment.CurrentDirectory, Fingerprint = "parent-policy",
-                AllowedTools = ["read_file", "search"], WriteFolders = [Environment.CurrentDirectory], EditableRoots = [Environment.CurrentDirectory],
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                RepositoryPath = Environment.CurrentDirectory,
+                Fingerprint = "parent-policy",
+                AllowedTools = ["read_file", "search"],
+                WriteFolders = [Environment.CurrentDirectory],
+                EditableRoots = [Environment.CurrentDirectory],
+                MutationRoots = [Environment.CurrentDirectory],
             },
         };
 
@@ -239,6 +245,7 @@ public sealed class ParallelAgentTests
         Assert.Equal(RepositoryTrustLevel.TrustedRead, child.SecurityPolicy.MaximumTrust);
         Assert.Empty(child.SecurityPolicy.WriteFolders);
         Assert.Empty(child.SecurityPolicy.EditableRoots);
+        Assert.Empty(child.SecurityPolicy.MutationRoots);
         Assert.Empty(child.SecurityPolicy.NetworkHostRestriction);
         var binding = new SessionPolicyBinding();
         binding.Publish(parent.SecurityPolicy with { Generation = 2 });
@@ -266,6 +273,38 @@ public sealed class ParallelAgentTests
             plan,
             assignment,
             Environment.CurrentDirectory));
+    }
+
+    /// <summary>Legacy discovery roots do not constrain implementers, but assignment mutation scope still does.</summary>
+    [Fact]
+    public void ToolPolicy_MutationScopeIsIndependentOfLegacyRoots()
+    {
+        const string path = "container/source/Example.cs";
+        var assignment = CreateAssignment(AgentRole.Implementer, path) with { Mode = AgentRunMode.SharedWorkspace };
+        var parent = new ToolInvocationContext
+        {
+            RepositoryPath = Environment.CurrentDirectory,
+            TrustLevel = RepositoryTrustLevel.TrustedMutation,
+            RequestedBy = "parent",
+            SecurityPolicy = new EffectiveSessionPolicy
+            {
+                BindingId = Guid.NewGuid(),
+                Generation = 1,
+                RepositoryPath = Environment.CurrentDirectory,
+                Fingerprint = "parent",
+                EditableRoots = [Path.Combine(Environment.CurrentDirectory, "src")],
+                MutationRoots = [Environment.CurrentDirectory],
+            },
+        };
+        var child = AgentToolPolicy.Scope(parent, CreatePlan(assignment), assignment, Environment.CurrentDirectory);
+        Assert.NotNull(child.SecurityPolicy);
+        Assert.Empty(child.SecurityPolicy.EditableRoots);
+        Assert.Equal([Path.GetFullPath(path)], child.SecurityPolicy.MutationRoots);
+        var binding = new SessionPolicyBinding();
+        binding.Publish(child.SecurityPolicy);
+        var mutations = new Threadsmith.Workspaces.MutationApprovalPolicyService(policyBinding: binding);
+        mutations.ValidatePaths([path], Environment.CurrentDirectory);
+        Assert.Throws<MutationPolicyException>(() => mutations.ValidatePaths(["container/source/Other.cs"], Environment.CurrentDirectory));
     }
 
     /// <summary>Verifies an empty child allowlist remains an explicit deny-all policy.</summary>

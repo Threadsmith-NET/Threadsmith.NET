@@ -355,7 +355,7 @@ internal static class ApplicationComposition
             host.PolicyBinding);
         var correctiveMessages = new CorrectiveMessageFactory(host.PromptLoader);
         var runSteering = new RunSteeringCoordinator(host.ExecutionLimits);
-        var userQuestions = new UserQuestionCoordinator(host.Events, runSteering, host.PolicyBinding, host.Sanitizer);
+        var userQuestions = new UserQuestionCoordinator(host.Events, runSteering, host.PolicyBinding, host.Sanitizer, host.ExecutionLimits);
         var validationStages = GetValidationStages(host.Configuration);
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? resolvedFallbackSelector = null;
         Func<ModelProfileId, CancellationToken, Task<ActiveModelSelectionResult>>? selectResolvedFallback =
@@ -586,7 +586,6 @@ internal static class ApplicationComposition
                         delegateAgentsOptions,
                         host.PromptLoader,
                         usage,
-                        runSteering,
                         integration.Models.TrustedProvider,
                         activeTurnCompactionProfile,
                         agentDisplay,

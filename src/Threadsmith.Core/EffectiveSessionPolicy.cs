@@ -53,8 +53,11 @@ public sealed record EffectiveSessionPolicy
     /// <summary>Gets normalized direct artifact write roots.</summary>
     public ImmutableArray<string> WriteFolders { get; init; } = [];
 
-    /// <summary>Gets normalized mutation roots, independent of ordinary read roots.</summary>
+    /// <summary>Gets normalized legacy root preferences retained for configuration compatibility, not mutation authorization.</summary>
     public ImmutableArray<string> EditableRoots { get; init; } = [];
+
+    /// <summary>Gets host-owned source mutation roots, narrowed by child assignment scope independently of discovery configuration.</summary>
+    public ImmutableArray<string> MutationRoots { get; init; } = [];
 
     /// <summary>Gets inherited repository path prohibitions.</summary>
     public ImmutableArray<string> ProhibitedPaths { get; init; } = [];

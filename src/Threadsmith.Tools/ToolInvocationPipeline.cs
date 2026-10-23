@@ -127,7 +127,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
 
         var error = succeeded ? null : "Clarification was interrupted before delivery.";
-        await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)) { RunId = request.RunId }, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Once publication begins, finish the terminal event and hook despite run cancellation.
+        await _events.PublishAsync(new ToolInvocationCompleted(request.SessionId, _timeProvider.GetUtcNow(), suspended.ToolInvocationId, succeeded, json, Error: error, ElapsedMilliseconds: ToElapsedMilliseconds(suspended.Duration)) { RunId = request.RunId }, CancellationToken.None);
         await InvokeAfterHookAsync(request, suspended.ToolInvocationId, succeeded, succeeded ? null : ToolErrorClassification.Cancelled.ToString(), request.Context.RequestedBy.StartsWith("hook:", StringComparison.Ordinal));
         return suspended with { ToolId = request.ToolId, Suspension = null, Succeeded = succeeded, ResultJson = json, Error = error, ErrorClassification = succeeded ? default : ToolErrorClassification.Cancelled };
     }
@@ -344,7 +347,25 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
 
         var results = await Task.WhenAll(tasks);
         var ordered = results.OrderBy(result => result.Ordinal).ToArray();
-        ThrowIfCancelledAfterResults(cancellationToken, ordered);
+        if (cancellationToken.IsCancellationRequested)
+        {
+            // The caller cannot take ownership of a suspension once the batch throws.
+            for (var index = 0; index < ordered.Length; index++)
+            {
+                var result = ordered[index];
+                if (result.Result.Suspension is not null)
+                {
+                    var invocation = requests.Single(request => request.Ordinal == result.Ordinal).Invocation;
+                    ordered[index] = result with
+                    {
+                        Result = await CompleteSuspensionAsync(invocation, result.Result, new(UserQuestionStatus.Interrupted, []), CancellationToken.None),
+                    };
+                }
+            }
+
+            throw new ToolBatchCancelledException(ordered, cancellationToken);
+        }
+
         return ordered;
     }
 
@@ -378,8 +399,10 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         {
             return new ToolBatchResult(planned.Request.Ordinal, planned.Request.CorrelationId, new ToolInvocationResult
             {
-                ToolInvocationId = ToolInvocationId.New(), ToolId = invocation.ToolId,
-                ErrorClassification = ToolErrorClassification.Cancelled, Error = "Skipped because the tool batch was cancelled.",
+                ToolInvocationId = ToolInvocationId.New(),
+                ToolId = invocation.ToolId,
+                ErrorClassification = ToolErrorClassification.Cancelled,
+                Error = "Skipped because the tool batch was cancelled.",
             });
         }
 
@@ -406,25 +429,6 @@ public sealed class ToolInvocationPipeline : IToolInvocationPipeline
         }
 
         return admittedAt + budget;
-    }
-
-    private static void ThrowIfCancelledAfterResults(
-        CancellationToken cancellationToken,
-        IReadOnlyList<ToolBatchResult> results)
-    {
-        if (!cancellationToken.IsCancellationRequested)
-        {
-            return;
-        }
-
-        if (results.Count > 0)
-        {
-            throw new ToolBatchCancelledException(
-                results.OrderBy(result => result.Ordinal).ToArray(),
-                cancellationToken);
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
     }
 
     private async Task<ToolInvocationResult> InvokeCoreAsync(

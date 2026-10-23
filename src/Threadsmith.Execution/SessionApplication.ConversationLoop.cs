@@ -1400,10 +1400,9 @@ public sealed partial class SessionApplication
             {
                 var questions = _userQuestions ?? throw new InvalidOperationException("Question coordination is unavailable.");
                 round.Registration.RunStopwatch.Stop();
-                UserQuestionResult answer;
                 try
                 {
-                    answer = await questions.WaitAsync(question, cancellationToken);
+                    var answer = await questions.WaitAsync(question, cancellationToken);
                     if (invocationContext.SecurityPolicy is { } captured)
                     {
                         invocationContext.PolicyBinding?.Validate(captured);
@@ -1415,6 +1414,8 @@ public sealed partial class SessionApplication
                     {
                         throw new InvalidOperationException("The repository or policy changed while awaiting clarification.");
                     }
+
+                    result = await _toolPipeline.CompleteSuspensionAsync(requests.Single().Invocation, result, answer, cancellationToken);
                 }
                 catch
                 {
@@ -1425,8 +1426,6 @@ public sealed partial class SessionApplication
                 {
                     round.Registration.RunStopwatch.Start();
                 }
-
-                result = await _toolPipeline.CompleteSuspensionAsync(requests.Single().Invocation, result, answer, cancellationToken);
             }
 
             if (round.Registration.UsesMemoryConcepts)

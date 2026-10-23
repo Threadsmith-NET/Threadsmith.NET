@@ -5667,7 +5667,7 @@ public static partial class Milestone1Tests
 
         internal IReadOnlyList<ImageArtifact> Images { get; init; } = [];
 
-        internal List<PresentationBatch> Batches { get; } = [];
+        internal ConcurrentQueue<PresentationBatch> Batches { get; } = new();
 
         internal List<ComposerRequest> ComposerRequests { get; } = [];
 
@@ -5699,7 +5699,7 @@ public static partial class Milestone1Tests
             CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Batches.Add(batch);
+            Batches.Enqueue(batch);
             return Task.CompletedTask;
         }
 

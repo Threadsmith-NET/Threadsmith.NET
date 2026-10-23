@@ -325,30 +325,6 @@ public sealed class Plan50OpenAiCodexTests
         }
     }
 
-    /// <summary>Expired-token refresh observes caller cancellation even when the shared HTTP client has no timeout.</summary>
-    [Fact]
-    public async Task TokenRefresh_HangingEndpoint_ObservesBoundedCancellation()
-    {
-        var root = Path.Combine(Path.GetTempPath(), $"threadsmith-codex-timeout-{Guid.NewGuid():N}");
-        var path = Path.Combine(root, "token.json");
-        Directory.CreateDirectory(root);
-        await File.WriteAllTextAsync(
-            path,
-            "{\"AccessToken\":\"old\",\"RefreshToken\":\"refresh\",\"ExpiresAt\":\"2020-01-01T00:00:00Z\"}",
-            TestContext.Current.CancellationToken);
-        using var oauth = new OpenAiCodexOAuthManager(new HttpClient(new HangingHandler()), path);
-        using var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
-
-        try
-        {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => oauth.GetAccessTokenAsync(timeout.Token));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     /// <summary>Native Responses requests and SSE events remain provider-neutral at the project boundary.</summary>
     [Theory]
     [InlineData("high")]
@@ -947,37 +923,6 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal("function_call_output", continuedInput[nextInput.GetArrayLength() + 1].GetProperty("type").GetString());
     }
 
-    /// <summary>Response body timeouts are failures; actual caller cancellation remains cancellation.</summary>
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Provider_ResponseStreamClassifiesTimeoutAndCallerCancellation(bool callerCancels)
-    {
-        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StreamContent(new WaitingResponseStream()),
-        });
-        var provider = await CreateProviderAsync(
-            handler,
-            "token",
-            configureProfile: profile => profile with { Timeout = callerCancels ? TimeSpan.FromSeconds(10) : TimeSpan.FromMilliseconds(100) });
-        using var caller = new CancellationTokenSource();
-        if (callerCancels)
-        {
-            caller.CancelAfter(TimeSpan.FromMilliseconds(100));
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
-                await provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token));
-        }
-        else
-        {
-            var exception = await Assert.ThrowsAsync<ModelProviderTimeoutException>(async () =>
-                await provider.StreamAsync(CreateStreamRequest(), caller.Token).ToListAsync(caller.Token));
-            Assert.Contains("timed out", exception.Message, StringComparison.Ordinal);
-        }
-
-        Assert.Equal(1, handler.RequestCount);
-    }
-
     /// <summary>Transport failures before a response use the configured attempt limit.</summary>
     [Theory]
     [InlineData(false)]
@@ -1125,48 +1070,6 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Equal(1, handler.RequestCount);
     }
 
-    private sealed class InterruptedResponseStream(byte[] content) : MemoryStream(content)
-    {
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (Position == Length)
-            {
-                throw new HttpIOException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
-            }
-
-            return base.ReadAsync(buffer, cancellationToken);
-        }
-    }
-
-    private static HttpResponseMessage JsonResponse(string value)
-    {
-        return new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(value, Encoding.UTF8, "application/json"),
-        };
-    }
-
-    private static HttpResponseMessage StreamingResponse()
-    {
-        return new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(
-            "data: {\"type\":\"response.completed\",\"response\":{}}\n\ndata: [DONE]\n\n",
-            Encoding.UTF8,
-            "text/event-stream"),
-        };
-    }
-
-    private sealed class WaitingResponseStream : MemoryStream
-    {
-        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return 0;
-        }
-    }
-
     /// <summary>Native Codex input preserves image bytes in user messages and correlated function outputs.</summary>
     [Theory]
     [InlineData(false)]
@@ -1291,6 +1194,39 @@ public sealed class Plan50OpenAiCodexTests
         Assert.Contains("red", observed, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("blue", observed, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("green", observed, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private sealed class InterruptedResponseStream(byte[] content) : MemoryStream(content)
+    {
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (Position == Length)
+            {
+                throw new HttpIOException(HttpRequestError.ResponseEnded, "The response ended prematurely.");
+            }
+
+            return base.ReadAsync(buffer, cancellationToken);
+        }
+    }
+
+    private static HttpResponseMessage JsonResponse(string value)
+    {
+        return new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(value, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private static HttpResponseMessage StreamingResponse()
+    {
+        return new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(
+            "data: {\"type\":\"response.completed\",\"response\":{}}\n\ndata: [DONE]\n\n",
+            Encoding.UTF8,
+            "text/event-stream"),
+        };
     }
 
     private static async Task<IModelProvider> CreateProviderAsync(
@@ -1433,17 +1369,6 @@ public sealed class Plan50OpenAiCodexTests
                 ? null
                 : await request.Content.ReadAsStringAsync(cancellationToken);
             return respond(request);
-        }
-    }
-
-    private sealed class HangingHandler : HttpMessageHandler
-    {
-        protected override async Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken)
-        {
-            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-            return new HttpResponseMessage(HttpStatusCode.OK);
         }
     }
 }

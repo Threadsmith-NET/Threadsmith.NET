@@ -168,7 +168,10 @@ public static class Plan117RoslynUpgradeTests
             await File.WriteAllTextAsync(markerPath, pipeName, TestContext.Current.CancellationToken);
             var load = await registry.LoadForBindingAsync(CreateLoadRequest(root), TestContext.Current.CancellationToken);
             await registry.CompleteInitialPublicationAsync(load, true, TestContext.Current.CancellationToken);
-            await pipe.WaitForConnectionAsync(TestContext.Current.CancellationToken);
+            await TestAnalyzerBarrier.WaitForConnectionAsync(
+                pipe,
+                registry.GetEngine(load.WorkspaceId).WaitForWarmAsync(TestContext.Current.CancellationToken),
+                TestContext.Current.CancellationToken);
             var queries = new AdvancedSemanticQueryService(registry, TestPromptLoader.Instance);
             var beforeWarm = registry.GetEngine(load.WorkspaceId).CaptureCodeExploreReadinessSnapshot();
             var truncated = await queries.QueryCodeExploreAsync(
@@ -230,9 +233,15 @@ public static class Plan117RoslynUpgradeTests
         }
         finally
         {
-            await ReleaseGeneratorAsync();
-            await registry.DisposeAsync();
-            DeleteOwnedTemporaryRoot(root);
+            try
+            {
+                await ReleaseGeneratorAsync();
+            }
+            finally
+            {
+                await registry.DisposeAsync();
+                DeleteOwnedTemporaryRoot(root);
+            }
         }
 
         async Task ReleaseGeneratorAsync()
@@ -242,15 +251,9 @@ public static class Plan117RoslynUpgradeTests
                 return;
             }
 
-            File.Delete(markerPath);
-            if (pipe.IsConnected)
-            {
-                await pipe.WriteAsync(new byte[] { 1 }, CancellationToken.None);
-                var acknowledgement = new byte[1];
-                Assert.Equal(1, await pipe.ReadAsync(acknowledgement, CancellationToken.None));
-            }
-
             released = true;
+            File.Delete(markerPath);
+            await TestAnalyzerBarrier.ReleaseAsync(pipe);
         }
     }
 
@@ -491,7 +494,7 @@ public static class Plan117RoslynUpgradeTests
             var operation = refresh
                 ? engine.RefreshFullAsync(cancellation.Token)
                 : engine.LoadAsync(request, cancellation.Token);
-            await pipe.WaitForConnectionAsync(TestContext.Current.CancellationToken);
+            await TestAnalyzerBarrier.WaitForConnectionAsync(pipe, operation, TestContext.Current.CancellationToken);
             if (retireOwner)
             {
                 var retirement = engine.RetirePreparationAsync(retainCurrentPreparation: false, TestContext.Current.CancellationToken);
@@ -527,15 +530,14 @@ public static class Plan117RoslynUpgradeTests
         {
             // Release abandoned construction before removing its owned fixture inputs.
             File.Delete(markerPath);
-            if (pipe.IsConnected)
+            try
             {
-                byte[] release = [1];
-                await pipe.WriteAsync(release, CancellationToken.None);
-                var acknowledgement = new byte[1];
-                Assert.Equal(1, await pipe.ReadAsync(acknowledgement, CancellationToken.None));
+                await TestAnalyzerBarrier.ReleaseAsync(pipe);
             }
-
-            DeleteOwnedTemporaryRoot(temporaryRoot);
+            finally
+            {
+                DeleteOwnedTemporaryRoot(temporaryRoot);
+            }
         }
     }
 

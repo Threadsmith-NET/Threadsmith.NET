@@ -11,6 +11,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $required = @{
+    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_RipgrepFastPath_ReturnsMatchesAfterProcessSanitization' = 1
+    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_RealRipgrepTruncation_PreservesCompleteMatches' = 1
+    'Threadsmith.ModelTooling.Tests.ToolRuntimeTests.SearchTextTool_ProhibitedPaths_FilterRipgrepResultsAuthoritatively' = 1
+    'Threadsmith.ModelTooling.Tests.WriteFileTests.Scratchpad_RipgrepSearchFindsIgnoredInRepositoryFiles' = 1
     'Threadsmith.ParallelAgents.Tests.Plan91DelegationToolTests.IntelligenceInvestigators_AreNarrowAndCannotSupplyParentReceipts' = 1
     'Threadsmith.NativeTools.Tests.Plan41InventoryToolTests.GitQueries_LogicalRootAlias_PreservesWorktreeBoundary' = 2
     'Threadsmith.ModelTooling.Tests.SemanticRefreshCoordinatorTests.SemanticEngine_SemanticRefreshInventoryIsRepositoryConfined' = 1

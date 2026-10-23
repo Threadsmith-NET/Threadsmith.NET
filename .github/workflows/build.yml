@@ -55,6 +55,16 @@ jobs:
       - name: Restore
         run: dotnet restore src/Threadsmith.sln
 
+      - name: Stage pinned ripgrep for integration tests
+        shell: pwsh
+        run: |
+          $outputRoot = Join-Path $env:RUNNER_TEMP 'threadsmith-test-ripgrep'
+          ./eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot $outputRoot
+          $executable = Join-Path $outputRoot ('stage/tools/rg' + $(if ($IsWindows) { '.exe' } else { '' }))
+          & $executable --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "THREADSMITH_TEST_RIPGREP=$executable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build
         run: dotnet build src/Threadsmith.sln --configuration Debug --no-restore
 

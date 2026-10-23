@@ -120,6 +120,16 @@ pwsh -NoProfile -File eng/release/Test-SourceDocumentation.ps1
 
 This validates the actual release documentation catalog. Relative links to excluded source material, including implementation plans, break installed help; use source-repository URLs for those references.
 
+Stage the pinned ripgrep fixture before running tests. The real-ripgrep tests require
+an explicit executable path and fail if it is missing; CI stages the same verified
+asset and requires all four integration cases to pass on every platform.
+
+```powershell
+$ripgrepRoot = Join-Path $PWD 'artifacts/test-ripgrep'
+pwsh -NoProfile -File eng/Stage-DevelopmentRipgrep.ps1 -OutputRoot $ripgrepRoot
+$env:THREADSMITH_TEST_RIPGREP = Join-Path $ripgrepRoot ('stage/tools/rg' + $(if ($IsWindows) { '.exe' } else { '' }))
+```
+
 For product changes, validate the final code revision with:
 
 ```powershell
